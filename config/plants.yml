@@ -1,0 +1,43 @@
+# Configuración de plantas y NCUs
+# El collector lanza una tarea async por NCU.
+
+plant:
+  id: "demo"                 # cambia a "ayora_24025", "san_jose_24019", etc.
+  name: "Planta demo"
+
+polling:
+  interval_s: 30             # ciclo completo de lectura por NCU
+  meteo_interval_s: 10       # HSU/RSU (viento manda en seguridad, conviene más rápido)
+  ncu_interval_s: 30
+  modbus_timeout_s: 3
+  modbus_retries: 2
+  max_regs_per_read: 110     # 5 TCUs x 22 regs (límite Modbus: 125)
+
+driver: "simulated"          # "simulated" | "modbus"
+
+# Orden de palabras para F32 (verificar con firmware Factiun):
+# "big"    -> registro N = palabra alta (big-endian word order, lo más común)
+# "little" -> registro N = palabra baja
+float_word_order: "big"
+
+ncus:
+  - id: "NCU-01"
+    host: "192.168.1.101"
+    port: 502
+    unit_id: 1
+    tcu_count: 160           # TCUs reales configurados en esta NCU (1..200)
+    hsu_count: 1
+    hsu_extended: false      # true si la HSU expone el bloque 28000 (piranómetros)
+  - id: "NCU-02"
+    host: "192.168.1.102"
+    port: 502
+    unit_id: 1
+    tcu_count: 145
+    hsu_count: 0
+    hsu_extended: false
+
+influxdb:
+  url: "http://influxdb:8086"
+  org: "factiun"
+  bucket: "trackers"
+  # token vía variable de entorno INFLUXDB_TOKEN

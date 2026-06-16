@@ -1,0 +1,152 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 1150" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#215E99"/>
+    </marker>
+    <marker id="arrg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5a6b7a"/>
+    </marker>
+  </defs>
+
+  <rect width="760" height="1150" fill="#f4f7fa"/>
+  <text x="380" y="42" text-anchor="middle" font-size="24" font-weight="700" fill="#0A1D30">SCADA de seguidores — arquitectura</text>
+  <text x="380" y="64" text-anchor="middle" font-size="13" fill="#5a6b7a">NCU Factiun · Modbus TCP (mapa R7) · solo lectura</text>
+
+  <!-- ZONA 1: PLANTA -->
+  <rect x="30" y="90" width="700" height="250" rx="14" fill="#ffffff" stroke="#c9d6e2" stroke-width="1.5"/>
+  <text x="50" y="118" font-size="14" font-weight="700" fill="#215E99" letter-spacing="1">PLANTA FV</text>
+
+  <!-- NCU 1 -->
+  <rect x="60" y="140" width="180" height="160" rx="10" fill="#eaf1f8" stroke="#215E99" stroke-width="1.5"/>
+  <rect x="75" y="155" width="150" height="34" rx="6" fill="#215E99"/>
+  <text x="150" y="177" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">NCU-01</text>
+  <text x="150" y="208" text-anchor="middle" font-size="11" fill="#33475b">gateway Modbus :502</text>
+  <text x="150" y="224" text-anchor="middle" font-size="11" fill="#33475b">hasta 200 TCU · bloque 30500+</text>
+  <!-- TCUs radio -->
+  <g fill="#1f9d57">
+    <rect x="85" y="240" width="14" height="14" rx="3"/>
+    <rect x="107" y="240" width="14" height="14" rx="3"/>
+    <rect x="129" y="240" width="14" height="14" rx="3"/>
+    <rect x="151" y="240" width="14" height="14" rx="3" fill="#F2A900"/>
+    <rect x="173" y="240" width="14" height="14" rx="3"/>
+    <rect x="195" y="240" width="14" height="14" rx="3" fill="#9aa6b2"/>
+  </g>
+  <text x="150" y="276" text-anchor="middle" font-size="10.5" fill="#5a6b7a">TCUs (Zigbee · ángulo, SoC, alarmas)</text>
+  <text x="150" y="291" text-anchor="middle" font-size="10.5" fill="#5a6b7a">lastComm 29500+ · HSU meteo 30200+</text>
+
+  <!-- NCU 2 -->
+  <rect x="270" y="140" width="180" height="160" rx="10" fill="#eaf1f8" stroke="#215E99" stroke-width="1.5"/>
+  <rect x="285" y="155" width="150" height="34" rx="6" fill="#215E99"/>
+  <text x="360" y="177" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">NCU-02</text>
+  <text x="360" y="208" text-anchor="middle" font-size="11" fill="#33475b">gateway Modbus :502</text>
+  <g fill="#1f9d57">
+    <rect x="295" y="240" width="14" height="14" rx="3"/>
+    <rect x="317" y="240" width="14" height="14" rx="3" fill="#e0322c"/>
+    <rect x="339" y="240" width="14" height="14" rx="3"/>
+    <rect x="361" y="240" width="14" height="14" rx="3"/>
+    <rect x="383" y="240" width="14" height="14" rx="3"/>
+    <rect x="405" y="240" width="14" height="14" rx="3"/>
+  </g>
+  <text x="360" y="276" text-anchor="middle" font-size="10.5" fill="#5a6b7a">+ HSU (viento · nieve · piranómetros)</text>
+
+  <!-- NCU N -->
+  <rect x="480" y="140" width="180" height="160" rx="10" fill="#eaf1f8" stroke="#8aa6c0" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <rect x="495" y="155" width="150" height="34" rx="6" fill="#8aa6c0"/>
+  <text x="570" y="177" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">NCU-N…</text>
+  <text x="570" y="225" text-anchor="middle" font-size="11" fill="#5a6b7a">El Burgo I: 2 NCU</text>
+  <text x="570" y="242" text-anchor="middle" font-size="11" fill="#5a6b7a">San José: 21 NCU</text>
+  <text x="570" y="259" text-anchor="middle" font-size="11" fill="#5a6b7a">Ayora: 16 NCU</text>
+
+  <!-- Flecha Modbus -->
+  <line x1="380" y1="340" x2="380" y2="412" stroke="#215E99" stroke-width="3" marker-end="url(#arr)"/>
+  <rect x="218" y="356" width="324" height="42" rx="9" fill="#0A1D30"/>
+  <text x="380" y="374" text-anchor="middle" font-size="12.5" font-weight="700" fill="#fff">Modbus TCP · 1 conexión por NCU</text>
+  <text x="380" y="391" text-anchor="middle" font-size="11" fill="#bcd0e2">polling cada 30 s · lecturas de ≤110 registros · SOLO LECTURA</text>
+
+  <!-- ZONA 2: NAS -->
+  <rect x="30" y="424" width="700" height="350" rx="14" fill="#ffffff" stroke="#c9d6e2" stroke-width="1.5"/>
+  <text x="50" y="452" font-size="14" font-weight="700" fill="#215E99" letter-spacing="1">NAS SYNOLOGY · DOCKER COMPOSE</text>
+
+  <!-- collector -->
+  <rect x="60" y="480" width="200" height="120" rx="10" fill="#fdf6ea" stroke="#d98300" stroke-width="1.5"/>
+  <text x="160" y="508" text-anchor="middle" font-size="14" font-weight="700" fill="#9a5d00">collector</text>
+  <text x="160" y="528" text-anchor="middle" font-size="11" fill="#33475b">Python · asyncio · pymodbus</text>
+  <text x="160" y="544" text-anchor="middle" font-size="11" fill="#33475b">1 tarea por NCU</text>
+  <text x="160" y="560" text-anchor="middle" font-size="11" fill="#33475b">decodifica F32/bitsets</text>
+  <text x="160" y="576" text-anchor="middle" font-size="11" fill="#33475b">clasifica health</text>
+
+  <!-- influx -->
+  <rect x="290" y="480" width="180" height="120" rx="10" fill="#eef9f2" stroke="#1f9d57" stroke-width="1.5"/>
+  <text x="380" y="508" text-anchor="middle" font-size="14" font-weight="700" fill="#137043">InfluxDB 2.7</text>
+  <text x="380" y="528" text-anchor="middle" font-size="11" fill="#33475b">series temporales :8086</text>
+  <text x="380" y="544" text-anchor="middle" font-size="11" fill="#33475b">tracker_status</text>
+  <text x="380" y="560" text-anchor="middle" font-size="11" fill="#33475b">ncu_status · meteo</text>
+  <text x="380" y="576" text-anchor="middle" font-size="11" fill="#33475b">histórico + retención</text>
+
+  <!-- api -->
+  <rect x="500" y="480" width="200" height="120" rx="10" fill="#eaf1f8" stroke="#215E99" stroke-width="1.5"/>
+  <text x="600" y="508" text-anchor="middle" font-size="14" font-weight="700" fill="#215E99">API · FastAPI</text>
+  <text x="600" y="528" text-anchor="middle" font-size="11" fill="#33475b">puerto :8000</text>
+  <text x="600" y="546" text-anchor="middle" font-size="11" font-family="monospace" fill="#0A1D30">GET /live</text>
+  <text x="600" y="562" text-anchor="middle" font-size="11" font-family="monospace" fill="#0A1D30">GET /history/ncu/tcu</text>
+  <text x="600" y="578" text-anchor="middle" font-size="11" font-family="monospace" fill="#0A1D30">GET /meteo</text>
+
+  <line x1="260" y1="540" x2="288" y2="540" stroke="#5a6b7a" stroke-width="2.5" marker-end="url(#arrg)"/>
+  <text x="274" y="530" text-anchor="middle" font-size="10" fill="#5a6b7a">write</text>
+  <line x1="470" y1="540" x2="498" y2="540" stroke="#5a6b7a" stroke-width="2.5" marker-end="url(#arrg)"/>
+  <text x="484" y="530" text-anchor="middle" font-size="10" fill="#5a6b7a">query</text>
+
+  <!-- config -->
+  <rect x="60" y="630" width="640" height="116" rx="10" fill="#f7fafc" stroke="#c9d6e2" stroke-width="1.2"/>
+  <text x="80" y="656" font-size="12" font-weight="700" fill="#0A1D30">config/</text>
+  <text x="95" y="678" font-size="11.5" font-family="monospace" fill="#33475b">plants.yml — IPs de NCUs, nº TCUs, intervalo, driver (modbus | simulated)</text>
+  <text x="95" y="698" font-size="11.5" font-family="monospace" fill="#33475b">modbus_map.yml — mapa de registros R7 (TCU compat, HSU, alarmas)</text>
+  <text x="95" y="722" font-size="11" fill="#9a5d00">driver simulado: pvlib genera ángulos solares reales para probar sin hierro</text>
+
+  <!-- Flecha HTTP -->
+  <line x1="380" y1="774" x2="380" y2="846" stroke="#215E99" stroke-width="3" marker-end="url(#arr)"/>
+  <rect x="228" y="790" width="304" height="42" rx="9" fill="#0A1D30"/>
+  <text x="380" y="808" text-anchor="middle" font-size="12.5" font-weight="700" fill="#fff">HTTP · JSON</text>
+  <text x="380" y="825" text-anchor="middle" font-size="11" fill="#bcd0e2">fetch /live cada 20 s</text>
+
+  <!-- ZONA 3: NAVEGADOR -->
+  <rect x="30" y="858" width="700" height="230" rx="14" fill="#ffffff" stroke="#c9d6e2" stroke-width="1.5"/>
+  <text x="50" y="886" font-size="14" font-weight="700" fill="#215E99" letter-spacing="1">NAVEGADOR (PC · MÓVIL)</text>
+
+  <rect x="60" y="906" width="430" height="156" rx="10" fill="#0e2438"/>
+  <text x="80" y="932" font-size="12.5" font-weight="700" fill="#F2A900">demo-siting.html · botón SCADA</text>
+  <!-- mini mapa -->
+  <g>
+    <rect x="80" y="946" width="9" height="26" rx="2" fill="#1f9d57"/>
+    <rect x="94" y="946" width="9" height="26" rx="2" fill="#1f9d57"/>
+    <rect x="108" y="946" width="9" height="26" rx="2" fill="#F2A900"/>
+    <rect x="122" y="946" width="9" height="26" rx="2" fill="#1f9d57"/>
+    <rect x="136" y="946" width="9" height="26" rx="2" fill="#1f9d57"/>
+    <rect x="80" y="980" width="9" height="26" rx="2" fill="#1f9d57"/>
+    <rect x="94" y="980" width="9" height="26" rx="2" fill="#e0322c"/>
+    <rect x="108" y="980" width="9" height="26" rx="2" fill="#1f9d57"/>
+    <rect x="122" y="980" width="9" height="26" rx="2" fill="#9aa6b2"/>
+    <rect x="136" y="980" width="9" height="26" rx="2" fill="#1f9d57"/>
+    <rect x="80" y="1014" width="9" height="26" rx="2" fill="#1f9d57"/>
+    <rect x="94" y="1014" width="9" height="26" rx="2" fill="#1f9d57"/>
+    <rect x="108" y="1014" width="9" height="26" rx="2" fill="#1f9d57"/>
+    <rect x="122" y="1014" width="9" height="26" rx="2" fill="#1f9d57"/>
+    <rect x="136" y="1014" width="9" height="26" rx="2" fill="#F2A900"/>
+    <rect x="172" y="975" width="13" height="13" fill="#12283f" stroke="#fff" stroke-width="1.2" transform="rotate(45 178 981)"/>
+  </g>
+  <text x="210" y="958" font-size="11" fill="#bcd0e2">mesas coloreadas por estado</text>
+  <text x="210" y="976" font-size="11" fill="#bcd0e2">tooltip: ángulo · SoC · alarmas</text>
+  <text x="210" y="994" font-size="11" fill="#bcd0e2">chip: 209 ok / 4 warn / 1 alarma / 1 off</text>
+  <text x="210" y="1012" font-size="11" fill="#bcd0e2">NCUs, repetidores y HSU del siting</text>
+
+  <!-- leyenda -->
+  <rect x="510" y="906" width="190" height="156" rx="10" fill="#f7fafc" stroke="#c9d6e2"/>
+  <text x="530" y="930" font-size="12" font-weight="700" fill="#0A1D30">Estado (health)</text>
+  <rect x="530" y="942" width="13" height="13" rx="3" fill="#1f9d57"/><text x="551" y="953" font-size="11.5" fill="#33475b">ok</text>
+  <rect x="530" y="964" width="13" height="13" rx="3" fill="#F2A900"/><text x="551" y="975" font-size="11.5" fill="#33475b">warn · desvío &gt;5°</text>
+  <rect x="530" y="986" width="13" height="13" rx="3" fill="#e0322c"/><text x="551" y="997" font-size="11.5" fill="#33475b">alarma crítica</text>
+  <rect x="530" y="1008" width="13" height="13" rx="3" fill="#9aa6b2"/><text x="551" y="1019" font-size="11.5" fill="#33475b">offline &gt;5 min</text>
+  <rect x="530" y="1030" width="13" height="13" rx="3" fill="#c4ccd4"/><text x="551" y="1041" font-size="11.5" fill="#33475b">sin datos</text>
+
+  <text x="380" y="1122" text-anchor="middle" font-size="11" fill="#8a9aa8">El collector nunca escribe en la NCU: el rango de comandos 40000+ (safe positions, modos) queda excluido.</text>
+</svg>

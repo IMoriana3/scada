@@ -1,0 +1,83 @@
+# Mapa Modbus de la NCU — derivado de NCU_Modbus_Map_R7.xlsx
+# SOLO LECTURA. El rango 40000+ (comandos) se excluye deliberadamente.
+
+tcu_compat:
+  # Bloque compacto: 22 registros por TCU, contiguo para 200 TCUs.
+  base: 30500
+  stride: 22
+  max_tcus: 200
+  fields:
+    # offset: definición
+    1:  {name: msr,            type: u16, bits: {bt_active: [0,0], sleep_state: [1,2], day_time: [7,7], main_state: [8,9], safe_position: [13,15]}}
+    2:  {name: alarms1,        type: u16}
+    3:  {name: alarms2,        type: u16}
+    4:  {name: flags_a,        type: u16, bits: {west_limit: [0,0], east_limit: [1,1], motor_locked: [11,11], system_ok: [15,15]}}
+    5:  {name: panel_voltage,  type: u16, unit: mV}
+    6:  {name: tilt_angle,     type: f32, unit: rad, to_deg: true}
+    8:  {name: motor_current,  type: u16, unit: mA}
+    9:  {name: motor_peak,     type: u16, unit: mA}
+    10: {name: target_angle,   type: f32, unit: rad, to_deg: true}
+    12: {name: psu_current,    type: s16, unit: mA}
+    13: {name: soc,            type: u8_low, unit: "%"}   # VERIFICAR: el Excel solapa SoC y RemainingCapacity en 30513
+    16: {name: battery_voltage, type: u16, unit: mV}
+    18: {name: battery_current, type: s16, unit: mA}
+    19: {name: temp_pcb,       type: u16, unit: Kx10, to_celsius: true}
+    20: {name: temp_battery,   type: u16, unit: Kx10, to_celsius: true}
+    21: {name: soh,            type: u8_low, unit: "%"}
+
+tcu_lastcomm:
+  base: 29500
+  stride: 2
+  type: u32          # Unix epoch
+
+# Decodificación de bits de alarmas (registro alarms1 / alarms2 del bloque compat)
+alarm_bits:
+  alarms1:
+    2:  out_of_range
+    4:  stop_button
+    7:  default_config
+    8:  zigbee_fail
+    11: batt_limited      # SoC < L2
+    12: batt_not_enough   # SoC < L3
+    13: batt_low          # SoC < L1
+    14: batt_critical     # SoC < 10%
+    15: test_fw
+  alarms2:
+    2:  time_never_set
+    4:  motor_overcurrent_hw
+    5:  motor_overcurrent_sw
+    8:  axis_blocked
+    14: axis_low_speed
+
+ncu:
+  registers:
+    hsu_global:   {addr: 30002, type: u16, bits: {alarm_any_wind: [1,1], wind_highest_level: [2,4], alarm_any_snow: [5,5], alarm_any_gust: [6,6], global_ws_fail: [7,7], global_ss_fail: [8,8]}}
+    digital_input: {addr: 30100, type: u16, bits: {battery_low: [0,0], ups_power_fault: [1,1], stop_button: [13,13]}}
+    main_status:  {addr: 30101, type: u16, bits: {alarm_battery_low: [0,0], gw1_alarm: [4,4], gw2_alarm: [5,5]}}
+    date_time:    {addr: 30104, type: u32}
+
+hsu:
+  # Bloque básico
+  base: 30200
+  stride: 10
+  max_hsus: 10
+  lastcomm_base: 29440      # U32 por HSU, stride 2
+  fields:
+    1: {name: msr,            type: u16, bits: {wind_level: [0,2], wind_dir_east: [3,3]}}
+    2: {name: alarms1,        type: u16, bits: {wind_sensor_fail: [0,0], snow_sensor_fail: [1,1], alarm_snow: [6,6], alarm_flood: [7,7], alarm_wind: [9,9], alarm_com: [15,15]}}
+    3: {name: wind_speed,     type: f32, unit: mps}
+    5: {name: wind_direction, type: f32, unit: deg}
+    7: {name: snow_level,     type: f32, unit: m}
+
+hsu_ext:
+  # Bloque extendido (piranómetros) — solo si hsu_extended: true
+  base: 28000
+  stride: 100
+  fields:
+    4:  {name: wind_speed,       type: f32, unit: mps}
+    6:  {name: wind_direction,   type: f32, unit: deg}
+    8:  {name: snow_level,       type: f32, unit: m}
+    16: {name: battery_voltage,  type: u16, unit: mV}
+    21: {name: ghi,              type: s32, unit: Wm2x100, scale: 0.01}
+    23: {name: poa_tracking,     type: s32, unit: Wm2x100, scale: 0.01}
+    25: {name: poa_diffuse,      type: s32, unit: Wm2x100, scale: 0.01}
