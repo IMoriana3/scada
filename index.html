@@ -1315,6 +1315,20 @@ function scadaChip(){
     document.getElementById("tooltip").parentNode.appendChild(c); }
   return c;
 }
+async function publishMeteo(sc){
+  // Lee /meteo (estaciones HSU) y publica el viento al bus compartido factiun_meteo
+  // (mismo origen imoriana3.github.io) para que el anemómetro del 3D gire con el viento real.
+  try{
+    const rm=await fetch(sc.url.replace(/\/$/,"")+"/meteo",{cache:"no-store"});
+    if(!rm.ok) return;
+    const jm=await rm.json();
+    const arr=Array.isArray(jm)?jm:(jm.meteo||jm.stations||jm.rows||jm.data||[]);
+    let sx=0,sy=0,sws=0,nw=0;
+    for(const m of arr){ if(m&&isFinite(m.wind_speed)){ const wd=(+m.wind_direction||0)*Math.PI/180; sx+=Math.cos(wd); sy+=Math.sin(wd); sws+=+m.wind_speed; nw++; } }
+    if(nw>0){ const wd=(Math.atan2(sy,sx)*180/Math.PI+360)%360;   // media vectorial de la dirección (correcta en el cruce 0/360)
+      localStorage.setItem("factiun_meteo",JSON.stringify({ws:+(sws/nw).toFixed(2),wd:+wd.toFixed(1),n:nw,t:Date.now()})); }
+  }catch(e){}
+}
 async function scadaPoll(){
   const sc=S.scada;
   try{
@@ -1325,6 +1339,7 @@ async function scadaPoll(){
     const cnt={ok:0,warn:0,alarm:0,offline:0};
     for(const t of (j.trackers||[])){ sc.data[t.ncu+"|"+t.tcu]=t; if(cnt[t.health]!=null)cnt[t.health]++; }
     sc.last=new Date(); sc.err=null;
+    publishMeteo(sc);   // publica el viento real (HSU) al bus compartido \u2192 el anem\u00f3metro del 3D (cobertura) gira con \u00e9l
     scadaChip().innerHTML=`SCADA \u00b7 ${j.count} TCU \u00b7 <span style="color:#7be0a8">${cnt.ok}</span> / <span style="color:#ffd35c">${cnt.warn}</span> / <span style="color:#ff8a80">${cnt.alarm}</span> / <span style="color:#aab6c2">${cnt.offline} off</span> \u00b7 ${sc.last.toLocaleTimeString().slice(0,8)}`;
   }catch(e){
     sc.err=String(e.message||e);
