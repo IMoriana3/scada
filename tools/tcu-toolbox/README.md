@@ -16,8 +16,8 @@ Mapa de registros: **SUNNER TCU Modbus Map v6.1 (FW v1.4.3)**. La NCU actúa de 
 
 | Pestaña | Qué hace |
 |---|---|
-| **Escribir** | Tabla de variables (todo el mapa 4xxxx: carga, calefactor, comunicaciones, geometría, umbrales, deadbands, safe positions, rangos de tilt, motor, SoC) con verificación tras escribir, reintentos, "reintentar fallidas" y guardado en NVM (40007 bit 15). Presets JSON y carga de un **backup como preset** (excluye comandos y fecha/hora). Los registros de comando piden **doble confirmación**. |
-| **Leer variable** | Una variable en un rango de TCUs con resumen de discrepancias (cuántos TCU tienen cada valor). Export CSV. |
+| **Escribir** | Tabla de variables (todo el mapa 4xxxx: carga, calefactor, comunicaciones, geometría, umbrales, deadbands, safe positions, rangos de tilt, motor, SoC) con verificación tras escribir, reintentos, "reintentar fallidas" y guardado en NVM (40007 bit 15). Campo **Filtro**: escribe `soc`, `tilt`, `zigbee`… y el desplegable de variables se reduce a lo que casa (las filas ya elegidas nunca se pierden). Presets JSON y carga de un **backup como preset** (excluye comandos y fecha/hora). Los registros de comando piden **doble confirmación**. |
+| **Leer variable** | Una variable en un rango de TCUs con resumen de discrepancias (cuántos TCU tienen cada valor). Campo **Filtro** con contador de coincidencias (busca también en los registros de estado `ESTADO …`; si solo queda una, se autoselecciona). Export CSV. |
 | **Volcar TCU** | Todas las variables de un TCU (config + estado + identidad opcional). Export CSV y **backup JSON** con metadatos (planta, IP, TCU, fecha, versión de mapa). Botón **Comparar con backup JSON**: marca en naranja las diferencias con un volcado anterior — ideal para verificar una TCU recién sustituida. |
 | **Diagnóstico** | Escanea un rango de TCUs y clasifica cada uno en `OK / AVISO / ALARMA / OFFLINE` con el **mismo criterio de salud que el SCADA** (eje bloqueado, sobrecorriente, batería crítica, seta, fuera de rango ⇒ alarma; resto de bits, `system_ok=0` o desviación >5° ⇒ aviso). Las alarmas se muestran **decodificadas bit a bit en texto** (registros 30002–30005), más SoC/SoH, tensiones, temperaturas y estado del cargador. Export CSV y JSON. |
 | **Utilidades** | **Sincronizar reloj**: escribe la hora del PC en un rango de TCUs (40001–40006 + secuencia 40007 bit0→bit1) y verifica leyendo el reloj real (30079). **Identificación**: FW principal/fábrica, MCU secundario, BQ, HW, Xbee HW/FW, **MAC Xbee**, **número de serie**, fecha de fabricación y lote (bloque 30300+). |
@@ -71,6 +71,7 @@ Diagnóstico (`Diagnóstico → JSON`): igual, con `"tipo": "diagnostico_tcu"` y
 
 ## Notas técnicas
 
+- Las variables de los desplegables siguen el orden del mapa, agrupadas por categoría como en el PDF (comandos → fecha/hora → carga → calefactor → comunicaciones → geometría → umbrales → límites → safe positions → rangos de tilt → motor → SoC); el filtro busca por subcadena sin distinguir mayúsculas y sin interpretar `[ ] * ?` como comodines.
 - Modbus TCP con framing MBAP propio (sin dependencias): FC03 lectura, FC16 escritura múltiple, FC22 mask-write para bytes y bits sueltos.
 - Tipos soportados: `u16, s16, u16hex, u32, u32hex, f32, f32deg, u8lo, u8hi, bit, dt_bcd (fecha BCD 3 regs), charger, serial`.
 - F32/U32 en orden *little-endian word swap* (2-1-4-3) según el mapa: registro N = palabra baja.

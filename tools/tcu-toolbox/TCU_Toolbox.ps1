@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '2.0'
+$VERSION_TOOLBOX = '2.1'
 $VERSION_MAPA    = 'SUNNER v6.1 (FW 1.4.3)'
 
 # ---------------------------------------------------------------------------
@@ -515,6 +515,15 @@ function Valor-A-Escritura([hashtable]$vdef, [string]$texto) {
 
 function BCD-Dec([int]$b) { return ((($b -shr 4) -band 0xF) * 10 + ($b -band 0xF)) }
 
+# Filtro de nombres por subcadena, sin distinguir mayusculas y sin tratar
+# [ ] * ? como comodines (los nombres llevan corchetes de unidades).
+function Filtrar-Nombres([string[]]$nombres, [string]$filtro) {
+    # retorno plano: los llamadores recogen con @(...); no proteger con ','
+    $f = "$filtro".Trim()
+    if (-not $f) { return $nombres }
+    return ($nombres | Where-Object { $_.IndexOf($f, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
+}
+
 function Leer-Decodificado([byte]$unit, [hashtable]$vdef) {
     $a = Dir-Trama $vdef.addr
     switch ($vdef.tipo) {
@@ -574,9 +583,9 @@ $gbCon.Location = New-Object System.Drawing.Point(10, 8)
 $gbCon.Size = New-Object System.Drawing.Size(925, 58)
 $form.Controls.Add($gbCon)
 
-function LG($p, [string]$t, [int]$x, [int]$w) {
+function LG($p, [string]$t, [int]$x, [int]$w, [int]$y = 25) {
     $l = New-Object System.Windows.Forms.Label
-    $l.Text = $t; $l.Location = New-Object System.Drawing.Point($x, 25)
+    $l.Text = $t; $l.Location = New-Object System.Drawing.Point($x, $y)
     $l.Size = New-Object System.Drawing.Size($w, 20); $p.Controls.Add($l); return $l
 }
 function TG($p, [string]$t, [int]$x, [int]$y, [int]$w) {
@@ -626,6 +635,11 @@ $txtWIni = TG $tabW '1' 62 22 45
 [void](LG $tabW 'a' 116 12)
 $txtWFin = TG $tabW '44' 131 22 45
 
+[void](LG $tabW 'Filtro' 200 42)
+$txtWFiltro = TG $tabW '' 244 22 170
+$lblWFiltro = LG $tabW '' 424 180
+$lblWFiltro.ForeColor = [System.Drawing.Color]::Gray
+
 $btnPresetSave = New-Object System.Windows.Forms.Button
 $btnPresetSave.Text = 'Guardar preset'
 $btnPresetSave.Location = New-Object System.Drawing.Point(620, 18)
@@ -672,6 +686,30 @@ $dgv.Add_CellValueChanged({
     }
 })
 
+# Una celda con un valor que no este en la lista del combo (p.ej. cargada con
+# el filtro activo) no debe reventar el grid.
+$dgv.Add_DataError({ param($s, $e) $e.ThrowException = $false })
+
+# Filtro del combo de variables: reduce la lista a lo que casa con el texto,
+# conservando siempre los nombres ya usados en filas existentes.
+function Refrescar-FiltroEscribir {
+    $usados = @{}
+    foreach ($fila in $dgv.Rows) {
+        if (-not $fila.IsNewRow -and $fila.Cells[0].Value) { $usados[[string]$fila.Cells[0].Value] = $true }
+    }
+    $coinciden = @(Filtrar-Nombres @($VARIABLES.Keys) $txtWFiltro.Text)
+    $colVar.Items.Clear()
+    foreach ($k in $coinciden) { [void]$colVar.Items.Add($k) }
+    foreach ($k in $VARIABLES.Keys) {
+        if ($usados.ContainsKey($k) -and -not $colVar.Items.Contains($k)) { [void]$colVar.Items.Add($k) }
+    }
+    if ("$($txtWFiltro.Text)".Trim()) { $lblWFiltro.Text = "$($coinciden.Count) de $($VARIABLES.Count) variables" }
+    else { $lblWFiltro.Text = "$($VARIABLES.Count) variables" }
+}
+
+$txtWFiltro.Add_TextChanged({ Refrescar-FiltroEscribir })
+Refrescar-FiltroEscribir
+
 $chkVerif = New-Object System.Windows.Forms.CheckBox
 $chkVerif.Text = 'Verificar tras escribir'
 $chkVerif.Location = New-Object System.Drawing.Point(10, 296)
@@ -712,23 +750,45 @@ $tabL = New-Object System.Windows.Forms.TabPage
 $tabL.Text = 'Leer variable'
 $tabs.TabPages.Add($tabL)
 
-[void](LG $tabL 'Variable' 10 60)
+[void](LG $tabL 'Filtro' 10 42)
+$txtLFiltro = TG $tabL '' 54 22 160
+$lblLFiltro = LG $tabL '' 222 130
+$lblLFiltro.ForeColor = [System.Drawing.Color]::Gray
+
+[void](LG $tabL 'Variable' 360 58)
 $cbLVar = New-Object System.Windows.Forms.ComboBox
-$cbLVar.Location = New-Object System.Drawing.Point(72, 21)
-$cbLVar.Size = New-Object System.Drawing.Size(340, 22)
+$cbLVar.Location = New-Object System.Drawing.Point(420, 21)
+$cbLVar.Size = New-Object System.Drawing.Size(488, 22)
 $cbLVar.DropDownStyle = 'DropDownList'
-foreach ($k in $VARIABLES.Keys) { [void]$cbLVar.Items.Add($k) }
-foreach ($k in $ESTADO.Keys)    { [void]$cbLVar.Items.Add('ESTADO ' + $k) }
 $tabL.Controls.Add($cbLVar)
 
-[void](LG $tabL 'TCU de' 428 52)
-$txtLIni = TG $tabL '1' 480 22 45
-[void](LG $tabL 'a' 533 12)
-$txtLFin = TG $tabL '44' 548 22 45
+# Rellena el combo aplicando el filtro; conserva la seleccion si sigue visible
+# y autoselecciona cuando solo queda una coincidencia.
+function Refrescar-FiltroLeer {
+    $sel = $cbLVar.SelectedItem
+    $todos = @($VARIABLES.Keys) + @($ESTADO.Keys | ForEach-Object { 'ESTADO ' + $_ })
+    $coinciden = @(Filtrar-Nombres $todos $txtLFiltro.Text)
+    $cbLVar.BeginUpdate()
+    $cbLVar.Items.Clear()
+    foreach ($k in $coinciden) { [void]$cbLVar.Items.Add($k) }
+    $cbLVar.EndUpdate()
+    if ($sel -and $cbLVar.Items.Contains($sel)) { $cbLVar.SelectedItem = $sel }
+    elseif ($cbLVar.Items.Count -eq 1) { $cbLVar.SelectedIndex = 0 }
+    if ("$($txtLFiltro.Text)".Trim()) { $lblLFiltro.Text = "$($coinciden.Count) de $($todos.Count)" }
+    else { $lblLFiltro.Text = "$($todos.Count) variables" }
+}
+
+$txtLFiltro.Add_TextChanged({ Refrescar-FiltroLeer })
+Refrescar-FiltroLeer
+
+[void](LG $tabL 'TCU de' 10 52 56)
+$txtLIni = TG $tabL '1' 62 52 45
+[void](LG $tabL 'a' 116 12 56)
+$txtLFin = TG $tabL '44' 131 52 45
 
 $btnLeer = New-Object System.Windows.Forms.Button
 $btnLeer.Text = 'LEER'
-$btnLeer.Location = New-Object System.Drawing.Point(650, 18)
+$btnLeer.Location = New-Object System.Drawing.Point(200, 49)
 $btnLeer.Size = New-Object System.Drawing.Size(110, 28)
 $btnLeer.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
 $btnLeer.ForeColor = [System.Drawing.Color]::White
@@ -736,14 +796,14 @@ $tabL.Controls.Add($btnLeer)
 
 $btnLCsv = New-Object System.Windows.Forms.Button
 $btnLCsv.Text = 'Exportar CSV'
-$btnLCsv.Location = New-Object System.Drawing.Point(770, 18)
+$btnLCsv.Location = New-Object System.Drawing.Point(320, 49)
 $btnLCsv.Size = New-Object System.Drawing.Size(118, 28)
 $btnLCsv.Enabled = $false
 $tabL.Controls.Add($btnLCsv)
 
 $lvL = New-Object System.Windows.Forms.ListView
-$lvL.Location = New-Object System.Drawing.Point(10, 55)
-$lvL.Size = New-Object System.Drawing.Size(898, 305)
+$lvL.Location = New-Object System.Drawing.Point(10, 86)
+$lvL.Size = New-Object System.Drawing.Size(898, 274)
 $lvL.View = 'Details'; $lvL.FullRowSelect = $true; $lvL.GridLines = $true
 [void]$lvL.Columns.Add('TCU', 70)
 [void]$lvL.Columns.Add('Valor', 200)
@@ -1076,7 +1136,8 @@ function Recoger-Variables {
         catch { Con "AVISO: '$nombre' valor invalido '$valor': $_ - IGNORADA" ([System.Drawing.Color]::Orange); continue }
         $lista += @{nombre=$nombre; texto="$valor"; addr=$v.addr; esc=$esc}
     }
-    return ,$lista
+    # retorno plano: los llamadores recogen con @(...); no proteger con ','
+    return $lista
 }
 
 function Escribir-EnTcus([int[]]$tcus) {
@@ -1208,6 +1269,8 @@ function Cargar-FilasEnGrid($pares) {
     $n = 0
     foreach ($e in $pares) {
         if ($VARIABLES.Contains([string]$e.variable)) {
+            # con el filtro activo el nombre puede no estar en el combo: anadirlo
+            if (-not $colVar.Items.Contains([string]$e.variable)) { [void]$colVar.Items.Add([string]$e.variable) }
             [void]$dgv.Rows.Add($e.variable, "$($e.valor)", (Info-Variable $e.variable))
             $n++
         } else {
@@ -1694,6 +1757,7 @@ $btnLog.Add_Click({
 # ------------------------- arranque -------------------------
 Con "TCU Toolbox v$VERSION_TOOLBOX listo. Mapa de registros: $VERSION_MAPA." ([System.Drawing.Color]::Gainsboro)
 Con 'Escribir: tabla + presets + backup como preset. Leer: una variable en un rango, con resumen de discrepancias.' ([System.Drawing.Color]::Gainsboro)
+Con 'Filtro de variables: escribe p.ej. "soc" o "tilt" en el campo Filtro y el desplegable se reduce a lo que casa.' ([System.Drawing.Color]::Gainsboro)
 Con 'Volcar: backup completo de una TCU (CSV/JSON) y comparacion contra un backup anterior.' ([System.Drawing.Color]::Gainsboro)
 Con 'Diagnostico: salud OK/AVISO/ALARMA/OFFLINE de un rango con alarmas en texto. Utilidades: reloj e identificacion.' ([System.Drawing.Color]::Gainsboro)
 foreach ($m in $script:MsgsInicio) { Con $m ([System.Drawing.Color]::SteelBlue) }
