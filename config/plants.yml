@@ -2,8 +2,8 @@
 # El collector lanza una tarea async por NCU.
 
 plant:
-  id: "demo"                 # cambia a "ayora_24025", "san_jose_24019", etc.
-  name: "Planta demo"
+  id: "elburgo"              # cambia a "ayora_24025", "san_jose_24019", etc.
+  name: "El Burgo I"
 
 polling:
   interval_s: 30             # ciclo completo de lectura por NCU
@@ -21,20 +21,29 @@ driver: "simulated"          # "simulated" | "modbus"
 float_word_order: "big"
 
 ncus:
-  - id: "NCU-01"
-    host: "192.168.1.101"
+  - id: "NCU1"
+    host: "10.100.1.52"
     port: 502
     unit_id: 1
-    tcu_count: 160           # TCUs reales configurados en esta NCU (1..200)
+    tcu_count: 108           # TCUs reales configurados en esta NCU (1..200)
     hsu_count: 1
     hsu_extended: false      # true si la HSU expone el bloque 28000 (piranómetros)
-  - id: "NCU-02"
-    host: "192.168.1.102"
+    # Passthrough Modbus de la NCU hacia los TCU (unit id = nº de TCU), un
+    # puerto por gateway Zigbee. Lo usa tools/tcu-toolbox/make_plantas.py
+    # para generar plantas.json; el collector lo ignora.
+    gateways:
+      - { puerto: 503, tcu_ini: 1,  tcu_fin: 56 }
+      - { puerto: 504, tcu_ini: 57, tcu_fin: 108 }
+  - id: "NCU2"
+    host: "10.100.1.56"
     port: 502
     unit_id: 1
-    tcu_count: 145
+    tcu_count: 107
     hsu_count: 0
     hsu_extended: false
+    gateways:
+      - { puerto: 503, tcu_ini: 1,  tcu_fin: 45 }
+      - { puerto: 504, tcu_ini: 46, tcu_fin: 107 }
 
 influxdb:
   url: "http://influxdb:8086"

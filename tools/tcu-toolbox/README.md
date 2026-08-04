@@ -26,15 +26,15 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 ## Vínculo con la plataforma (sin dejar de ser offline)
 
-- **Plantas compartidas**: la toolbox carga `plantas.json` (junto al script) al arrancar. Se puede editar a mano o generar desde el mismo `config/plants.yml` que usa el collector del SCADA:
+- **Plantas compartidas y automatizadas**: la toolbox carga `plantas.json` (junto al script) al arrancar. La fuente de verdad es el mismo `config/plants.yml` que usa el collector del SCADA: cada NCU declara ahí sus gateways passthrough (clave `gateways`, que el collector ignora):
 
-  ```bash
-  cd tools/tcu-toolbox
-  python make_plantas.py                 # lee ../../config/plants.yml
-  python make_plantas.py --puertos 503 504
+  ```yaml
+  gateways:
+    - { puerto: 503, tcu_ini: 1,  tcu_fin: 56 }
+    - { puerto: 504, tcu_ini: 57, tcu_fin: 108 }
   ```
 
-  Después ajusta los rangos `tcu_ini`/`tcu_fin` por gateway si cada GW atiende un subrango (como en El Burgo).
+  Un workflow de GitHub Actions (`.github/workflows/plantas-toolbox.yml`) regenera y commitea `plantas.json` automáticamente en cada cambio de `plants.yml`, así la carpeta que se baja al portátil de campo lleva siempre las plantas al día. **No edites `plantas.json` a mano**: cambia `plants.yml` y deja que se regenere (o lanza `python make_plantas.py` en local).
 
 - **Exportes canónicos**: los backups (`{"tipo":"backup_tcu", ...}`) y diagnósticos (`{"tipo":"diagnostico_tcu", ...}`) llevan planta, IP, TCU, fecha y versión de mapa, de modo que cualquier pieza de la plataforma (SCADA, gemelo, informes) puede ingerirlos sin ambigüedad.
 
