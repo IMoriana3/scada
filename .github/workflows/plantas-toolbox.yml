@@ -28,18 +28,18 @@ jobs:
       - name: Instalar PyYAML
         run: pip install pyyaml
 
-      - name: Regenerar plantas.json
+      - name: Regenerar JSON de la planta
         working-directory: tools/tcu-toolbox
         run: python make_plantas.py
 
       - name: Commit si hay cambios
         run: |
-          if git diff --quiet tools/tcu-toolbox/plantas.json; then
-            echo "plantas.json ya estaba al dia"
+          git add tools/tcu-toolbox/plantas
+          if git diff --cached --quiet; then
+            echo "plantas/ ya estaba al dia"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add tools/tcu-toolbox/plantas.json
-          git commit -m "plantas.json regenerado desde config/plants.yml"
+          git commit -m "plantas/: JSON de planta regenerado desde config/plants.yml"
           git push

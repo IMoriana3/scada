@@ -6,7 +6,7 @@ Es el complemento de **escritura** del SCADA de este repo: el SCADA es solo-lect
 
 ## Arranque
 
-1. Copia la carpeta `tcu-toolbox/` al portátil de campo.
+1. Copia la carpeta `tcu-toolbox/` al portátil de campo (los JSON de plantas van dentro, en `plantas/`).
 2. Doble clic en `TCU_Toolbox.bat` (no requiere admin).
 3. Elige planta (o rellena IP/puerto a mano) y usa las pestañas.
 
@@ -26,7 +26,9 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 ## Vínculo con la plataforma (sin dejar de ser offline)
 
-- **Plantas compartidas y automatizadas**: la toolbox carga `plantas.json` (junto al script) al arrancar. La fuente de verdad es el mismo `config/plants.yml` que usa el collector del SCADA: cada NCU declara ahí sus gateways passthrough (clave `gateways`, que el collector ignora):
+- **Mismo programa para todas las plantas, un JSON por planta**: la toolbox carga al arrancar todos los JSON de la subcarpeta `plantas/` (uno por planta, p. ej. `elburgo.json`) más un `plantas.json` clásico si existe. El botón **Cargar...** (junto al desplegable de plantas) importa un JSON recién descargado de la plataforma y ofrece guardarlo en `plantas/` para próximas sesiones. Así el programa nunca cambia por añadir plantas: solo se descargan ficheros.
+
+  La fuente de verdad es el mismo `config/plants.yml` que usa el collector del SCADA: cada NCU declara ahí sus gateways passthrough (clave `gateways`, que el collector ignora):
 
   ```yaml
   gateways:
@@ -34,7 +36,7 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
     - { puerto: 504, tcu_ini: 57, tcu_fin: 108 }
   ```
 
-  Un workflow de GitHub Actions (`.github/workflows/plantas-toolbox.yml`) regenera y commitea `plantas.json` automáticamente en cada cambio de `plants.yml`, así la carpeta que se baja al portátil de campo lleva siempre las plantas al día. **No edites `plantas.json` a mano**: cambia `plants.yml` y deja que se regenere (o lanza `python make_plantas.py` en local).
+  Un workflow de GitHub Actions (`.github/workflows/plantas-toolbox.yml`) regenera y commitea `plantas/<id_planta>.json` automáticamente en cada cambio de `plants.yml`. **No edites esos JSON a mano**: cambia `plants.yml` y deja que se regeneren (o lanza `python make_plantas.py` en local). Cada despliegue del SCADA (una planta) aporta su fichero; en el portátil de campo se pueden acumular los de varias plantas en `plantas/`.
 
 - **Exportes canónicos**: los backups (`{"tipo":"backup_tcu", ...}`) y diagnósticos (`{"tipo":"diagnostico_tcu", ...}`) llevan planta, IP, TCU, fecha y versión de mapa, de modo que cualquier pieza de la plataforma (SCADA, gemelo, informes) puede ingerirlos sin ambigüedad.
 

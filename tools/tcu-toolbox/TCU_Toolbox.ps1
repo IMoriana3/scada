@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '2.1'
+$VERSION_TOOLBOX = '2.2'
 $VERSION_MAPA    = 'SUNNER v6.1 (FW 1.4.3)'
 
 # ---------------------------------------------------------------------------
@@ -42,24 +42,39 @@ $PLANTAS = [ordered]@{
 }
 
 $script:MsgsInicio = @()
+
+# Fusiona un JSON de plantas ({version, plantas:[{nombre,ip,puerto,tcu_ini,tcu_fin}]})
+# en $PLANTAS. Devuelve cuantas entradas cargo; lanza si el fichero es ilegible.
+function Cargar-FicheroPlantas([string]$ruta) {
+    $jp = Get-Content $ruta -Raw | ConvertFrom-Json
+    if (-not $jp.plantas) { throw "sin lista 'plantas'" }
+    $n = 0
+    foreach ($p in $jp.plantas) {
+        if (-not $p.nombre -or -not $p.ip) { continue }
+        $PLANTAS[[string]$p.nombre] = @{
+            ip     = [string]$p.ip
+            puerto = [int]$p.puerto
+            ini    = [int]$p.tcu_ini
+            fin    = [int]$p.tcu_fin
+        }
+        $n++
+    }
+    return $n
+}
+
+# El programa es el mismo para todas las plantas; la configuracion viaja en
+# JSON: la carpeta plantas/ lleva un fichero por planta (generados por la
+# plataforma) y plantas.json unico se mantiene por compatibilidad.
 $rutaPlantas = Join-Path $PSScriptRoot 'plantas.json'
 if (Test-Path $rutaPlantas) {
-    try {
-        $jp = Get-Content $rutaPlantas -Raw | ConvertFrom-Json
-        $nCargadas = 0
-        foreach ($p in $jp.plantas) {
-            if (-not $p.nombre -or -not $p.ip) { continue }
-            $PLANTAS[[string]$p.nombre] = @{
-                ip     = [string]$p.ip
-                puerto = [int]$p.puerto
-                ini    = [int]$p.tcu_ini
-                fin    = [int]$p.tcu_fin
-            }
-            $nCargadas++
-        }
-        $script:MsgsInicio += "plantas.json cargado: $nCargadas plantas"
-    } catch {
-        $script:MsgsInicio += "AVISO: plantas.json ilegible ($_) - uso la lista integrada"
+    try { $script:MsgsInicio += "plantas.json: $(Cargar-FicheroPlantas $rutaPlantas) plantas" }
+    catch { $script:MsgsInicio += "AVISO: plantas.json ilegible ($_) - ignorado" }
+}
+$dirPlantas = Join-Path $PSScriptRoot 'plantas'
+if (Test-Path $dirPlantas) {
+    foreach ($f in @(Get-ChildItem $dirPlantas -Filter '*.json' | Sort-Object Name)) {
+        try { $script:MsgsInicio += "plantas/$($f.Name): $(Cargar-FicheroPlantas $f.FullName) plantas" }
+        catch { $script:MsgsInicio += "AVISO: plantas/$($f.Name) ilegible ($_) - ignorado" }
     }
 }
 
@@ -607,20 +622,26 @@ function TG($p, [string]$t, [int]$x, [int]$y, [int]$w) {
 
 $cbPlanta = New-Object System.Windows.Forms.ComboBox
 $cbPlanta.Location = New-Object System.Drawing.Point(10, 21)
-$cbPlanta.Size = New-Object System.Drawing.Size(210, 22)
+$cbPlanta.Size = New-Object System.Drawing.Size(175, 22)
 $cbPlanta.DropDownStyle = 'DropDownList'
 foreach ($k in $PLANTAS.Keys) { [void]$cbPlanta.Items.Add($k) }
 $cbPlanta.SelectedIndex = 0
 $gbCon.Controls.Add($cbPlanta)
 
-[void](LG $gbCon 'IP' 235 20)
-$txtIp = TG $gbCon '192.168.4.60' 257 22 110
-[void](LG $gbCon 'Puerto' 380 46)
-$txtPort = TG $gbCon '503' 428 22 50
-[void](LG $gbCon 'Timeout ms' 495 76)
-$txtTo = TG $gbCon '8000' 573 22 55
-[void](LG $gbCon 'Reintentos' 645 72)
-$txtRet = TG $gbCon '3' 719 22 35
+$btnPlantas = New-Object System.Windows.Forms.Button
+$btnPlantas.Text = 'Cargar...'
+$btnPlantas.Location = New-Object System.Drawing.Point(190, 19)
+$btnPlantas.Size = New-Object System.Drawing.Size(62, 26)
+$gbCon.Controls.Add($btnPlantas)
+
+[void](LG $gbCon 'IP' 262 20)
+$txtIp = TG $gbCon '192.168.4.60' 284 22 105
+[void](LG $gbCon 'Puerto' 398 46)
+$txtPort = TG $gbCon '503' 446 22 45
+[void](LG $gbCon 'Timeout ms' 502 76)
+$txtTo = TG $gbCon '8000' 578 22 50
+[void](LG $gbCon 'Reintentos' 638 70)
+$txtRet = TG $gbCon '3' 710 22 30
 
 $btnCancelar = New-Object System.Windows.Forms.Button
 $btnCancelar.Text = 'CANCELAR'
@@ -1113,6 +1134,45 @@ function Rango-Tcus([string]$tIni, [string]$tFin, [string]$etiqueta) {
     if ($fin -lt $ini) { throw "$etiqueta : el TCU final ($fin) es menor que el inicial ($ini)" }
     return @($ini..$fin)
 }
+
+function Refrescar-ComboPlantas {
+    $sel = $cbPlanta.SelectedItem
+    $cbPlanta.Items.Clear()
+    foreach ($k in $PLANTAS.Keys) { [void]$cbPlanta.Items.Add($k) }
+    if ($sel -and $cbPlanta.Items.Contains($sel)) { $cbPlanta.SelectedItem = $sel } else { $cbPlanta.SelectedIndex = 0 }
+}
+
+# Importa uno o varios JSON de plantas descargados de la plataforma y ofrece
+# guardarlos en plantas/ para que se carguen solos en proximas sesiones.
+$btnPlantas.Add_Click({
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    $dlg.Filter = 'Plantas (*.json)|*.json'
+    $dlg.Multiselect = $true
+    if ($dlg.ShowDialog() -ne 'OK') { return }
+    $importados = @()
+    foreach ($f in $dlg.FileNames) {
+        try {
+            $n = Cargar-FicheroPlantas $f
+            $importados += $f
+            Con "Plantas cargadas de $([System.IO.Path]::GetFileName($f)): $n" ([System.Drawing.Color]::SteelBlue)
+        } catch {
+            Con "AVISO: $([System.IO.Path]::GetFileName($f)) ilegible ($_) - ignorado" ([System.Drawing.Color]::Orange)
+        }
+    }
+    if ($importados.Count -eq 0) { return }
+    Refrescar-ComboPlantas
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "Guardar una copia en la carpeta 'plantas' junto al script, para que se carguen solas al arrancar?",
+        'Recordar plantas', 'YesNo', 'Question')
+    if ($r -eq 'Yes') {
+        try {
+            $dir = Join-Path $PSScriptRoot 'plantas'
+            if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+            foreach ($f in $importados) { Copy-Item $f (Join-Path $dir ([System.IO.Path]::GetFileName($f))) -Force }
+            Con "Copiados $($importados.Count) ficheros a plantas/" ([System.Drawing.Color]::SteelBlue)
+        } catch { Con "AVISO: no se pudo copiar a plantas/: $_" ([System.Drawing.Color]::Orange) }
+    }
+})
 
 $cbPlanta.Add_SelectedIndexChanged({
     $p = $PLANTAS[$cbPlanta.SelectedItem]

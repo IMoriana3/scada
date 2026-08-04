@@ -46,7 +46,8 @@ def main() -> None:
                     help="ruta a plants.yml del SCADA (defecto: ../../config/plants.yml)")
     ap.add_argument("--puertos", nargs="+", type=int, default=[503, 504],
                     help="puertos passthrough de la NCU, uno por gateway (defecto: 503 504)")
-    ap.add_argument("--salida", default="plantas.json", help="fichero de salida")
+    ap.add_argument("--salida", default=None,
+                    help="fichero de salida (defecto: plantas/<plant_id>.json, un JSON por planta)")
     args = ap.parse_args()
 
     ruta = Path(args.plants)
@@ -99,8 +100,14 @@ def main() -> None:
         "version": 1,
         "plantas": plantas,
     }
-    Path(args.salida).write_text(json.dumps(salida, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"{args.salida}: {len(plantas)} entradas ({len(ncus)} NCUs x {len(args.puertos)} puertos)")
+    if args.salida:
+        destino = Path(args.salida)
+    else:
+        pid = (cfg.get("plant") or {}).get("id") or "planta"
+        destino = Path("plantas") / f"{pid}.json"
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    destino.write_text(json.dumps(salida, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"{destino}: {len(plantas)} entradas ({len(ncus)} NCUs)")
 
 
 if __name__ == "__main__":
