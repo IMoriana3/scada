@@ -266,7 +266,8 @@ $ADDR_TIEMPO  = @(40001, 40002, 40003, 40004, 40005, 40006)
 $BITS_AL1 = @{   # 30002
   2='tilt fuera de rango'; 4='seta de emergencia pulsada'; 6='sensor T bateria desconectado'
   7='config por defecto (fallo NVM)'; 8='fallo com con Xbee'; 9='params com por defecto (fallo NVM)'
-  10='bateria desconectada'; 11='SoC muy bajo (L2)'; 12='SoC critico (L3)'; 13='SoC bajo (L1)'
+  10='bateria desconectada'; 11='SoC muy bajo (L2)'; 12='SoC bajo L3'; 13='SoC bajo (L1)'
+  14='SoC critico (<10%)'   # bit del mapa R7 de la NCU (batt_critical), no documentado en el PDF v6.1
   15='FW de test / no oficial'
 }
 $BITS_AL2 = @{   # 30003
@@ -291,8 +292,10 @@ $CHARGER_STATES = @{
   1='inicial'; 2='bateria aislada'; 3='bateria conectada'; 4='inicializando BQ'
   5='carga CC'; 6='carga CV'; 7='carga completa'; 8='bateria no detectada'
 }
-# Bits criticos -> estado ALARMA en el diagnostico (mismo criterio que el SCADA)
-$CRIT_AL1 = (1 -shl 2) -bor (1 -shl 4) -bor (1 -shl 12)                    # rango, seta, SoC critico
+# Bits criticos -> estado ALARMA en el diagnostico. Mismo criterio que
+# collector/decode.py (tracker_health): out_of_range, stop_button,
+# batt_critical (bit 14, no el L3 del bit 12), eje y motor.
+$CRIT_AL1 = (1 -shl 2) -bor (1 -shl 4) -bor (1 -shl 14)                    # rango, seta, SoC critico <10%
 $CRIT_AL2 = (1 -shl 4) -bor (1 -shl 5) -bor (1 -shl 8) -bor (1 -shl 15)   # corto, sobrecorriente, eje, driver
 
 function Bits-Texto([int]$valor, [hashtable]$tabla) {
@@ -424,8 +427,9 @@ $INV = [Globalization.CultureInfo]::InvariantCulture
 
 function Normalizar-Decimal([string]$t) {
     $t = $t.Trim()
-    if ($t -match '^-?\d{1,3}(\.\d{3})+(,\d+)?$') {
-        # formato espanol con miles: 1.234,56
+    # El punto solo se trata como separador de miles si tambien hay coma
+    # decimal (1.234,56). Un "1.234" a secas es un decimal con punto, no 1234.
+    if ($t -match '^-?\d{1,3}(\.\d{3})+,\d+$') {
         return ($t -replace '\.', '') -replace ',', '.'
     }
     if ($t.Contains(',') -and -not $t.Contains('.')) {
@@ -433,6 +437,12 @@ function Normalizar-Decimal([string]$t) {
         return $t -replace ',', '.'
     }
     return $t
+}
+
+function Parse-RealFinito([string]$texto) {
+    $d = [double]::Parse((Normalizar-Decimal $texto), $INV)
+    if ([double]::IsNaN($d) -or [double]::IsInfinity($d)) { throw "'$texto' no es un numero finito" }
+    return $d
 }
 
 function Entero-Estricto([string]$t) {
@@ -482,12 +492,13 @@ function Valor-A-Escritura([hashtable]$vdef, [string]$texto) {
             return @{modo='fc16'; addr=$a; palabras=@($lo, $hi); esperado=@($lo, $hi)}
         }
         'f32' {
-            $f = [float]([double]::Parse((Normalizar-Decimal $texto), $INV))
+            $f = [float](Parse-RealFinito $texto)
+            if ([float]::IsInfinity($f)) { throw "fuera de rango F32" }
             $w = F32-A-Palabras $f
             return @{modo='fc16'; addr=$a; palabras=$w; esperado=$w}
         }
         'f32deg' {
-            $g = [double]::Parse((Normalizar-Decimal $texto), $INV)
+            $g = Parse-RealFinito $texto
             if ([math]::Abs($g) -gt 360) { throw "$g grados no es un angulo razonable: este campo espera GRADOS" }
             $f = [float]($g * [math]::PI / 180.0)
             $w = F32-A-Palabras $f
@@ -1299,6 +1310,15 @@ $btnCargarBackup.Add_Click({
     if ($obj.tipo -ne 'backup_tcu' -or -not $obj.variables) {
         [void][System.Windows.Forms.MessageBox]::Show('El fichero no es un backup de TCU (usa "Backup JSON" en la pestana Volcar).','Error'); return
     }
+    # Un backup marcado incompleto (o con variables sin valor) dejaria la TCU
+    # a medio configurar: avisar antes de usarlo como preset.
+    $sinValor = @($obj.variables | Where-Object { "$($_.valor)" -eq '' }).Count
+    if (($obj.PSObject.Properties['completo'] -and -not $obj.completo) -or $sinValor -gt 0) {
+        $r = [System.Windows.Forms.MessageBox]::Show(
+            "Este backup esta INCOMPLETO ($sinValor variables sin valor). Si lo escribes en una TCU, las variables que faltan quedaran sin configurar.`r`n`r`nCargarlo como preset de todos modos?",
+            'Backup incompleto', 'YesNo', 'Warning')
+        if ($r -ne 'Yes') { return }
+    }
     # Solo variables de configuracion: fuera comandos y fecha/hora de entrada
     $pares = @()
     foreach ($v in $obj.variables) {
@@ -1495,11 +1515,17 @@ $btnVolcar.Add_Click({ Lanzar {
         } catch { Con "AVISO: identidad no legible: $_" ([System.Drawing.Color]::Orange) }
     }
     Modbus-Cerrar
+    $completo = (-not $script:Cancelar) -and ($koc -eq 0)
     $script:MetaVolcado = @{
         planta = Nombre-Planta; ip = $cx.ip; puerto = $cx.puerto; tcu = $tcu
         fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        completo = $completo; errores = $koc; cancelado = [bool]$script:Cancelar
     }
-    Con "Volcado terminado: $okc leidas, $koc con error" ([System.Drawing.Color]::SteelBlue)
+    if ($completo) {
+        Con "Volcado terminado: $okc leidas, $koc con error" ([System.Drawing.Color]::SteelBlue)
+    } else {
+        Con "Volcado INCOMPLETO: $okc leidas, $koc con error$(if ($script:Cancelar) { ', cancelado' }). Un backup exportado quedara marcado como incompleto." ([System.Drawing.Color]::Orange)
+    }
 } })
 
 $btnDCsv.Add_Click({
@@ -1514,23 +1540,35 @@ $btnDCsv.Add_Click({
 
 $btnBackupJson.Add_Click({
     if (-not $script:MetaVolcado) { return }
+    if (-not $script:MetaVolcado.completo) {
+        $r = [System.Windows.Forms.MessageBox]::Show(
+            "El volcado esta INCOMPLETO ($($script:MetaVolcado.errores) variables sin leer$(if ($script:MetaVolcado.cancelado) { ', cancelado' })).`r`n" +
+            "Un backup incompleto NO sirve para restaurar una TCU entera (las variables no leidas quedarian sin configurar).`r`n`r`n" +
+            "Guardar de todos modos, marcado como incompleto?",
+            'Backup incompleto', 'YesNo', 'Warning')
+        if ($r -ne 'Yes') { return }
+    }
     $dlg = New-Object System.Windows.Forms.SaveFileDialog
     $dlg.Filter = 'Backup TCU (*.json)|*.json'
-    $dlg.FileName = 'backup_tcu' + $script:MetaVolcado.tcu + '_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.json'
+    $sufijo = ''
+    if (-not $script:MetaVolcado.completo) { $sufijo = '_INCOMPLETO' }
+    $dlg.FileName = 'backup_tcu' + $script:MetaVolcado.tcu + '_' + (Get-Date -Format 'yyyyMMdd_HHmm') + $sufijo + '.json'
     if ($dlg.ShowDialog() -ne 'OK') { return }
     $obj = [ordered]@{
-        tipo    = 'backup_tcu'
-        mapa    = $VERSION_MAPA
-        toolbox = $VERSION_TOOLBOX
-        planta  = $script:MetaVolcado.planta
-        ip      = $script:MetaVolcado.ip
-        puerto  = $script:MetaVolcado.puerto
-        tcu     = $script:MetaVolcado.tcu
-        fecha   = $script:MetaVolcado.fecha
+        tipo     = 'backup_tcu'
+        mapa     = $VERSION_MAPA
+        toolbox  = $VERSION_TOOLBOX
+        planta   = $script:MetaVolcado.planta
+        ip       = $script:MetaVolcado.ip
+        puerto   = $script:MetaVolcado.puerto
+        tcu      = $script:MetaVolcado.tcu
+        fecha    = $script:MetaVolcado.fecha
+        completo = [bool]$script:MetaVolcado.completo
+        errores  = $script:MetaVolcado.errores
         variables = @($script:UltimoVolcado | ForEach-Object { [ordered]@{variable=$_.Variable; valor=$_.Valor; grupo=$_.Grupo} })
     }
     ConvertTo-Json $obj -Depth 5 | Set-Content $dlg.FileName -Encoding UTF8
-    Con "Backup JSON guardado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
+    Con "Backup JSON guardado: $($dlg.FileName)$(if (-not $script:MetaVolcado.completo) { '  (INCOMPLETO)' })" ([System.Drawing.Color]::SteelBlue)
 })
 
 $btnComparar.Add_Click({
