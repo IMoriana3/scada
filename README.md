@@ -48,6 +48,7 @@ La NCU actúa como **gateway Modbus** de todos sus TCU en un único espacio de d
 - Expone los datos ya digeridos en una API REST simple para el frontend.
 - Colorea cada seguidor en el mapa según su **estado de salud** (`health`) y muestra su telemetría al pasar el ratón.
 - Es **solo lectura**: el rango Modbus de comandos (40000+: safe positions, modos, ángulo objetivo) queda excluido a propósito para no comprometer la seguridad de la planta.
+- Cuando sí hay que **escribir** en un TCU (configuración, reloj, NVM), el complemento de campo es **[TCU Toolbox](tools/tcu-toolbox/)** (`tools/tcu-toolbox/`): herramienta offline en PowerShell que habla con los TCU vía el passthrough Modbus de la NCU, comparte las plantas de `config/plants.yml` (vía `make_plantas.py`) y replica este mismo modelo de `health` en su pestaña de diagnóstico.
 
 ### Estado `health`
 
