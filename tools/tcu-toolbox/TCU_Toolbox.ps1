@@ -2402,9 +2402,13 @@ function Escribir-EnTcus([int[]]$tcus) {
         foreach ($tcu in $seg.tcus) {
             if (Chequear-Cancelado) { break }
             $fallo = $null; $hecho = $true
+            $cambios = @()
             if (-not $segOk) { $hecho = $false; $fallo = "sin conexion ($($cx.ip):$($seg.puerto))" }
             else {
                 foreach ($v in $vars) {
+                    # valor anterior, para dejar rastro "antes -> despues" en el log
+                    $previo = '?'
+                    try { $previo = Leer-Decodificado $tcu $VARIABLES[$v.nombre] } catch {}
                     $hecho = $false
                     for ($i = 1; $i -le $cx.reint -and -not $hecho; $i++) {
                         if ($script:Cancelar) { break }
@@ -2426,6 +2430,7 @@ function Escribir-EnTcus([int[]]$tcus) {
                                 }
                             }
                             $hecho = $true
+                            $cambios += "$($v.nombre): $previo -> $($v.texto)"
                         } catch {
                             $fallo = "$($v.nombre): $_"
                             if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
@@ -2441,7 +2446,7 @@ function Escribir-EnTcus([int[]]$tcus) {
                 Con ("TCU {0,3}  FALLO   {1}" -f $tcu, $fallo) ([System.Drawing.Color]::Salmon)
             } else {
                 $ok++
-                Con ("TCU {0,3}  OK" -f $tcu) ([System.Drawing.Color]::LightGreen)
+                Con ("TCU {0,3}  OK   {1}" -f $tcu, ($cambios -join ' | ')) ([System.Drawing.Color]::LightGreen)
             }
         }
     }
@@ -3330,9 +3335,13 @@ $btnCsvTcu.Add_Click({ Lanzar {
         foreach ($tcu in $seg.tcus) {
             if (Chequear-Cancelado) { break }
             $fallo = $null; $todoOk = $segOk
+            $cambios = @()
             if (-not $segOk) { $fallo = "sin conexion ($($cx.ip):$($seg.puerto))" }
             else {
                 foreach ($j in $porTcu[[int]$tcu]) {
+                    # valor anterior, para dejar rastro "antes -> despues" en el log
+                    $previo = '?'
+                    try { $previo = Leer-Decodificado $tcu $VARIABLES[$j.nombre] } catch {}
                     $hecho = $false
                     for ($i = 1; $i -le $cx.reint -and -not $hecho; $i++) {
                         if ($script:Cancelar) { break }
@@ -3345,6 +3354,7 @@ $btnCsvTcu.Add_Click({ Lanzar {
                                 if (-not $cmp.ok) { throw "verificacion: leido $($cmp.leidoRaw)" }
                             }
                             $hecho = $true
+                            $cambios += "$($j.nombre): $previo -> $($j.texto)"
                         } catch {
                             $fallo = "$($j.nombre) = $($j.texto): $_"
                             if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
@@ -3354,7 +3364,7 @@ $btnCsvTcu.Add_Click({ Lanzar {
                     if (-not $hecho) { $todoOk = $false; break }
                 }
             }
-            if ($todoOk) { $ok++; Con ("TCU {0,3}  OK  ({1} valores)" -f $tcu, $porTcu[[int]$tcu].Count) ([System.Drawing.Color]::LightGreen) }
+            if ($todoOk) { $ok++; Con ("TCU {0,3}  OK   {1}" -f $tcu, ($cambios -join ' | ')) ([System.Drawing.Color]::LightGreen) }
             else { $ko++; Con ("TCU {0,3}  FALLO  {1}" -f $tcu, $fallo) ([System.Drawing.Color]::Salmon) }
         }
     }
