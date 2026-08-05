@@ -1,6 +1,6 @@
 # Pruebas de la TCU Toolbox
 
-275 comprobaciones de la lógica no-GUI de `TCU_Toolbox.ps1` contra un simulador
+278 comprobaciones de la lógica no-GUI de `TCU_Toolbox.ps1` contra un simulador
 Modbus TCP, sin tocar una planta.
 
 ```bash
@@ -25,6 +25,17 @@ Cubre el filtro **multiopción** (marcar ALARMA y OFFLINE a la vez), el cruce de
 filtros de dos columnas, "todas"/"ninguna", que abrir un panel cierre el
 anterior, la caja de texto de las columnas con muchos valores y la ordenación.
 Con `CHROMIUM_PATH` se le puede pasar un Chromium ya instalado.
+
+## Auditoría de maqueta
+
+`maqueta.ps1` extrae la geometría de los ~200 controles del script, les aplica
+las reglas de anclaje y **simula agrandar la ventana**, avisando de cualquier
+par de controles que acabe solapándose. Es lo que cierra la familia de fallos
+"al maximizar no se ve tal botón", que de otro modo solo aparece abriendo la
+ventana en Windows. Se ejecuta sola dentro de `test_toolbox.ps1`.
+
+Es una aproximación: lee posiciones y tamaños literales del código, así que un
+control colocado con una expresión calculada se le escapa.
 
 ## Qué cubre
 

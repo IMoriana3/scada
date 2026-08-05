@@ -657,9 +657,17 @@ Check 'informe escritura no dice sin datos' ($hEsc.Contains('Sin datos en esta s
 $hNada = Informe-Html ($baseE + @{esc=@()})
 Check 'informe sin nada avisa de la escritura' ($hNada.Contains('ejecuta una Escritura')) 'True'
 # la escritura se ordena con el resto por lo ultimo que se hizo
-$hMix = Informe-Html ($baseE + @{esc=$esc; inv=@([pscustomobject]@{NCU='1'; TCU=1; Serie='S'; MAC='M'; FW='v1'; FW_fabrica='v0'; HW='6'; Fecha_fab='18/06/2025'; Nota='OK'})
-                                horas=@{esc='23:42'; inv='22:00'}; orden=@{inv=1; esc=2}})
+$mixBase = @{planta='X'; ip=''; fecha=''; usuario=''; version='5.9'; mapa='m'; diag=@(); pem=@(); aud=@(); lectura=@()}
+$hMix = Informe-Html ($mixBase + @{esc=$esc; inv=@([pscustomobject]@{NCU='1'; TCU=1; Serie='S'; MAC='M'; FW='v1'; FW_fabrica='v0'; HW='6'; Fecha_fab='18/06/2025'; Nota='OK'})
+                                   horas=@{esc='23:42'; inv='22:00'}; orden=@{inv=1; esc=2}})
 Check 'informe escritura antes que inventario' ($hMix.IndexOf('Escritura de variables') -lt $hMix.IndexOf('Inventario de flota')) 'True'
+
+# ---------- auditoria de maqueta: nada puede solaparse al agrandar ----------
+# Cierra la familia de fallos de esta tanda: en vez de esperar a que se vea un
+# boton tapado, se comprueba la geometria de todas las pestanas.
+$salidaMaq = & (Join-Path $PSScriptRoot 'maqueta.ps1')
+Check 'maqueta sin solapes' (($salidaMaq -join ' ') -like '*SIN SOLAPES*') 'True'
+Check 'maqueta analiza el script entero' (($salidaMaq -join ' ') -match 'controles analizados: (\d+)' -and [int]$matches[1] -gt 150) 'True'
 
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }

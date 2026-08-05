@@ -36,6 +36,8 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
 
+**Consola copiable (v6.1)** — el texto de la consola siempre se pudo seleccionar con el ratón y copiar con Ctrl+C, pero cada línea nueva **te robaba la selección**: en una operación larga era imposible copiar nada. Ahora, si hay algo seleccionado, la consola escribe sin tocar la selección ni mover la vista. Y con el **botón derecho** hay menú: Copiar, Seleccionar todo, **Copiar toda la consola** (para pegar un resultado en un correo), Guardar log y Limpiar.
+
 **Etiquetas que tapaban botones (v6.0)** — al maximizar, **TEST COMM** desaparecía: la nota del registrador, que está a su izquierda en la misma fila, es una etiqueta larga y se anclaba a izquierda y derecha, así que se estiraba por encima del botón (y va antes en el z-order, así que lo tapaba). Ahora una etiqueta larga solo se estira si **no tiene nada a su derecha** en la misma franja horizontal.
 
 **Botones tapados al maximizar (v5.7)** — con la ventana maximizada, la tabla de cada pestaña se estiraba hacia abajo y **se comía los controles que van debajo**: el botón **ESCRIBIR**, la casilla de verificación, NVM… La tabla crecía pero los botones seguían anclados arriba. Ahora todo lo que está por debajo de la tabla que crece se ancla al borde inferior y baja con la ventana. La regla de anclaje se ha separado en una función pura (`Anclaje-Para`) que la suite comprueba con la geometría real de cada pestaña, sin abrir una ventana.
@@ -59,7 +61,7 @@ Además, transversales a las pestañas (v3.1):
 
 ## Pruebas
 
-`tests/` lleva un simulador Modbus TCP y **275 comprobaciones** de toda la lógica no-GUI, para poder tocar el script sin planta delante:
+`tests/` lleva un simulador Modbus TCP y **278 comprobaciones** de toda la lógica no-GUI, para poder tocar el script sin planta delante:
 
 ```bash
 cd tests && python3 mb_server.py &
