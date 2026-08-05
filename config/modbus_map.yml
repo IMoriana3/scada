@@ -18,7 +18,7 @@ tcu_compat:
     9:  {name: motor_peak,     type: u16, unit: mA}
     10: {name: target_angle,   type: f32, unit: rad, to_deg: true}
     12: {name: psu_current,    type: s16, unit: mA}
-    13: {name: soc,            type: u8_low, unit: "%"}   # VERIFICAR: el Excel solapa SoC y RemainingCapacity en 30513
+    13: {name: soc,            type: u8_low, unit: "%"}   # R7.1: SoC confirmado en byte bajo (el doc lista RemainingCapacity U16 solapado en 30513; byte alto reservado)
     16: {name: battery_voltage, type: u16, unit: mV}
     18: {name: battery_current, type: s16, unit: mA}
     19: {name: temp_pcb,       type: u16, unit: Kx10, to_celsius: true}

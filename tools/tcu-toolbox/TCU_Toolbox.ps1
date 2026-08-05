@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 #  TCU Toolbox v2 - Configuracion y diagnostico de TCUs Sunner (offline)
 #
 #  Pestanas:
@@ -25,8 +25,12 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '2.7'
-$VERSION_MAPA    = 'SUNNER v6.1 (FW 1.4.3)'
+$VERSION_TOOLBOX = '2.8'
+$VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
+
+# La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
+$PUERTO_NCU = 502
+$UNIT_NCU   = 1
 
 # ---------------------------------------------------------------------------
 #  Plantas: SOLO las de los ficheros cargados (plantas/ + plantas.json/csv +
@@ -68,12 +72,14 @@ function Cargar-FicheroPlantas([string]$ruta) {
     if (-not $jp.plantas) { throw "sin lista 'plantas'" }
     foreach ($p in $jp.plantas) {
         if (-not $p.nombre -or -not $p.ip) { continue }
-        $PLANTAS[[string]$p.nombre] = @{
+        $e = @{
             ip     = [string]$p.ip
             puerto = [int]$p.puerto
             ini    = [int]$p.tcu_ini
             fin    = [int]$p.tcu_fin
         }
+        if ($p.PSObject.Properties['hsu_esclavo'] -and "$($p.hsu_esclavo)" -match '^\d+$') { $e.hsu = [int]$p.hsu_esclavo }
+        $PLANTAS[[string]$p.nombre] = $e
         $n++
     }
     return $n
@@ -105,7 +111,9 @@ function Construir-EntradasAuto {
         $gws = @($grupo | ForEach-Object { @{puerto=$_.p.puerto; ini=$_.p.ini; fin=$_.p.fin} } | Sort-Object { $_.ini })
         $ini = @($gws | ForEach-Object { $_.ini } | Measure-Object -Minimum).Minimum
         $fin = @($gws | ForEach-Object { $_.fin } | Measure-Object -Maximum).Maximum
-        $PLANTAS["$prefijo (auto)"] = @{ip=$ip; puerto=$null; ini=[int]$ini; fin=[int]$fin; gws=$gws}
+        $auto = @{ip=$ip; puerto=$null; ini=[int]$ini; fin=[int]$fin; gws=$gws}
+        foreach ($g in $grupo) { if ($g.p.hsu) { $auto.hsu = $g.p.hsu; break } }
+        $PLANTAS["$prefijo (auto)"] = $auto
     }
     # agrupar por planta a partir del patron de nombre "<Planta> NCU<n>"
     $porPlanta = [ordered]@{}
@@ -410,6 +418,109 @@ function Bits-Texto([int]$valor, [hashtable]$tabla) {
         if ($valor -band (1 -shl $b)) { $lista += $tabla[$b] }
     }
     return $lista
+}
+
+# ---- HSU (estacion meteo, mapa R23; esclavo Modbus tras el gateway) ----
+$HSU_AL1 = @{
+  0='com. anemometro'; 1='com. sensor nieve'; 2='com. piranometro'; 3='com. sensor T ext'
+  4='bateria desconectada'; 5='com. sensor granizo'; 6='ALARMA NIEVE'; 7='ALARMA LLUVIA'
+  9='ALARMA VIENTO'; 10='ALARMA RACHA'; 12='ALARMA VIENTO N2'; 13='ALARMA VIENTO N3'
+  14='com. dual irradiancia'; 15='com. pluviometro'
+}
+
+# ---- NCU (registros propios, mapa R7.1; puerto 502, unit 1) ----
+$NCU_DIN = @{
+  0='bateria UPS baja'; 1='fallo alimentacion UPS'; 13='SETA DE EMERGENCIA'
+}
+$NCU_MAIN = @{
+  0='alarma bateria baja'; 4='GW1 DESCONECTADO'; 5='GW2 DESCONECTADO'
+}
+
+# Lee la meteo en vivo de una HSU (bloques 30000-30013 y 30021-30028).
+# Devuelve @{filas=[pscustomobject Campo/Valor/Nota]; alarmas=@(); nivel=int}.
+function Hsu-LeerMeteo([byte]$unit) {
+    $w  = FC03-Leer $unit (Dir-Trama 30000) 14
+    $w2 = FC03-Leer $unit (Dir-Trama 30021) 8
+    $nivel = $w[1] -band 0x7
+    $al1 = $w[2]
+    $alarmas = @(Bits-Texto $al1 $HSU_AL1)
+    $viento = Palabras-A-F32 @($w[3], $w[4])
+    $dir    = Palabras-A-F32 @($w[5], $w[6])
+    $nieve  = Palabras-A-F32 @($w[7], $w[8])
+    $tempC  = ($w[10] / 10.0) - 273.15
+    $irrRaw = ([int]$w[13] -shl 16) -bor [int]$w[12]
+    $filas = @(
+        [pscustomobject]@{Campo='Nivel de viento (0-7)';   Valor="$nivel";                                              Nota=$(if ($nivel -gt 0) { 'ALARMA DE VIENTO ACTIVA' } else { '' })}
+        [pscustomobject]@{Campo='Viento [m/s]';            Valor=$viento.ToString('0.##', $INV);                        Nota=("{0:0.#} km/h" -f ($viento * 3.6))}
+        [pscustomobject]@{Campo='Direccion viento [deg]';  Valor=$dir.ToString('0.#', $INV);                            Nota="sector $((($w[1] -shr 12) -band 0xF))"}
+        [pscustomobject]@{Campo='Nieve [m]';               Valor=$nieve.ToString('0.###', $INV);                        Nota=''}
+        [pscustomobject]@{Campo='Lluvia [mm/h]';           Valor="$($w[9])";                                            Nota=''}
+        [pscustomobject]@{Campo='Temperatura ext [C]';     Valor=$tempC.ToString('0.#', $INV);                          Nota=''}
+        [pscustomobject]@{Campo='Humedad rel [%]';         Valor=(($w[11] / 10.0)).ToString('0.#', $INV);               Nota=''}
+        [pscustomobject]@{Campo='Irradiancia [W/m2]';      Valor=(($irrRaw / 100.0)).ToString('0.#', $INV);             Nota=''}
+        [pscustomobject]@{Campo='Alarmas (30002)';         Valor=("0x{0:X4}" -f $al1);                                  Nota=$(if ($alarmas.Count) { $alarmas -join '; ' } else { 'sin alarmas' })}
+        [pscustomobject]@{Campo='Bateria litio [mV]';      Valor="$($w2[0])";                                           Nota=''}
+        [pscustomobject]@{Campo='T interna [C]';           Valor=(($w2[5] - 273)).ToString('0', $INV);                  Nota=''}
+        [pscustomobject]@{Campo='V bateria int [mV]';      Valor="$($w2[6])";                                           Nota=''}
+        [pscustomobject]@{Campo='V panel/aliment [mV]';    Valor="$($w2[7])";                                           Nota=''}
+    )
+    return @{filas=$filas; alarmas=$alarmas; nivel=$nivel}
+}
+
+# Lee la configuracion relevante de la HSU. Devuelve filas Campo/Valor/Nota y
+# los valores de umbrales para rellenar los cuadros de edicion.
+function Hsu-LeerConfig([byte]$unit) {
+    $wCfg = FC03-Leer $unit (Dir-Trama 41002) 7      # 41002..41008
+    $wAlt = FC03-Leer $unit (Dir-Trama 40008) 1      # altura sensor nieve
+    $wUmb = FC03-Leer $unit (Dir-Trama 41011) 8      # 41011..41018
+    $low  = Palabras-A-F32 @($wUmb[0], $wUmb[1])     # 41011 desactivacion
+    $mid  = Palabras-A-F32 @($wUmb[2], $wUmb[3])     # 41013 activacion
+    $tLow = $wUmb[6]; $tMid = $wUmb[7]               # 41017 / 41018
+    $sens = $wCfg[6]
+    $nombresSens = @{0='pluviometro'; 1='T-HR ext'; 2='piranometro 3STP'; 3='granizo RK400'; 4='lluvia'; 5='nieve'; 6='anemometro sonico'; 7='piranometro Kipp'; 8='inundacion'; 9='T ext'; 10='dual irradiancia'}
+    $lista = @(Bits-Texto $sens $nombresSens)
+    $filas = @(
+        [pscustomobject]@{Campo='Esclavo Modbus (41002)';        Valor="$($wCfg[0] -band 0xFF)";               Nota=''}
+        [pscustomobject]@{Campo='Sensores config. (41008)';      Valor=("0x{0:X4}" -f $sens);                  Nota=$(if ($lista.Count) { $lista -join ', ' } else { 'ninguno declarado' })}
+        [pscustomobject]@{Campo='Altura sensor nieve [cm]';      Valor="$($wAlt[0])";                          Nota='40008'}
+        [pscustomobject]@{Campo='Umbral viento ON [m/s]';        Valor=$mid.ToString('0.##', $INV);            Nota='41013 (activacion)'}
+        [pscustomobject]@{Campo='Umbral viento OFF [m/s]';       Valor=$low.ToString('0.##', $INV);            Nota='41011 (desactivacion)'}
+        [pscustomobject]@{Campo='Tiempo activacion [s]';         Valor="$tMid";                                Nota='41018'}
+        [pscustomobject]@{Campo='Tiempo desactivacion [s]';      Valor="$tLow";                                Nota='41017'}
+    )
+    return @{filas=$filas; low=$low; mid=$mid; tLow=$tLow; tMid=$tMid}
+}
+
+# Una fila de la caja negra de 24 h de la HSU (4 registros por minuto desde 31000)
+function Hsu-CajaFila([int[]]$w, [int]$minuto) {
+    return [pscustomobject]@{
+        Hora        = ('{0:00}:{1:00}' -f [math]::Floor($minuto / 60), ($minuto % 60))
+        Dir_deg     = $w[0]
+        Vmedia_kmh  = ($w[1] -band 0xFF)
+        Vmax_kmh    = (($w[1] -shr 8) -band 0xFF)
+        NieveMax_cm = $w[2]
+        Irr_Wm2     = [math]::Round($w[3] / 10.0, 1)
+    }
+}
+
+# Salud de la propia NCU (30100-30105, unit 1 en el puerto 502). Requiere
+# conexion ya abierta. Devuelve @{salud; alarmas; fecha; din; principal}.
+function Ncu-Salud {
+    $w = FC03-Leer $UNIT_NCU (Dir-Trama 30100) 6
+    $din = $w[0]; $principal = $w[1]
+    $alarmas = @(Bits-Texto $din $NCU_DIN) + @(Bits-Texto $principal $NCU_MAIN)
+    for ($b = 3; $b -le 12; $b++) {
+        if ($din -band (1 -shl $b)) { $alarmas += "interruptor limpieza $($b-2) activo" }
+    }
+    $salud = 'OK'
+    if (($principal -band 0x30) -or ($din -band 0x2000)) { $salud = 'ALARMA' }       # GW1/GW2 caidos o seta
+    elseif (($din -band 0x3) -or ($principal -band 0x1)) { $salud = 'AVISO' }        # UPS/bateria
+    $fecha = ''
+    try {
+        $epoch = ([long]$w[5] -shl 16) -bor [long]$w[4]
+        if ($epoch -gt 1000000000) { $fecha = [DateTimeOffset]::FromUnixTimeSeconds($epoch).UtcDateTime.ToString('yyyy-MM-dd HH:mm:ss') + ' UTC' }
+    } catch {}
+    return @{salud=$salud; alarmas=$alarmas; fecha=$fecha; din=$din; principal=$principal}
 }
 
 # Direccion: se envia el numero del PDF tal cual (asi funciona modbus-utils).
@@ -954,7 +1065,7 @@ $cbLVar.DropDownStyle = 'DropDownList'
 $tabL.Controls.Add($cbLVar)
 
 $btnLAdd = New-Object System.Windows.Forms.Button
-$btnLAdd.Text = 'Anadir'
+$btnLAdd.Text = 'Añadir'
 $btnLAdd.Location = New-Object System.Drawing.Point(806, 19)
 $btnLAdd.Size = New-Object System.Drawing.Size(102, 26)
 $tabL.Controls.Add($btnLAdd)
@@ -1257,6 +1368,85 @@ $lvV.View = 'Details'; $lvV.FullRowSelect = $true; $lvV.GridLines = $true
 [void]$lvV.Columns.Add('Nota', 150)
 $gbInvF.Controls.Add($lvV)
 
+# ============================ TAB HSU (METEO) ============================
+$tabH = New-Object System.Windows.Forms.TabPage
+$tabH.Text = 'HSU'
+$tabs.TabPages.Add($tabH)
+
+[void](LG $tabH 'Esclavo HSU' 10 78)
+$txtHSlave = TG $tabH '185' 92 22 45
+
+$btnHMeteo = New-Object System.Windows.Forms.Button
+$btnHMeteo.Text = 'LEER METEO'
+$btnHMeteo.Location = New-Object System.Drawing.Point(155, 18)
+$btnHMeteo.Size = New-Object System.Drawing.Size(120, 28)
+$btnHMeteo.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnHMeteo.ForeColor = [System.Drawing.Color]::White
+$tabH.Controls.Add($btnHMeteo)
+
+$btnHConfig = New-Object System.Windows.Forms.Button
+$btnHConfig.Text = 'LEER CONFIG'
+$btnHConfig.Location = New-Object System.Drawing.Point(285, 18)
+$btnHConfig.Size = New-Object System.Drawing.Size(120, 28)
+$tabH.Controls.Add($btnHConfig)
+
+$btnHCaja = New-Object System.Windows.Forms.Button
+$btnHCaja.Text = 'CAJA NEGRA 24h -> CSV'
+$btnHCaja.Location = New-Object System.Drawing.Point(415, 18)
+$btnHCaja.Size = New-Object System.Drawing.Size(175, 28)
+$tabH.Controls.Add($btnHCaja)
+
+$btnHReloj = New-Object System.Windows.Forms.Button
+$btnHReloj.Text = 'RELOJ UTC'
+$btnHReloj.Location = New-Object System.Drawing.Point(600, 18)
+$btnHReloj.Size = New-Object System.Drawing.Size(95, 28)
+$btnHReloj.BackColor = [System.Drawing.Color]::FromArgb(0,120,60)
+$btnHReloj.ForeColor = [System.Drawing.Color]::White
+$tabH.Controls.Add($btnHReloj)
+
+$btnHNieve = New-Object System.Windows.Forms.Button
+$btnHNieve.Text = 'CALIBRAR NIEVE'
+$btnHNieve.Location = New-Object System.Drawing.Point(705, 18)
+$btnHNieve.Size = New-Object System.Drawing.Size(125, 28)
+$tabH.Controls.Add($btnHNieve)
+
+$btnHNvm = New-Object System.Windows.Forms.Button
+$btnHNvm.Text = 'NVM'
+$btnHNvm.Location = New-Object System.Drawing.Point(840, 18)
+$btnHNvm.Size = New-Object System.Drawing.Size(68, 28)
+$btnHNvm.BackColor = [System.Drawing.Color]::FromArgb(160,80,0)
+$btnHNvm.ForeColor = [System.Drawing.Color]::White
+$tabH.Controls.Add($btnHNvm)
+
+[void](LG $tabH 'Umbral ON [m/s]' 10 100 56)
+$txtHMid = TG $tabH '' 112 52 55
+[void](LG $tabH 'OFF [m/s]' 178 62 56)
+$txtHLow = TG $tabH '' 244 52 55
+[void](LG $tabH 't ON [s]' 310 50 56)
+$txtHTMid = TG $tabH '' 362 52 45
+[void](LG $tabH 't OFF [s]' 418 52 56)
+$txtHTLow = TG $tabH '' 474 52 45
+
+$btnHUmb = New-Object System.Windows.Forms.Button
+$btnHUmb.Text = 'ESCRIBIR UMBRALES'
+$btnHUmb.Location = New-Object System.Drawing.Point(535, 49)
+$btnHUmb.Size = New-Object System.Drawing.Size(155, 26)
+$btnHUmb.BackColor = [System.Drawing.Color]::FromArgb(0,120,60)
+$btnHUmb.ForeColor = [System.Drawing.Color]::White
+$tabH.Controls.Add($btnHUmb)
+
+$lblHNota = LG $tabH 'La HSU cuelga de un gateway concreto: usa una entrada GW (o puerto manual), no (auto).' 700 210 46
+$lblHNota.ForeColor = [System.Drawing.Color]::Gray
+
+$lvH = New-Object System.Windows.Forms.ListView
+$lvH.Location = New-Object System.Drawing.Point(10, 84)
+$lvH.Size = New-Object System.Drawing.Size(898, 276)
+$lvH.View = 'Details'; $lvH.FullRowSelect = $true; $lvH.GridLines = $true
+[void]$lvH.Columns.Add('Campo', 240)
+[void]$lvH.Columns.Add('Valor', 160)
+[void]$lvH.Columns.Add('Nota', 480)
+$tabH.Controls.Add($lvH)
+
 # ============================ TAB UTILIDADES ============================
 $tabU = New-Object System.Windows.Forms.TabPage
 $tabU.Text = 'Utilidades'
@@ -1381,7 +1571,8 @@ function Con([string]$t, $color) {
 $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $btnDiag, $btnSync, $btnIdent,
                     $btnPresetSave, $btnPresetLoad, $btnCargarBackup, $btnLCsv, $btnDCsv, $btnBackupJson,
                     $btnComparar, $btnGCsv, $btnGJson, $btnICsv,
-                    $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnInvF, $btnInvFCsv)
+                    $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnInvF, $btnInvFCsv,
+                    $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm)
 
 function Set-UIOcupada([bool]$ocupada) {
     foreach ($b in $BOTONES_ACCION) { $b.Enabled = (-not $ocupada) }
@@ -1429,11 +1620,11 @@ function Params-Conexion {
     if (-not $ip) { throw 'IP vacia' }
     $to     = Val-Int $txtTo.Text 'Timeout' 500 60000
     $reint  = Val-Int $txtRet.Text 'Reintentos' 1 10
-    if ($ip -eq '(planta)') {
+    if ($ip -eq 'NA' -or $ip -eq '(planta)') {
         $p = $null
         if ($cbPlanta.SelectedItem) { $p = $PLANTAS[$cbPlanta.SelectedItem] }
-        if (-not ($p -and $p.ncus)) { throw "'(planta)' requiere una entrada (PLANTA completa) seleccionada" }
-        return @{ip='(planta)'; puerto=$null; gws=$null; multi=$p.ncus; etiqueta='PLANTA'; to=$to; reint=$reint}
+        if (-not ($p -and $p.ncus)) { throw "IP 'NA' solo vale con una entrada (PLANTA completa) seleccionada" }
+        return @{ip='NA'; puerto=$null; gws=$null; multi=$p.ncus; etiqueta='PLANTA'; to=$to; reint=$reint}
     }
     $pt = $txtPort.Text.Trim()
     if ($pt -eq 'auto') {
@@ -1529,8 +1720,10 @@ $btnPlantas.Add_Click({
 $cbPlanta.Add_SelectedIndexChanged({
     $p = $PLANTAS[$cbPlanta.SelectedItem]
     if ($p -and $p.ncus) {
-        # planta completa: solo Diagnostico; rangos y puertos por NCU automaticos
-        $txtIp.Text = '(planta)'; $txtPort.Text = 'auto'
+        # planta completa: solo Diagnostico; IP, puertos y rangos van por NCU
+        # (los campos se ignoran y se muestran como NA)
+        $txtIp.Text = 'NA'; $txtPort.Text = 'auto'
+        $txtGIni.Text = 'NA'; $txtGFin.Text = 'NA'
         Con "PLANTA completa seleccionada ($(@($p.ncus).Count) NCUs): usa DIAGNOSTICAR; el filtro NCUs admite '1,3-5' (vacio = todas)." ([System.Drawing.Color]::SteelBlue)
         return
     }
@@ -1544,6 +1737,7 @@ $cbPlanta.Add_SelectedIndexChanged({
         $txtAIni.Text = "$($p.ini)"; $txtAFin.Text = "$($p.fin)"
         $txtVIni.Text = "$($p.ini)"; $txtVFin.Text = "$($p.fin)"
         $txtBIni.Text = "$($p.ini)"; $txtBFin.Text = "$($p.fin)"
+        if ($p.hsu) { $txtHSlave.Text = "$($p.hsu)" }
     }
 })
 
@@ -2149,7 +2343,33 @@ $btnDiag.Add_Click({ Lanzar {
     $nOk = 0; $nAviso = 0; $nAlarma = 0; $nOff = 0
     foreach ($tr in $trabajos) {
     if ($script:Cancelar) { break }
-    if ($null -ne $tr.ncu) { Con ("--- NCU{0}  ({1})  TCUs {2}-{3} ---" -f $tr.ncu, $tr.ip, $tr.tcus[0], $tr.tcus[-1]) ([System.Drawing.Color]::SteelBlue) }
+    if ($null -ne $tr.ncu) {
+        Con ("--- NCU{0}  ({1})  TCUs {2}-{3} ---" -f $tr.ncu, $tr.ip, $tr.tcus[0], $tr.tcus[-1]) ([System.Drawing.Color]::SteelBlue)
+        # salud de la propia NCU (puerto 502, unit 1): GW1/GW2, UPS, seta, reloj
+        $ns = $null; $nsErr = ''
+        try {
+            Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
+            $ns = Ncu-Salud
+            Modbus-Cerrar
+        } catch { $nsErr = "$_"; Modbus-Cerrar }
+        $dn = [pscustomobject]@{
+            NCU="$($tr.ncu)"; TCU='NCU'; Salud=$(if ($ns) { $ns.salud } else { 'AVISO' }); Modo='-'
+            Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''
+            Alarmas=$(if ($ns) { ((@($ns.alarmas) + $(if ($ns.fecha) { @("reloj NCU: $($ns.fecha)") } else { @() })) -join '; ') } else { "NCU sin respuesta en ${PUERTO_NCU}: $nsErr" })
+            main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
+        }
+        $itemN = New-Object System.Windows.Forms.ListViewItem("$($tr.ncu)")
+        foreach ($c in @($dn.TCU, $dn.Salud, $dn.Modo, $dn.Tilt, $dn.Objetivo, $dn.Dif, $dn.SoC, $dn.Alarmas)) { [void]$itemN.SubItems.Add("$c") }
+        switch ($dn.Salud) {
+            'OK'     { $itemN.ForeColor = [System.Drawing.Color]::DarkGreen }
+            'AVISO'  { $itemN.ForeColor = [System.Drawing.Color]::DarkOrange }
+            'ALARMA' { $itemN.ForeColor = [System.Drawing.Color]::Firebrick }
+        }
+        $lvG.Items.Add($itemN) | Out-Null
+        $script:UltimoDiag += $dn
+        if ($dn.Salud -ne 'OK') { Con ("NCU{0}  {1,-8} {2}" -f $tr.ncu, $dn.Salud, $dn.Alarmas) ([System.Drawing.Color]::Orange) }
+        [System.Windows.Forms.Application]::DoEvents()
+    }
     $segs = @(Plan-Segmentos $tr.tcus $tr.cx)
     foreach ($seg in $segs) {
     if ($script:Cancelar) { break }
@@ -2586,6 +2806,204 @@ $btnInvFCsv.Add_Click({
     }
 })
 
+# ------------------------- HSU (METEO) -------------------------
+function Params-Hsu {
+    $cx = Params-Conexion
+    if ($cx.multi -or -not $cx.puerto) {
+        throw "la HSU cuelga de un gateway concreto: elige una entrada GW (o IP/puerto manual), no (auto) ni PLANTA"
+    }
+    $cx.unitHsu = [byte](Val-Int $txtHSlave.Text 'Esclavo HSU' 1 255)
+    return $cx
+}
+
+function Hsu-Mostrar([array]$filas) {
+    $lvH.Items.Clear()
+    foreach ($f in $filas) {
+        $item = New-Object System.Windows.Forms.ListViewItem($f.Campo)
+        [void]$item.SubItems.Add($f.Valor); [void]$item.SubItems.Add($f.Nota)
+        if ($f.Nota -match 'ALARMA') { $item.ForeColor = [System.Drawing.Color]::Firebrick }
+        $lvH.Items.Add($item) | Out-Null
+    }
+}
+
+$btnHMeteo.Add_Click({ Lanzar {
+    $cx = Params-Hsu
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Leyendo meteo de HSU esclavo $($cx.unitHsu)  ($($cx.ip):$($cx.puerto))" ([System.Drawing.Color]::SteelBlue)
+    try { Modbus-Conectar $cx.ip $cx.puerto $cx.to } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
+    $m = $null; $err = ''
+    for ($i = 1; $i -le $cx.reint -and $null -eq $m; $i++) {
+        try { $m = Hsu-LeerMeteo $cx.unitHsu }
+        catch {
+            $err = "$_"
+            if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+            Start-Sleep -Milliseconds (300 * $i)
+        }
+    }
+    Modbus-Cerrar
+    if ($null -eq $m) { Con "HSU sin respuesta: $err" ([System.Drawing.Color]::Salmon); return }
+    Hsu-Mostrar $m.filas
+    if ($m.nivel -gt 0 -or $m.alarmas.Count -gt 0) {
+        Con ("HSU: nivel de viento {0}; alarmas: {1}" -f $m.nivel, $(if ($m.alarmas.Count) { $m.alarmas -join '; ' } else { 'ninguna' })) ([System.Drawing.Color]::Orange)
+    } else {
+        Con 'HSU: sin alarmas, nivel de viento 0.' ([System.Drawing.Color]::LightGreen)
+    }
+} })
+
+$btnHConfig.Add_Click({ Lanzar {
+    $cx = Params-Hsu
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Leyendo configuracion de HSU esclavo $($cx.unitHsu)  ($($cx.ip):$($cx.puerto))" ([System.Drawing.Color]::SteelBlue)
+    try { Modbus-Conectar $cx.ip $cx.puerto $cx.to } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
+    $c = $null; $err = ''
+    for ($i = 1; $i -le $cx.reint -and $null -eq $c; $i++) {
+        try { $c = Hsu-LeerConfig $cx.unitHsu }
+        catch {
+            $err = "$_"
+            if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+            Start-Sleep -Milliseconds (300 * $i)
+        }
+    }
+    Modbus-Cerrar
+    if ($null -eq $c) { Con "HSU sin respuesta: $err" ([System.Drawing.Color]::Salmon); return }
+    Hsu-Mostrar $c.filas
+    $txtHMid.Text = $c.mid.ToString('0.##', $INV); $txtHLow.Text = $c.low.ToString('0.##', $INV)
+    $txtHTMid.Text = "$($c.tMid)"; $txtHTLow.Text = "$($c.tLow)"
+    Con "Config leida; umbrales cargados en los cuadros (ON $($txtHMid.Text) / OFF $($txtHLow.Text) m/s)." ([System.Drawing.Color]::SteelBlue)
+} })
+
+$btnHUmb.Add_Click({ Lanzar {
+    $cx = Params-Hsu
+    $mid = Parse-RealFinito $txtHMid.Text
+    $low = Parse-RealFinito $txtHLow.Text
+    $tMid = Val-Int $txtHTMid.Text 'Tiempo activacion' 0 65535
+    $tLow = Val-Int $txtHTLow.Text 'Tiempo desactivacion' 0 65535
+    if ($mid -lt 0 -or $mid -gt 60 -or $low -lt 0 -or $low -gt 60) { throw 'umbral fuera de rango razonable (0-60 m/s)' }
+    if ($low -gt $mid) { throw "el umbral OFF ($low) no puede ser mayor que el ON ($mid)" }
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "ATENCION: vas a cambiar los umbrales de VIENTO de la HSU $($cx.unitHsu) - esto afecta a la SEGURIDAD de la planta.`r`n`r`n" +
+        "ON (41013): $mid m/s  tras $tMid s`r`nOFF (41011): $low m/s  tras $tLow s`r`n`r`nContinuar?",
+        'UMBRALES DE VIENTO', 'YesNo', 'Warning')
+    if ($r -ne 'Yes') { return }
+    try { Modbus-Conectar $cx.ip $cx.puerto $cx.to } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
+    $trabajos = @(
+        @{n='umbral ON (41013)';  esc=(Valor-A-Escritura @{addr=41013; tipo='f32'} ($mid.ToString($INV)))}
+        @{n='umbral OFF (41011)'; esc=(Valor-A-Escritura @{addr=41011; tipo='f32'} ($low.ToString($INV)))}
+        @{n='t ON (41018)';       esc=(Valor-A-Escritura @{addr=41018; tipo='u16'} "$tMid")}
+        @{n='t OFF (41017)';      esc=(Valor-A-Escritura @{addr=41017; tipo='u16'} "$tLow")}
+    )
+    $ok = $true
+    foreach ($t in $trabajos) {
+        $hecho = $false; $fallo = ''
+        for ($i = 1; $i -le $cx.reint -and -not $hecho; $i++) {
+            try {
+                FC16-Escribir $cx.unitHsu $t.esc.addr $t.esc.palabras
+                $cmp = Comparar-Escritura $cx.unitHsu $t.esc
+                if (-not $cmp.ok) { throw "verificacion: leido $($cmp.leidoRaw)" }
+                $hecho = $true
+            } catch {
+                $fallo = "$_"
+                if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+                Start-Sleep -Milliseconds (300 * $i)
+            }
+        }
+        if ($hecho) { Con "  $($t.n)  OK" ([System.Drawing.Color]::LightGreen) }
+        else { $ok = $false; Con "  $($t.n)  FALLO  $fallo" ([System.Drawing.Color]::Salmon) }
+    }
+    Modbus-Cerrar
+    if ($ok) { Con 'Umbrales escritos y verificados. RECUERDA: pulsa NVM para que sobrevivan a un reinicio.' ([System.Drawing.Color]::Orange) }
+} })
+
+$btnHReloj.Add_Click({ Lanzar {
+    $cx = Params-Hsu
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "Poner el reloj de la HSU $($cx.unitHsu) en hora (UTC, desde este PC)?",
+        'Reloj HSU', 'YesNo', 'Question')
+    if ($r -ne 'Yes') { return }
+    try { Modbus-Conectar $cx.ip $cx.puerto $cx.to } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
+    $hecho = $false; $fallo = ''
+    for ($i = 1; $i -le $cx.reint -and -not $hecho; $i++) {
+        try {
+            $u = [DateTime]::UtcNow
+            FC16-Escribir $cx.unitHsu 40001 @($u.Second, $u.Minute, $u.Hour, $u.Day, $u.Month, $u.Year)
+            $hecho = $true
+        } catch {
+            $fallo = "$_"
+            if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+            Start-Sleep -Milliseconds (300 * $i)
+        }
+    }
+    Modbus-Cerrar
+    if ($hecho) { Con "Reloj de la HSU puesto en hora (UTC). La caja negra de 24h usa esta hora." ([System.Drawing.Color]::LightGreen) }
+    else { Con "FALLO poniendo el reloj: $fallo" ([System.Drawing.Color]::Salmon) }
+} })
+
+$btnHNieve.Add_Click({ Lanzar {
+    $cx = Params-Hsu
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "Calibrar el CERO del sensor de nieve de la HSU $($cx.unitHsu)?`r`nHazlo SOLO sin nieve bajo el sensor.",
+        'Calibrar sensor de nieve', 'YesNo', 'Warning')
+    if ($r -ne 'Yes') { return }
+    try { Modbus-Conectar $cx.ip $cx.puerto $cx.to } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
+    try { FC22-Mascara $cx.unitHsu 40007 0xFFF7 0x0008; Con 'Calibracion de nieve lanzada (40007 bit 3).' ([System.Drawing.Color]::LightGreen) }
+    catch { Con "FALLO: $_" ([System.Drawing.Color]::Salmon) }
+    Modbus-Cerrar
+} })
+
+$btnHNvm.Add_Click({ Lanzar {
+    $cx = Params-Hsu
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "Guardar la configuracion de la HSU $($cx.unitHsu) en NVM (40007 bit 15)?",
+        'NVM HSU', 'YesNo', 'Warning')
+    if ($r -ne 'Yes') { return }
+    try { Modbus-Conectar $cx.ip $cx.puerto $cx.to } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
+    try { FC22-Mascara $cx.unitHsu 40007 0x7FFF 0x8000; Con 'NVM de la HSU guardada.' ([System.Drawing.Color]::LightGreen) }
+    catch { Con "FALLO: $_" ([System.Drawing.Color]::Salmon) }
+    Modbus-Cerrar
+} })
+
+$btnHCaja.Add_Click({ Lanzar {
+    $cx = Params-Hsu
+    $dlg = New-Object System.Windows.Forms.SaveFileDialog
+    $dlg.Filter = 'CSV (*.csv)|*.csv'
+    $dlg.FileName = 'hsu_cajanegra_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
+    if ($dlg.ShowDialog() -ne 'OK') { return }
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Descargando caja negra 24h de la HSU $($cx.unitHsu) (1440 minutos, 58 lecturas)..." ([System.Drawing.Color]::SteelBlue)
+    try { Modbus-Conectar $cx.ip $cx.puerto $cx.to } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
+    $regsTot = 1440 * 4
+    $palabras = New-Object System.Collections.Generic.List[int]
+    $offset = 0; $fallo = $null
+    while ($offset -lt $regsTot) {
+        if (Chequear-Cancelado) { break }
+        $n = [math]::Min(100, $regsTot - $offset)
+        $trozo = $null
+        for ($i = 1; $i -le $cx.reint -and $null -eq $trozo; $i++) {
+            try { $trozo = FC03-Leer $cx.unitHsu (31000 + $offset) $n }
+            catch {
+                $fallo = "$_"
+                if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+                Start-Sleep -Milliseconds (300 * $i)
+            }
+        }
+        if ($null -eq $trozo) { Con "FALLO leyendo el bloque en 31000+$offset : $fallo" ([System.Drawing.Color]::Salmon); break }
+        foreach ($v in $trozo) { $palabras.Add($v) }
+        $offset += $n
+        if (($offset / 100) % 10 -eq 0) { Con ("  {0}/{1} registros..." -f $offset, $regsTot) ([System.Drawing.Color]::Gainsboro) }
+    }
+    Modbus-Cerrar
+    $minutos = [math]::Floor($palabras.Count / 4)
+    if ($minutos -eq 0) { Con 'Sin datos.' ([System.Drawing.Color]::Salmon); return }
+    $filas = @()
+    for ($m = 0; $m -lt $minutos; $m++) {
+        $filas += Hsu-CajaFila @($palabras[$m*4], $palabras[$m*4+1], $palabras[$m*4+2], $palabras[$m*4+3]) $m
+    }
+    $filas | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+    Con "Caja negra exportada: $($dlg.FileName)  ($minutos minutos$(if ($minutos -lt 1440) { ', INCOMPLETA' }))." ([System.Drawing.Color]::SteelBlue)
+    $vmax = ($filas | Measure-Object -Property Vmax_kmh -Maximum).Maximum
+    Con ("Viento maximo del dia registrado por la HSU: {0} km/h." -f $vmax) ([System.Drawing.Color]::SteelBlue)
+} })
+
 # ------------------------- log manual -------------------------
 $btnLog.Add_Click({
     $dlg = New-Object System.Windows.Forms.SaveFileDialog
@@ -2600,7 +3018,8 @@ Con 'Escribir: tabla + presets + backup como preset. Leer: varias variables a la
 Con 'Filtro de variables: escribe p.ej. "soc" o "tilt" en el campo Filtro y el desplegable se reduce a lo que casa.' ([System.Drawing.Color]::Gainsboro)
 Con 'Entradas (auto): NCU completa con puerto resuelto por TCU; los gateways se recorren en secuencia.' ([System.Drawing.Color]::Gainsboro)
 Con 'Flota: auditoria contra preset de referencia e inventario (FW/serie/MAC). Volcar: BACKUP NCU masivo. Escribir: CSV por TCU.' ([System.Drawing.Color]::Gainsboro)
-Con 'Diagnostico de PLANTA completa: elige la entrada "(PLANTA completa)" y DIAGNOSTICAR recorre todas las NCUs (filtro NCUs: 1,3-5).' ([System.Drawing.Color]::Gainsboro)
+Con 'Diagnostico de PLANTA completa: recorre todas las NCUs (filtro NCUs: 1,3-5) e incluye la salud de cada NCU (GW1/GW2, UPS, seta).' ([System.Drawing.Color]::Gainsboro)
+Con 'HSU: meteo en vivo, umbrales de viento, reloj UTC, calibracion de nieve y caja negra de 24h a CSV.' ([System.Drawing.Color]::Gainsboro)
 Con 'Volcar: backup completo de una TCU (CSV/JSON) y comparacion contra un backup anterior.' ([System.Drawing.Color]::Gainsboro)
 Con 'Diagnostico: salud OK/AVISO/ALARMA/OFFLINE de un rango con alarmas en texto. Utilidades: reloj e identificacion.' ([System.Drawing.Color]::Gainsboro)
 foreach ($m in $script:MsgsInicio) { Con $m ([System.Drawing.Color]::SteelBlue) }
