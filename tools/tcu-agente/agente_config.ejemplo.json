@@ -1,0 +1,10 @@
+{
+  "_comentario": "Copia este fichero como agente_config.json y rellenalo. El token debe ser una cadena larga aleatoria (p. ej. 40+ caracteres); es la llave de acceso al agente.",
+  "planta": "Ayora",
+  "puerto": 8585,
+  "token": "CAMBIAME-token-largo-aleatorio",
+  "timeout_ms": 8000,
+  "toolbox": null,
+  "dir_datos": null,
+  "puerto_ncu": null
+}
