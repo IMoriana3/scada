@@ -1,4 +1,4 @@
-# TCU Toolbox v2 — configuración y diagnóstico de TCUs Sunner (offline)
+# TCU Toolbox — configuración y diagnóstico de TCUs Sunner (offline)
 
 > Herramienta de campo para O&M: escribe, lee, respalda y diagnostica los TCU de los seguidores a través del gateway Modbus TCP de la NCU. **100 % offline**: un `.ps1` + un `.bat`, sin instalar nada (PowerShell viene con Windows), sin red fuera de la LAN de planta.
 
@@ -30,6 +30,13 @@ Cuando una NCU tiene varios gateways, el desplegable ofrece además una entrada 
 | **Utilidades** | **Sincronizar reloj**: escribe la hora del PC en un rango de TCUs (40001–40006 + secuencia 40007 bit0→bit1) y verifica leyendo el reloj real (30079). **Identificación**: FW principal/fábrica, MCU secundario, BQ, HW, Xbee HW/FW, **MAC Xbee**, **número de serie**, fecha de fabricación y lote (bloque 30300+). |
 
 Consola común con colores, botón **CANCELAR** para abortar operaciones largas, y **log automático** a `logs/tcu_toolbox_AAAAMMDD.log`.
+
+Además, transversales a las pestañas (v3.1):
+
+- **INFORME HTML** (barra inferior): vuelca a un informe HTML autocontenido todo lo hecho en la sesión — diagnóstico de flota, resultados de PEM, auditoría e inventario — con metadatos (planta, IP, fecha, técnico, versiones) y filas coloreadas por estado. Se guarda en `informes/` y se abre solo: el entregable de la jornada de puesta en marcha.
+- **Rollback automático** en escrituras masivas (>3 TCUs, tanto en Escribir como en CSV por TCU): antes de tocar nada se leen los valores actuales y se guardan en `backups/rollback_<fecha>.csv` con formato `TCU;variable;valor` — restaurable tal cual con el botón **CSV por TCU...**. Los registros de comando se excluyen del rollback (reescribirlos relanzaría órdenes). Si el rollback no se puede crear, la toolbox pregunta antes de seguir sin él.
+- **Mini-registrador** (Diagnóstico → **BUCLE CSV**): repite el diagnóstico cada X minutos y acumula cada pase (con fecha/hora y las alarmas desglosadas en columnas) en `informes/registro_<fecha>.csv`. Se para con CANCELAR. Para vigilar una TCU intermitente o una tarde de viento sin quedarse mirando.
+- **Recordar sesión**: al cerrar se guarda `config_local.json` (planta, IP, puerto, timeout, reintentos, esclavo HSU) y al arrancar se restaura — el PC de planta arranca ya apuntando a su planta.
 
 ## Vínculo con la plataforma (sin dejar de ser offline)
 
@@ -77,7 +84,7 @@ Backup (`Volcar TCU → Backup JSON`):
   "variables": [ { "variable": "41010 longitud [deg]", "valor": "-1.685", "grupo": "config" } ] }
 ```
 
-Diagnóstico (`Diagnóstico → JSON`): igual, con `"tipo": "diagnostico_tcu"` y una lista `tcus` con salud, ángulos, batería y alarmas en texto por TCU.
+Diagnóstico (`Diagnóstico → JSON`): igual, con `"tipo": "diagnostico_tcu"` y una lista `tcus` con salud, ángulos, batería y alarmas en texto por TCU. Estos JSON se pueden subir al **Histórico de diagnósticos** de la plataforma (`historico.html` en factiun-cartera): guarda la evolución por planta en Supabase y calcula el **diff contra el diagnóstico anterior** (qué TCUs empeoraron o mejoraron).
 
 ## Seguridad
 

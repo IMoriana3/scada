@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '3.0'
+$VERSION_TOOLBOX = '3.1'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -545,6 +545,76 @@ function Viento-Seguro([string]$ipNcu, [int]$to, [int]$puerto = 0) {
 }
 
 $ESTADOS_COMIS = @{3='Factory'; 2='TCU configurado'; 1='Motor verificado'; 0='COMISIONADO'}
+
+function Html-Esc([string]$s) {
+    return "$s".Replace('&', '&amp;').Replace('<', '&lt;').Replace('>', '&gt;')
+}
+
+# Informe PEM autocontenido en HTML. $m: planta, ip, fecha, usuario, version,
+# mapa + listas opcionales diag/inv/aud/pem (objetos de la sesion).
+function Informe-Html([hashtable]$m) {
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine('<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Informe PEM - ' + (Html-Esc $m.planta) + '</title><style>')
+    [void]$sb.AppendLine('body{font-family:Segoe UI,Arial,sans-serif;font-size:13px;margin:24px;color:#222}h1{font-size:20px}h2{font-size:15px;margin-top:26px;border-bottom:2px solid #345;padding-bottom:4px}table{border-collapse:collapse;width:100%;margin-top:8px}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;font-size:12px}th{background:#eef2f6}tr.ok td{background:#eaf7ee}tr.aviso td{background:#fff6e0}tr.alarma td{background:#fdeaea}tr.off td{background:#f0f0f0;color:#777}.meta{color:#555}.res{font-weight:600;margin:6px 0}')
+    [void]$sb.AppendLine('</style></head><body>')
+    [void]$sb.AppendLine('<h1>Informe de puesta en marcha &mdash; ' + (Html-Esc $m.planta) + '</h1>')
+    [void]$sb.AppendLine('<p class="meta">Fecha: ' + (Html-Esc $m.fecha) + ' &middot; IP/conexion: ' + (Html-Esc $m.ip) + ' &middot; Tecnico: ' + (Html-Esc $m.usuario) + '<br>TCU Toolbox v' + (Html-Esc $m.version) + ' &middot; Mapa: ' + (Html-Esc $m.mapa) + '</p>')
+    $clase = { param($s) switch -Wildcard ("$s") { 'OK*'{'ok'} 'PASA*'{'ok'} 'ALARMA*'{'alarma'} 'FALLA*'{'alarma'} 'AVISO*'{'aviso'} 'DUDOSO*'{'aviso'} 'PENDIENTE*'{'aviso'} 'OFFLINE*'{'off'} 'SALTADO*'{'off'} default{''} } }
+    $tabla = {
+        param($titulo, $filas, $cols, $colEstado)
+        if (-not $filas -or @($filas).Count -eq 0) { return }
+        [void]$sb.AppendLine('<h2>' + (Html-Esc $titulo) + ' <span class="meta">(' + @($filas).Count + ' filas)</span></h2>')
+        $grupos = @($filas) | Group-Object $colEstado | ForEach-Object { "$($_.Count) $($_.Name)" }
+        [void]$sb.AppendLine('<div class="res">' + (Html-Esc ($grupos -join ' | ')) + '</div>')
+        [void]$sb.AppendLine('<table><tr>' + (($cols | ForEach-Object { '<th>' + (Html-Esc $_) + '</th>' }) -join '') + '</tr>')
+        foreach ($f in @($filas)) {
+            $cl = & $clase $f.$colEstado
+            [void]$sb.AppendLine('<tr' + $(if ($cl) { ' class="' + $cl + '"' } else { '' }) + '>' + (($cols | ForEach-Object { '<td>' + (Html-Esc "$($f.$_)") + '</td>' }) -join '') + '</tr>')
+        }
+        [void]$sb.AppendLine('</table>')
+    }
+    & $tabla 'Diagnostico de flota' $m.diag @('NCU','TCU','Salud','Modo','Tilt','Objetivo','Dif','SoC','Alarmas') 'Salud'
+    & $tabla 'Puesta en marcha (PEM)' $m.pem @('TCU','Resultado','Detalle') 'Resultado'
+    & $tabla 'Auditoria contra preset de referencia' $m.aud @('TCU','Variable','Esperado','Leido','Nota') 'Nota'
+    & $tabla 'Inventario de flota' $m.inv @('TCU','Serie','MAC','FW','FW_fabrica','HW','Fecha_fab','Nota') 'Nota'
+    if ((-not $m.diag -or @($m.diag).Count -eq 0) -and (-not $m.pem -or @($m.pem).Count -eq 0) -and (-not $m.aud -or @($m.aud).Count -eq 0) -and (-not $m.inv -or @($m.inv).Count -eq 0)) {
+        [void]$sb.AppendLine('<p>Sin datos en esta sesion: ejecuta Diagnostico, PEM, Auditoria o Inventario antes de generar el informe.</p>')
+    }
+    [void]$sb.AppendLine('<p class="meta">Generado por TCU Toolbox &mdash; Factiun.</p></body></html>')
+    return $sb.ToString()
+}
+
+# Copia de seguridad previa (rollback) de los registros que se van a tocar:
+# lee el valor actual de cada (tcu, variable) y lo guarda como CSV por TCU
+# (TCU;variable;valor), restaurable con el boton "CSV por TCU...".
+function Rollback-Crear([array]$pares, [hashtable]$cx) {
+    $dir = Join-Path $PSScriptRoot 'backups'
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+    $fich = Join-Path $dir ('rollback_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.csv')
+    $lineas = @('TCU;variable;valor')
+    $errs = 0
+    $tcus = @($pares | ForEach-Object { [int]$_.tcu } | Sort-Object -Unique)
+    $porTcu = @{}
+    foreach ($p in $pares) { if (-not $porTcu.ContainsKey([int]$p.tcu)) { $porTcu[[int]$p.tcu] = @() }; $porTcu[[int]$p.tcu] += [string]$p.nombre }
+    $segs = @(Plan-Segmentos $tcus $cx)
+    foreach ($seg in $segs) {
+        if ($script:Cancelar) { break }
+        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to } catch { $errs += @($seg.tcus).Count; continue }
+        foreach ($tcu in $seg.tcus) {
+            if ($script:Cancelar) { break }
+            foreach ($nombre in ($porTcu[[int]$tcu] | Sort-Object -Unique)) {
+                try {
+                    $val = Leer-Decodificado $tcu $VARIABLES[$nombre]
+                    $lineas += "$tcu;$nombre;$val"
+                } catch { $errs++ }
+            }
+        }
+    }
+    Modbus-Cerrar
+    if ($lineas.Count -le 1) { throw "no se pudo leer ningun valor actual ($errs errores)" }
+    Set-Content -Path $fich -Value $lineas -Encoding UTF8
+    return @{fichero=$fich; filas=($lineas.Count - 1); errores=$errs}
+}
 
 # Tramos consecutivos de una lista ordenada de TCUs: @(1,2,3,5) -> (1-3),(5-5)
 function Runs-Consecutivos([int[]]$tcus) {
@@ -1439,9 +1509,25 @@ $btnGJson.Size = New-Object System.Drawing.Size(110, 28)
 $btnGJson.Enabled = $false
 $tabG.Controls.Add($btnGJson)
 
+# mini-registrador: repite el diagnostico cada X minutos y acumula a CSV
+[void](LG $tabG 'Registrador: cada' 10 108 57)
+$txtGCada = TG $tabG '10' 118 54 40
+[void](LG $tabG 'min' 163 28 57)
+$btnGBucle = New-Object System.Windows.Forms.Button
+$btnGBucle.Text = 'BUCLE CSV'
+$btnGBucle.Location = New-Object System.Drawing.Point(200, 51)
+$btnGBucle.Size = New-Object System.Drawing.Size(120, 28)
+$tabG.Controls.Add($btnGBucle)
+$lblGBucle = New-Object System.Windows.Forms.Label
+$lblGBucle.Text = ''
+$lblGBucle.Location = New-Object System.Drawing.Point(328, 57)
+$lblGBucle.Size = New-Object System.Drawing.Size(580, 20)
+$lblGBucle.ForeColor = [System.Drawing.Color]::Gray
+$tabG.Controls.Add($lblGBucle)
+
 $lvG = New-Object System.Windows.Forms.ListView
-$lvG.Location = New-Object System.Drawing.Point(10, 55)
-$lvG.Size = New-Object System.Drawing.Size(898, 305)
+$lvG.Location = New-Object System.Drawing.Point(10, 88)
+$lvG.Size = New-Object System.Drawing.Size(898, 272)
 $lvG.View = 'Details'; $lvG.FullRowSelect = $true; $lvG.GridLines = $true
 [void]$lvG.Columns.Add('NCU', 45)
 [void]$lvG.Columns.Add('TCU', 45)
@@ -1822,9 +1908,15 @@ $btnLog.Location = New-Object System.Drawing.Point(825, 741)
 $btnLog.Size = New-Object System.Drawing.Size(110, 28)
 $form.Controls.Add($btnLog)
 
+$btnInforme = New-Object System.Windows.Forms.Button
+$btnInforme.Text = 'INFORME HTML'
+$btnInforme.Location = New-Object System.Drawing.Point(700, 741)
+$btnInforme.Size = New-Object System.Drawing.Size(118, 28)
+$form.Controls.Add($btnInforme)
+
 $lblLog = New-Object System.Windows.Forms.Label
 $lblLog.Location = New-Object System.Drawing.Point(10, 746)
-$lblLog.Size = New-Object System.Drawing.Size(800, 20)
+$lblLog.Size = New-Object System.Drawing.Size(680, 20)
 $lblLog.ForeColor = [System.Drawing.Color]::Gray
 $form.Controls.Add($lblLog)
 
@@ -1870,7 +1962,8 @@ $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $
                     $btnComparar, $btnGCsv, $btnGJson, $btnICsv,
                     $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnInvF, $btnInvFCsv,
                     $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm,
-                    $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComis, $btnPComisSet, $btnPCsv)
+                    $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComis, $btnPComisSet, $btnPCsv,
+                    $btnGBucle)
 
 function Set-UIOcupada([bool]$ocupada) {
     foreach ($b in $BOTONES_ACCION) { $b.Enabled = (-not $ocupada) }
@@ -2088,6 +2181,28 @@ function Escribir-EnTcus([int[]]$tcus) {
             "ATENCION: vas a escribir registros de COMANDO que pueden mover el seguidor o cambiar su modo:`r`n`r`n$lista`r`n`r`nSeguro que quieres continuar?",
             'REGISTROS DE COMANDO', 'YesNo', 'Stop')
         if ($r2 -ne 'Yes') { return }
+    }
+
+    if ($tcus.Count -gt 3) {
+        # escritura masiva: copia de seguridad previa (rollback) de los valores
+        # actuales, restaurable con "CSV por TCU...". Los registros de comando
+        # se excluyen: reescribirlos relanzaria ordenes.
+        $paresRb = @()
+        foreach ($t in $tcus) {
+            foreach ($v in $vars) { if ($ADDR_COMANDO -notcontains $v.addr) { $paresRb += ,@{tcu=[int]$t; nombre=$v.nombre} } }
+        }
+        if ($paresRb.Count -gt 0) {
+            Con "Creando copia de seguridad (rollback) de $($paresRb.Count) valores actuales..." ([System.Drawing.Color]::SteelBlue)
+            try {
+                $rb = Rollback-Crear $paresRb $cx
+                Con "Rollback guardado: $($rb.fichero)  ($($rb.filas) valores$(if ($rb.errores) { ", $($rb.errores) sin leer" })). Restaurable con 'CSV por TCU...'." ([System.Drawing.Color]::SteelBlue)
+            } catch {
+                $r3 = [System.Windows.Forms.MessageBox]::Show(
+                    "No se pudo crear la copia de seguridad previa (rollback):`r`n$_`r`n`r`nEscribir AUN ASI, sin copia?", 'Rollback', 'YesNo', 'Warning')
+                if ($r3 -ne 'Yes') { return }
+            }
+            if ($script:Cancelar) { return }
+        }
     }
 
     $script:Fallidas.Clear(); $btnFallidas.Enabled = $false
@@ -2616,7 +2731,8 @@ function Diag-LeerTcu([byte]$tcu) {
     }
 }
 
-$btnDiag.Add_Click({ Lanzar {
+# Un pase completo de diagnostico (usado por DIAGNOSTICAR y por el registrador)
+function Diag-Correr {
     $cx = Params-Conexion
     $lvG.Items.Clear(); $script:UltimoDiag = @(); $lblGResumen.Text = ''
     # trabajos: una entrada por NCU (planta completa) o una sola (modo normal)
@@ -2778,6 +2894,48 @@ $btnDiag.Add_Click({ Lanzar {
     $lblGResumen.Text = "OK: $nOk  Aviso: $nAviso  Alarma: $nAlarma  Off: $nOff"
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Diagnostico: OK $nOk | AVISO $nAviso | ALARMA $nAlarma | OFFLINE $nOff" ([System.Drawing.Color]::SteelBlue)
+}
+
+$btnDiag.Add_Click({ Lanzar { Diag-Correr } })
+
+# Mini-registrador: diagnostico en bucle cada X minutos, acumulando cada pase
+# (con fecha/hora y alarmas desglosadas) en informes/registro_<ts>.csv.
+# Se para con el boton CANCELAR.
+$COLS_REGISTRO = @('NCU','TCU','Salud','Modo','Tilt','Objetivo','Dif','SoC','SoH','Vbat_mV','Ibat_mA',
+                   'Tbat_C','Tpcb_C','Alarmas','main_status','alarmas_1','alarmas_2','alarmas_3','alarmas_4','system_status')
+$btnGBucle.Add_Click({ Lanzar {
+    $cada = Val-Int $txtGCada.Text 'Registrador: minutos' 1 1440
+    $null = Params-Conexion   # valida la conexion antes de empezar el bucle
+    $dir = Join-Path $PSScriptRoot 'informes'
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+    $fich = Join-Path $dir ('registro_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.csv')
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Registrador: un diagnostico cada $cada min acumulando en $fich  - pulsa CANCELAR para parar." ([System.Drawing.Color]::SteelBlue)
+    $vuelta = 0
+    while (-not $script:Cancelar) {
+        $vuelta++
+        $lblGBucle.Text = "Registrador: vuelta $vuelta en curso..."
+        Diag-Correr
+        $ahora = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        $filas = foreach ($d in $script:UltimoDiag) {
+            $o = [ordered]@{FechaHora = $ahora}
+            foreach ($c in $COLS_REGISTRO) { $o[$c] = "$($d.$c)" }   # columnas fijas: -Append exige el mismo esquema
+            $des = Alarmas-Desglose "$($d.alarmas_1)" "$($d.alarmas_2)"
+            foreach ($k in $des.Keys) { $o[$k] = $des[$k] }
+            [pscustomobject]$o
+        }
+        if (@($filas).Count -gt 0) { @($filas) | Export-Csv $fich -NoTypeInformation -Encoding UTF8 -Append }
+        if ($script:Cancelar) { break }
+        $lblGBucle.Text = "Registrador: $vuelta pases guardados. Proximo en $cada min (CANCELAR para parar)."
+        $hasta = (Get-Date).AddMinutes($cada)
+        while ((Get-Date) -lt $hasta) {
+            if ($script:Cancelar) { break }
+            Start-Sleep -Milliseconds 500
+            [System.Windows.Forms.Application]::DoEvents()
+        }
+    }
+    Con "Registrador parado tras $vuelta pases. CSV acumulado: $fich" ([System.Drawing.Color]::SteelBlue)
+    $lblGBucle.Text = "Registrador parado ($vuelta pases): $fich"
 } })
 
 $btnGCsv.Add_Click({
@@ -2902,6 +3060,23 @@ $btnCsvTcu.Add_Click({ Lanzar {
             "ATENCION: el CSV toca $($peligro.Count) registros de COMANDO. Seguro?",
             'REGISTROS DE COMANDO', 'YesNo', 'Stop')
         if ($r2 -ne 'Yes') { return }
+    }
+    if ($tcus.Count -gt 3) {
+        # rollback previo con los valores actuales (sin registros de comando)
+        $paresRb = @()
+        foreach ($j in $jobs) { if ($ADDR_COMANDO -notcontains $VARIABLES[$j.nombre].addr) { $paresRb += ,@{tcu=[int]$j.tcu; nombre=$j.nombre} } }
+        if ($paresRb.Count -gt 0) {
+            Con "Creando copia de seguridad (rollback) de $($paresRb.Count) valores actuales..." ([System.Drawing.Color]::SteelBlue)
+            try {
+                $rb = Rollback-Crear $paresRb $cx
+                Con "Rollback guardado: $($rb.fichero)  ($($rb.filas) valores$(if ($rb.errores) { ", $($rb.errores) sin leer" })). Restaurable con 'CSV por TCU...'." ([System.Drawing.Color]::SteelBlue)
+            } catch {
+                $r3 = [System.Windows.Forms.MessageBox]::Show(
+                    "No se pudo crear la copia de seguridad previa (rollback):`r`n$_`r`n`r`nEscribir AUN ASI, sin copia?", 'Rollback', 'YesNo', 'Warning')
+                if ($r3 -ne 'Yes') { return }
+            }
+            if ($script:Cancelar) { return }
+        }
     }
     $porTcu = @{}
     foreach ($j in $jobs) { if (-not $porTcu.ContainsKey($j.tcu)) { $porTcu[$j.tcu] = @() }; $porTcu[$j.tcu] += ,$j }
@@ -3664,6 +3839,57 @@ $btnLog.Add_Click({
     if ($dlg.ShowDialog() -eq 'OK') { Set-Content $dlg.FileName $rtb.Text -Encoding UTF8 }
 })
 
+# ------------------------- informe HTML de la sesion -------------------------
+$btnInforme.Add_Click({
+    try {
+        $dir = Join-Path $PSScriptRoot 'informes'
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+        $m = @{
+            planta = (Nombre-Planta); ip = $txtIp.Text.Trim()
+            fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm'); usuario = "$env:USERNAME"
+            version = $VERSION_TOOLBOX; mapa = $VERSION_MAPA
+            diag = $script:UltimoDiag; pem = $script:UltimoPem
+            aud = $script:UltimaAud; inv = $script:UltimoInv
+        }
+        $fich = Join-Path $dir ('informe_' + ($m.planta -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.html')
+        Set-Content -Path $fich -Value (Informe-Html $m) -Encoding UTF8
+        Con "Informe HTML generado: $fich" ([System.Drawing.Color]::SteelBlue)
+        Start-Process $fich
+    } catch { Con "ERROR generando el informe: $_" ([System.Drawing.Color]::Salmon) }
+})
+
+# ------------------------- recordar la ultima sesion -------------------------
+# config_local.json junto al script: planta, IP, puerto, timeout, reintentos y
+# esclavo HSU. Se guarda al cerrar y se restaura al arrancar.
+$script:FichConfigLocal = Join-Path $PSScriptRoot 'config_local.json'
+function Config-Guardar {
+    try {
+        $cfg = [ordered]@{
+            planta = "$($cbPlanta.SelectedItem)"; ip = $txtIp.Text.Trim(); puerto = $txtPort.Text.Trim()
+            timeout = $txtTo.Text.Trim(); reintentos = $txtRet.Text.Trim(); hsu = $txtHSlave.Text.Trim()
+        }
+        ConvertTo-Json $cfg | Set-Content $script:FichConfigLocal -Encoding UTF8
+    } catch {}
+}
+function Config-Restaurar {
+    if (-not (Test-Path $script:FichConfigLocal)) { return }
+    try {
+        $cfg = Get-Content $script:FichConfigLocal -Raw | ConvertFrom-Json
+        if ($cfg.planta -and $cbPlanta.Items.Contains("$($cfg.planta)")) {
+            $cbPlanta.SelectedItem = "$($cfg.planta)"   # autorrellena rangos/IP via SelectedIndexChanged
+        }
+        if ("$($cbPlanta.SelectedItem)" -eq '(manual)') {
+            if ("$($cfg.ip)") { $txtIp.Text = "$($cfg.ip)" }
+            if ("$($cfg.puerto)") { $txtPort.Text = "$($cfg.puerto)" }
+        }
+        if ("$($cfg.timeout)") { $txtTo.Text = "$($cfg.timeout)" }
+        if ("$($cfg.reintentos)") { $txtRet.Text = "$($cfg.reintentos)" }
+        if ("$($cfg.hsu)") { $txtHSlave.Text = "$($cfg.hsu)" }
+        Con "Sesion anterior restaurada: planta '$($cbPlanta.SelectedItem)' (config_local.json)." ([System.Drawing.Color]::SteelBlue)
+    } catch { Con "AVISO: config_local.json ilegible ($_) - ignorado" ([System.Drawing.Color]::Orange) }
+}
+$form.Add_FormClosing({ Config-Guardar })
+
 # ------------------------- arranque -------------------------
 Con "TCU Toolbox v$VERSION_TOOLBOX listo. Mapa de registros: $VERSION_MAPA." ([System.Drawing.Color]::Gainsboro)
 Con 'Escribir: tabla + presets + backup como preset. Leer: varias variables a la vez en un rango, con resumen de discrepancias.' ([System.Drawing.Color]::Gainsboro)
@@ -3675,9 +3901,13 @@ Con 'HSU: meteo en vivo, umbrales de viento, reloj UTC, calibracion de nieve y c
 Con 'PEM: test de motor con guardia de viento, modo masivo, clear de alarmas, stow test y estado de comisionado.' ([System.Drawing.Color]::Gainsboro)
 Con 'Volcar: backup completo de una TCU (CSV/JSON) y comparacion contra un backup anterior.' ([System.Drawing.Color]::Gainsboro)
 Con 'Diagnostico: salud OK/AVISO/ALARMA/OFFLINE de un rango con alarmas en texto. Utilidades: reloj e identificacion.' ([System.Drawing.Color]::Gainsboro)
+Con 'Registrador (Diagnostico): BUCLE CSV repite el diagnostico cada X min y lo acumula en informes/registro_*.csv.' ([System.Drawing.Color]::Gainsboro)
+Con 'INFORME HTML: volcado de la sesion (diagnostico, PEM, auditoria e inventario) a un informe con colores.' ([System.Drawing.Color]::Gainsboro)
+Con 'Escritura masiva (>3 TCUs): se crea antes un rollback en backups/ restaurable con "CSV por TCU...".' ([System.Drawing.Color]::Gainsboro)
 foreach ($m in $script:MsgsInicio) { Con $m ([System.Drawing.Color]::SteelBlue) }
 if ($PLANTAS.Count -le 1) {
     Con 'Sin plantas cargadas: usa el boton Cargar... (o copia los JSON de la plataforma en la subcarpeta plantas/).' ([System.Drawing.Color]::Orange)
 }
+Config-Restaurar
 [void]$form.ShowDialog()
 Modbus-Cerrar
