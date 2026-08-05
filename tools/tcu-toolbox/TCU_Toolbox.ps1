@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '4.4'
+$VERSION_TOOLBOX = '4.5'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2039,6 +2039,16 @@ $btnFwVerif.Size = New-Object System.Drawing.Size(200, 28)
 $btnFwVerif.Enabled = $false
 $tabFW.Controls.Add($btnFwVerif)
 
+$btnFwPrep = New-Object System.Windows.Forms.Button
+$btnFwPrep.Text = 'PREPARAR 1 TCU (captura OTA)'
+$btnFwPrep.Location = New-Object System.Drawing.Point(212, 51)
+$btnFwPrep.Size = New-Object System.Drawing.Size(210, 26)
+$tabFW.Controls.Add($btnFwPrep)
+[void](LG $tabFW 'NCU' 432 30 56)
+$txtFwNcu = TG $tabFW '1' 464 52 34
+[void](LG $tabFW 'TCU' 506 30 56)
+$txtFwTcu = TG $tabFW '1' 538 52 40
+
 $btnFwCsv = New-Object System.Windows.Forms.Button
 $btnFwCsv.Text = 'CSV'
 $btnFwCsv.Location = New-Object System.Drawing.Point(798, 18)
@@ -2049,12 +2059,12 @@ $tabFW.Controls.Add($btnFwCsv)
 $lblFw = LG $tabFW 'Haz primero un Inventario (pestana Flota) y luego el plan.' 610 180
 $lblFw.ForeColor = [System.Drawing.Color]::Gray
 
-$lblFwNota = LG $tabFW 'Cada tramo es un CARRIL (una NCU + un gateway): el updater de Sunner admite varias ventanas a la vez, una por carril, y asi la campana se divide por el numero de carriles en paralelo.' 10 898 52
+$lblFwNota = LG $tabFW 'Cada tramo es un CARRIL (NCU + gateway): el updater admite varias ventanas a la vez, una por carril. PREPARAR comprueba viento, comunicacion y alarmas, y hace backup antes de actualizar/capturar una TCU.' 10 898 82
 $lblFwNota.ForeColor = [System.Drawing.Color]::Gray
 
 $lvFW = New-Object System.Windows.Forms.ListView
-$lvFW.Location = New-Object System.Drawing.Point(10, 78)
-$lvFW.Size = New-Object System.Drawing.Size(898, 282)
+$lvFW.Location = New-Object System.Drawing.Point(10, 104)
+$lvFW.Size = New-Object System.Drawing.Size(898, 256)
 $lvFW.View = 'Details'; $lvFW.FullRowSelect = $true; $lvFW.GridLines = $true
 [void]$lvFW.Columns.Add('NCU', 50)
 [void]$lvFW.Columns.Add('IP', 110)
@@ -2296,7 +2306,8 @@ $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $
                     $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnInvF, $btnInvFCsv,
                     $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm,
                     $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComis, $btnPComisSet, $btnPCsv,
-                    $btnGBucle, $btnPSeg, $btnAudJson, $btnInvJson, $btnHBuscar, $btnGComm)
+                    $btnGBucle, $btnPSeg, $btnAudJson, $btnInvJson, $btnHBuscar, $btnGComm,
+                    $btnFwPlan, $btnFwVerif, $btnFwPrep)
 
 function Set-UIOcupada([bool]$ocupada) {
     foreach ($b in $BOTONES_ACCION) { $b.Enabled = (-not $ocupada) }
@@ -4374,6 +4385,81 @@ $btnFwVerif.Add_Click({ Lanzar {
     $lblFw.Text = "Verificacion: $ok en $obj | $ko pendientes | $err sin respuesta"
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Verificacion: $ok TCUs ya en $obj, $ko siguen pendientes, $err sin respuesta. Lanza un INVENTARIO nuevo para dejar constancia (y subirlo al Historico)." ([System.Drawing.Color]::SteelBlue)
+} })
+
+# Preparar una TCU concreta antes de actualizarla (o de capturar su OTA) en
+# una planta EN PRODUCCION: durante la actualizacion la TCU esta en
+# bootloader y NO obedece un stow, asi que se comprueba el viento primero.
+$btnFwPrep.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    $nNcu = "$($txtFwNcu.Text)".Trim()
+    $tcu = Val-Int $txtFwTcu.Text 'TCU' 1 247
+    $trabajos = @(Trabajos-Planta $cx $null)
+    $tr = $trabajos | Where-Object { "$($_.ncu)" -eq $nNcu } | Select-Object -First 1
+    if (-not $tr) { $tr = $trabajos[0] }
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "PREPARANDO NCU$nNcu TCU $tcu ($($tr.ip)) para actualizar/capturar" ([System.Drawing.Color]::SteelBlue)
+    $problemas = @()
+
+    # 1) viento: durante el OTA la TCU no responde a stow
+    $v = $null
+    try { $v = Viento-Seguro $tr.ip $tr.cx.to $PUERTO_NCU } catch {}
+    if ($null -eq $v) { $problemas += 'no se ha podido leer la HSU: sin guardia de viento' }
+    elseif ($v.alarma -or $v.nivel -gt 0) { $problemas += "VIENTO nivel $($v.nivel) (alarma=$($v.alarma)): NO actualices ahora, la TCU no obedecera un stow" }
+    else { Con '  viento: OK (sin alarma ni nivel activo en las HSU de la NCU)' ([System.Drawing.Color]::LightGreen) }
+
+    # 2) comunicacion y estado via NCU (rapido, sin Zigbee)
+    $d = $null
+    try {
+        Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
+        $dm = Ncu-DiagCompat @($tcu)
+        $d = $dm[[int]$tcu]
+        Modbus-Cerrar
+    } catch { Modbus-Cerrar; $problemas += "no se pudo consultar la NCU: $_" }
+    if ($d) {
+        Con ("  estado via NCU: {0} | modo {1} | tilt {2} | SoC {3}% | {4}" -f $d.Salud, $d.Modo, $d.Tilt, $d.SoC, $(if ($d.Alarmas) { $d.Alarmas } else { 'sin alarmas' })) ([System.Drawing.Color]::Gainsboro)
+        if ($d.Salud -eq 'OFFLINE') { $problemas += 'la TCU no comunica con la NCU: actualizarla seria perder el tiempo' }
+        if ($d.Salud -eq 'ALARMA') { $problemas += "la TCU tiene alarma critica ($($d.Alarmas)): resuelvela antes" }
+        if ("$($d.SoC)" -ne '' -and [int]$d.SoC -lt 40) { $problemas += "SoC bajo ($($d.SoC)%): si la bateria cae a mitad del OTA puedes dejarla a medias" }
+    }
+
+    # 3) backup completo de la TCU antes de tocarla
+    $seg = @(Plan-Segmentos @($tcu) $tr.cx)[0]
+    $fichBk = ''
+    try {
+        Modbus-Conectar $tr.ip $seg.puerto $tr.cx.to
+        $vars = @(); $errs = 0
+        foreach ($n in @(Nombres-Ordenados @($VARIABLES.Keys))) {
+            try { $vars += [pscustomobject]@{variable=$n; valor=(Leer-Decodificado $tcu $VARIABLES[$n]); grupo='config'} }
+            catch { $errs++ }
+        }
+        $fwActual = ''
+        try { $fwActual = ((Ident-Leer $tcu) | Where-Object { $_.Campo -eq 'FW principal' }).Valor } catch {}
+        Modbus-Cerrar
+        $dirBk = Join-Path $PSScriptRoot 'backups'
+        if (-not (Test-Path $dirBk)) { New-Item -ItemType Directory -Path $dirBk | Out-Null }
+        $fichBk = Join-Path $dirBk ("pre_ota_ncu{0}_tcu{1}_{2}.json" -f $nNcu, $tcu, (Get-Date -Format 'yyyyMMdd_HHmmss'))
+        ConvertTo-Json ([ordered]@{
+            tipo='backup_tcu'; mapa=$VERSION_MAPA; toolbox=$VERSION_TOOLBOX; motivo='pre-OTA'
+            planta=(Nombre-Planta); ip=$tr.ip; puerto=$seg.puerto; tcu=[int]$tcu; ncu=$nNcu
+            fecha=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); completo=($errs -eq 0); errores=$errs
+            firmware_antes=$fwActual; variables=$vars
+        }) -Depth 5 | Set-Content $fichBk -Encoding UTF8
+        Con "  backup previo: $fichBk  ($($vars.Count) variables, $errs errores; FW actual: $fwActual)" ([System.Drawing.Color]::LightGreen)
+        if ($errs -gt 0) { $problemas += "el backup previo tiene $errs variables sin leer" }
+    } catch { Modbus-Cerrar; $problemas += "no se pudo hacer el backup previo: $_" }
+
+    Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
+    if ($problemas.Count -eq 0) {
+        Con 'LISTO para actualizar esta TCU.' ([System.Drawing.Color]::LightGreen)
+    } else {
+        foreach ($p in $problemas) { Con "  AVISO: $p" ([System.Drawing.Color]::Orange) }
+    }
+    Con "En el TCU Updater:  NCU IP = $($tr.ip)   Gateway port = $($seg.puerto)   TCU = $tcu" ([System.Drawing.Color]::SteelBlue)
+    Con "Para GRABAR el protocolo, lanza antes en otra ventana:" ([System.Drawing.Color]::SteelBlue)
+    Con "   powershell -ExecutionPolicy Bypass -File `"$(Join-Path $PSScriptRoot 'TCU_ProxyOTA.ps1')`" -Ncu $($tr.ip) -Puerto $($seg.puerto)" ([System.Drawing.Color]::Gainsboro)
+    Con "   y en el updater pon NCU IP = 127.0.0.1 y Gateway port = 5020 (el resto igual)." ([System.Drawing.Color]::Gainsboro)
+    Con 'Durante el OTA la TCU esta en bootloader: no sigue al sol ni obedece stow. Vigila el viento.' ([System.Drawing.Color]::Orange)
 } })
 
 $btnFwCsv.Add_Click({

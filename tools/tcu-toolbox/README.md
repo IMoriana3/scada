@@ -114,6 +114,17 @@ Lo que aporta la toolbox, sin tocar el firmware:
 2. **Cuántas ventanas lanzar**: cada tramo es un carril independiente (NCU + gateway = red Zigbee distinta). El updater no tiene bloqueo de instancia única: se pueden abrir varias a la vez, una por carril, y la campaña se divide por ese número.
 3. **Qué subió de verdad**: VERIFICAR TRAS ACTUALIZAR + un Inventario nuevo, cuyo **diff** en el Histórico de la plataforma deja constancia de qué TCUs pasaron de una versión a otra.
 
+### Actualizar (o capturar) en una planta en producción
+
+⚠️ Durante la actualización la TCU se reinicia **en modo bootloader**: unos 20 minutos en los que **no sigue al sol ni obedece un stow**. Si entra viento en ese rato, ese seguidor no se pone en seguridad. Por eso el botón **PREPARAR 1 TCU (captura OTA)** de la pestaña Firmware, que antes de tocar nada:
+
+1. Consulta las **HSU vía NCU** y avisa si hay viento (nivel > 0 o alarma) — el momento equivocado para dejar una TCU sorda.
+2. Comprueba **vía NCU** que esa TCU comunica, que no tiene alarma crítica y que el **SoC no es bajo** (si la batería cae a mitad del OTA, se queda a medias).
+3. Hace un **backup completo previo** (`backups/pre_ota_ncu<n>_tcu<n>_<fecha>.json`) anotando el firmware actual.
+4. Imprime los datos exactos para el updater (IP de NCU, puerto de gateway, nº de TCU) y el comando listo del proxy de captura.
+
+Recomendación para la primera vez: una TCU **que ya toque actualizar**, que comunique bien, con SoC alto, con viento en calma y con alguien pudiendo ir al seguidor. Si el proxy o el updater se cortan a mitad, el updater soporta reanudar desde la última dirección (*Continuing OTA from address*), pero mejor no estrenarlo con viento.
+
 **`TCU_ProxyOTA.ps1`** — capturador del protocolo OTA, paso previo a cualquier actualizador propio:
 
 ```powershell
