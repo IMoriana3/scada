@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '5.1'
+$VERSION_TOOLBOX = '5.2'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1598,103 +1598,103 @@ $btnNvm.ForeColor = [System.Drawing.Color]::White
 $tabW.Controls.Add($btnNvm)
 
 # ============================ TAB LEER VARIABLE ============================
+# Misma maqueta que Escribir: una tabla con una fila por variable, en vez del
+# combo + Anadir + lista que habia antes. Las dos pestanas se usan seguidas y
+# no tenia sentido que se eligieran las variables de dos maneras distintas.
 $tabL = New-Object System.Windows.Forms.TabPage
 $tabL.Text = 'Leer variable'
 $tabs.TabPages.Add($tabL)
 
-[void](LG $tabL 'Filtro' 10 42)
-$txtLFiltro = TG $tabL '' 54 22 160
-$lblLFiltro = LG $tabL '' 222 130
+[void](LG $tabL 'TCU de' 10 52)
+$txtLIni = TG $tabL '1' 62 22 45
+[void](LG $tabL 'a' 116 12)
+$txtLFin = TG $tabL '44' 131 22 45
+
+[void](LG $tabL 'Filtro' 200 42)
+$txtLFiltro = TG $tabL '' 244 22 170
+$lblLFiltro = LG $tabL '' 424 180
 $lblLFiltro.ForeColor = [System.Drawing.Color]::Gray
-
-[void](LG $tabL 'Variable' 360 58)
-$cbLVar = New-Object System.Windows.Forms.ComboBox
-$cbLVar.Location = New-Object System.Drawing.Point(420, 21)
-$cbLVar.Size = New-Object System.Drawing.Size(380, 22)
-$cbLVar.DropDownStyle = 'DropDownList'
-$tabL.Controls.Add($cbLVar)
-
-$btnLAdd = New-Object System.Windows.Forms.Button
-$btnLAdd.Text = 'Añadir'
-$btnLAdd.Location = New-Object System.Drawing.Point(806, 19)
-$btnLAdd.Size = New-Object System.Drawing.Size(102, 26)
-$tabL.Controls.Add($btnLAdd)
-
-# Rellena el combo aplicando el filtro; conserva la seleccion si sigue visible
-# y autoselecciona cuando solo queda una coincidencia.
-function Refrescar-FiltroLeer {
-    $sel = $cbLVar.SelectedItem
-    $todos = @(Nombres-Ordenados @($VARIABLES.Keys)) + @(Nombres-Ordenados @($ESTADO.Keys) | ForEach-Object { 'ESTADO ' + $_ })
-    $coinciden = @(Filtrar-Nombres $todos $txtLFiltro.Text)
-    $cbLVar.BeginUpdate()
-    $cbLVar.Items.Clear()
-    foreach ($k in $coinciden) { [void]$cbLVar.Items.Add($k) }
-    $cbLVar.EndUpdate()
-    if ($sel -and $cbLVar.Items.Contains($sel)) { $cbLVar.SelectedItem = $sel }
-    elseif ($cbLVar.Items.Count -eq 1) { $cbLVar.SelectedIndex = 0 }
-    if ("$($txtLFiltro.Text)".Trim()) { $lblLFiltro.Text = "$($coinciden.Count) de $($todos.Count)" }
-    else { $lblLFiltro.Text = "$($todos.Count) variables" }
-}
-
-$txtLFiltro.Add_TextChanged({ Refrescar-FiltroLeer })
-Refrescar-FiltroLeer
-
-# lista de variables a leer (varias a la vez, como la tabla de Escribir)
-$lbLSel = New-Object System.Windows.Forms.ListBox
-$lbLSel.Location = New-Object System.Drawing.Point(10, 50)
-$lbLSel.Size = New-Object System.Drawing.Size(500, 58)
-$lbLSel.IntegralHeight = $false
-$tabL.Controls.Add($lbLSel)
-
-$btnLQuitar = New-Object System.Windows.Forms.Button
-$btnLQuitar.Text = 'Quitar'
-$btnLQuitar.Location = New-Object System.Drawing.Point(516, 50)
-$btnLQuitar.Size = New-Object System.Drawing.Size(72, 26)
-$tabL.Controls.Add($btnLQuitar)
-
-$btnLVaciar = New-Object System.Windows.Forms.Button
-$btnLVaciar.Text = 'Vaciar'
-$btnLVaciar.Location = New-Object System.Drawing.Point(516, 82)
-$btnLVaciar.Size = New-Object System.Drawing.Size(72, 26)
-$tabL.Controls.Add($btnLVaciar)
-
-[void](LG $tabL 'TCU de' 604 50 56)
-$txtLIni = TG $tabL '1' 654 52 40
-[void](LG $tabL 'a' 700 10 56)
-$txtLFin = TG $tabL '44' 712 52 40
 
 $btnLeer = New-Object System.Windows.Forms.Button
 $btnLeer.Text = 'LEER'
-$btnLeer.Location = New-Object System.Drawing.Point(766, 49)
-$btnLeer.Size = New-Object System.Drawing.Size(112, 26)
+$btnLeer.Location = New-Object System.Drawing.Point(620, 18)
+$btnLeer.Size = New-Object System.Drawing.Size(140, 28)
 $btnLeer.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
 $btnLeer.ForeColor = [System.Drawing.Color]::White
 $tabL.Controls.Add($btnLeer)
 
 $btnLCsv = New-Object System.Windows.Forms.Button
 $btnLCsv.Text = 'Exportar CSV'
-$btnLCsv.Location = New-Object System.Drawing.Point(766, 82)
-$btnLCsv.Size = New-Object System.Drawing.Size(112, 26)
+$btnLCsv.Location = New-Object System.Drawing.Point(766, 18)
+$btnLCsv.Size = New-Object System.Drawing.Size(140, 28)
 $btnLCsv.Enabled = $false
 $tabL.Controls.Add($btnLCsv)
 
-$btnLAdd.Add_Click({
-    $s = $cbLVar.SelectedItem
-    if ($s -and -not $lbLSel.Items.Contains($s)) { [void]$lbLSel.Items.Add($s) }
-})
-$cbLVar.Add_KeyDown({ param($s,$e) if ($e.KeyCode -eq 'Enter') { $btnLAdd.PerformClick() } })
-$btnLQuitar.Add_Click({ if ($lbLSel.SelectedIndex -ge 0) { $lbLSel.Items.RemoveAt($lbLSel.SelectedIndex) } })
-$btnLVaciar.Add_Click({ $lbLSel.Items.Clear() })
-$lbLSel.Add_DoubleClick({ if ($lbLSel.SelectedIndex -ge 0) { $lbLSel.Items.RemoveAt($lbLSel.SelectedIndex) } })
+# La lista de lectura admite tambien los registros de estado (3xxxx), que en
+# Escribir no existen: por eso el combo de esta tabla no es el mismo.
+$dgvL = New-Object System.Windows.Forms.DataGridView
+$dgvL.Location = New-Object System.Drawing.Point(10, 55)
+$dgvL.Size = New-Object System.Drawing.Size(898, 228)
+$dgvL.AllowUserToAddRows = $true
+$dgvL.RowHeadersVisible = $false
+$dgvL.BackgroundColor = [System.Drawing.Color]::White
+$colLVar = New-Object System.Windows.Forms.DataGridViewComboBoxColumn
+$colLVar.HeaderText = 'Variable'; $colLVar.Width = 420
+$colLInfo = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+$colLInfo.HeaderText = 'Registro / tipo'; $colLInfo.Width = 452; $colLInfo.ReadOnly = $true
+[void]$dgvL.Columns.Add($colLVar); [void]$dgvL.Columns.Add($colLInfo)
+$tabL.Controls.Add($dgvL)
 
-$lvL = New-Object System.Windows.Forms.ListView
-$lvL.Location = New-Object System.Drawing.Point(10, 114)
-$lvL.Size = New-Object System.Drawing.Size(898, 246)
-$lvL.View = 'Details'; $lvL.FullRowSelect = $true; $lvL.GridLines = $true
-[void]$lvL.Columns.Add('TCU', 70)
-[void]$lvL.Columns.Add('Valor', 200)
-[void]$lvL.Columns.Add('Estado', 600)
-$tabL.Controls.Add($lvL)
+$dgvL.Add_CellValueChanged({
+    param($s, $e)
+    if ($e.ColumnIndex -eq 0 -and $e.RowIndex -ge 0) {
+        $nombre = "$($dgvL.Rows[$e.RowIndex].Cells[0].Value)"
+        if ($nombre) { $dgvL.Rows[$e.RowIndex].Cells[1].Value = Info-Lectura $nombre }
+    }
+})
+$dgvL.Add_DataError({ param($s, $e) $e.ThrowException = $false })
+
+function Nombres-Legibles { return @(Nombres-Ordenados @($VARIABLES.Keys)) + @(Nombres-Ordenados @($ESTADO.Keys) | ForEach-Object { 'ESTADO ' + $_ }) }
+
+function Info-Lectura([string]$nombre) {
+    $v = $null
+    if ($nombre -like 'ESTADO *') { $v = $ESTADO[$nombre.Substring(7)] } else { $v = $VARIABLES[$nombre] }
+    if (-not $v) { return '' }
+    if ($v.tipo -eq 'bit') { return "reg $($v.addr)  bit $($v.bit)" }
+    return "reg $($v.addr)  tipo $($v.tipo)"
+}
+
+# Filtro del combo: reduce la lista a lo que casa, conservando siempre los
+# nombres ya usados en filas existentes (igual que en Escribir).
+function Refrescar-FiltroLeer {
+    $usados = @{}
+    foreach ($fila in $dgvL.Rows) {
+        if (-not $fila.IsNewRow -and $fila.Cells[0].Value) { $usados["$($fila.Cells[0].Value)"] = $true }
+    }
+    $todos = @(Nombres-Legibles)
+    $coinciden = @(Filtrar-Nombres $todos $txtLFiltro.Text)
+    $colLVar.Items.Clear()
+    foreach ($k in $coinciden) { [void]$colLVar.Items.Add($k) }
+    foreach ($k in $todos) {
+        if ($usados.ContainsKey($k) -and -not $colLVar.Items.Contains($k)) { [void]$colLVar.Items.Add($k) }
+    }
+    if ("$($txtLFiltro.Text)".Trim()) { $lblLFiltro.Text = "$($coinciden.Count) de $($todos.Count) variables" }
+    else { $lblLFiltro.Text = "$($todos.Count) variables" }
+}
+
+$txtLFiltro.Add_TextChanged({ Refrescar-FiltroLeer })
+Refrescar-FiltroLeer
+
+# Nombres elegidos en la tabla, sin repetidos y en el orden en que estan
+function Vars-DeTablaLeer {
+    $r = New-Object System.Collections.ArrayList
+    foreach ($fila in $dgvL.Rows) {
+        if ($fila.IsNewRow) { continue }
+        $n = "$($fila.Cells[0].Value)"
+        if ($n -and -not $r.Contains($n)) { [void]$r.Add($n) }
+    }
+    return ,$r
+}
 
 # ============================ TAB VOLCAR TCU ============================
 $tabD = New-Object System.Windows.Forms.TabPage
@@ -2869,10 +2869,8 @@ function Def-DeLectura([string]$sel) {
 }
 
 $btnLeer.Add_Click({ Lanzar {
-    # lista de variables: las anadidas, o la seleccionada en el combo si la lista esta vacia
-    $nombres = @($lbLSel.Items)
-    if ($nombres.Count -eq 0 -and $cbLVar.SelectedItem) { $nombres = @([string]$cbLVar.SelectedItem) }
-    if ($nombres.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('Elige una variable (o anade varias a la lista).','Aviso'); return }
+    $nombres = @(Vars-DeTablaLeer)
+    if ($nombres.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('Elige al menos una variable en la tabla.','Aviso'); return }
     $defs = @($nombres | ForEach-Object { @{nombre=[string]$_; vdef=(Def-DeLectura $_)} })
     $cx = Params-Conexion
     $tcus = $null
@@ -2910,15 +2908,24 @@ $btnLeer.Add_Click({ Lanzar {
             if (Chequear-Cancelado) { break }
             $fila = [ordered]@{NCU=$etNcu; TCU=[int]$tcu}
             $errores = 0; $err = $errSeg
+            # Si la primera variable agota los reintentos por falta de respuesta,
+            # el TCU esta mudo: no tiene sentido esperar el timeout completo de
+            # las demas. Con 5 variables, 8 s y 3 reintentos eso son 2 minutos
+            # por TCU muerto. Un fallo Modbus (direccion ilegal, etc.) NO cuenta:
+            # ahi el equipo si contesta y el resto puede leerse.
+            $mudo = $false; $iVar = -1
             foreach ($d in $defs) {
                 if ($script:Cancelar) { break }
+                $iVar++
                 $val = $null
-                if ($segOk) {
+                $sinRespuesta = $false
+                if ($segOk -and -not $mudo) {
                     for ($i = 1; $i -le $tr.cx.reint -and $null -eq $val; $i++) {
-                        try { $val = Leer-Decodificado $tcu $d.vdef }
+                        try { $val = Leer-Decodificado $tcu $d.vdef; $sinRespuesta = $false }
                         catch {
                             $err = "$_"
-                            if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+                            $sinRespuesta = -not (Es-ExcepcionModbus $_.Exception.Message)
+                            if ($sinRespuesta) { Modbus-Reconectar }
                             Start-Sleep -Milliseconds (200 * $i)
                         }
                     }
@@ -2927,10 +2934,14 @@ $btnLeer.Add_Click({ Lanzar {
                     $fila[$d.nombre] = $val
                     if (-not $valores[$d.nombre].ContainsKey($val)) { $valores[$d.nombre][$val] = 0 }
                     $valores[$d.nombre][$val]++
-                } else { $fila[$d.nombre] = ''; $errores++ }
+                } else {
+                    $fila[$d.nombre] = ''; $errores++
+                    if ($sinRespuesta -and $iVar -eq 0) { $mudo = $true }
+                }
             }
             $estado = 'OK'
-            if ($errores -gt 0) { $estado = "$errores fallos: $err" }
+            if ($mudo) { $estado = "no responde: $err" }
+            elseif ($errores -gt 0) { $estado = "$errores fallos: $err" }
             $fila['Estado'] = $estado
             $item = New-Object System.Windows.Forms.ListViewItem($etNcu)
             [void]$item.SubItems.Add("$tcu")

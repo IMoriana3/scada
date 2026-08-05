@@ -29,7 +29,7 @@ jobs:
           test -n "$VER"
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
           cd tools
-          zip -r "../TCU_Toolbox_v${VER}.zip" tcu-toolbox -x "tcu-toolbox/logs/*" "tcu-toolbox/backups/*" "tcu-toolbox/informes/*" "tcu-toolbox/config_local.json"
+          zip -r "../TCU_Toolbox_v${VER}.zip" tcu-toolbox -x "tcu-toolbox/logs/*" "tcu-toolbox/backups/*" "tcu-toolbox/informes/*" "tcu-toolbox/config_local.json" "tcu-toolbox/tests/*"
           VAG=$(grep -oP "VERSION_AGENTE = '\K[0-9.]+" tcu-agente/TCU_Agente.ps1)
           zip -r "../TCU_Agente_v${VAG}.zip" tcu-agente -x "tcu-agente/agente_config.json" "tcu-agente/*.log"
           cd ..
