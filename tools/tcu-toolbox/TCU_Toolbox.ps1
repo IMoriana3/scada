@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '5.0'
+$VERSION_TOOLBOX = '5.1'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2994,7 +2994,13 @@ function Ident-Leer([byte]$tcu) {
         }
     }
     [void]$campos.Add([pscustomobject]@{Campo='Numero de serie';           Valor=$serie})
-    [void]$campos.Add([pscustomobject]@{Campo='Fecha de fabricacion';      Valor=("{0}-{1:00}-{2:00}" -f $w[26], (($w[25] -shr 8) -band 0xFF), ($w[25] -band 0xFF))})
+    # dd/mm/aaaa: el registro trae el ano en dos cifras y antes se pintaba
+    # aa-mm-dd, que se lee como fecha americana
+    $fabA = [int]$w[26]; if ($fabA -lt 100) { $fabA += 2000 }
+    $fabM = ($w[25] -shr 8) -band 0xFF; $fabD = $w[25] -band 0xFF
+    $fabTxt = ''
+    if ($fabD -gt 0 -or $fabM -gt 0) { $fabTxt = "{0:00}/{1:00}/{2}" -f $fabD, $fabM, $fabA }
+    [void]$campos.Add([pscustomobject]@{Campo='Fecha de fabricacion';      Valor=$fabTxt})
     [void]$campos.Add([pscustomobject]@{Campo='Lote / verificador';        Valor="$($w[27]) / $($w[28])"})
     [void]$campos.Add([pscustomobject]@{Campo='Revision HW';               Valor="$($w[29])"})
     return $campos
@@ -4591,17 +4597,18 @@ $btnFwCsv.Add_Click({
 # completa, (auto) o entrada suelta) y lee el bloque compacto de HSUs que
 # cada NCU cachea (30200+, puerto 502). Rellena la lista y el desplegable.
 $script:HsusPlanta = @()
+$script:HsuSel = $null
 $btnHBuscar.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $p = $null; if ($cbPlanta.SelectedItem) { $p = $PLANTAS[$cbPlanta.SelectedItem] }
     $ncus = @()
     if ($cx.multi) {
-        foreach ($n in $cx.multi) { $ncus += ,@{ncu="$($n.ncu)"; ip=$n.ip; hsu=$n.hsu} }
+        foreach ($n in $cx.multi) { $ncus += ,@{ncu="$($n.ncu)"; ip=$n.ip; hsu=$n.hsu; gws=$n.gws} }
     } else {
         $eti = ''
         $m = [regex]::Match("$($cbPlanta.SelectedItem)", 'NCU(\d+)')
         if ($m.Success) { $eti = $m.Groups[1].Value }
-        $ncus += ,@{ncu=$eti; ip=$cx.ip; hsu=$(if ($p) { $p.hsu } else { $null })}
+        $ncus += ,@{ncu=$eti; ip=$cx.ip; hsu=$(if ($p) { $p.hsu } else { $null }); gws=$cx.gws}
     }
     $lvH.Items.Clear()
     $script:HsusPlanta = @()
@@ -4616,7 +4623,7 @@ $btnHBuscar.Add_Click({ Lanzar {
         if ($filas.Count -eq 0) { Con "$(if ($n.ncu) { "NCU$($n.ncu)" } else { $n.ip }): sin HSUs en el bloque compacto." ([System.Drawing.Color]::Gainsboro); continue }
         foreach ($f in $filas) {
             $eti = ($(if ($n.ncu) { "NCU$($n.ncu) - " } else { '' }) + $f.TCU)
-            $script:HsusPlanta += ,@{etiqueta=$eti; ncu="$($n.ncu)"; ip=$n.ip; hsu=$n.hsu; salud=$f.Salud; texto=$f.Alarmas}
+            $script:HsusPlanta += ,@{etiqueta=$eti; ncu="$($n.ncu)"; ip=$n.ip; hsu=$n.hsu; gws=$n.gws; salud=$f.Salud; texto=$f.Alarmas}
             $item = New-Object System.Windows.Forms.ListViewItem($eti)
             [void]$item.SubItems.Add("$($f.Salud)"); [void]$item.SubItems.Add("$($f.Alarmas)")
             switch ($f.Salud) {
@@ -4640,8 +4647,10 @@ $btnHBuscar.Add_Click({ Lanzar {
 $cbHsuSel.Add_SelectedIndexChanged({
     if ($script:Ocupado) { return }
     $i = $cbHsuSel.SelectedIndex
+    $script:HsuSel = $null
     if ($i -le 0 -or $i -gt $script:HsusPlanta.Count) { return }
     $h = $script:HsusPlanta[$i - 1]
+    $script:HsuSel = $h
     $txtIp.Text = $h.ip
     if ($h.hsu) { $txtHSlave.Text = "$($h.hsu)" }
     Con "HSU seleccionada: $($h.etiqueta) -> IP $($h.ip)$(if ($h.hsu) { ", esclavo $($h.hsu)" } else { '' }). Pon el puerto del GW del que cuelga para METEO/CONFIG/caja negra." ([System.Drawing.Color]::SteelBlue)
@@ -4650,7 +4659,21 @@ $cbHsuSel.Add_SelectedIndexChanged({
 function Params-Hsu {
     $cx = Params-Conexion
     if ($cx.multi -or -not $cx.puerto) {
-        throw "la HSU cuelga de un gateway concreto: elige una entrada GW (o IP/puerto manual), no (auto) ni PLANTA"
+        # La HSU cuelga de un gateway concreto, pero si se ha elegido una en el
+        # desplegable ya sabemos de que NCU es (BUSCAR HSUs lo resuelve): se usa
+        # su IP y el primer gateway de esa NCU en vez de obligar a cambiar la
+        # entrada de conexion a mano.
+        $h = $script:HsuSel
+        if ($h -and $h.ip) {
+            $puerto = $null
+            $gws = $(if ($h.gws) { $h.gws } else { $cx.gws })
+            if ($gws -and @($gws).Count -gt 0) { $puerto = @($gws | Sort-Object { [int]$_.puerto })[0].puerto }
+            if (-not $puerto) { $puerto = 503 }   # GW1, el habitual cuando la topologia no lo declara
+            $cx = @{ip=$h.ip; puerto=[int]$puerto; gws=$null; multi=$null; etiqueta="$puerto"; to=$cx.to; reint=$cx.reint}
+            Con "HSU $($h.etiqueta): usando $($cx.ip):$($cx.puerto), el primer gateway de su NCU. Si cuelga del otro, pon el puerto a mano." ([System.Drawing.Color]::SteelBlue)
+        } else {
+            throw "elige una HSU en el desplegable (BUSCAR HSUs) o una entrada GW concreta: la HSU cuelga de un gateway"
+        }
     }
     $cx.unitHsu = [byte](Val-Int $txtHSlave.Text 'Esclavo HSU' 1 255)
     return $cx
@@ -5169,23 +5192,57 @@ $rtb.Anchor        = 'Left,Right,Bottom'
 $lblLog.Anchor     = 'Left,Bottom'
 $btnLog.Anchor     = 'Right,Bottom'
 $btnInforme.Anchor = 'Right,Bottom'
-$anchoTab = $tabs.Width - 24
+
+# Anclar contra un contenedor que todavia no tiene su tamano definitivo deja
+# los controles pegados al borde derecho (Anadir, LEER, Exportar CSV...) fuera
+# de la vista, y las tablas mas largas que su pestana, con la barra de
+# desplazamiento por debajo del borde. Por eso todo esto se hace con la
+# ventana ya mostrada y con una guarda por si algun contenedor sigue sin
+# medir lo que deberia.
 function Anclar-Contenedor($cont, $anchoRef) {
+    $ancho = $cont.ClientSize.Width
     foreach ($c in $cont.Controls) {
+        $cabe = ($ancho -ge ($c.Left + $c.Width)) -and ($cont.ClientSize.Height -ge ($c.Top + $c.Height))
         if ($c -is [System.Windows.Forms.ListView] -or $c -is [System.Windows.Forms.DataGridView] -or $c -is [System.Windows.Forms.RichTextBox]) {
-            $c.Anchor = 'Top,Left,Right,Bottom'
+            if ($cabe) { $c.Anchor = 'Top,Left,Right,Bottom' }
         } elseif ($c -is [System.Windows.Forms.GroupBox]) {
             # en Flota hay dos grupos apilados: el de abajo es el que crece
-            if ($c.Top -gt 150) { $c.Anchor = 'Top,Left,Right,Bottom' } else { $c.Anchor = 'Top,Left,Right' }
+            if ($cabe) {
+                if ($c.Top -gt 150) { $c.Anchor = 'Top,Left,Right,Bottom' } else { $c.Anchor = 'Top,Left,Right' }
+            }
             Anclar-Contenedor $c ($c.Width - 24)
         } elseif (($c -is [System.Windows.Forms.Button]) -and (($c.Left + $c.Width) -gt ($anchoRef - 60))) {
-            $c.Anchor = 'Top,Right'      # botones pegados al borde derecho
+            if ($cabe) { $c.Anchor = 'Top,Right' }   # botones pegados al borde derecho
         } elseif (($c -is [System.Windows.Forms.Label]) -and ($c.Width -gt 300)) {
-            $c.Anchor = 'Top,Left,Right' # notas y resumenes largos
+            if ($cabe) { $c.Anchor = 'Top,Left,Right' } # notas y resumenes largos
         }
     }
 }
-foreach ($tp in $tabs.TabPages) { Anclar-Contenedor $tp $anchoTab }
+
+# Red de seguridad: si algo ha acabado fuera de su contenedor, se mete dentro.
+# Mas vale un boton apretado contra el borde que un boton que no se ve.
+function Layout-Rescatar($cont) {
+    $ancho = $cont.ClientSize.Width; $alto = $cont.ClientSize.Height
+    if ($ancho -lt 40 -or $alto -lt 40) { return }
+    foreach ($c in $cont.Controls) {
+        if ($c.Width  -gt ($ancho - 8)) { $c.Width  = $ancho - 8 }
+        if ($c.Height -gt ($alto  - 8)) { $c.Height = $alto  - 8 }
+        if (($c.Left + $c.Width)  -gt ($ancho - 4)) { $c.Left = [Math]::Max(4, $ancho - 4 - $c.Width) }
+        if (($c.Top  + $c.Height) -gt ($alto  - 4)) { $c.Top  = [Math]::Max(4, $alto  - 4 - $c.Height) }
+        if ($c.Controls.Count -gt 0) { Layout-Rescatar $c }
+    }
+}
+
+$form.Add_Shown({
+    try {
+        if ($script:TemaNombre -ne 'clasico') { Tema-AjustarAnchos $form }
+        $anchoTab = $tabs.DisplayRectangle.Width - 10
+        foreach ($tp in $tabs.TabPages) { Anclar-Contenedor $tp $anchoTab }
+        Layout-Rescatar $form
+    } catch {
+        Con "AVISO: no se pudo ajustar el diseno de la ventana ($_)" ([System.Drawing.Color]::Orange)
+    }
+})
 
 Config-Restaurar
 [void]$form.ShowDialog()
