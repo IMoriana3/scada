@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '4.9'
+$VERSION_TOOLBOX = '5.0'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1012,6 +1012,11 @@ function Dir-Trama([int]$addrDoc) { return $addrDoc }
 # ---------------------------------------------------------------------------
 $script:Tcp = $null; $script:Stream = $null; $script:Tid = 0
 $script:ConIp = ''; $script:ConPuerto = 0; $script:ConTimeout = 8000
+# El socket queda "sucio" cuando una peticion no ha terminado limpia: la NCU
+# puede soltar despues la respuesta tardia del TCU que no contesto a tiempo.
+$script:Sucio = $false
+$script:Desfases = 0        # respuestas atrasadas descartadas (se avisa en consola)
+$script:AvisosDesfase = 0
 
 function Modbus-Conectar([string]$ip, [int]$puerto, [int]$timeoutMs) {
     Modbus-Cerrar
@@ -1024,6 +1029,7 @@ function Modbus-Conectar([string]$ip, [int]$puerto, [int]$timeoutMs) {
     $script:Stream = $c.GetStream()
     $script:Stream.ReadTimeout = $timeoutMs
     $script:ConIp = $ip; $script:ConPuerto = $puerto; $script:ConTimeout = $timeoutMs
+    $script:Sucio = $false      # socket nuevo: no puede arrastrar respuestas viejas
 }
 
 function Modbus-Reconectar {
@@ -1052,8 +1058,39 @@ $EXC_MODBUS = @{
   10='GatewayPathUnavailable'; 11='GatewayTargetNoResponse'
 }
 
+# Descarta lo que hubiera esperando en el socket antes de pedir nada: si hay
+# bytes, son de una peticion anterior y desplazarian todas las respuestas.
+function Modbus-Vaciar {
+    try {
+        while ($script:Stream -and $script:Stream.DataAvailable) {
+            $b = New-Object byte[] 2048
+            if ($script:Stream.Read($b, 0, 2048) -le 0) { break }
+            $script:Desfases++
+        }
+    } catch {}
+}
+
 function Modbus-Transaccion([byte]$unit, [byte[]]$pdu) {
     if (-not $script:Stream) { throw "Sin conexion" }
+    # Resincronizacion tras un fallo. La NCU sella la respuesta tardia de un TCU
+    # con el ID de transaccion de la peticion que tenga en curso, asi que
+    # comprobar el ID no la detecta: se colaria como respuesta de la siguiente
+    # variable y a partir de ahi toda la fila saldria corrida una columna
+    # (east_pitch mostrando los radianes de max_tilt, etc.). La unica forma
+    # segura de volver a cuadrar peticion y respuesta es un socket limpio.
+    if ($script:Sucio) {
+        $script:Sucio = $false
+        Modbus-Reconectar
+        if (-not $script:Stream) { throw "Sin conexion" }
+    }
+    $antes = $script:Desfases
+    Modbus-Vaciar
+    if ($script:Desfases -gt $antes -and $script:AvisosDesfase -lt 5) {
+        $script:AvisosDesfase++
+        if (Get-Command Con -ErrorAction SilentlyContinue) {
+            Con 'AVISO: la NCU habia dejado una respuesta atrasada en la conexion; descartada y resincronizado.' ([System.Drawing.Color]::Orange)
+        }
+    }
     $script:Tid = ($script:Tid + 1) % 65535
     if ($script:Tid -eq 0) { $script:Tid = 1 }
     $len = $pdu.Length + 1
@@ -1063,22 +1100,36 @@ function Modbus-Transaccion([byte]$unit, [byte[]]$pdu) {
     $adu[4] = [byte](($len -shr 8) -band 0xFF); $adu[5] = [byte]($len -band 0xFF)
     $adu[6] = $unit
     [Array]::Copy($pdu, 0, $adu, 7, $pdu.Length)
-    $script:Stream.Write($adu, 0, $adu.Length)
 
-    while ($true) {
-        $cab = Leer-Exacto 7
-        $rtid = ([int]$cab[0] -shl 8) -bor [int]$cab[1]
-        $rlen = ([int]$cab[4] -shl 8) -bor [int]$cab[5]
-        $cuerpo = Leer-Exacto ($rlen - 1)
-        if ($rtid -eq $script:Tid) {
-            if ($cuerpo[0] -band 0x80) {
-                $exc = [int]$cuerpo[1]
-                $nom = $EXC_MODBUS[$exc]
-                if (-not $nom) { $nom = 'Excepcion' }
-                throw ("{0} (0x{1:X2})" -f $nom, $exc)
+    # Del equipo = ha contestado el propio TCU/HSU, asi que no quedan tramas
+    # tardias en camino y el socket sigue siendo de fiar. Las de gateway
+    # (0x0A/0x0B) las da la NCU porque el TCU no ha llegado a tiempo: puede
+    # contestar despues, y esa trama hay que darla por perdida reconectando.
+    $delEquipo = $false
+    try {
+        $script:Stream.Write($adu, 0, $adu.Length)
+        while ($true) {
+            $cab = Leer-Exacto 7
+            $rtid = ([int]$cab[0] -shl 8) -bor [int]$cab[1]
+            $rlen = ([int]$cab[4] -shl 8) -bor [int]$cab[5]
+            $cuerpo = Leer-Exacto ($rlen - 1)
+            if ($rtid -eq $script:Tid) {
+                if ($cuerpo[0] -band 0x80) {
+                    $exc = [int]$cuerpo[1]
+                    $nom = $EXC_MODBUS[$exc]
+                    if (-not $nom) { $nom = 'Excepcion' }
+                    $delEquipo = ($exc -ne 10 -and $exc -ne 11)
+                    throw ("{0} (0x{1:X2})" -f $nom, $exc)
+                }
+                if ([int]$cuerpo[0] -ne [int]$pdu[0]) {
+                    throw ("Respuesta descolocada: se pidio FC{0} y llego FC{1}" -f [int]$pdu[0], [int]$cuerpo[0])
+                }
+                return $cuerpo
             }
-            return $cuerpo
         }
+    } catch {
+        if (-not $delEquipo) { $script:Sucio = $true }
+        throw
     }
 }
 
@@ -1091,6 +1142,11 @@ function Es-ExcepcionModbus([string]$msg) {
 function FC03-Leer([byte]$unit, [int]$addr, [int]$n) {
     $pdu = [byte[]](3, (($addr -shr 8) -band 0xFF), ($addr -band 0xFF), (($n -shr 8) -band 0xFF), ($n -band 0xFF))
     $r = Modbus-Transaccion $unit $pdu
+    # una respuesta de otra peticion casi siempre trae otro numero de registros
+    if ([int]$r[1] -ne (2 * $n)) {
+        $script:Sucio = $true
+        throw ("Respuesta descolocada: se pidieron {0} registros y llegaron {1}" -f $n, ([int]$r[1] / 2))
+    }
     $vals = New-Object int[] $n
     for ($i = 0; $i -lt $n; $i++) { $vals[$i] = (([int]$r[2 + 2*$i] -shl 8) -bor [int]$r[3 + 2*$i]) }
     return ,$vals
