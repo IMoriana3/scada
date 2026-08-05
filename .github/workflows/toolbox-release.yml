@@ -28,7 +28,7 @@ jobs:
           test -n "$VER"
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
           cd tools
-          zip -r "../TCU_Toolbox_v${VER}.zip" tcu-toolbox -x "tcu-toolbox/logs/*"
+          zip -r "../TCU_Toolbox_v${VER}.zip" tcu-toolbox -x "tcu-toolbox/logs/*" "tcu-toolbox/backups/*" "tcu-toolbox/informes/*" "tcu-toolbox/config_local.json"
           cd ..
           unzip -l "TCU_Toolbox_v${VER}.zip"
 
