@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '4.8'
+$VERSION_TOOLBOX = '4.9'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -4825,6 +4825,7 @@ function Config-Guardar {
         $cfg = [ordered]@{
             planta = "$($cbPlanta.SelectedItem)"; ip = $txtIp.Text.Trim(); puerto = $txtPort.Text.Trim()
             timeout = $txtTo.Text.Trim(); reintentos = $txtRet.Text.Trim(); hsu = $txtHSlave.Text.Trim()
+            tema = $script:TemaNombre
         }
         ConvertTo-Json $cfg | Set-Content $script:FichConfigLocal -Encoding UTF8
     } catch {}
@@ -4860,13 +4861,248 @@ Con 'PEM: test de motor con guardia de viento, modo masivo, limpieza de alarmas 
 Con 'Volcar: backup completo de una TCU (CSV/JSON) y comparacion contra un backup anterior.' ([System.Drawing.Color]::Gainsboro)
 Con 'Diagnostico: salud OK/AVISO/ALARMA/OFFLINE de un rango con alarmas en texto. Utilidades: reloj e identificacion.' ([System.Drawing.Color]::Gainsboro)
 Con 'Registrador (Diagnostico): BUCLE CSV repite el diagnostico cada X min y lo acumula en informes/registro_*.csv.' ([System.Drawing.Color]::Gainsboro)
-Con 'INFORME HTML: volcado de la sesion (diagnostico, PEM, auditoria e inventario) a un informe con colores.' ([System.Drawing.Color]::Gainsboro)
+Con 'INFORME HTML: volcado de la sesion (diagnostico, PEM, auditoria, inventario y lectura de variables) a un informe con filtros.' ([System.Drawing.Color]::Gainsboro)
 Con 'Escritura masiva (>3 TCUs): se crea antes un rollback en backups/ restaurable con "CSV por TCU...".' ([System.Drawing.Color]::Gainsboro)
 Con 'PEM > SEGUIMIENTO JSON: exporta la ficha de seguimiento (comisionado + auditoria + motor) para subirla al Historico de la plataforma.' ([System.Drawing.Color]::Gainsboro)
 foreach ($m in $script:MsgsInicio) { Con $m ([System.Drawing.Color]::SteelBlue) }
 if ($PLANTAS.Count -le 1) {
     Con 'Sin plantas cargadas: usa el boton Cargar... (o copia los JSON de la plataforma en la subcarpeta plantas/).' ([System.Drawing.Color]::Orange)
 }
+# ---------------------------------------------------------------------------
+#  Tema visual (v4.9)
+#  Se aplica al final, sobre los controles ya creados: solo cambia colores,
+#  fuentes y bordes, nunca posiciones, asi que el diseno de cada pestana sigue
+#  siendo exactamente el mismo. Es un tema claro a proposito: las filas de las
+#  listas se colorean por salud (verde/ambar/rojo) sobre fondo blanco.
+# ---------------------------------------------------------------------------
+$script:Tema = @{
+    Fondo   = [System.Drawing.Color]::FromArgb(244,246,249)   # lienzo
+    Tarjeta = [System.Drawing.Color]::White                   # grupos, tablas
+    Linea   = [System.Drawing.Color]::FromArgb(214,221,230)
+    Texto   = [System.Drawing.Color]::FromArgb(26,34,45)
+    Suave   = [System.Drawing.Color]::FromArgb(108,124,140)   # notas y cabeceras
+    Acento  = [System.Drawing.Color]::FromArgb(0,110,180)
+    Fila    = [System.Drawing.Color]::FromArgb(248,250,252)   # fila alterna
+    Sel     = [System.Drawing.Color]::FromArgb(219,234,247)
+    ConsBg  = [System.Drawing.Color]::FromArgb(11,15,20)      # misma consola que la plataforma web
+    ConsFg  = [System.Drawing.Color]::FromArgb(231,238,244)
+}
+$script:FuenteUI  = New-Object System.Drawing.Font('Segoe UI', 9)
+$script:FuenteNeg = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+$script:FuenteCab = New-Object System.Drawing.Font('Segoe UI', 8, [System.Drawing.FontStyle]::Bold)
+
+function Tema-Tono($col, [int]$n) {
+    $r = [Math]::Max(0, [Math]::Min(255, [int]$col.R + $n))
+    $g = [Math]::Max(0, [Math]::Min(255, [int]$col.G + $n))
+    $b = [Math]::Max(0, [Math]::Min(255, [int]$col.B + $n))
+    return [System.Drawing.Color]::FromArgb($r, $g, $b)
+}
+
+# DoubleBuffered es protegida: sin esto los grupos parpadean al redimensionar
+function Tema-DobleBuffer($c) {
+    try {
+        $pr = $c.GetType().GetProperty('DoubleBuffered', [System.Reflection.BindingFlags]'Instance,NonPublic')
+        if ($pr) { $pr.SetValue($c, $true, $null) }
+    } catch {}
+}
+
+function Tema-Recoger($cont, $acc) {
+    foreach ($c in $cont.Controls) {
+        [void]$acc.Add($c)
+        if ($c.Controls.Count -gt 0) { Tema-Recoger $c $acc }
+    }
+}
+
+# La fuente nueva es algo mas ancha que la de serie: si a alguna etiqueta o
+# boton se le queda corto el ancho fijo, se ensancha lo justo, sin llegar a
+# tocar el control que tenga a su derecha.
+function Tema-AjustarAnchos($cont) {
+    foreach ($c in $cont.Controls) {
+        if ($c.Controls.Count -gt 0) { Tema-AjustarAnchos $c }
+        $ajustable = ($c -is [System.Windows.Forms.Label]) -or ($c -is [System.Windows.Forms.CheckBox]) -or
+                     ($c -is [System.Windows.Forms.RadioButton]) -or ($c -is [System.Windows.Forms.Button])
+        if (-not $ajustable) { continue }
+        if ($c.AutoSize -or [string]::IsNullOrEmpty($c.Text)) { continue }
+        $margen = if ($c -is [System.Windows.Forms.Label]) { 6 } else { 20 }
+        $necesita = [System.Windows.Forms.TextRenderer]::MeasureText($c.Text, $c.Font).Width + $margen
+        if ($necesita -le $c.Width) { continue }
+        $tope = $c.Parent.ClientSize.Width - 6
+        foreach ($o in $c.Parent.Controls) {
+            if ($o -eq $c -or $o.Left -le $c.Left) { continue }
+            if (($o.Top -ge ($c.Top + $c.Height)) -or (($o.Top + $o.Height) -le $c.Top)) { continue }
+            if ($o.Left -lt $tope) { $tope = $o.Left - 4 }
+        }
+        $nuevo = [Math]::Min($necesita, $tope - $c.Left)
+        if ($nuevo -gt $c.Width) { $c.Width = $nuevo }
+    }
+}
+
+function Tema-Aplicar {
+    $script:Ctrls = New-Object System.Collections.ArrayList
+    Tema-Recoger $form $script:Ctrls
+
+    # Que botones llevan color propio hay que mirarlo ANTES de tocar fondos:
+    # BackColor es una propiedad ambiental y en cuanto cambia el del formulario
+    # los botones sin color propio devuelven el heredado, no el del sistema.
+    $script:BotonAccion = @{}
+    foreach ($c in $script:Ctrls) {
+        if ($c -is [System.Windows.Forms.Button]) {
+            $script:BotonAccion[$c] = ($c.BackColor -ne [System.Drawing.SystemColors]::Control)
+        }
+    }
+
+    $form.Font      = $script:FuenteUI
+    $form.BackColor = $script:Tema.Fondo
+    $form.ForeColor = $script:Tema.Texto
+    Tema-DobleBuffer $form
+
+    foreach ($c in $script:Ctrls) {
+        if ($c -is [System.Windows.Forms.Button]) {
+            $c.FlatStyle = 'Flat'
+            $c.UseVisualStyleBackColor = $false
+            if ($script:BotonAccion[$c]) {
+                # boton de accion: mantiene su color (verde escribir, azul leer,
+                # naranja NVM/stow, rojo cancelar) pero plano y en negrita
+                $c.FlatAppearance.BorderSize = 0
+                $c.ForeColor = [System.Drawing.Color]::White
+                $c.Font = $script:FuenteNeg
+                $c.FlatAppearance.MouseOverBackColor = (Tema-Tono $c.BackColor 26)
+                $c.FlatAppearance.MouseDownBackColor = (Tema-Tono $c.BackColor (-22))
+            } else {
+                $c.BackColor = $script:Tema.Tarjeta
+                $c.ForeColor = $script:Tema.Texto
+                $c.FlatAppearance.BorderSize  = 1
+                $c.FlatAppearance.BorderColor = $script:Tema.Linea
+                $c.FlatAppearance.MouseOverBackColor = $script:Tema.Sel
+            }
+        }
+        elseif ($c -is [System.Windows.Forms.GroupBox]) {
+            $c.BackColor = $script:Tema.Tarjeta
+            $c.ForeColor = $script:Tema.Suave
+            Tema-DobleBuffer $c
+            # el borde grabado de serie es lo que mas envejece la ventana: se
+            # repinta el grupo entero como una tarjeta con un filete de 1 px
+            $c.Add_Paint({
+                param($s, $e)
+                $g = $e.Graphics
+                $g.Clear($script:Tema.Tarjeta)
+                $lapiz = New-Object System.Drawing.Pen($script:Tema.Linea, 1)
+                $g.DrawRectangle($lapiz, 0, 6, ($s.ClientSize.Width - 1), ($s.ClientSize.Height - 7))
+                $lapiz.Dispose()
+                $t = "$($s.Text)".Trim().ToUpper()
+                if ($t) {
+                    $tam = [System.Windows.Forms.TextRenderer]::MeasureText($t, $script:FuenteCab)
+                    $br = New-Object System.Drawing.SolidBrush($script:Tema.Tarjeta)
+                    $g.FillRectangle($br, 9, 0, ($tam.Width + 6), $tam.Height)
+                    $br.Dispose()
+                    [System.Windows.Forms.TextRenderer]::DrawText($g, $t, $script:FuenteCab,
+                        (New-Object System.Drawing.Point(11, 0)), $script:Tema.Suave)
+                }
+            })
+        }
+        elseif ($c -is [System.Windows.Forms.TabPage]) {
+            $c.UseVisualStyleBackColor = $false
+            $c.BackColor = $script:Tema.Fondo
+            $c.ForeColor = $script:Tema.Texto
+        }
+        elseif ($c -is [System.Windows.Forms.ListView]) {
+            $c.BorderStyle = 'FixedSingle'
+            $c.BackColor = $script:Tema.Tarjeta
+            $c.ForeColor = $script:Tema.Texto
+            $c.FullRowSelect = $true
+            # una lista de imagenes de 1x20 solo para dar aire a las filas
+            try {
+                if (-not $c.SmallImageList) {
+                    $il = New-Object System.Windows.Forms.ImageList
+                    $il.ImageSize = New-Object System.Drawing.Size(1, 20)
+                    $c.SmallImageList = $il
+                }
+            } catch {}
+        }
+        elseif ($c -is [System.Windows.Forms.DataGridView]) {
+            $c.BorderStyle = 'FixedSingle'
+            $c.BackgroundColor = $script:Tema.Tarjeta
+            $c.GridColor = $script:Tema.Linea
+            $c.CellBorderStyle = 'SingleHorizontal'
+            $c.ColumnHeadersBorderStyle = 'Single'
+            $c.EnableHeadersVisualStyles = $false
+            $c.ColumnHeadersDefaultCellStyle.BackColor = $script:Tema.Tarjeta
+            $c.ColumnHeadersDefaultCellStyle.ForeColor = $script:Tema.Suave
+            $c.ColumnHeadersDefaultCellStyle.Font = $script:FuenteCab
+            $c.ColumnHeadersHeightSizeMode = 'EnableResizing'   # si estuviera en AutoSize, fijar la altura lanzaria
+            $c.ColumnHeadersHeight = 28
+            $c.AlternatingRowsDefaultCellStyle.BackColor = $script:Tema.Fila
+            $c.DefaultCellStyle.SelectionBackColor = $script:Tema.Sel
+            $c.DefaultCellStyle.SelectionForeColor = $script:Tema.Texto
+            $c.RowTemplate.Height = 24
+            foreach ($f in $c.Rows) { $f.Height = 24 }
+        }
+        elseif ($c -is [System.Windows.Forms.ListBox]) {
+            $c.BorderStyle = 'FixedSingle'
+            $c.BackColor = $script:Tema.Tarjeta
+            $c.ForeColor = $script:Tema.Texto
+        }
+        elseif ($c -is [System.Windows.Forms.TextBox]) {
+            $c.BorderStyle = 'FixedSingle'
+            $c.BackColor = $script:Tema.Tarjeta
+            $c.ForeColor = $script:Tema.Texto
+        }
+        elseif ($c -is [System.Windows.Forms.Label]) {
+            # las notas y resumenes iban en Gray; se unifican al gris del tema
+            if ($c.ForeColor -eq [System.Drawing.Color]::Gray) { $c.ForeColor = $script:Tema.Suave }
+        }
+    }
+
+    # Pestanas planas: las de serie son las que mas delatan la edad de la ventana.
+    # SizeMode 'Normal' (no 'Fixed'): cada pestana se ajusta a su texto, que con
+    # nueve pestanas es la diferencia entre que quepan todas o salgan flechas.
+    $tabs.BackColor = $script:Tema.Fondo
+    $tabs.DrawMode  = 'OwnerDrawFixed'
+    $tabs.SizeMode  = 'Normal'
+    $tabs.Padding   = New-Object System.Drawing.Point(12, 4)
+    $tabs.ItemSize  = New-Object System.Drawing.Size(90, 28)
+    $tabs.Add_DrawItem({
+        param($s, $e)
+        $g = $e.Graphics
+        $r = $s.GetTabRect($e.Index)
+        $activa = ($e.Index -eq $s.SelectedIndex)
+        $br = New-Object System.Drawing.SolidBrush($(if ($activa) { $script:Tema.Tarjeta } else { $script:Tema.Fondo }))
+        $g.FillRectangle($br, $r)
+        $br.Dispose()
+        if ($activa) {
+            $ba = New-Object System.Drawing.SolidBrush($script:Tema.Acento)
+            $g.FillRectangle($ba, $r.X, $r.Y, $r.Width, 3)
+            $ba.Dispose()
+        }
+        $fmt = New-Object System.Drawing.StringFormat
+        $fmt.Alignment = [System.Drawing.StringAlignment]::Center
+        $fmt.LineAlignment = [System.Drawing.StringAlignment]::Center
+        $bt = New-Object System.Drawing.SolidBrush($(if ($activa) { $script:Tema.Texto } else { $script:Tema.Suave }))
+        $rf = New-Object System.Drawing.RectangleF($r.X, ($r.Y + 2), $r.Width, $r.Height)
+        $g.DrawString($s.TabPages[$e.Index].Text, $(if ($activa) { $script:FuenteNeg } else { $script:FuenteUI }), $bt, $rf, $fmt)
+        $bt.Dispose(); $fmt.Dispose()
+    })
+
+    # Consola: misma paleta que la plataforma web
+    $rtb.BorderStyle = 'None'
+    $rtb.BackColor = $script:Tema.ConsBg
+    $rtb.ForeColor = $script:Tema.ConsFg
+    $lblLog.ForeColor = $script:Tema.Suave
+
+    Tema-AjustarAnchos $form
+}
+
+# Escotilla de salida: con "tema": "clasico" en config_local.json la ventana
+# vuelve al aspecto de siempre sin tocar el script.
+$script:TemaNombre = 'claro'
+try {
+    if (Test-Path $script:FichConfigLocal) {
+        $cfgT = Get-Content $script:FichConfigLocal -Raw | ConvertFrom-Json
+        if ("$($cfgT.tema)" -eq 'clasico') { $script:TemaNombre = 'clasico' }
+    }
+} catch {}
+if ($script:TemaNombre -ne 'clasico') { Tema-Aplicar }
+
 # ------------------------- ventana redimensionable -------------------------
 # Anclajes para que al maximizar crezcan las tablas y la consola (el diseno
 # usa posiciones fijas, asi que sin esto la ventana grande dejaria huecos).
