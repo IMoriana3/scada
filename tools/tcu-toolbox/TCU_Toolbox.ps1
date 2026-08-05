@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '3.8'
+$VERSION_TOOLBOX = '3.9'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1820,7 +1820,7 @@ $btnPModo.Size = New-Object System.Drawing.Size(118, 24)
 $tabP.Controls.Add($btnPModo)
 
 $btnPClear = New-Object System.Windows.Forms.Button
-$btnPClear.Text = 'CLEAR ALARMAS'
+$btnPClear.Text = 'LIMPIAR ALARMAS'
 $btnPClear.Location = New-Object System.Drawing.Point(274, 44)
 $btnPClear.Size = New-Object System.Drawing.Size(122, 24)
 $tabP.Controls.Add($btnPClear)
@@ -4247,7 +4247,7 @@ Con 'Entradas (auto): NCU completa con puerto resuelto por TCU; los gateways se 
 Con 'Flota: auditoria contra preset de referencia e inventario (FW/serie/MAC). Volcar: BACKUP NCU masivo. Escribir: CSV por TCU.' ([System.Drawing.Color]::Gainsboro)
 Con 'Diagnostico de Planta completa: recorre todas las NCUs (filtro NCUs: 1,3-5) e incluye la salud de cada NCU (GW1/GW2, UPS, seta).' ([System.Drawing.Color]::Gainsboro)
 Con 'HSU: meteo en vivo, umbrales de viento, reloj UTC, calibracion de nieve y caja negra de 24h a CSV.' ([System.Drawing.Color]::Gainsboro)
-Con 'PEM: test de motor con guardia de viento, modo masivo, clear de alarmas, stow test y estado de comisionado.' ([System.Drawing.Color]::Gainsboro)
+Con 'PEM: test de motor con guardia de viento, modo masivo, limpieza de alarmas enclavadas, stow test y estado de comisionado.' ([System.Drawing.Color]::Gainsboro)
 Con 'Volcar: backup completo de una TCU (CSV/JSON) y comparacion contra un backup anterior.' ([System.Drawing.Color]::Gainsboro)
 Con 'Diagnostico: salud OK/AVISO/ALARMA/OFFLINE de un rango con alarmas en texto. Utilidades: reloj e identificacion.' ([System.Drawing.Color]::Gainsboro)
 Con 'Registrador (Diagnostico): BUCLE CSV repite el diagnostico cada X min y lo acumula en informes/registro_*.csv.' ([System.Drawing.Color]::Gainsboro)
