@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '5.7'
+$VERSION_TOOLBOX = '5.8'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2559,7 +2559,7 @@ function Set-UIOcupada([bool]$ocupada) {
 # CANCELAR, y cierra la conexion Modbus pase lo que pase.
 function Lanzar([scriptblock]$accion) {
     if ($script:Ocupado) { Con 'Hay una operacion en curso (usa CANCELAR para abortarla).' ([System.Drawing.Color]::Orange); return }
-    $script:Ocupado = $true; $script:Cancelar = $false
+    $script:Ocupado = $true; $script:Cancelar = $false; $script:NcuLog = ''
     Set-UIOcupada $true
     try { & $accion }
     catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon) }
@@ -2599,6 +2599,15 @@ function Params-Conexion {
     }
     $puerto = Val-Int $pt 'Puerto' 1 65535
     return @{ip=$ip; puerto=$puerto; gws=$null; etiqueta="$puerto"; to=$to; reint=$reint}
+}
+
+# Etiqueta de una TCU para la consola. En Planta completa los numeros de TCU
+# se repiten en cada NCU, asi que sin la NCU delante una linea de log no dice
+# de que equipo habla. $script:NcuLog lo pone el bucle de cada operacion.
+$script:NcuLog = ''
+function Eti-Tcu($tcu) {
+    if ("$script:NcuLog") { return ("NCU{0,-3} TCU {1,3}" -f $script:NcuLog, $tcu) }
+    return ("TCU {0,3}" -f $tcu)
 }
 
 # Divide una lista de TCUs en segmentos consecutivos por puerto de gateway.
@@ -2757,8 +2766,32 @@ function Escribir-EnTcus($tcus) {
     if ($vars.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('No hay variables con valor.','Aviso'); return }
     $cx = Params-Conexion
     # Con (Planta completa) se recorren todas las NCUs con sus rangos
-    # automaticos, igual que en Leer y en Diagnostico.
-    $trabajos = @(Trabajos-Planta $cx $tcus)
+    # automaticos, igual que en Leer y en Diagnostico. Y si lo que llega es la
+    # lista de fallidas, cada una trae su NCU: hay que volver a la suya, porque
+    # en una planta los numeros de TCU se repiten entre NCUs.
+    if ($tcus -and (@($tcus)[0] -is [hashtable])) {
+        $porNcuF = @{}
+        foreach ($f in @($tcus)) {
+            $k = "$($f.ncu)"
+            if (-not $porNcuF.ContainsKey($k)) { $porNcuF[$k] = @() }
+            $porNcuF[$k] += [int]$f.tcu
+        }
+        $lista = @()
+        foreach ($k in @($porNcuF.Keys | Sort-Object)) {
+            $n = $null
+            if ($k -and $cx.multi) { $n = @($cx.multi | Where-Object { "$($_.ncu)" -eq $k })[0] }
+            if ($n) {
+                $lista += ,@{ncu=[int]$n.ncu; ip=$n.ip; tcus=@($porNcuF[$k] | Sort-Object)
+                             cx=@{ip=$n.ip; puerto=$null; gws=$n.gws; multi=$null; etiqueta='auto'; to=$cx.to; reint=$cx.reint}}
+            } else {
+                if ($k) { Con "AVISO: las fallidas de NCU$k se reintentan contra la conexion actual ($($cx.ip)); vuelve a elegir la planta si no es la misma." ([System.Drawing.Color]::Orange) }
+                $lista += ,@{ncu=$null; ip=$cx.ip; tcus=@($porNcuF[$k] | Sort-Object); cx=$cx}
+            }
+        }
+        $trabajos = @($lista)
+    } else {
+        $trabajos = @(Trabajos-Planta $cx $tcus)
+    }
     if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
     $nTcus = 0; foreach ($tr in $trabajos) { $nTcus += @($tr.tcus).Count }
     $donde = $(if ($cx.multi) { "$($trabajos.Count) NCUs de la PLANTA COMPLETA" } else { "$($cx.ip):$($cx.etiqueta)" })
@@ -2802,6 +2835,7 @@ function Escribir-EnTcus($tcus) {
             try {
                 $filasRb = 0; $errRb = 0; $ficheroRb = ''
                 foreach ($tr in $trabajos) {
+                    $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
                     if ($script:Cancelar) { break }
                     $paresRb = @()
                     foreach ($t in $tr.tcus) {
@@ -2826,6 +2860,7 @@ function Escribir-EnTcus($tcus) {
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Escribiendo $($vars.Count) variables en $nTcus TCUs  ($donde)" ([System.Drawing.Color]::SteelBlue)
     foreach ($tr in $trabajos) {
+        $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
     if ($script:Cancelar) { break }
     if ($null -ne $tr.ncu) { Con ("--- NCU{0}  ({1})  TCUs {2}-{3} ---" -f $tr.ncu, $tr.ip, $tr.tcus[0], $tr.tcus[-1]) ([System.Drawing.Color]::SteelBlue) }
     $segs = @(Plan-Segmentos $tr.tcus $tr.cx)
@@ -2879,11 +2914,11 @@ function Escribir-EnTcus($tcus) {
             }
             if ($script:Cancelar -and -not $hecho) { break }
             if (-not $hecho) {
-                [void]$script:Fallidas.Add($tcu)
-                Con ("TCU {0,3}  FALLO   {1}" -f $tcu, $fallo) ([System.Drawing.Color]::Salmon)
+                [void]$script:Fallidas.Add(@{ncu=$(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' }); tcu=[int]$tcu})
+                Con ((Eti-Tcu $tcu) + ("  FALLO   {0}" -f $fallo)) ([System.Drawing.Color]::Salmon)
             } else {
                 $ok++
-                Con ("TCU {0,3}  OK   {1}" -f $tcu, ($cambios -join ' | ')) ([System.Drawing.Color]::LightGreen)
+                Con ((Eti-Tcu $tcu) + ("  OK   {0}" -f ($cambios -join ' | '))) ([System.Drawing.Color]::LightGreen)
             }
         }
     }
@@ -2892,7 +2927,7 @@ function Escribir-EnTcus($tcus) {
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "OK: $ok   Fallidas: $($script:Fallidas.Count)" ([System.Drawing.Color]::SteelBlue)
     if ($script:Fallidas.Count -gt 0) {
-        Con ("TCUs fallidas: " + ($script:Fallidas -join ', ')) ([System.Drawing.Color]::Salmon)
+        Con ("TCUs fallidas: " + (($script:Fallidas | ForEach-Object { $(if ($_.ncu) { "NCU$($_.ncu)/$($_.tcu)" } else { "$($_.tcu)" }) }) -join ', ')) ([System.Drawing.Color]::Salmon)
     }
 }
 
@@ -2902,7 +2937,12 @@ $btnEscribir.Add_Click({ Lanzar {
     if (-not $cxW.multi) { $tcusW = Rango-Tcus $txtWIni.Text $txtWFin.Text 'Escribir' }
     Escribir-EnTcus $tcusW
 } })
-$btnFallidas.Add_Click({ Lanzar { if ($script:Fallidas.Count -gt 0) { Escribir-EnTcus @($script:Fallidas | ForEach-Object { [int]$_ }) } } })
+# Reintentar fallidas tiene que volver a la NCU de cada una: en una escritura
+# de planta completa los numeros de TCU se repiten entre NCUs.
+$btnFallidas.Add_Click({ Lanzar {
+    if ($script:Fallidas.Count -eq 0) { return }
+    Escribir-EnTcus @($script:Fallidas | ForEach-Object { @{ncu=$_.ncu; tcu=[int]$_.tcu} })
+} })
 
 $btnNvm.Add_Click({ Lanzar {
     if ($script:Fallidas.Count -gt 0) {
@@ -2934,8 +2974,8 @@ $btnNvm.Add_Click({ Lanzar {
                     }
                 }
             }
-            if ($hecho) { Con ("TCU {0,3}  NVM guardado" -f $tcu) ([System.Drawing.Color]::LightGreen) }
-            else        { Con ("TCU {0,3}  NVM FALLO" -f $tcu) ([System.Drawing.Color]::Salmon) }
+            if ($hecho) { Con ((Eti-Tcu $tcu) + "  NVM guardado") ([System.Drawing.Color]::LightGreen) }
+            else        { Con ((Eti-Tcu $tcu) + "  NVM FALLO") ([System.Drawing.Color]::Salmon) }
         }
     }
     Modbus-Cerrar
@@ -3043,6 +3083,7 @@ $btnLeer.Add_Click({ Lanzar {
     $valores = @{}
     foreach ($d in $defs) { $valores[$d.nombre] = @{} }
     foreach ($tr in $trabajos) {
+        $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
     if ($script:Cancelar) { break }
     $etNcu = ''
     if ($null -ne $tr.ncu) {
@@ -3415,6 +3456,7 @@ function Diag-Correr {
     }
     $nOk = 0; $nAviso = 0; $nAlarma = 0; $nOff = 0
     foreach ($tr in $trabajos) {
+        $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
     if ($script:Cancelar) { break }
     if ($null -ne $tr.ncu) {
         Con ("--- NCU{0}  ({1})  TCUs {2}-{3} ---" -f $tr.ncu, $tr.ip, $tr.tcus[0], $tr.tcus[-1]) ([System.Drawing.Color]::SteelBlue)
@@ -3617,6 +3659,7 @@ $btnGComm.Add_Click({ Lanzar {
     Con "TEST COMM: $($trabajos.Count) NCU(s), $totT TCUs y sus HSUs - solo lastComm via NCU (puerto $PUERTO_NCU)" ([System.Drawing.Color]::SteelBlue)
     $nOk = 0; $nOff = 0; $nNcuOk = 0; $nNcuKo = 0; $nHsuOk = 0; $nHsuKo = 0
     foreach ($tr in $trabajos) {
+        $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
         if ($script:Cancelar) { break }
         $et = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
         $c = $null; $err = ''
@@ -3808,16 +3851,16 @@ $btnSync.Add_Click({ Lanzar {
             if ($chkSVerif.Checked) {
                 try {
                     $reloj = Leer-Decodificado $tcu @{addr=30079; tipo='dt_bcd'}
-                    Con ("TCU {0,3}  OK  reloj = {1}" -f $tcu, $reloj) ([System.Drawing.Color]::LightGreen)
+                    Con ((Eti-Tcu $tcu) + ("  OK  reloj = {0}" -f $reloj)) ([System.Drawing.Color]::LightGreen)
                 } catch {
-                    Con ("TCU {0,3}  OK  (reloj no verificable: {1})" -f $tcu, $_) ([System.Drawing.Color]::LightGreen)
+                    Con ((Eti-Tcu $tcu) + ("  OK  (reloj no verificable: {0})" -f $_)) ([System.Drawing.Color]::LightGreen)
                 }
             } else {
-                Con ("TCU {0,3}  OK" -f $tcu) ([System.Drawing.Color]::LightGreen)
+                Con ((Eti-Tcu $tcu) + "  OK") ([System.Drawing.Color]::LightGreen)
             }
         } else {
             $ko++
-            Con ("TCU {0,3}  FALLO  {1}" -f $tcu, $fallo) ([System.Drawing.Color]::Salmon)
+            Con ((Eti-Tcu $tcu) + ("  FALLO  {0}" -f $fallo)) ([System.Drawing.Color]::Salmon)
         }
     }
     }
@@ -3909,8 +3952,8 @@ $btnCsvTcu.Add_Click({ Lanzar {
                     if (-not $hecho) { $todoOk = $false; break }
                 }
             }
-            if ($todoOk) { $ok++; Con ("TCU {0,3}  OK   {1}" -f $tcu, ($cambios -join ' | ')) ([System.Drawing.Color]::LightGreen) }
-            else { $ko++; Con ("TCU {0,3}  FALLO  {1}" -f $tcu, $fallo) ([System.Drawing.Color]::Salmon) }
+            if ($todoOk) { $ok++; Con ((Eti-Tcu $tcu) + ("  OK   {0}" -f ($cambios -join ' | '))) ([System.Drawing.Color]::LightGreen) }
+            else { $ko++; Con ((Eti-Tcu $tcu) + ("  FALLO  {0}" -f $fallo)) ([System.Drawing.Color]::Salmon) }
         }
     }
     Modbus-Cerrar
@@ -3937,7 +3980,7 @@ $btnBackupNcu.Add_Click({ Lanzar {
         catch { $segOk = $false; Con "ERROR de conexion ($($cx.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
         foreach ($tcu in $seg.tcus) {
             if (Chequear-Cancelado) { break }
-            if (-not $segOk) { $ko++; Con ("TCU {0,3}  FALLO  sin conexion" -f $tcu) ([System.Drawing.Color]::Salmon); continue }
+            if (-not $segOk) { $ko++; Con ((Eti-Tcu $tcu) + "  FALLO  sin conexion") ([System.Drawing.Color]::Salmon); continue }
             $vars = @(); $errs = 0
             foreach ($nombre in $VARIABLES.Keys) {
                 if ($script:Cancelar) { break }
@@ -3965,8 +4008,8 @@ $btnBackupNcu.Add_Click({ Lanzar {
             if (-not $completo) { $suf = '_INCOMPLETO' }
             $fich = Join-Path $dir ("backup_tcu{0}_{1}{2}.json" -f $tcu, $ts, $suf)
             ConvertTo-Json $obj -Depth 5 | Set-Content $fich -Encoding UTF8
-            if ($completo) { $ok++; Con ("TCU {0,3}  backup OK" -f $tcu) ([System.Drawing.Color]::LightGreen) }
-            else { $ko++; Con ("TCU {0,3}  backup INCOMPLETO ({1} errores)" -f $tcu, $errs) ([System.Drawing.Color]::Orange) }
+            if ($completo) { $ok++; Con ((Eti-Tcu $tcu) + "  backup OK") ([System.Drawing.Color]::LightGreen) }
+            else { $ko++; Con ((Eti-Tcu $tcu) + ("  backup INCOMPLETO ({0} errores)" -f $errs)) ([System.Drawing.Color]::Orange) }
         }
     }
     Modbus-Cerrar
@@ -4017,6 +4060,7 @@ $btnAud.Add_Click({ Lanzar {
     }
     $nOk = 0; $nDesv = 0; $nErr = 0
     foreach ($tr in $trabajos) {
+        $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
     if ($script:Cancelar) { break }
     $etNcu = ''
     if ($null -ne $tr.ncu) {
@@ -4131,6 +4175,7 @@ $btnInvF.Add_Click({ Lanzar {
     }
     $ok = 0; $ko = 0
     foreach ($tr in $trabajos) {
+        $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
     if ($script:Cancelar) { break }
     $etNcu = ''
     if ($null -ne $tr.ncu) {
@@ -4456,6 +4501,7 @@ $btnPComis.Add_Click({ Lanzar {
         $trabajos = @(Trabajos-Planta $cx $null)
         Con "Comisionado de Planta completa via NCU: $($trabajos.Count) NCUs (bloque compacto, sin Zigbee)" ([System.Drawing.Color]::SteelBlue)
         foreach ($tr in $trabajos) {
+            $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
             if ($script:Cancelar) { break }
             Con ("--- NCU{0}  ({1})  TCUs {2}-{3} ---" -f $tr.ncu, $tr.ip, $tr.tcus[0], $tr.tcus[-1]) ([System.Drawing.Color]::SteelBlue)
             $dm = $null
@@ -4587,6 +4633,7 @@ $btnFwPlan.Add_Click({ Lanzar {
     $trabajos = @(Trabajos-Planta $cx $null)
     $gws = @{}; $ips = @{}
     foreach ($tr in $trabajos) {
+        $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
         $k = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
         $ips[$k] = $tr.ip
         $gws[$k] = $(if ($tr.cx.gws) { $tr.cx.gws } else { @(@{puerto=$tr.cx.puerto; ini=1; fin=247}) })
