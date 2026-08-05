@@ -2752,17 +2752,23 @@ function Recoger-Variables {
     return $lista
 }
 
-function Escribir-EnTcus([int[]]$tcus) {
+function Escribir-EnTcus($tcus) {
     $vars = @(Recoger-Variables)
     if ($vars.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('No hay variables con valor.','Aviso'); return }
     $cx = Params-Conexion
+    # Con (Planta completa) se recorren todas las NCUs con sus rangos
+    # automaticos, igual que en Leer y en Diagnostico.
+    $trabajos = @(Trabajos-Planta $cx $tcus)
+    if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
+    $nTcus = 0; foreach ($tr in $trabajos) { $nTcus += @($tr.tcus).Count }
+    $donde = $(if ($cx.multi) { "$($trabajos.Count) NCUs de la PLANTA COMPLETA" } else { "$($cx.ip):$($cx.etiqueta)" })
     $resumen = ($vars | ForEach-Object {
         $hex = if ($_.esc.modo -eq 'fc16') { ($_.esc.palabras | ForEach-Object { '{0:X4}' -f $_ }) -join ' ' }
                else { 'AND {0:X4} OR {1:X4}' -f $_.esc.and, $_.esc.or }
         "  $($_.nombre) = $($_.texto)   [$hex]"
     }) -join "`r`n"
     $r = [System.Windows.Forms.MessageBox]::Show(
-        "Se escribiran $($vars.Count) variables en $($tcus.Count) TCUs de $($cx.ip):$($cx.puerto):`r`n`r`n$resumen`r`n`r`nContinuar?",
+        "Se escribiran $($vars.Count) variables en $nTcus TCUs de ${donde}:`r`n`r`n$resumen`r`n`r`nContinuar?",
         'Confirmar', 'YesNo', 'Warning')
     if ($r -ne 'Yes') { return }
 
@@ -2775,19 +2781,37 @@ function Escribir-EnTcus([int[]]$tcus) {
         if ($r2 -ne 'Yes') { return }
     }
 
-    if ($tcus.Count -gt 3) {
+    if ($nTcus -gt 3) {
         # escritura masiva: copia de seguridad previa (rollback) de los valores
         # actuales, restaurable con "CSV por TCU...". Los registros de comando
         # se excluyen: reescribirlos relanzaria ordenes.
-        $paresRb = @()
-        foreach ($t in $tcus) {
-            foreach ($v in $vars) { if ($ADDR_COMANDO -notcontains $v.addr) { $paresRb += ,@{tcu=[int]$t; nombre=$v.nombre} } }
+        $nRb = 0
+        foreach ($tr in $trabajos) { foreach ($t in $tr.tcus) { foreach ($v in $vars) { if ($ADDR_COMANDO -notcontains $v.addr) { $nRb++ } } } }
+        # El rollback lee uno a uno: en una planta entera son miles de lecturas
+        # y puede tardar mas que la propia escritura, asi que se avisa antes.
+        $saltarRb = $false
+        if ($nRb -gt 400) {
+            $rMasivo = [System.Windows.Forms.MessageBox]::Show(
+                "La copia de seguridad previa leeria $nRb valores uno a uno; en una planta entera eso puede tardar bastante mas que la propia escritura.`r`n`r`nSI: crear la copia igualmente (recomendado).`r`nNO: escribir sin copia de seguridad.`r`nCANCELAR: no escribir nada.",
+                'Rollback de planta completa', 'YesNoCancel', 'Warning')
+            if ($rMasivo -eq 'Cancel') { return }
+            if ($rMasivo -eq 'No') { $saltarRb = $true }
         }
-        if ($paresRb.Count -gt 0) {
-            Con "Creando copia de seguridad (rollback) de $($paresRb.Count) valores actuales..." ([System.Drawing.Color]::SteelBlue)
+        if ($nRb -gt 0 -and -not $saltarRb) {
+            Con "Creando copia de seguridad (rollback) de $nRb valores actuales..." ([System.Drawing.Color]::SteelBlue)
             try {
-                $rb = Rollback-Crear $paresRb $cx
-                Con "Rollback guardado: $($rb.fichero)  ($($rb.filas) valores$(if ($rb.errores) { ", $($rb.errores) sin leer" })). Restaurable con 'CSV por TCU...'." ([System.Drawing.Color]::SteelBlue)
+                $filasRb = 0; $errRb = 0; $ficheroRb = ''
+                foreach ($tr in $trabajos) {
+                    if ($script:Cancelar) { break }
+                    $paresRb = @()
+                    foreach ($t in $tr.tcus) {
+                        foreach ($v in $vars) { if ($ADDR_COMANDO -notcontains $v.addr) { $paresRb += ,@{tcu=[int]$t; nombre=$v.nombre} } }
+                    }
+                    if ($paresRb.Count -eq 0) { continue }
+                    $rb = Rollback-Crear $paresRb $tr.cx
+                    $filasRb += $rb.filas; $errRb += $rb.errores; $ficheroRb = $rb.fichero
+                }
+                Con "Rollback guardado: $ficheroRb  ($filasRb valores$(if ($errRb) { ", $errRb sin leer" })). Restaurable con 'CSV por TCU...'." ([System.Drawing.Color]::SteelBlue)
             } catch {
                 $r3 = [System.Windows.Forms.MessageBox]::Show(
                     "No se pudo crear la copia de seguridad previa (rollback):`r`n$_`r`n`r`nEscribir AUN ASI, sin copia?", 'Rollback', 'YesNo', 'Warning')
@@ -2800,15 +2824,18 @@ function Escribir-EnTcus([int[]]$tcus) {
     $script:Fallidas.Clear(); $btnFallidas.Enabled = $false
     $ok = 0
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Escribiendo $($vars.Count) variables en $($tcus.Count) TCUs  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
-    $segs = @(Plan-Segmentos $tcus $cx)
-    if ($segs.Count -eq 0) { Con 'Ningun TCU cae en los gateways de la NCU.' ([System.Drawing.Color]::Orange); return }
+    Con "Escribiendo $($vars.Count) variables en $nTcus TCUs  ($donde)" ([System.Drawing.Color]::SteelBlue)
+    foreach ($tr in $trabajos) {
+    if ($script:Cancelar) { break }
+    if ($null -ne $tr.ncu) { Con ("--- NCU{0}  ({1})  TCUs {2}-{3} ---" -f $tr.ncu, $tr.ip, $tr.tcus[0], $tr.tcus[-1]) ([System.Drawing.Color]::SteelBlue) }
+    $segs = @(Plan-Segmentos $tr.tcus $tr.cx)
+    if ($segs.Count -eq 0) { Con 'Ningun TCU cae en los gateways de la NCU.' ([System.Drawing.Color]::Orange); continue }
     foreach ($seg in $segs) {
         if ($script:Cancelar) { break }
         $segOk = $true
-        if ($cx.gws) { Con ("-- gateway {0}:{1}  ({2} TCUs)" -f $cx.ip, $seg.puerto, $seg.tcus.Count) ([System.Drawing.Color]::SteelBlue) }
-        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
-        catch { $segOk = $false; Con "ERROR de conexion ($($cx.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
+        if ($tr.cx.gws) { Con ("-- gateway {0}:{1}  ({2} TCUs)" -f $tr.ip, $seg.puerto, $seg.tcus.Count) ([System.Drawing.Color]::SteelBlue) }
+        try { Modbus-Conectar $tr.ip $seg.puerto $tr.cx.to }
+        catch { $segOk = $false; Con "ERROR de conexion ($($tr.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
         foreach ($tcu in $seg.tcus) {
             if (Chequear-Cancelado) { break }
             $fallo = $null; $hecho = $true
@@ -2860,6 +2887,7 @@ function Escribir-EnTcus([int[]]$tcus) {
             }
         }
     }
+    }
     Modbus-Cerrar
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "OK: $ok   Fallidas: $($script:Fallidas.Count)" ([System.Drawing.Color]::SteelBlue)
@@ -2868,7 +2896,12 @@ function Escribir-EnTcus([int[]]$tcus) {
     }
 }
 
-$btnEscribir.Add_Click({ Lanzar { Escribir-EnTcus (Rango-Tcus $txtWIni.Text $txtWFin.Text 'Escribir') } })
+$btnEscribir.Add_Click({ Lanzar {
+    $cxW = Params-Conexion
+    $tcusW = $null
+    if (-not $cxW.multi) { $tcusW = Rango-Tcus $txtWIni.Text $txtWFin.Text 'Escribir' }
+    Escribir-EnTcus $tcusW
+} })
 $btnFallidas.Add_Click({ Lanzar { if ($script:Fallidas.Count -gt 0) { Escribir-EnTcus @($script:Fallidas | ForEach-Object { [int]$_ }) } } })
 
 $btnNvm.Add_Click({ Lanzar {
