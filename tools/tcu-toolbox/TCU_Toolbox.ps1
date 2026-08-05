@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '3.7'
+$VERSION_TOOLBOX = '3.8'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -88,7 +88,7 @@ function Cargar-FicheroPlantas([string]$ruta) {
 # Entradas "(auto)": si varias entradas comparten IP (una por gateway de la
 # misma NCU), se anade una entrada agregada que cubre el rango completo y
 # resuelve sola el puerto de cada TCU (adios al error de puerto).
-# Entradas "(PLANTA completa)": si los nombres siguen el patron
+# Entradas "(Planta completa)": si los nombres siguen el patron
 # "<Planta> NCU<n> ...", se anade ademas una entrada por planta con la lista
 # de sus NCUs, para operaciones de planta entera (Diagnostico).
 function Construir-EntradasAuto {
@@ -136,7 +136,7 @@ function Construir-EntradasAuto {
         foreach ($n in ($ncus.Keys | Sort-Object)) {
             $lista += ,@{ncu=[int]$n; ip=$ncus[$n].ip; gws=@($ncus[$n].gws | Sort-Object { $_.ini })}
         }
-        $PLANTAS["$planta (PLANTA completa)"] = @{ip=$null; puerto=$null; ini=$null; fin=$null; ncus=$lista}
+        $PLANTAS["$planta (Planta completa)"] = @{ip=$null; puerto=$null; ini=$null; fin=$null; ncus=$lista}
     }
 }
 
@@ -2160,7 +2160,7 @@ function Params-Conexion {
     if ($ip -eq 'NA' -or $ip -eq '(planta)') {
         $p = $null
         if ($cbPlanta.SelectedItem) { $p = $PLANTAS[$cbPlanta.SelectedItem] }
-        if (-not ($p -and $p.ncus)) { throw "IP 'NA' solo vale con una entrada (PLANTA completa) seleccionada" }
+        if (-not ($p -and $p.ncus)) { throw "IP 'NA' solo vale con una entrada (Planta completa) seleccionada" }
         return @{ip='NA'; puerto=$null; gws=$null; multi=$p.ncus; etiqueta='PLANTA'; to=$to; reint=$reint}
     }
     $pt = $txtPort.Text.Trim()
@@ -2181,7 +2181,7 @@ function Params-Conexion {
 # puerto de cada TCU con los rangos de la NCU (adios al error de puerto) y
 # avisa de los TCUs que no caen en ningun gateway.
 function Plan-Segmentos([int[]]$tcus, [hashtable]$cx) {
-    if ($cx.multi) { throw "la entrada (PLANTA completa) solo esta soportada en Diagnostico y Flota; elige una NCU concreta" }
+    if ($cx.multi) { throw "la entrada (Planta completa) solo esta soportada en Diagnostico y Flota; elige una NCU concreta" }
     if (-not $cx.gws) { return @{puerto=$cx.puerto; tcus=$tcus} }
     $segs = New-Object System.Collections.ArrayList
     $huerfanos = @()
@@ -2282,7 +2282,7 @@ $cbPlanta.Add_SelectedIndexChanged({
         $txtGIni.Text = 'NA'; $txtGFin.Text = 'NA'
         $txtAIni.Text = 'NA'; $txtAFin.Text = 'NA'
         $txtVIni.Text = 'NA'; $txtVFin.Text = 'NA'
-        Con "PLANTA completa seleccionada ($(@($p.ncus).Count) NCUs): vale en Diagnostico y Flota (auditoria e inventario), con rangos automaticos por NCU; el filtro NCUs del diagnostico admite '1,3-5' (vacio = todas)." ([System.Drawing.Color]::SteelBlue)
+        Con "Planta completa seleccionada ($(@($p.ncus).Count) NCUs): vale en Diagnostico y Flota (auditoria e inventario), con rangos automaticos por NCU; el filtro NCUs del diagnostico admite '1,3-5' (vacio = todas)." ([System.Drawing.Color]::SteelBlue)
         return
     }
     if ($p) {
@@ -3422,7 +3422,7 @@ $btnAud.Add_Click({ Lanzar {
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     if ($cx.multi) {
         $totTcus = 0; foreach ($tr in $trabajos) { $totTcus += @($tr.tcus).Count }
-        Con "Auditoria de PLANTA completa: $($trabajos.Count) NCUs, $totTcus TCUs contra '$($script:PresetRefNombre)' ($($script:PresetRef.Count) variables)" ([System.Drawing.Color]::SteelBlue)
+        Con "Auditoria de Planta completa: $($trabajos.Count) NCUs, $totTcus TCUs contra '$($script:PresetRefNombre)' ($($script:PresetRef.Count) variables)" ([System.Drawing.Color]::SteelBlue)
     } else {
         Con "Auditoria de TCUs $($tcus[0])-$($tcus[-1]) contra '$($script:PresetRefNombre)' ($($script:PresetRef.Count) variables)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     }
@@ -3535,7 +3535,7 @@ $btnInvF.Add_Click({ Lanzar {
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     if ($cx.multi) {
         $totTcus = 0; foreach ($tr in $trabajos) { $totTcus += @($tr.tcus).Count }
-        Con "Inventario de PLANTA completa: $($trabajos.Count) NCUs, $totTcus TCUs (rangos por NCU automaticos)" ([System.Drawing.Color]::SteelBlue)
+        Con "Inventario de Planta completa: $($trabajos.Count) NCUs, $totTcus TCUs (rangos por NCU automaticos)" ([System.Drawing.Color]::SteelBlue)
     } else {
         Con "Inventario de TCUs $($tcus[0])-$($tcus[-1])  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     }
@@ -3680,7 +3680,7 @@ function Guardia-Viento([hashtable]$cx) {
 
 $btnPMotor.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    if ($cx.multi) { throw 'el test de motor va por NCU: elige una entrada (auto)/GW, no PLANTA completa' }
+    if ($cx.multi) { throw 'el test de motor va por NCU: elige una entrada (auto)/GW, no Planta completa' }
     $tcus = Rango-Tcus $txtPIni.Text $txtPFin.Text 'Test motor'
     $pulso = Val-Int $txtPPulso.Text 'Pulso' 1 30
     $umbral = Parse-RealFinito $txtPUmbral.Text
@@ -3858,11 +3858,11 @@ $btnPComis.Add_Click({ Lanzar {
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     $cuenta = @{}
     if ($cx.multi) {
-        # PLANTA completa: el estado de comisionado viaja en los bits 4:3 del
+        # Planta completa: el estado de comisionado viaja en los bits 4:3 del
         # registro de estado que la NCU cachea (bloque compacto, puerto 502)
         # - toda la planta en segundos, sin rondas Zigbee
         $trabajos = @(Trabajos-Planta $cx $null)
-        Con "Comisionado de PLANTA completa via NCU: $($trabajos.Count) NCUs (bloque compacto, sin Zigbee)" ([System.Drawing.Color]::SteelBlue)
+        Con "Comisionado de Planta completa via NCU: $($trabajos.Count) NCUs (bloque compacto, sin Zigbee)" ([System.Drawing.Color]::SteelBlue)
         foreach ($tr in $trabajos) {
             if ($script:Cancelar) { break }
             Con ("--- NCU{0}  ({1})  TCUs {2}-{3} ---" -f $tr.ncu, $tr.ip, $tr.tcus[0], $tr.tcus[-1]) ([System.Drawing.Color]::SteelBlue)
@@ -4245,7 +4245,7 @@ Con 'Escribir: tabla + presets + backup como preset. Leer: varias variables a la
 Con 'Filtro de variables: escribe p.ej. "soc" o "tilt" en el campo Filtro y el desplegable se reduce a lo que casa.' ([System.Drawing.Color]::Gainsboro)
 Con 'Entradas (auto): NCU completa con puerto resuelto por TCU; los gateways se recorren en secuencia.' ([System.Drawing.Color]::Gainsboro)
 Con 'Flota: auditoria contra preset de referencia e inventario (FW/serie/MAC). Volcar: BACKUP NCU masivo. Escribir: CSV por TCU.' ([System.Drawing.Color]::Gainsboro)
-Con 'Diagnostico de PLANTA completa: recorre todas las NCUs (filtro NCUs: 1,3-5) e incluye la salud de cada NCU (GW1/GW2, UPS, seta).' ([System.Drawing.Color]::Gainsboro)
+Con 'Diagnostico de Planta completa: recorre todas las NCUs (filtro NCUs: 1,3-5) e incluye la salud de cada NCU (GW1/GW2, UPS, seta).' ([System.Drawing.Color]::Gainsboro)
 Con 'HSU: meteo en vivo, umbrales de viento, reloj UTC, calibracion de nieve y caja negra de 24h a CSV.' ([System.Drawing.Color]::Gainsboro)
 Con 'PEM: test de motor con guardia de viento, modo masivo, clear de alarmas, stow test y estado de comisionado.' ([System.Drawing.Color]::Gainsboro)
 Con 'Volcar: backup completo de una TCU (CSV/JSON) y comparacion contra un backup anterior.' ([System.Drawing.Color]::Gainsboro)
