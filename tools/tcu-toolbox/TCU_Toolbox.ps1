@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '5.5'
+$VERSION_TOOLBOX = '5.6'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -565,6 +565,7 @@ function Informe-Html([hashtable]$m) {
     [void]$sb.AppendLine('.fm{position:relative;display:block}.fmb{width:100%;box-sizing:border-box;font:inherit;font-size:11px;padding:2px 4px;border:1px solid #bbb;border-radius:3px;background:#fff;cursor:pointer;text-align:left;overflow:hidden;white-space:nowrap}.fmb.act{border-color:#06c;color:#06c;font-weight:700}')
     [void]$sb.AppendLine('.fmp{position:absolute;z-index:30;top:100%;left:0;min-width:100%;max-height:250px;overflow:auto;background:#fff;border:1px solid #bbb;border-radius:3px;box-shadow:0 6px 18px rgba(20,30,45,.2);padding:5px 7px;display:none;white-space:nowrap;text-align:left}')
     [void]$sb.AppendLine('.fmp label{display:block;font-weight:400;font-size:12px;padding:1px 0;cursor:pointer}.fmp .fmt{border-bottom:1px solid #e6ebf0;margin-bottom:4px;padding-bottom:4px}.fmp .fmt a{color:#06c;cursor:pointer;text-decoration:underline;margin-right:10px;font-size:11px}')
+    [void]$sb.AppendLine('.indice{background:#eef4fb;border:1px solid #cfe0f2;border-radius:4px;padding:7px 10px;margin:14px 0;font-size:13px}.indice a{color:#06c;text-decoration:none;font-weight:700}.indice a:hover{text-decoration:underline}')
     [void]$sb.AppendLine('</style></head><body>')
     [void]$sb.AppendLine('<h1>Informe de puesta en marcha &mdash; ' + (Html-Esc $m.planta) + '</h1>')
     [void]$sb.AppendLine('<p class="meta">Fecha: ' + (Html-Esc $m.fecha) + ' &middot; IP/conexion: ' + (Html-Esc $m.ip) + ' &middot; Tecnico: ' + (Html-Esc $m.usuario) + '<br>TCU Toolbox v' + (Html-Esc $m.version) + ' &middot; Mapa: ' + (Html-Esc $m.mapa) + '</p>')
@@ -574,7 +575,7 @@ function Informe-Html([hashtable]$m) {
         if (-not $filas -or @($filas).Count -eq 0) { return }
         $hh = ''
         if ($m.horas -and $m.horas[$clave]) { $hh = ' <span class="meta">(' + (Html-Esc $m.horas[$clave]) + ')</span>' }
-        [void]$sb.AppendLine('<h2>' + (Html-Esc $titulo) + $hh + ' <span class="meta">(' + @($filas).Count + ' filas)</span></h2>')
+        [void]$sb.AppendLine('<h2 id="s-' + $clave + '">' + (Html-Esc $titulo) + $hh + ' <span class="meta">(' + @($filas).Count + ' filas)</span></h2>')
         $grupos = @($filas) | Group-Object $colEstado | ForEach-Object { "$($_.Count) $($_.Name)" }
         [void]$sb.AppendLine('<div class="res">' + (Html-Esc ($grupos -join ' | ')) + ' <span class="vis"></span></div>')
         [void]$sb.AppendLine('<table class="filtrable"><thead><tr>' + (($cols | ForEach-Object { '<th title="clic para ordenar">' + (Html-Esc $_) + '<span class="fl"></span></th>' }) -join '') + '</tr></thead><tbody>')
@@ -587,10 +588,10 @@ function Informe-Html([hashtable]$m) {
     # Lectura de variables: columnas dinamicas (una por variable leida) y
     # resumen de discrepancias, que es lo que interesa de una lectura masiva:
     # que TCUs se salen del valor mayoritario.
-    if ($m.lectura -and @($m.lectura).Count -gt 0) {
+    $tablaLectura = {
         $filasL = @($m.lectura)
         $colsL = @($filasL[0].PSObject.Properties.Name)
-        [void]$sb.AppendLine('<h2>Lectura de variables' + $(if ($m.horas -and $m.horas['lectura']) { ' <span class="meta">(' + (Html-Esc $m.horas['lectura']) + ')</span>' } else { '' }) + ' <span class="meta">(' + $filasL.Count + ' TCUs)</span></h2>')
+        [void]$sb.AppendLine('<h2 id="s-lectura">Lectura de variables' + $(if ($m.horas -and $m.horas['lectura']) { ' <span class="meta">(' + (Html-Esc $m.horas['lectura']) + ')</span>' } else { '' }) + ' <span class="meta">(' + $filasL.Count + ' TCUs)</span></h2>')
         $disc = @()
         foreach ($c in $colsL) {
             if (@('NCU','TCU','Estado') -contains $c) { continue }
@@ -614,10 +615,35 @@ function Informe-Html([hashtable]$m) {
         }
         [void]$sb.AppendLine('</tbody></table>')
     }
-    & $tabla 'Diagnostico de flota' $m.diag @('NCU','TCU','Salud','Modo','Tilt','Objetivo','Dif','SoC','Alarmas') 'Salud' 'diag'
-    & $tabla 'Puesta en marcha (PEM)' $m.pem @('NCU','TCU','Resultado','Detalle') 'Resultado' 'pem'
-    & $tabla 'Auditoria contra preset de referencia' $m.aud @('NCU','TCU','Variable','Esperado','Leido','Nota') 'Nota' 'aud'
-    & $tabla 'Inventario de flota' $m.inv @('NCU','TCU','Serie','MAC','FW','FW_fabrica','HW','Fecha_fab','Nota') 'Nota' 'inv'
+
+    # Las secciones se pintan EMPEZANDO POR LA ULTIMA QUE SE EJECUTO. Si acabas
+    # de hacer un inventario, el inventario va arriba aunque en la sesion
+    # hubiera un diagnostico anterior: si no, el informe parece de otra cosa.
+    $secciones = @(
+        @{clave='lectura'; titulo='Lectura de variables'; filas=$m.lectura; pinta=$tablaLectura}
+        @{clave='diag'; titulo='Diagnostico de flota'; filas=$m.diag
+          cols=@('NCU','TCU','Salud','Modo','Tilt','Objetivo','Dif','SoC','Alarmas'); estado='Salud'}
+        @{clave='pem'; titulo='Puesta en marcha (PEM)'; filas=$m.pem
+          cols=@('NCU','TCU','Resultado','Detalle'); estado='Resultado'}
+        @{clave='aud'; titulo='Auditoria contra preset de referencia'; filas=$m.aud
+          cols=@('NCU','TCU','Variable','Esperado','Leido','Nota'); estado='Nota'}
+        @{clave='inv'; titulo='Inventario de flota'; filas=$m.inv
+          cols=@('NCU','TCU','Serie','MAC','FW','FW_fabrica','HW','Fecha_fab','Nota'); estado='Nota'}
+    )
+    $conDatos = @($secciones | Where-Object { $_.filas -and @($_.filas).Count -gt 0 })
+    # sin marca de orden (informes de versiones viejas) van al final
+    $conDatos = @($conDatos | Sort-Object { $(if ($m.orden -and $m.orden[$_.clave]) { - [int]$m.orden[$_.clave] } else { 999 }) })
+    if ($conDatos.Count -gt 1) {
+        $idx = $conDatos | ForEach-Object {
+            $hh = $(if ($m.horas -and $m.horas[$_.clave]) { ' ' + (Html-Esc $m.horas[$_.clave]) } else { '' })
+            '<a href="#s-' + $_.clave + '">' + (Html-Esc $_.titulo) + '</a><span class="meta">' + $hh + ' &middot; ' + @($_.filas).Count + ' filas</span>'
+        }
+        [void]$sb.AppendLine('<div class="indice">En esta sesion: ' + ($idx -join ' &nbsp;|&nbsp; ') + '</div>')
+    }
+    foreach ($sec in $conDatos) {
+        if ($sec.pinta) { & $sec.pinta }
+        else { & $tabla $sec.titulo $sec.filas $sec.cols $sec.estado $sec.clave }
+    }
     if ((-not $m.diag -or @($m.diag).Count -eq 0) -and (-not $m.pem -or @($m.pem).Count -eq 0) -and (-not $m.aud -or @($m.aud).Count -eq 0) -and (-not $m.inv -or @($m.inv).Count -eq 0) -and (-not $m.lectura -or @($m.lectura).Count -eq 0)) {
         [void]$sb.AppendLine('<p>Sin datos en esta sesion: ejecuta una Lectura de variables, un Diagnostico, PEM, Auditoria o Inventario antes de generar el informe.</p>')
     }
@@ -2460,6 +2486,16 @@ $script:PresetRef = $null
 $script:PresetRefNombre = ''
 $script:UltimoEsComm = $false   # el ultimo resultado de la lista es un TEST COMM, no un diagnostico
 $script:HoraDe = @{}            # hora a la que se ejecuto cada bloque, para el informe
+$script:OrdenDe = @{}           # y en que orden, para que el informe empiece por lo ultimo
+$script:NBloque = 0
+# Deja constancia de que un bloque se acaba de ejecutar. El informe ordena sus
+# secciones con esto: si acabas de hacer un inventario, el inventario va
+# primero aunque en la sesion hubiera un diagnostico anterior.
+function Marcar-Bloque([string]$clave) {
+    $script:HoraDe[$clave] = (Get-Date -Format 'HH:mm')
+    $script:NBloque++
+    $script:OrdenDe[$clave] = $script:NBloque
+}
 $script:SegMotor = @{}   # "ncu|tcu" -> @{ncu;tcu;estado;obs} del test de motor
 $script:SegComis = @{}   # idem, de LEER ESTADO de comisionado
 $script:SegAud = @{}     # idem, de la auditoria contra preset
@@ -3050,7 +3086,7 @@ $btnLeer.Add_Click({ Lanzar {
             foreach ($k in $v.Keys) { Con ("     {0}  en {1} TCUs" -f $k, $v[$k]) ([System.Drawing.Color]::Orange) }
         }
     }
-    $script:HoraDe['lectura'] = (Get-Date -Format 'HH:mm')
+    Marcar-Bloque 'lectura'
 } })
 
 $btnLCsv.Add_Click({
@@ -3482,7 +3518,7 @@ function Diag-Correr {
     $lblGResumen.Text = "OK: $nOk  Aviso: $nAviso  Alarma: $nAlarma  Off: $nOff"
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Diagnostico: OK $nOk | AVISO $nAviso | ALARMA $nAlarma | OFFLINE $nOff" ([System.Drawing.Color]::SteelBlue)
-    $script:HoraDe['diag'] = (Get-Date -Format 'HH:mm')
+    Marcar-Bloque 'diag'
     # resumen general por NCU (planta completa) y refresco de los filtros de vista
     if ($cx.multi) {
         foreach ($g in @($script:UltimoDiag | Where-Object { $_.NCU } | Group-Object NCU)) {
@@ -3595,7 +3631,7 @@ $btnGComm.Add_Click({ Lanzar {
     $lblGResumen.Text = "Comm: $nOk / $($nOk + $nOff)"
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "TEST COMM en $seg s: NCUs $nNcuOk OK / $nNcuKo sin respuesta | TCUs $nOk comunican / $nOff sin comunicacion | HSUs $nHsuOk OK / $nHsuKo sin comunicacion" ([System.Drawing.Color]::SteelBlue)
-    $script:HoraDe['diag'] = (Get-Date -Format 'HH:mm')
+    Marcar-Bloque 'diag'
     Con "Es solo una prueba de comunicacion (lastComm): para alarmas, modo y posiciones usa DIAGNOSTICAR." ([System.Drawing.Color]::Gainsboro)
     $selV = $cbGVerNcu.SelectedItem
     $cbGVerNcu.Items.Clear()
@@ -4008,7 +4044,7 @@ $btnAud.Add_Click({ Lanzar {
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Auditoria: $nOk TCUs conformes | $nDesv con desviaciones | $nErr sin respuesta. $($script:UltimaAud.Count) filas listadas." ([System.Drawing.Color]::SteelBlue)
     if ($script:UltimaAud.Count -eq 0) { Con 'Toda la flota coincide con el preset de referencia.' ([System.Drawing.Color]::LightGreen) }
-    $script:HoraDe['aud'] = (Get-Date -Format 'HH:mm')
+    Marcar-Bloque 'aud'
 } })
 
 $btnAudCsv.Add_Click({
@@ -4118,7 +4154,7 @@ $btnInvF.Add_Click({ Lanzar {
         foreach ($g in $fws) { Con ("   {0}  en {1} TCUs" -f $g.Name, $g.Count) ([System.Drawing.Color]::Orange) }
     }
     Con "Inventario terminado: $ok leidas, $ko sin respuesta" ([System.Drawing.Color]::SteelBlue)
-    $script:HoraDe['inv'] = (Get-Date -Format 'HH:mm')
+    Marcar-Bloque 'inv'
 } })
 
 $btnInvFCsv.Add_Click({
@@ -4163,7 +4199,7 @@ function Pem-Fila([string]$tcu, [string]$res, [string]$det, [string]$ncu = '') {
     }
     $lvP.Items.Add($item) | Out-Null
     $script:UltimoPem += [pscustomobject]@{NCU=$ncu; TCU=$tcu; Resultado=$res; Detalle=$det}
-    $script:HoraDe['pem'] = (Get-Date -Format 'HH:mm')
+    Marcar-Bloque 'pem'
     $pre = $(if ($ncu) { "NCU$ncu " } else { '' })
     if ($res -notlike 'PASA*' -and $res -notlike 'OK*') { Con ("{0}TCU {1,3}  {2}  {3}" -f $pre, $tcu, $res, $det) ([System.Drawing.Color]::Orange) }
     else { Con ("{0}TCU {1,3}  {2}  {3}" -f $pre, $tcu, $res, $det) ([System.Drawing.Color]::LightGreen) }
@@ -5034,7 +5070,7 @@ $btnInforme.Add_Click({
             fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm'); usuario = "$env:USERNAME"
             version = $VERSION_TOOLBOX; mapa = $VERSION_MAPA
             diag = $script:UltimoDiag; pem = $script:UltimoPem
-            aud = $script:UltimaAud; inv = $script:UltimoInv
+            aud = $script:UltimaAud; inv = $script:UltimoInv; orden = $script:OrdenDe
             lectura = $script:UltimaLectura; horas = $script:HoraDe
         }
         $fich = Join-Path $dir ('informe_' + ($m.planta -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.html')

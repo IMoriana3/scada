@@ -572,6 +572,24 @@ Check 'hsus: viento de la primera' (@($rH.filas | Where-Object { "$($_.Campo)" -
 $rH1 = Hsu-Recorrer @($objsH[0]) $cxH { param($u) Hsu-LeerMeteo $u } $null
 Check 'hsu unica sin cabecera' (@($rH1.filas | Where-Object { "$($_.Campo)" -like '--- *' }).Count) 0
 
+# ---------- el informe empieza por lo ultimo que se hizo ----------
+# El caso real: haces un inventario despues de un diagnostico, pides el informe
+# y arriba sale el diagnostico, asi que parece que ha ignorado el inventario.
+$dg = @([pscustomobject]@{NCU='1'; TCU=1; Salud='OK'; Modo='AUTO'; Tilt='0'; Objetivo='0'; Dif='0'; SoC='90'; Alarmas=''})
+$iv = @([pscustomobject]@{NCU='1'; TCU=1; Serie='SN1'; MAC='AA'; FW='v1.6.0'; FW_fabrica='v1.4.3'; HW='6'; Fecha_fab='18/06/2025'; Nota='OK'})
+$base = @{planta='X'; ip=''; fecha=''; usuario=''; version='5.6'; mapa='m'; pem=@(); aud=@(); lectura=@()}
+$hOrd = Informe-Html ($base + @{diag=$dg; inv=$iv; horas=@{diag='10:00'; inv='11:00'}; orden=@{diag=1; inv=2}})
+Check 'informe: inventario antes que diagnostico' ($hOrd.IndexOf('Inventario de flota') -lt $hOrd.IndexOf('Diagnostico de flota')) 'True'
+$hOrd2 = Informe-Html ($base + @{diag=$dg; inv=$iv; horas=@{diag='11:00'; inv='10:00'}; orden=@{diag=2; inv=1}})
+Check 'informe: al reves si el diag es posterior' ($hOrd2.IndexOf('Diagnostico de flota') -lt $hOrd2.IndexOf('Inventario de flota')) 'True'
+Check 'informe: indice de secciones' ($hOrd.Contains('En esta sesion:') -and $hOrd.Contains('href="#s-inv"')) 'True'
+Check 'informe: ancla en el titulo' ($hOrd.Contains('id="s-inv"')) 'True'
+$hUna = Informe-Html ($base + @{diag=$dg; inv=@(); horas=@{diag='10:00'}; orden=@{diag=1}})
+Check 'informe: sin indice con una sola seccion' ($hUna.Contains('En esta sesion:')) 'False'
+# informes de versiones viejas, sin marca de orden: no deben romperse
+$hSin = Informe-Html ($base + @{diag=$dg; inv=$iv})
+Check 'informe: sin orden sigue saliendo' ($hSin.Contains('Inventario de flota') -and $hSin.Contains('Diagnostico de flota')) 'True'
+
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }
 else { Write-Host "$fallos PRUEBAS FALLIDAS"; exit 1 }
