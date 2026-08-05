@@ -31,25 +31,135 @@ Solo necesita PyYAML (ya esta en requirements del collector).
 
 import argparse
 import json
+import re
 import sys
+import unicodedata
 from pathlib import Path
+
+
+def parse_rango(texto):
+    """'1-56' -> (1, 56); '109' -> (109, 109); '-'/vacio -> None."""
+    t = str(texto or "").strip()
+    m = re.match(r"^(\d+)\s*-\s*(\d+)$", t)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    if re.match(r"^\d+$", t):
+        return int(t), int(t)
+    return None
+
+
+def slug(texto):
+    t = unicodedata.normalize("NFKD", str(texto)).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-") or "planta"
+
+
+def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
+    """Lee la hoja 'Direcciones IP' del Excel maestro y devuelve
+    {(num, proyecto): [entradas plantas.json]}. Solo usa IP NCU y los rangos
+    de esclavos por gateway: las columnas de credenciales NI SE LEEN."""
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        sys.exit("Falta openpyxl: pip install openpyxl")
+    wb = load_workbook(ruta, data_only=True)
+    if hoja not in wb.sheetnames:
+        sys.exit(f"El Excel no tiene la hoja '{hoja}' (tiene: {wb.sheetnames})")
+    filas = list(wb[hoja].iter_rows(values_only=True))
+    head = [str(c).strip() if c is not None else "" for c in filas[0]]
+
+    def col(nombre, desde=0):
+        try:
+            return head.index(nombre, desde)
+        except ValueError:
+            sys.exit(f"La hoja '{hoja}' no tiene la columna '{nombre}'")
+
+    i_num, i_proy, i_ncu = col("Nº"), col("Proyecto"), col("NCU")
+    i_ip = col("IP NCU")
+    i_esc1 = col("Esclavos")
+    i_esc2 = col("Esclavos", col("IP GW 2"))   # segundo 'Esclavos', tras IP GW 2
+
+    plantas = {}
+    actual = None
+    ncu_auto = 0
+    for fila in filas[2:]:
+        def v(i):
+            return str(fila[i]).strip() if (i < len(fila) and fila[i] is not None) else ""
+        num, proy = v(i_num), v(i_proy)
+        if num and proy:
+            num = re.sub(r"\.0$", "", num)
+            actual = (num, proy)
+            ncu_auto = 0
+            plantas.setdefault(actual, [])
+        if not actual:
+            continue
+        ip = v(i_ip)
+        if not re.match(r"^\d+\.\d+\.\d+\.\d+$", ip):
+            continue
+        ncu_auto += 1
+        ntxt = re.sub(r"\.0$", "", v(i_ncu))
+        n = int(ntxt) if re.match(r"^\d+$", ntxt) else ncu_auto
+        rangos = [parse_rango(v(i_esc1)), parse_rango(v(i_esc2))]
+        gws = [(puertos[k], r) for k, r in enumerate(rangos) if r and k < len(puertos)]
+        if not gws:
+            continue
+        for gidx, (puerto, (ini, fin)) in enumerate(gws, start=1):
+            sufijo = f" GW{gidx}" if len(gws) > 1 else ""
+            plantas[actual].append({
+                "nombre": f"{proy} NCU{n}{sufijo}",
+                "ip": ip,
+                "puerto": puerto,
+                "tcu_ini": ini,
+                "tcu_fin": fin,
+            })
+
+    ficheros = []
+    for (num, proy), entradas in sorted(plantas.items()):
+        if not entradas or num in excluir:
+            continue
+        destino = Path("plantas") / f"{num}-{slug(proy)}.json"
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.write_text(json.dumps({
+            "_comentario": (f"Planta {num} ({proy}) generada desde el Excel maestro "
+                            f"(hoja '{hoja}') por make_plantas.py --excel. Solo topologia: "
+                            "sin credenciales. NO subir el Excel al repo." + comentario_extra),
+            "version": 1,
+            "plantas": entradas,
+        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        ficheros.append((destino, len(entradas)))
+        print(f"{destino}: {len(entradas)} entradas ({proy})")
+    if not ficheros:
+        sys.exit("El Excel no produjo ninguna planta (revisa la hoja y las columnas)")
+    return ficheros
+
 
 try:
     import yaml
 except ImportError:
-    sys.exit("Falta PyYAML: pip install pyyaml")
+    yaml = None
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--plants", default="../../config/plants.yml",
                     help="ruta a plants.yml del SCADA (defecto: ../../config/plants.yml)")
+    ap.add_argument("--excel", default=None,
+                    help="modo Excel maestro: ruta al .xlsx con la hoja 'Direcciones IP'; "
+                         "genera plantas/<num>-<planta>.json por cada planta (sin credenciales)")
+    ap.add_argument("--hoja", default="Direcciones IP", help="hoja del Excel (defecto: Direcciones IP)")
+    ap.add_argument("--excluir", nargs="*", default=[],
+                    help="numeros de proyecto a saltar en modo Excel (p.ej. --excluir 23003)")
     ap.add_argument("--puertos", nargs="+", type=int, default=[503, 504],
                     help="puertos passthrough de la NCU, uno por gateway (defecto: 503 504)")
     ap.add_argument("--salida", default=None,
                     help="fichero de salida (defecto: plantas/<plant_id>.json, un JSON por planta)")
     args = ap.parse_args()
 
+    if args.excel:
+        modo_excel(Path(args.excel), args.hoja, args.puertos, set(args.excluir), "")
+        return
+
+    if yaml is None:
+        sys.exit("Falta PyYAML: pip install pyyaml")
     ruta = Path(args.plants)
     if not ruta.exists():
         sys.exit(f"No existe {ruta} (ejecuta desde tools/tcu-toolbox/ o pasa --plants)")
