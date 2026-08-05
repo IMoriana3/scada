@@ -92,7 +92,16 @@ Backup (`Volcar TCU → Backup JSON`):
   "variables": [ { "variable": "41010 longitud [deg]", "valor": "-1.685", "grupo": "config" } ] }
 ```
 
-Diagnóstico (`Diagnóstico → JSON`): igual, con `"tipo": "diagnostico_tcu"` y una lista `tcus` con salud, ángulos, batería y alarmas en texto por TCU. Estos JSON se pueden subir al **Histórico de diagnósticos** de la plataforma (`historico.html` en factiun-cartera): guarda la evolución por planta en Supabase y calcula el **diff contra el diagnóstico anterior** (qué TCUs empeoraron o mejoraron).
+Diagnóstico (`Diagnóstico → JSON`): igual, con `"tipo": "diagnostico_tcu"` y una lista `tcus` con salud, ángulos, batería y alarmas en texto por TCU.
+
+**Todos los JSON de la toolbox se suben al Histórico de la plataforma** (`historico.html` en factiun-cartera), que guarda la evolución por planta en Supabase y calcula el diff contra el registro anterior del mismo tipo (v3.6):
+
+| Tipo | Botón | Diff en la plataforma |
+|---|---|---|
+| `diagnostico_tcu` | Diagnóstico → JSON | qué TCUs empeoran/mejoran de salud |
+| `seguimiento_pem` | PEM → SEGUIMIENTO JSON | qué tareas se completan o se rompen |
+| `inventario_tcu` | Flota → Inventario → JSON | cambios de FW y TCUs sustituidas (cambio de nº de serie) |
+| `auditoria_tcu` | Flota → Auditoría → JSON | desviaciones nuevas, resueltas y cambiadas (avisa si el preset difiere) |
 
 ## Seguridad
 
