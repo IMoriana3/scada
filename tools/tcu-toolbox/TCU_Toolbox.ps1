@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '2.8'
+$VERSION_TOOLBOX = '2.9'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -501,6 +501,128 @@ function Hsu-CajaFila([int[]]$w, [int]$minuto) {
         NieveMax_cm = $w[2]
         Irr_Wm2     = [math]::Round($w[3] / 10.0, 1)
     }
+}
+
+# Tramos consecutivos de una lista ordenada de TCUs: @(1,2,3,5) -> (1-3),(5-5)
+function Runs-Consecutivos([int[]]$tcus) {
+    $runs = New-Object System.Collections.ArrayList
+    $ini = $null; $prev = $null
+    foreach ($t in $tcus) {
+        if ($null -eq $ini) { $ini = $t; $prev = $t; continue }
+        if ($t -eq $prev + 1) { $prev = $t; continue }
+        [void]$runs.Add(@{ini=$ini; fin=$prev}); $ini = $t; $prev = $t
+    }
+    if ($null -ne $ini) { [void]$runs.Add(@{ini=$ini; fin=$prev}) }
+    return $runs
+}
+
+# Diagnostico VIA NCU: lee el bloque compacto (30500+, 22 regs/TCU) y los
+# lastComm (29500+) que la NCU cachea de sus TCUs - lecturas TCP locales, sin
+# pasar por Zigbee. Mismo criterio de salud que el SCADA; OFFLINE = lastComm
+# a 0 o con mas de 300 s de antiguedad respecto al reloj de la NCU (30104).
+# Requiere conexion abierta al puerto 502. Devuelve hashtable tcu -> objeto.
+function Ncu-DiagCompat([int[]]$tcus) {
+    $wclk = FC03-Leer $UNIT_NCU (Dir-Trama 30104) 2
+    $reloj = ([long]$wclk[1] -shl 16) -bor [long]$wclk[0]
+    $res = @{}
+    $lastc = @{}
+    foreach ($run in @(Runs-Consecutivos $tcus)) {
+        # lastComm: 2 regs por TCU, hasta 50 TCUs por lectura
+        $t0 = [int]$run.ini
+        while ($t0 -le [int]$run.fin) {
+            $n = [math]::Min(50, [int]$run.fin - $t0 + 1)
+            $w = FC03-Leer $UNIT_NCU (Dir-Trama (29500 + ($t0 - 1) * 2)) (2 * $n)
+            for ($k = 0; $k -lt $n; $k++) {
+                $lastc[$t0 + $k] = ([long]$w[2*$k + 1] -shl 16) -bor [long]$w[2*$k]
+            }
+            $t0 += $n
+        }
+        # datos: 22 regs por TCU, hasta 5 TCUs por lectura (110 regs)
+        $t0 = [int]$run.ini
+        while ($t0 -le [int]$run.fin) {
+            $n = [math]::Min(5, [int]$run.fin - $t0 + 1)
+            $w = FC03-Leer $UNIT_NCU (Dir-Trama (30500 + ($t0 - 1) * 22)) (22 * $n)
+            for ($k = 0; $k -lt $n; $k++) {
+                $tcu = $t0 + $k; $b = 22 * $k
+                $msr = $w[$b+1]; $al1 = $w[$b+2]; $al2 = $w[$b+3]; $fl = $w[$b+4]
+                $tilt = (Palabras-A-F32 @($w[$b+6], $w[$b+7])) * 180.0 / [math]::PI
+                $targ = (Palabras-A-F32 @($w[$b+10], $w[$b+11])) * 180.0 / [math]::PI
+                $ibat = $w[$b+18]; if ($ibat -gt 32767) { $ibat -= 65536 }
+                $dif = [math]::Abs($tilt - $targ)
+                $edad = -1
+                if ($reloj -gt 1000000000 -and $lastc[$tcu] -gt 1000000000) { $edad = $reloj - $lastc[$tcu] }
+                $alarmas = @(Bits-Texto $al1 $BITS_AL1) + @(Bits-Texto $al2 $BITS_AL2)
+                $notas = @()
+                if ($dif -gt 5) { $notas += ("dif {0:0.0} deg" -f $dif) }
+                if ((($fl -shr 15) -band 1) -eq 0) { $notas += 'system OK = 0' }
+                if ((($fl -shr 11) -band 1) -eq 1) { $notas += 'alarma motor enclavada' }
+                if ($edad -gt 90) { $notas += "datos de hace $edad s" }
+                $salud = 'OK'
+                if ($lastc[$tcu] -eq 0 -or ($edad -ge 0 -and $edad -gt 300)) {
+                    $salud = 'OFFLINE'
+                    $notas = @($(if ($lastc[$tcu] -eq 0) { 'la NCU nunca ha leido este TCU' } else { "sin datos en la NCU desde hace $edad s" }))
+                }
+                elseif ((($al1 -band $CRIT_AL1) -ne 0) -or (($al2 -band $CRIT_AL2) -ne 0)) { $salud = 'ALARMA' }
+                elseif ($alarmas.Count -gt 0 -or $notas.Count -gt 0) { $salud = 'AVISO' }
+                $res[$tcu] = [pscustomobject]@{
+                    TCU = $tcu; Salud = $salud
+                    Modo = @('OFF','MANUAL','AUTO','?')[(($msr -shr 8) -band 0x3)]
+                    Tilt = [math]::Round($tilt, 1); Objetivo = [math]::Round($targ, 1); Dif = [math]::Round($dif, 1)
+                    SoC = ($w[$b+13] -band 0xFF); SoH = ($w[$b+21] -band 0xFF)
+                    Vbat_mV = $w[$b+16]; Ibat_mA = $ibat
+                    Tbat_C = [math]::Round(($w[$b+20] / 10.0) - 273.15, 1); Tpcb_C = [math]::Round(($w[$b+19] / 10.0) - 273.15, 1)
+                    Alarmas = (($alarmas + $notas) -join '; ')
+                    main_status = ("0x{0:X4}" -f $msr); alarmas_1 = ("0x{0:X4}" -f $al1); alarmas_2 = ("0x{0:X4}" -f $al2)
+                    alarmas_3 = ''; alarmas_4 = ''; system_status = ("0x{0:X4}" -f $fl)
+                }
+            }
+            $t0 += $n
+        }
+    }
+    return $res
+}
+
+# HSUs cacheadas por la NCU (bloque 30200, 10 regs/HSU, max 10; lastComm en
+# 29440). Requiere conexion abierta al puerto 502. Devuelve lista de objetos
+# solo para las HSU que existen (product o lastComm distintos de 0).
+$NCU_HSU_AL1 = @{
+  0='fallo sensor viento'; 1='fallo sensor nieve'; 6='ALARMA NIEVE'; 7='ALARMA INUNDACION'
+  9='ALARMA VIENTO'; 15='fallo com. HSU'
+}
+function Ncu-HsuCompat {
+    $wclk = FC03-Leer $UNIT_NCU (Dir-Trama 30104) 2
+    $reloj = ([long]$wclk[1] -shl 16) -bor [long]$wclk[0]
+    $wlc = FC03-Leer $UNIT_NCU (Dir-Trama 29440) 20
+    $wd  = FC03-Leer $UNIT_NCU (Dir-Trama 30200) 100
+    $lista = @()
+    for ($h = 0; $h -lt 10; $h++) {
+        $b = $h * 10
+        $lastc = ([long]$wlc[2*$h + 1] -shl 16) -bor [long]$wlc[2*$h]
+        if ($wd[$b] -eq 0 -and $lastc -eq 0) { continue }
+        $msr = $wd[$b+1]; $al1 = $wd[$b+2]
+        $nivel = $msr -band 0x7
+        $viento = Palabras-A-F32 @($wd[$b+3], $wd[$b+4])
+        $dir    = Palabras-A-F32 @($wd[$b+5], $wd[$b+6])
+        $nieve  = Palabras-A-F32 @($wd[$b+7], $wd[$b+8])
+        $edad = -1
+        if ($reloj -gt 1000000000 -and $lastc -gt 1000000000) { $edad = $reloj - $lastc }
+        $alarmas = @(Bits-Texto $al1 $NCU_HSU_AL1)
+        $salud = 'OK'
+        if ($lastc -eq 0 -or ($edad -ge 0 -and $edad -gt 300)) { $salud = 'OFFLINE' }
+        elseif ($al1 -band 0x8003) { $salud = 'ALARMA' }                      # sensores caidos o com rota
+        elseif (($al1 -band 0x02C0) -or $nivel -gt 0) { $salud = 'AVISO' }    # viento/nieve/inundacion activos
+        $texto = ("viento {0:0.#} m/s (nivel {1}), dir {2:0} deg; nieve {3:0.###} m" -f $viento, $nivel, $dir, $nieve)
+        if ($alarmas.Count) { $texto = ($alarmas -join '; ') + ' | ' + $texto }
+        if ($edad -gt 90) { $texto += " | datos de hace $edad s" }
+        if ($salud -eq 'OFFLINE') { $texto = $(if ($lastc -eq 0) { 'la NCU nunca ha leido esta HSU' } else { "sin datos en la NCU desde hace $edad s" }) }
+        $lista += [pscustomobject]@{
+            NCU=''; TCU=("HSU{0}" -f ($h + 1)); Salud=$salud; Modo='-'
+            Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''
+            Alarmas=$texto
+            main_status=("0x{0:X4}" -f $msr); alarmas_1=("0x{0:X4}" -f $al1); alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
+        }
+    }
+    return $lista
 }
 
 # Salud de la propia NCU (30100-30105, unit 1 en el puerto 502). Requiere
@@ -1230,19 +1352,26 @@ $txtGFin = TG $tabG '44' 131 22 45
 $btnDiag = New-Object System.Windows.Forms.Button
 $btnDiag.Text = 'DIAGNOSTICAR'
 $btnDiag.Location = New-Object System.Drawing.Point(200, 18)
-$btnDiag.Size = New-Object System.Drawing.Size(140, 28)
+$btnDiag.Size = New-Object System.Drawing.Size(120, 28)
 $btnDiag.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
 $btnDiag.ForeColor = [System.Drawing.Color]::White
 $tabG.Controls.Add($btnDiag)
 
-[void](LG $tabG 'NCUs' 350 40)
-$txtGNcus = TG $tabG '' 392 22 66
+$chkGNcu = New-Object System.Windows.Forms.CheckBox
+$chkGNcu.Text = 'via NCU'
+$chkGNcu.Checked = $true
+$chkGNcu.Location = New-Object System.Drawing.Point(328, 21)
+$chkGNcu.Size = New-Object System.Drawing.Size(92, 22)
+$tabG.Controls.Add($chkGNcu)
+
+[void](LG $tabG 'NCUs' 425 40)
+$txtGNcus = TG $tabG '' 467 22 62
 $txtGNcus.Text = ''
 
 $lblGResumen = New-Object System.Windows.Forms.Label
 $lblGResumen.Text = ''
-$lblGResumen.Location = New-Object System.Drawing.Point(470, 24)
-$lblGResumen.Size = New-Object System.Drawing.Size(190, 20)
+$lblGResumen.Location = New-Object System.Drawing.Point(540, 24)
+$lblGResumen.Size = New-Object System.Drawing.Size(120, 20)
 $tabG.Controls.Add($lblGResumen)
 
 $btnGCsv = New-Object System.Windows.Forms.Button
@@ -2369,6 +2498,61 @@ $btnDiag.Add_Click({ Lanzar {
         $script:UltimoDiag += $dn
         if ($dn.Salud -ne 'OK') { Con ("NCU{0}  {1,-8} {2}" -f $tr.ncu, $dn.Salud, $dn.Alarmas) ([System.Drawing.Color]::Orange) }
         [System.Windows.Forms.Application]::DoEvents()
+    }
+    if ($chkGNcu.Checked) {
+        # modo rapido: bloque compacto que la NCU cachea de sus TCUs (30500+,
+        # puerto 502) - lecturas TCP locales, sin rondas Zigbee por TCU
+        $dm = $null; $hsus = @()
+        try {
+            Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
+            $dm = Ncu-DiagCompat $tr.tcus
+            try { $hsus = @(Ncu-HsuCompat) } catch { Con "AVISO: bloque HSU no legible: $_" ([System.Drawing.Color]::Orange) }
+        } catch { Con "ERROR via NCU ($($tr.ip):$PUERTO_NCU): $_  - desmarca 'via NCU' para el modo directo Zigbee" ([System.Drawing.Color]::Salmon) }
+        Modbus-Cerrar
+        foreach ($dh in $hsus) {
+            $dh.NCU = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
+            $itemH = New-Object System.Windows.Forms.ListViewItem($dh.NCU)
+            foreach ($c in @($dh.TCU, $dh.Salud, $dh.Modo, $dh.Tilt, $dh.Objetivo, $dh.Dif, $dh.SoC, $dh.Alarmas)) { [void]$itemH.SubItems.Add("$c") }
+            switch ($dh.Salud) {
+                'OK'      { $itemH.ForeColor = [System.Drawing.Color]::DarkGreen;  $nOk++ }
+                'AVISO'   { $itemH.ForeColor = [System.Drawing.Color]::DarkOrange; $nAviso++ }
+                'ALARMA'  { $itemH.ForeColor = [System.Drawing.Color]::Firebrick;  $nAlarma++ }
+                'OFFLINE' { $itemH.ForeColor = [System.Drawing.Color]::Gray;       $nOff++ }
+            }
+            $lvG.Items.Add($itemH) | Out-Null
+            $script:UltimoDiag += $dh
+            if ($dh.Salud -ne 'OK') { Con ("{0}{1}  {2,-8} {3}" -f $(if ($dh.NCU) { "NCU$($dh.NCU) " } else { '' }), $dh.TCU, $dh.Salud, $dh.Alarmas) ([System.Drawing.Color]::Orange) }
+        }
+        foreach ($tcu in $tr.tcus) {
+            if (Chequear-Cancelado) { break }
+            $d = $null
+            if ($dm) { $d = $dm[[int]$tcu] }
+            if ($null -eq $d) {
+                $d = [pscustomobject]@{
+                    TCU=[int]$tcu; Salud='OFFLINE'; Modo=''; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
+                    Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''; Alarmas='sin datos via NCU'
+                    main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
+                }
+            }
+            $etiquetaNcu = ''
+            if ($null -ne $tr.ncu) { $etiquetaNcu = "$($tr.ncu)" }
+            $d | Add-Member -NotePropertyName NCU -NotePropertyValue $etiquetaNcu -Force
+            $item = New-Object System.Windows.Forms.ListViewItem($etiquetaNcu)
+            foreach ($c in @($d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
+            switch ($d.Salud) {
+                'OK'      { $item.ForeColor = [System.Drawing.Color]::DarkGreen;  $nOk++ }
+                'AVISO'   { $item.ForeColor = [System.Drawing.Color]::DarkOrange; $nAviso++ }
+                'ALARMA'  { $item.ForeColor = [System.Drawing.Color]::Firebrick;  $nAlarma++ }
+                'OFFLINE' { $item.ForeColor = [System.Drawing.Color]::Gray;       $nOff++ }
+            }
+            $lvG.Items.Add($item) | Out-Null
+            $script:UltimoDiag += $d
+            if ($d.Salud -ne 'OK') {
+                Con ("{0}TCU {1,3}  {2,-8} {3}" -f $(if ($etiquetaNcu) { "NCU$etiquetaNcu " } else { '' }), $d.TCU, $d.Salud, $d.Alarmas) ([System.Drawing.Color]::Orange)
+            }
+        }
+        [System.Windows.Forms.Application]::DoEvents()
+        continue
     }
     $segs = @(Plan-Segmentos $tr.tcus $tr.cx)
     foreach ($seg in $segs) {
