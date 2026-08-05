@@ -628,6 +628,30 @@ $script:NcuLog = '13'
 Check 'eti ncu de dos cifras' (Eti-Tcu 105) 'NCU13  TCU 105'
 $script:NcuLog = ''
 
+# ---------- la escritura entra en el informe ----------
+# Escribes una variable en toda la planta, pides el informe y sale "Sin datos
+# en esta sesion": el informe nunca habia recogido las escrituras, que es
+# justo lo que hay que documentar de una jornada de puesta en marcha.
+$esc = @(
+  [pscustomobject]@{NCU='2'; TCU=1; Variable='41111 max_tilt_west_r1 [deg]'; Antes='45'; Despues='55'; Estado='OK'}
+  [pscustomobject]@{NCU='2'; TCU=6; Variable='41111 max_tilt_west_r1 [deg]'; Antes='55'; Despues='55'; Estado='FALLO: Respuesta descolocada'}
+)
+$baseE = @{planta='X'; ip=''; fecha=''; usuario=''; version='5.9'; mapa='m'; diag=@(); pem=@(); aud=@(); inv=@(); lectura=@()}
+$hEsc = Informe-Html ($baseE + @{esc=$esc; horas=@{esc='23:42'}; orden=@{esc=1}})
+Check 'informe seccion escritura' ($hEsc.Contains('Escritura de variables')) 'True'
+Check 'informe escritura hora' ($hEsc.Contains('(23:42)')) 'True'
+Check 'informe escritura antes/despues' ($hEsc.Contains('<td>45</td>') -and $hEsc.Contains('<td>55</td>')) 'True'
+Check 'informe escritura fallo en rojo' ($hEsc.Contains('class="alarma"')) 'True'
+Check 'informe escritura resumen' ($hEsc.Contains('1 OK')) 'True'
+Check 'informe escritura no dice sin datos' ($hEsc.Contains('Sin datos en esta sesion')) 'False'
+# y sigue avisando cuando de verdad no hay nada
+$hNada = Informe-Html ($baseE + @{esc=@()})
+Check 'informe sin nada avisa de la escritura' ($hNada.Contains('ejecuta una Escritura')) 'True'
+# la escritura se ordena con el resto por lo ultimo que se hizo
+$hMix = Informe-Html ($baseE + @{esc=$esc; inv=@([pscustomobject]@{NCU='1'; TCU=1; Serie='S'; MAC='M'; FW='v1'; FW_fabrica='v0'; HW='6'; Fecha_fab='18/06/2025'; Nota='OK'})
+                                horas=@{esc='23:42'; inv='22:00'}; orden=@{inv=1; esc=2}})
+Check 'informe escritura antes que inventario' ($hMix.IndexOf('Escritura de variables') -lt $hMix.IndexOf('Inventario de flota')) 'True'
+
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }
 else { Write-Host "$fallos PRUEBAS FALLIDAS"; exit 1 }

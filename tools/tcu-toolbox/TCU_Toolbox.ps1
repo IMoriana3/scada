@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '5.8'
+$VERSION_TOOLBOX = '5.9'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -569,7 +569,7 @@ function Informe-Html([hashtable]$m) {
     [void]$sb.AppendLine('</style></head><body>')
     [void]$sb.AppendLine('<h1>Informe de puesta en marcha &mdash; ' + (Html-Esc $m.planta) + '</h1>')
     [void]$sb.AppendLine('<p class="meta">Fecha: ' + (Html-Esc $m.fecha) + ' &middot; IP/conexion: ' + (Html-Esc $m.ip) + ' &middot; Tecnico: ' + (Html-Esc $m.usuario) + '<br>TCU Toolbox v' + (Html-Esc $m.version) + ' &middot; Mapa: ' + (Html-Esc $m.mapa) + '</p>')
-    $clase = { param($s) switch -Wildcard ("$s") { 'OK*'{'ok'} 'PASA*'{'ok'} 'ALARMA*'{'alarma'} 'FALLA*'{'alarma'} 'AVISO*'{'aviso'} 'DUDOSO*'{'aviso'} 'PENDIENTE*'{'aviso'} 'OFFLINE*'{'off'} 'SALTADO*'{'off'} default{''} } }
+    $clase = { param($s) switch -Wildcard ("$s") { 'OK*'{'ok'} 'PASA*'{'ok'} 'ALARMA*'{'alarma'} 'FALLA*'{'alarma'} 'FALLO*'{'alarma'} 'AVISO*'{'aviso'} 'DUDOSO*'{'aviso'} 'PENDIENTE*'{'aviso'} 'OFFLINE*'{'off'} 'SALTADO*'{'off'} default{''} } }
     $tabla = {
         param($titulo, $filas, $cols, $colEstado, $clave)
         if (-not $filas -or @($filas).Count -eq 0) { return }
@@ -629,6 +629,8 @@ function Informe-Html([hashtable]$m) {
           cols=@('NCU','TCU','Variable','Esperado','Leido','Nota'); estado='Nota'}
         @{clave='inv'; titulo='Inventario de flota'; filas=$m.inv
           cols=@('NCU','TCU','Serie','MAC','FW','FW_fabrica','HW','Fecha_fab','Nota'); estado='Nota'}
+        @{clave='esc'; titulo='Escritura de variables'; filas=$m.esc
+          cols=@('NCU','TCU','Variable','Antes','Despues','Estado'); estado='Estado'}
     )
     $conDatos = @($secciones | Where-Object { $_.filas -and @($_.filas).Count -gt 0 })
     # sin marca de orden (informes de versiones viejas) van al final
@@ -644,8 +646,8 @@ function Informe-Html([hashtable]$m) {
         if ($sec.pinta) { & $sec.pinta }
         else { & $tabla $sec.titulo $sec.filas $sec.cols $sec.estado $sec.clave }
     }
-    if ((-not $m.diag -or @($m.diag).Count -eq 0) -and (-not $m.pem -or @($m.pem).Count -eq 0) -and (-not $m.aud -or @($m.aud).Count -eq 0) -and (-not $m.inv -or @($m.inv).Count -eq 0) -and (-not $m.lectura -or @($m.lectura).Count -eq 0)) {
-        [void]$sb.AppendLine('<p>Sin datos en esta sesion: ejecuta una Lectura de variables, un Diagnostico, PEM, Auditoria o Inventario antes de generar el informe.</p>')
+    if ($conDatos.Count -eq 0) {
+        [void]$sb.AppendLine('<p>Sin datos en esta sesion: ejecuta una Escritura, una Lectura de variables, un Diagnostico, PEM, Auditoria o Inventario antes de generar el informe.</p>')
     }
     [void]$sb.AppendLine('<p class="meta">Generado por TCU Toolbox &mdash; Factiun. Filtra con la fila bajo la cabecera (desplegable = valor exacto; caja de texto = contiene) y ordena con un clic en la cabecera.</p>')
     # Filtros por columna y orden al clicar la cabecera. JS embebido, sin red y
@@ -2476,6 +2478,7 @@ $form.Controls.Add($lblLog)
 # ---------------------------------------------------------------------------
 $script:Fallidas = New-Object System.Collections.ArrayList
 $script:UltimaLectura = @()
+$script:UltimaEscritura = @()
 $script:UltimoVolcado = @()
 $script:UltimoDiag = @()
 $script:UltimaIdent = @()
@@ -2856,6 +2859,7 @@ function Escribir-EnTcus($tcus) {
     }
 
     $script:Fallidas.Clear(); $btnFallidas.Enabled = $false
+    $script:UltimaEscritura = @()
     $ok = 0
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Escribiendo $($vars.Count) variables en $nTcus TCUs  ($donde)" ([System.Drawing.Color]::SteelBlue)
@@ -2879,7 +2883,7 @@ function Escribir-EnTcus($tcus) {
             else {
                 foreach ($v in $vars) {
                     # valor anterior, para dejar rastro "antes -> despues" en el log
-                    $previo = '?'
+                    $previo = '?'; $ultErr = ''
                     try { $previo = Leer-Decodificado $tcu $VARIABLES[$v.nombre] } catch {}
                     $hecho = $false
                     for ($i = 1; $i -le $cx.reint -and -not $hecho; $i++) {
@@ -2903,13 +2907,22 @@ function Escribir-EnTcus($tcus) {
                             }
                             $hecho = $true
                             $cambios += "$($v.nombre): $previo -> $($v.texto)"
+                            $script:UltimaEscritura += [pscustomobject]@{
+                                NCU=$script:NcuLog; TCU=[int]$tcu; Variable=$v.nombre
+                                Antes=$previo; Despues=$v.texto; Estado='OK'}
                         } catch {
                             $fallo = "$($v.nombre): $_"
+                            $ultErr = "$_"
                             if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
                             Start-Sleep -Milliseconds (300 * $i)
                         }
                     }
-                    if (-not $hecho) { break }
+                    if (-not $hecho) {
+                        $script:UltimaEscritura += [pscustomobject]@{
+                            NCU=$script:NcuLog; TCU=[int]$tcu; Variable=$v.nombre
+                            Antes=$previo; Despues=$v.texto; Estado="FALLO: $ultErr"}
+                        break
+                    }
                 }
             }
             if ($script:Cancelar -and -not $hecho) { break }
@@ -2926,6 +2939,7 @@ function Escribir-EnTcus($tcus) {
     Modbus-Cerrar
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "OK: $ok   Fallidas: $($script:Fallidas.Count)" ([System.Drawing.Color]::SteelBlue)
+    if (@($script:UltimaEscritura).Count -gt 0) { Marcar-Bloque 'esc' }
     if ($script:Fallidas.Count -gt 0) {
         Con ("TCUs fallidas: " + (($script:Fallidas | ForEach-Object { $(if ($_.ncu) { "NCU$($_.ncu)/$($_.tcu)" } else { "$($_.tcu)" }) }) -join ', ')) ([System.Drawing.Color]::Salmon)
     }
@@ -5150,7 +5164,7 @@ $btnInforme.Add_Click({
             fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm'); usuario = "$env:USERNAME"
             version = $VERSION_TOOLBOX; mapa = $VERSION_MAPA
             diag = $script:UltimoDiag; pem = $script:UltimoPem
-            aud = $script:UltimaAud; inv = $script:UltimoInv; orden = $script:OrdenDe
+            aud = $script:UltimaAud; inv = $script:UltimoInv; esc = $script:UltimaEscritura; orden = $script:OrdenDe
             lectura = $script:UltimaLectura; horas = $script:HoraDe
         }
         $fich = Join-Path $dir ('informe_' + ($m.planta -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.html')
