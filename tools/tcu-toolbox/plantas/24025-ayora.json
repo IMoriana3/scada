@@ -1,0 +1,118 @@
+{
+  "_comentario": "Planta 24025 (Ayora) generada desde el Excel maestro (hoja 'Direcciones IP') por make_plantas.py --excel. Solo topologia: sin credenciales. NO subir el Excel al repo.",
+  "version": 1,
+  "plantas": [
+    {
+      "nombre": "Ayora NCU1",
+      "ip": "192.168.4.10",
+      "puerto": 503,
+      "tcu_ini": 1,
+      "tcu_fin": 63
+    },
+    {
+      "nombre": " NCU2",
+      "ip": "192.168.4.20",
+      "puerto": 503,
+      "tcu_ini": 1,
+      "tcu_fin": 69
+    },
+    {
+      "nombre": " NCU3",
+      "ip": "192.168.4.30",
+      "puerto": 503,
+      "tcu_ini": 1,
+      "tcu_fin": 66
+    },
+    {
+      "nombre": " NCU4",
+      "ip": "192.168.4.40",
+      "puerto": 503,
+      "tcu_ini": 1,
+      "tcu_fin": 30
+    },
+    {
+      "nombre": " NCU5",
+      "ip": "192.168.4.45",
+      "puerto": 503,
+      "tcu_ini": 1,
+      "tcu_fin": 48
+    },
+    {
+      "nombre": " NCU6",
+      "ip": "192.168.4.50",
+      "puerto": 503,
+      "tcu_ini": 1,
+      "tcu_fin": 26
+    },
+    {
+      "nombre": " NCU7",
+      "ip": "192.168.4.55",
+      "puerto": 503,
+      "tcu_ini": 1,
+      "tcu_fin": 25
+    },
+    {
+      "nombre": " NCU8",
+      "ip": "192.168.4.60",
+      "puerto": 503,
+      "tcu_ini": 1,
+      "tcu_fin": 44
+    },
+    {
+      "nombre": " NCU9",
+      "ip": "192.168.4.65",
+      "puerto": 503,
+      "tcu_ini": 1,
+      "tcu_fin": 41
+    },
+    {
+      "nombre": " NCU10",
+      "ip": "192.168.4.70",
+      "puerto": 503,
+      "tcu_ini": 1,
+      "tcu_fin": 40
+    },
+    {
+      "nombre": " NCU11",
+      "ip": "192.168.4.75",
+      "puerto": 503,
+      "tcu_ini": 1,
+      "tcu_fin": 65
+    },
+    {
+      "nombre": " NCU12",
+      "ip": "192.168.4.80",
+      "puerto": 503,
+      "tcu_ini": 1,
+      "tcu_fin": 53
+    },
+    {
+      "nombre": " NCU13",
+      "ip": "192.168.4.90",
+      "puerto": 503,
+      "tcu_ini": 1,
+      "tcu_fin": 72
+    },
+    {
+      "nombre": " NCU14",
+      "ip": "192.168.4.95",
+      "puerto": 503,
+      "tcu_ini": 1,
+      "tcu_fin": 24
+    },
+    {
+      "nombre": " NCU15",
+      "ip": "192.168.4.100",
+      "puerto": 503,
+      "tcu_ini": 1,
+      "tcu_fin": 43
+    },
+    {
+      "nombre": " NCU16",
+      "ip": "192.168.4.110",
+      "puerto": 503,
+      "tcu_ini": 1,
+      "tcu_fin": 45
+    }
+  ]
+}

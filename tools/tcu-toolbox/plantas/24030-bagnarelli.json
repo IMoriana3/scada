@@ -1,0 +1,13 @@
+{
+  "_comentario": "Planta 24030 (Bagnarelli) generada desde el Excel maestro (hoja 'Direcciones IP') por make_plantas.py --excel. Solo topologia: sin credenciales. NO subir el Excel al repo.",
+  "version": 1,
+  "plantas": [
+    {
+      "nombre": "Bagnarelli NCU1",
+      "ip": "192.168.5.21",
+      "puerto": 503,
+      "tcu_ini": 1,
+      "tcu_fin": 17
+    }
+  ]
+}
