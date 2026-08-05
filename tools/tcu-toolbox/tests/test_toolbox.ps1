@@ -613,6 +613,15 @@ Check 'ancla tabla de arriba no crece' (Anclaje-Para $gTabla2) 'Top,Left,Right'
 # etiqueta larga por debajo de la tabla
 $gEtiq = @{tipo='etiqueta'; top=300; left=10; ancho=600; alto=20; anchoRef=$anchoRef; crece=$false; abajoTabla=283}
 Check 'ancla nota larga baja y estira' (Anclaje-Para $gEtiq) 'Bottom,Left,Right'
+# Una etiqueta larga CON algo a su derecha no puede estirarse: al maximizar se
+# le echa encima. Geometria real de Diagnostico: la nota del registrador
+# (328,57) mide 330 y TEST COMM esta en (668,51) en la misma fila.
+$gNota = @{tipo='etiqueta'; top=57; left=328; ancho=330; alto=20; anchoRef=$anchoRef; crece=$false; abajoTabla=360; vecinoDerecha=$true}
+Check 'nota larga con vecino no estira' (Anclaje-Para $gNota) ''
+$gNotaSola = @{tipo='etiqueta'; top=57; left=328; ancho=330; alto=20; anchoRef=$anchoRef; crece=$false; abajoTabla=360; vecinoDerecha=$false}
+Check 'nota larga sin vecino si estira' (Anclaje-Para $gNotaSola) 'Top,Left,Right'
+$gEtiqV = @{tipo='etiqueta'; top=300; left=10; ancho=600; alto=20; anchoRef=$anchoRef; crece=$false; abajoTabla=283; vecinoDerecha=$true}
+Check 'nota baja con vecino solo baja' (Anclaje-Para $gEtiqV) 'Bottom,Left'
 # sin tablas en el contenedor, nada cambia
 $gSin = @{tipo='boton'; top=292; left=180; ancho=120; alto=30; anchoRef=$anchoRef; crece=$false; abajoTabla=-1}
 Check 'sin tabla, boton sin anclaje' (Anclaje-Para $gSin) ''

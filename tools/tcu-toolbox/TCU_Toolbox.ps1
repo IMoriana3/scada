@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '5.9'
+$VERSION_TOOLBOX = '6.0'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -5486,7 +5486,7 @@ function Anclaje-Para([hashtable]$g) {
     # ventana. Si se queda anclado arriba, al maximizar la tabla se estira y se
     # lo come: es lo que pasaba con ESCRIBIR y con las casillas de su fila.
     if ($g.abajoTabla -ge 0 -and $g.top -ge ($g.abajoTabla - 4)) {
-        if ($g.tipo -eq 'etiqueta' -and $g.ancho -gt 300) { return 'Bottom,Left,Right' }
+        if ($g.tipo -eq 'etiqueta' -and $g.ancho -gt 300 -and -not $g.vecinoDerecha) { return 'Bottom,Left,Right' }
         if (($g.left + $g.ancho) -gt ($g.anchoRef - 60)) { return 'Bottom,Right' }
         return 'Bottom,Left'
     }
@@ -5496,7 +5496,10 @@ function Anclaje-Para([hashtable]$g) {
         return 'Top,Left,Right'
     }
     if ($g.tipo -eq 'boton' -and (($g.left + $g.ancho) -gt ($g.anchoRef - 60))) { return 'Top,Right' }
-    if ($g.tipo -eq 'etiqueta' -and $g.ancho -gt 300) { return 'Top,Left,Right' }
+    # Una etiqueta larga solo puede estirarse si no tiene nada a su derecha en
+    # la misma fila. Si lo tiene, al maximizar se le echa encima y lo tapa
+    # (era el caso de la nota del registrador sobre el boton TEST COMM).
+    if ($g.tipo -eq 'etiqueta' -and $g.ancho -gt 300 -and -not $g.vecinoDerecha) { return 'Top,Left,Right' }
     return ''
 }
 
@@ -5524,8 +5527,16 @@ function Anclar-Contenedor($cont, $anchoRef) {
         elseif ($c -is [System.Windows.Forms.GroupBox]) { $tipo = 'grupo' }
         elseif ($c -is [System.Windows.Forms.Button]) { $tipo = 'boton' }
         elseif ($c -is [System.Windows.Forms.Label]) { $tipo = 'etiqueta' }
+        # hay algo a su derecha en la misma franja horizontal?
+        $vecino = $false
+        foreach ($o in $cont.Controls) {
+            if ($o -eq $c -or $o.Left -le $c.Left) { continue }
+            if (($o.Top -ge ($c.Top + $c.Height)) -or (($o.Top + $o.Height) -le $c.Top)) { continue }
+            $vecino = $true; break
+        }
         $a = Anclaje-Para @{tipo=$tipo; top=$c.Top; left=$c.Left; ancho=$c.Width; alto=$c.Height
-                            anchoRef=$anchoRef; crece=($c.Top -eq $topeAbajo); abajoTabla=$abajoTabla}
+                            anchoRef=$anchoRef; crece=($c.Top -eq $topeAbajo); abajoTabla=$abajoTabla
+                            vecinoDerecha=$vecino}
         if ($a) { $c.Anchor = $a }
         if ($tipo -eq 'grupo') { Anclar-Contenedor $c ($c.Width - 24) }
     }
