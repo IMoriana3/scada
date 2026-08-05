@@ -1,9 +1,23 @@
 {
-  "_comentario": "Copia este fichero como agente_config.json y rellenalo. El token debe ser una cadena larga aleatoria (p. ej. 40+ caracteres); es la llave de acceso al agente.",
+  "_comentario": "Copia este fichero como agente_config.json y rellenalo. El token debe ser una cadena larga aleatoria (40+ caracteres): es la llave de acceso al agente.",
   "planta": "Ayora",
   "puerto": 8585,
   "token": "CAMBIAME-token-largo-aleatorio",
   "timeout_ms": 8000,
+
+  "_escritura": "false = agente de solo lectura. Ponlo a true SOLO cuando quieras ejecutar comandos desde la web (cada comando exige ademas confirmacion y queda auditado).",
+  "permitir_escritura": false,
+
+  "_vigilante": "cada cuantos minutos vigilar la planta y avisar de alarmas nuevas (0 = apagado)",
+  "intervalo_vigilancia_min": 5,
+
+  "_supabase": "credenciales de un usuario dedicado (crea p.ej. agente@factiun.com en Supabase Auth) para subir alertas, acciones y sincronizaciones. Sin ellas, todo eso queda solo en consola/log local.",
+  "supabase_url": "https://icqiwmbbeoeswbcbgflc.supabase.co",
+  "supabase_key": "sb_publishable_lOmQfLA1rv7Jg0N3vjzcOA_qnbatn2p",
+  "supabase_email": null,
+  "supabase_pass": null,
+
+  "_pruebas": "solo para desarrollo: ruta alternativa a TCU_Toolbox.ps1, carpeta de plantas alternativa y puerto NCU del simulador",
   "toolbox": null,
   "dir_datos": null,
   "puerto_ncu": null
