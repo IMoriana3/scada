@@ -21,7 +21,8 @@ $i1 = $src.IndexOf('function Ident-Leer'); $f1 = $src.IndexOf('$btnIdent.Add_Cli
 $i2 = $src.IndexOf('function Diag-LeerTcu'); $f2 = $src.IndexOf('$btnDiag.Add_Click')
 $i3 = $src.IndexOf('function Params-Conexion'); $f3 = $src.IndexOf('function Rango-Tcus')
 $i4 = $src.IndexOf('function Nombres-Legibles'); $f4 = $src.IndexOf('function Refrescar-FiltroLeer')
-$logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4)
+$i5 = $src.IndexOf('function Hsu-Recorrer'); $f5 = $src.IndexOf('function Hsu-Mostrar')
+$logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5)
 Invoke-Expression $logica
 
 $fallos = 0
@@ -516,6 +517,23 @@ Check 'info nombre desconocido' (Info-Lectura 'no existe') ''
 Check 'info bit' (Info-Lectura '40037 jeita_enable (bit 0)') 'reg 40037  bit 0'
 # los corchetes del nombre no pueden tratarse como comodines al buscarlo
 Check 'info nombre con corchetes' (Info-Lectura '41106 east_pitch [m]') 'reg 41106  tipo f32'
+
+# ---------- lectura de varias HSUs de una pasada ----------
+function Chequear-Cancelado { return $false }
+$cxH = @{ip='127.0.0.1'; puerto=15020; gws=$null; multi=$null; etiqueta='15020'; to=2000; reint=1}
+$objsH = @(
+  @{etiqueta='NCU1 - HSU1'; ip='127.0.0.1'; puerto=15020; unit=185}
+  @{etiqueta='NCU2 - HSU1'; ip='127.0.0.1'; puerto=15020; unit=185}
+  @{etiqueta='NCU9 - HSU9'; ip='127.0.0.1'; puerto=15020; unit=7}   # 7 = GatewayTargetNoResponse
+)
+$rH = Hsu-Recorrer $objsH $cxH { param($u) Hsu-LeerMeteo $u } $null
+Check 'hsus: responden 2 de 3' (@($rH.oks).Count) 2
+Check 'hsus: cabecera por HSU' (@($rH.filas | Where-Object { "$($_.Campo)" -like '--- NCU*' }).Count) 3
+Check 'hsus: la muda deja fila' (@($rH.filas | Where-Object { "$($_.Valor)" -eq 'sin respuesta' }).Count) 1
+Check 'hsus: viento de la primera' (@($rH.filas | Where-Object { "$($_.Campo)" -like 'Viento*' }).Count -ge 2) 'True'
+# una sola HSU no mete cabeceras
+$rH1 = Hsu-Recorrer @($objsH[0]) $cxH { param($u) Hsu-LeerMeteo $u } $null
+Check 'hsu unica sin cabecera' (@($rH1.filas | Where-Object { "$($_.Campo)" -like '--- *' }).Count) 0
 
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }

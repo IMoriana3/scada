@@ -1,6 +1,6 @@
 # Pruebas de la TCU Toolbox
 
-238 comprobaciones de la lógica no-GUI de `TCU_Toolbox.ps1` contra un simulador
+243 comprobaciones de la lógica no-GUI de `TCU_Toolbox.ps1` contra un simulador
 Modbus TCP, sin tocar una planta.
 
 ```bash
@@ -19,7 +19,7 @@ plantas (entradas `(auto)`, planta completa, segmentado por gateway, CSV de
 topología), filtro de variables, decodificación de alarmas y salud, bloque
 compacto de la NCU, TEST COMM, planificador de campaña de firmware, seguimiento
 PEM, informe HTML (filtros, orden, sección de lectura con su resumen de
-discrepancias) y la selección de variables de la pestaña Leer.
+discrepancias), la selección de variables de la pestaña Leer y la lectura de varias HSUs de una pasada.
 
 ## El simulador
 
