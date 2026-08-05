@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '4.2'
+$VERSION_TOOLBOX = '4.3'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -758,6 +758,46 @@ function Runs-Consecutivos([int[]]$tcus) {
     }
     if ($null -ne $ini) { [void]$runs.Add(@{ini=$ini; fin=$prev}) }
     return $runs
+}
+
+# TEST COMM: la prueba mas rapida posible de "quien habla y quien no". No lee
+# el bloque compacto de cada TCU (22 regs), solo los lastComm que la NCU
+# cachea: 2 regs por TCU y hasta 50 TCUs por lectura, mas los 20 regs de las
+# HSUs. Una NCU de 75 TCUs se resuelve en ~4 lecturas en vez de ~17.
+# Requiere conexion abierta al puerto 502. Devuelve @{reloj; tcus; hsus}.
+function Ncu-Comm([int[]]$tcus) {
+    $wclk = FC03-Leer $UNIT_NCU (Dir-Trama 30104) 2
+    $reloj = ([long]$wclk[1] -shl 16) -bor [long]$wclk[0]
+    $edadDe = {
+        param($lc)
+        if ($reloj -gt 1000000000 -and $lc -gt 1000000000) { return [int]($reloj - $lc) }
+        return -1
+    }
+    $res = @{}
+    foreach ($run in @(Runs-Consecutivos $tcus)) {
+        $t0 = [int]$run.ini
+        while ($t0 -le [int]$run.fin) {
+            $n = [math]::Min(50, [int]$run.fin - $t0 + 1)
+            $w = FC03-Leer $UNIT_NCU (Dir-Trama (29500 + ($t0 - 1) * 2)) (2 * $n)
+            for ($k = 0; $k -lt $n; $k++) {
+                $lc = ([long]$w[2*$k + 1] -shl 16) -bor [long]$w[2*$k]
+                $edad = & $edadDe $lc
+                $res[$t0 + $k] = @{lastcomm=$lc; edad=$edad; comunica=(($lc -ne 0) -and ($edad -ge 0) -and ($edad -le 300))}
+            }
+            $t0 += $n
+        }
+    }
+    $hsus = @()
+    try {
+        $wh = FC03-Leer $UNIT_NCU (Dir-Trama 29440) 20
+        for ($h = 0; $h -lt 10; $h++) {
+            $lc = ([long]$wh[2*$h + 1] -shl 16) -bor [long]$wh[2*$h]
+            if ($lc -eq 0) { continue }        # ranura sin HSU declarada
+            $edad = & $edadDe $lc
+            $hsus += ,@{hsu=("HSU{0}" -f ($h + 1)); lastcomm=$lc; edad=$edad; comunica=(($edad -ge 0) -and ($edad -le 300))}
+        }
+    } catch {}
+    return @{reloj=$reloj; tcus=$res; hsus=$hsus}
 }
 
 # Diagnostico VIA NCU: lee el bloque compacto (30500+, 22 regs/TCU) y los
@@ -1652,9 +1692,17 @@ $tabG.Controls.Add($btnGBucle)
 $lblGBucle = New-Object System.Windows.Forms.Label
 $lblGBucle.Text = ''
 $lblGBucle.Location = New-Object System.Drawing.Point(328, 57)
-$lblGBucle.Size = New-Object System.Drawing.Size(580, 20)
+$lblGBucle.Size = New-Object System.Drawing.Size(330, 20)
 $lblGBucle.ForeColor = [System.Drawing.Color]::Gray
 $tabG.Controls.Add($lblGBucle)
+
+$btnGComm = New-Object System.Windows.Forms.Button
+$btnGComm.Text = 'TEST COMM (rapido)'
+$btnGComm.Location = New-Object System.Drawing.Point(668, 51)
+$btnGComm.Size = New-Object System.Drawing.Size(150, 28)
+$btnGComm.BackColor = [System.Drawing.Color]::FromArgb(0,120,60)
+$btnGComm.ForeColor = [System.Drawing.Color]::White
+$tabG.Controls.Add($btnGComm)
 
 # filtros de vista sobre el resultado ya leido (no relanzan lecturas)
 [void](LG $tabG 'Ver' 10 30 89)
@@ -2125,6 +2173,7 @@ $script:UltimoInv = @()
 $script:UltimoPem = @()
 $script:PresetRef = $null
 $script:PresetRefNombre = ''
+$script:UltimoEsComm = $false   # el ultimo resultado de la lista es un TEST COMM, no un diagnostico
 $script:SegMotor = @{}   # "ncu|tcu" -> @{ncu;tcu;estado;obs} del test de motor
 $script:SegComis = @{}   # idem, de LEER ESTADO de comisionado
 $script:SegAud = @{}     # idem, de la auditoria contra preset
@@ -2158,7 +2207,7 @@ $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $
                     $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnInvF, $btnInvFCsv,
                     $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm,
                     $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComis, $btnPComisSet, $btnPCsv,
-                    $btnGBucle, $btnPSeg, $btnAudJson, $btnInvJson, $btnHBuscar)
+                    $btnGBucle, $btnPSeg, $btnAudJson, $btnInvJson, $btnHBuscar, $btnGComm)
 
 function Set-UIOcupada([bool]$ocupada) {
     foreach ($b in $BOTONES_ACCION) { $b.Enabled = (-not $ocupada) }
@@ -3174,7 +3223,79 @@ function Diag-Refrescar {
     else { $lblGVer.Text = "$n de $tot filas  ($fNcu / $fSal) - el CSV/JSON exporta siempre todo" }
 }
 
-$btnDiag.Add_Click({ Lanzar { Diag-Correr } })
+$btnDiag.Add_Click({ Lanzar { $script:UltimoEsComm = $false; Diag-Correr } })
+
+# TEST COMM: quien habla y quien no, en segundos. Solo lastComm via NCU
+# (2 regs por TCU) + la salud de cada NCU: ni bloque compacto ni Zigbee.
+$btnGComm.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    $tcus = $null
+    if (-not $cx.multi) { $tcus = Rango-Tcus $txtGIni.Text $txtGFin.Text 'Test comm' }
+    $trabajos = @(Trabajos-Planta $cx $tcus $(if ($cx.multi) { $txtGNcus.Text } else { '' }))
+    if ($trabajos.Count -eq 0) { Con 'El filtro de NCUs no coincide con ninguna NCU de la planta.' ([System.Drawing.Color]::Orange); return }
+    $lvG.Items.Clear(); $script:UltimoDiag = @(); $lblGResumen.Text = ''
+    $script:UltimoEsComm = $true
+    $reloj0 = Get-Date
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    $totT = 0; foreach ($tr in $trabajos) { $totT += @($tr.tcus).Count }
+    Con "TEST COMM: $($trabajos.Count) NCU(s), $totT TCUs y sus HSUs - solo lastComm via NCU (puerto $PUERTO_NCU)" ([System.Drawing.Color]::SteelBlue)
+    $nOk = 0; $nOff = 0; $nNcuOk = 0; $nNcuKo = 0; $nHsuOk = 0; $nHsuKo = 0
+    foreach ($tr in $trabajos) {
+        if ($script:Cancelar) { break }
+        $et = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
+        $c = $null; $err = ''
+        try { Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to; $c = Ncu-Comm $tr.tcus }
+        catch { $err = "$_" }
+        Modbus-Cerrar
+        if ($null -eq $c) {
+            $nNcuKo++
+            $d = [pscustomobject]@{NCU=$et; TCU='NCU'; Salud='OFFLINE'; Modo='-'; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
+                Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''; Alarmas="NCU SIN RESPUESTA en $($tr.ip):${PUERTO_NCU} - $err"
+                main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
+            $script:UltimoDiag += $d
+            $nOff += @($tr.tcus).Count
+            Con ("NCU{0,-3} {1,-15} SIN RESPUESTA: {2}" -f $et, $tr.ip, $err) ([System.Drawing.Color]::Salmon)
+            continue
+        }
+        $nNcuOk++
+        $script:UltimoDiag += [pscustomobject]@{NCU=$et; TCU='NCU'; Salud='OK'; Modo='-'; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
+            Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''; Alarmas="NCU responde ($($tr.ip):$PUERTO_NCU)"
+            main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
+        foreach ($h in $c.hsus) {
+            if ($h.comunica) { $nHsuOk++ } else { $nHsuKo++ }
+            $script:UltimoDiag += [pscustomobject]@{NCU=$et; TCU=$h.hsu; Salud=$(if ($h.comunica) { 'OK' } else { 'OFFLINE' }); Modo='-'
+                Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''
+                Alarmas=$(if ($h.comunica) { "comunica (hace $($h.edad) s)" } else { $(if ($h.lastcomm -eq 0) { 'la NCU nunca la ha leido' } else { "sin datos desde hace $($h.edad) s" }) })
+                main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
+        }
+        $mudas = @()
+        foreach ($tcu in $tr.tcus) {
+            $e = $c.tcus[[int]$tcu]
+            $ok = ($null -ne $e -and $e.comunica)
+            if ($ok) { $nOk++ } else { $nOff++; $mudas += $tcu }
+            $script:UltimoDiag += [pscustomobject]@{NCU=$et; TCU=[int]$tcu; Salud=$(if ($ok) { 'OK' } else { 'OFFLINE' }); Modo='-'
+                Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''
+                Alarmas=$(if ($ok) { "comunica (hace $($e.edad) s)" } elseif ($null -eq $e -or $e.lastcomm -eq 0) { 'la NCU nunca ha leido este TCU' } else { "sin datos desde hace $($e.edad) s" })
+                main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
+        }
+        $nT = @($tr.tcus).Count
+        Con ("NCU{0,-3} {1,-15} OK  {2}/{3} TCUs comunican, {4} HSUs{5}" -f $et, $tr.ip, ($nT - $mudas.Count), $nT, @($c.hsus).Count,
+            $(if ($mudas.Count) { "  |  SIN COMM: " + ($mudas -join ', ') } else { '' })) `
+            $(if ($mudas.Count) { [System.Drawing.Color]::Orange } else { [System.Drawing.Color]::LightGreen })
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    $seg = [math]::Round(((Get-Date) - $reloj0).TotalSeconds, 1)
+    $lblGResumen.Text = "Comm: $nOk / $($nOk + $nOff)"
+    Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "TEST COMM en $seg s: NCUs $nNcuOk OK / $nNcuKo sin respuesta | TCUs $nOk comunican / $nOff sin comunicacion | HSUs $nHsuOk OK / $nHsuKo sin comunicacion" ([System.Drawing.Color]::SteelBlue)
+    Con "Es solo una prueba de comunicacion (lastComm): para alarmas, modo y posiciones usa DIAGNOSTICAR." ([System.Drawing.Color]::Gainsboro)
+    $selV = $cbGVerNcu.SelectedItem
+    $cbGVerNcu.Items.Clear()
+    [void]$cbGVerNcu.Items.Add('NCU - todas')
+    foreach ($nv in @($script:UltimoDiag | ForEach-Object { "$($_.NCU)" } | Where-Object { $_ } | Sort-Object {[int]$_} -Unique)) { [void]$cbGVerNcu.Items.Add("NCU$nv") }
+    if ($selV -and $cbGVerNcu.Items.Contains($selV)) { $cbGVerNcu.SelectedItem = $selV } else { $cbGVerNcu.SelectedIndex = 0 }
+    Diag-Refrescar
+} })
 
 $cbGVerNcu.Add_SelectedIndexChanged({ if (-not $script:Ocupado) { Diag-Refrescar } })
 $cbGVerSalud.Add_SelectedIndexChanged({ if (-not $script:Ocupado) { Diag-Refrescar } })
@@ -3196,6 +3317,7 @@ $btnGBucle.Add_Click({ Lanzar {
     while (-not $script:Cancelar) {
         $vuelta++
         $lblGBucle.Text = "Registrador: vuelta $vuelta en curso..."
+        $script:UltimoEsComm = $false
         Diag-Correr
         $ahora = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
         $filas = foreach ($d in $script:UltimoDiag) {
@@ -3238,12 +3360,18 @@ $btnGCsv.Add_Click({
 })
 
 $btnGJson.Add_Click({
+    if ($script:UltimoEsComm) {
+        $r = [System.Windows.Forms.MessageBox]::Show(
+            "Lo ultimo que se ha ejecutado es un TEST COMM (solo comunicacion), no un diagnostico completo.`r`n`r`nSe exportara como 'test_comm' y la plataforma NO lo aceptara como diagnostico.`r`n`r`nExportar igualmente?",
+            'Test de comunicacion', 'YesNo', 'Warning')
+        if ($r -ne 'Yes') { return }
+    }
     $dlg = New-Object System.Windows.Forms.SaveFileDialog
     $dlg.Filter = 'JSON (*.json)|*.json'
-    $dlg.FileName = 'diagnostico_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.json'
+    $dlg.FileName = $(if ($script:UltimoEsComm) { 'test_comm_' } else { 'diagnostico_' }) + (Get-Date -Format 'yyyyMMdd_HHmm') + '.json'
     if ($dlg.ShowDialog() -ne 'OK') { return }
     $obj = [ordered]@{
-        tipo    = 'diagnostico_tcu'
+        tipo    = $(if ($script:UltimoEsComm) { 'test_comm' } else { 'diagnostico_tcu' })
         mapa    = $VERSION_MAPA
         toolbox = $VERSION_TOOLBOX
         planta  = Nombre-Planta
