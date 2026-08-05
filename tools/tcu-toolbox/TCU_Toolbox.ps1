@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '4.1'
+$VERSION_TOOLBOX = '4.2'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -557,7 +557,7 @@ function Informe-Html([hashtable]$m) {
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.AppendLine('<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Informe PEM - ' + (Html-Esc $m.planta) + '</title><style>')
     [void]$sb.AppendLine('body{font-family:Segoe UI,Arial,sans-serif;font-size:13px;margin:24px;color:#222}h1{font-size:20px}h2{font-size:15px;margin-top:26px;border-bottom:2px solid #345;padding-bottom:4px}table{border-collapse:collapse;width:100%;margin-top:8px}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;font-size:12px}th{background:#eef2f6;cursor:pointer;user-select:none}tr.ok td{background:#eaf7ee}tr.aviso td{background:#fff6e0}tr.alarma td{background:#fdeaea}tr.off td{background:#f0f0f0;color:#777}.meta{color:#555}.res{font-weight:600;margin:6px 0}')
-    [void]$sb.AppendLine('tr.filtros td{background:#f7f9fb;padding:2px 4px}tr.filtros select,tr.filtros input{width:100%;box-sizing:border-box;font-size:11px;padding:2px;border:1px solid #bbb;border-radius:3px}.vis{color:#555;font-weight:400;font-size:12px}')
+    [void]$sb.AppendLine('tr.filtros td{background:#f7f9fb;padding:2px 4px}tr.filtros select,tr.filtros input{width:100%;box-sizing:border-box;font-size:11px;padding:2px;border:1px solid #bbb;border-radius:3px}.vis{color:#555;font-weight:400;font-size:12px}th:hover{background:#dde6ef}th .fl{color:#06c}')
     [void]$sb.AppendLine('</style></head><body>')
     [void]$sb.AppendLine('<h1>Informe de puesta en marcha &mdash; ' + (Html-Esc $m.planta) + '</h1>')
     [void]$sb.AppendLine('<p class="meta">Fecha: ' + (Html-Esc $m.fecha) + ' &middot; IP/conexion: ' + (Html-Esc $m.ip) + ' &middot; Tecnico: ' + (Html-Esc $m.usuario) + '<br>TCU Toolbox v' + (Html-Esc $m.version) + ' &middot; Mapa: ' + (Html-Esc $m.mapa) + '</p>')
@@ -568,12 +568,12 @@ function Informe-Html([hashtable]$m) {
         [void]$sb.AppendLine('<h2>' + (Html-Esc $titulo) + ' <span class="meta">(' + @($filas).Count + ' filas)</span></h2>')
         $grupos = @($filas) | Group-Object $colEstado | ForEach-Object { "$($_.Count) $($_.Name)" }
         [void]$sb.AppendLine('<div class="res">' + (Html-Esc ($grupos -join ' | ')) + ' <span class="vis"></span></div>')
-        [void]$sb.AppendLine('<table class="filtrable"><tr>' + (($cols | ForEach-Object { '<th title="clic para ordenar">' + (Html-Esc $_) + '</th>' }) -join '') + '</tr>')
+        [void]$sb.AppendLine('<table class="filtrable"><thead><tr>' + (($cols | ForEach-Object { '<th title="clic para ordenar">' + (Html-Esc $_) + '<span class="fl"></span></th>' }) -join '') + '</tr></thead><tbody>')
         foreach ($f in @($filas)) {
             $cl = & $clase $f.$colEstado
             [void]$sb.AppendLine('<tr' + $(if ($cl) { ' class="' + $cl + '"' } else { '' }) + '>' + (($cols | ForEach-Object { '<td>' + (Html-Esc "$($f.$_)") + '</td>' }) -join '') + '</tr>')
         }
-        [void]$sb.AppendLine('</table>')
+        [void]$sb.AppendLine('</tbody></table>')
     }
     & $tabla 'Diagnostico de flota' $m.diag @('NCU','TCU','Salud','Modo','Tilt','Objetivo','Dif','SoC','Alarmas') 'Salud'
     & $tabla 'Puesta en marcha (PEM)' $m.pem @('NCU','TCU','Resultado','Detalle') 'Resultado'
@@ -583,62 +583,100 @@ function Informe-Html([hashtable]$m) {
         [void]$sb.AppendLine('<p>Sin datos en esta sesion: ejecuta Diagnostico, PEM, Auditoria o Inventario antes de generar el informe.</p>')
     }
     [void]$sb.AppendLine('<p class="meta">Generado por TCU Toolbox &mdash; Factiun. Filtra con la fila bajo la cabecera (desplegable = valor exacto; caja de texto = contiene) y ordena con un clic en la cabecera.</p>')
-    # filtros por columna y orden al clicar la cabecera - JS embebido, sin red
+    # Filtros por columna y orden al clicar la cabecera. JS embebido, sin red y
+    # sin sintaxis moderna a proposito (bucles for clasicos, nada de NodeList
+    # .forEach ni arrow functions): asi funciona tambien si el PC de planta
+    # abre el informe con Internet Explorer o un Edge en modo compatibilidad.
     [void]$sb.AppendLine(@'
 <script>
 (function(){
-  document.querySelectorAll("table.filtrable").forEach(function(tb){
-    var filas = Array.prototype.slice.call(tb.rows, 1);
+  var tablas = document.getElementsByTagName("table");
+  for (var i = 0; i < tablas.length; i++) {
+    if (tablas[i].className.indexOf("filtrable") < 0) continue;
+    try { preparar(tablas[i]); } catch (e) { if (window.console) console.log("tabla no preparada: " + e.message); }
+  }
+  function texto(celda) { return (celda.textContent || celda.innerText || "").replace(/^\s+|\s+$/g, ""); }
+  function preparar(tb) {
+    var cabecera = tb.tHead ? tb.tHead.rows[0] : tb.rows[0];
+    var cuerpo = tb.tBodies[0];
+    if (!cabecera || !cuerpo) return;
+    var filas = [];
+    for (var k = 0; k < cuerpo.rows.length; k++) { filas.push(cuerpo.rows[k]); }
     if (!filas.length) return;
-    var nCols = tb.rows[0].cells.length;
-    var visor = tb.previousElementSibling ? tb.previousElementSibling.querySelector(".vis") : null;
-    var tf = tb.insertRow(1); tf.className = "filtros";
+    var nCols = cabecera.cells.length;
+    var visor = null;
+    var prev = tb.previousSibling;
+    while (prev && !visor) {
+      if (prev.nodeType === 1 && prev.getElementsByClassName) {
+        var vs = prev.getElementsByClassName("vis");
+        if (vs.length) visor = vs[0];
+      }
+      prev = prev.previousSibling;
+    }
+    var tf = (tb.tHead || tb).insertRow(tb.tHead ? -1 : 1);
+    tf.className = "filtros";
     var ctrls = [];
     for (var c = 0; c < nCols; c++) {
       var celda = tf.insertCell(-1);
-      var vals = {};
-      filas.forEach(function(r){ var t = r.cells[c].textContent.trim(); if (t) vals[t] = 1; });
-      var lista = Object.keys(vals).sort();
+      var vals = {}, lista = [];
+      for (var f = 0; f < filas.length; f++) {
+        var t = texto(filas[f].cells[c]);
+        if (t && !vals[t]) { vals[t] = 1; lista.push(t); }
+      }
+      lista.sort();
       var ctrl;
       if (lista.length > 0 && lista.length <= 30) {
         ctrl = document.createElement("select");
-        var op = document.createElement("option"); op.value = ""; op.textContent = "(todas)"; ctrl.appendChild(op);
-        lista.forEach(function(v){ var o = document.createElement("option"); o.value = v; o.textContent = v; ctrl.appendChild(o); });
+        ctrl.appendChild(new Option("(todas)", ""));
+        for (var v = 0; v < lista.length; v++) { ctrl.appendChild(new Option(lista[v], lista[v])); }
       } else {
-        ctrl = document.createElement("input"); ctrl.placeholder = "filtrar...";
+        ctrl = document.createElement("input");
+        ctrl.setAttribute("placeholder", "filtrar...");
       }
-      ctrl.addEventListener("input", aplicar); ctrl.addEventListener("change", aplicar);
-      celda.appendChild(ctrl); ctrls.push(ctrl);
+      if (ctrl.addEventListener) {
+        ctrl.addEventListener("input", aplicar, false);
+        ctrl.addEventListener("change", aplicar, false);
+      } else { ctrl.attachEvent("onchange", aplicar); ctrl.attachEvent("onkeyup", aplicar); }
+      celda.appendChild(ctrl);
+      ctrls.push(ctrl);
     }
-    function aplicar(){
+    function aplicar() {
       var n = 0;
-      filas.forEach(function(r){
-        var ok = ctrls.every(function(ctrl, c){
-          var f = ctrl.value.trim(); if (!f) return true;
-          var t = r.cells[c].textContent.trim();
-          return ctrl.tagName === "SELECT" ? t === f : t.toLowerCase().indexOf(f.toLowerCase()) >= 0;
-        });
-        r.style.display = ok ? "" : "none";
+      for (var f = 0; f < filas.length; f++) {
+        var ok = true;
+        for (var c = 0; c < ctrls.length && ok; c++) {
+          var val = (ctrls[c].value || "").replace(/^\s+|\s+$/g, "");
+          if (!val) continue;
+          var t = texto(filas[f].cells[c]);
+          ok = (ctrls[c].tagName === "SELECT") ? (t === val) : (t.toLowerCase().indexOf(val.toLowerCase()) >= 0);
+        }
+        filas[f].style.display = ok ? "" : "none";
         if (ok) n++;
-      });
-      if (visor) visor.textContent = (n === filas.length) ? "" : "- filtro: " + n + " de " + filas.length + " visibles";
+      }
+      if (visor) visor.innerHTML = (n === filas.length) ? "" : ("- filtro: " + n + " de " + filas.length + " visibles");
     }
     var dir = {};
-    Array.prototype.forEach.call(tb.rows[0].cells, function(th, c){
-      th.addEventListener("click", function(){
-        dir[c] = -(dir[c] || -1);
+    for (var h = 0; h < cabecera.cells.length; h++) { enganchar(cabecera.cells[h], h); }
+    function enganchar(th, c) {
+      function ordenar() {
+        dir[c] = (dir[c] === 1) ? -1 : 1;
         var d = dir[c];
-        filas.sort(function(a, b){
-          var x = a.cells[c].textContent.trim(), y = b.cells[c].textContent.trim();
+        filas.sort(function(a, b) {
+          var x = texto(a.cells[c]), y = texto(b.cells[c]);
           var nx = parseFloat(x.replace(",", ".")), ny = parseFloat(y.replace(",", "."));
-          if (!isNaN(nx) && !isNaN(ny)) return (nx - ny) * d;
-          return x.localeCompare(y) * d;
+          if (!isNaN(nx) && !isNaN(ny) && /^[-+0-9.,]+$/.test(x) && /^[-+0-9.,]+$/.test(y)) return (nx - ny) * d;
+          return (x < y ? -1 : (x > y ? 1 : 0)) * d;
         });
-        var cuerpo = filas[0].parentNode;
-        filas.forEach(function(r){ cuerpo.appendChild(r); });
-      });
-    });
-  });
+        for (var f = 0; f < filas.length; f++) { cuerpo.appendChild(filas[f]); }
+        for (var h2 = 0; h2 < cabecera.cells.length; h2++) {
+          var m = cabecera.cells[h2].getElementsByTagName("span");
+          if (m.length) m[0].innerHTML = (h2 === c) ? (d > 0 ? " &#9650;" : " &#9660;") : "";
+        }
+      }
+      if (th.addEventListener) { th.addEventListener("click", ordenar, false); }
+      else { th.attachEvent("onclick", ordenar); }
+    }
+  }
 })();
 </script>
 '@)
