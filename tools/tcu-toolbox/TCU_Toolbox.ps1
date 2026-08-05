@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '4.6'
+$VERSION_TOOLBOX = '4.7'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -232,11 +232,11 @@ $ESTADO = [ordered]@{
 # ---------------------------------------------------------------------------
 $VARIABLES = [ordered]@{
   # ---- COMANDOS (registros de orden; escribir con cuidado) ----
-  '40000 CMD main_change_request [hex]'   = @{addr=40000; tipo='u16'}
-  '40007 CMD extended_control [hex]'      = @{addr=40007; tipo='u16'}
-  '40017 CMD manual_motor [hex] PELIGRO'  = @{addr=40017; tipo='u16'}
-  '40018 CMD config_control [hex] PELIGRO'= @{addr=40018; tipo='u16'}
-  '42000 CMD remote_change_request [hex]' = @{addr=42000; tipo='u16'}
+  '40000 CMD main_change_request [hex]'   = @{addr=40000; tipo='u16hex'}
+  '40007 CMD extended_control [hex]'      = @{addr=40007; tipo='u16hex'}
+  '40017 CMD manual_motor [hex] PELIGRO'  = @{addr=40017; tipo='u16hex'}
+  '40018 CMD config_control [hex] PELIGRO'= @{addr=40018; tipo='u16hex'}
+  '42000 CMD remote_change_request [hex]' = @{addr=42000; tipo='u16hex'}
   # ---- FECHA / HORA DE ENTRADA ----
   '40001 input_time_segundos'             = @{addr=40001; tipo='u16'}
   '40002 input_time_minutos'              = @{addr=40002; tipo='u16'}
@@ -254,7 +254,7 @@ $VARIABLES = [ordered]@{
   '40014 carga_T2_T3 [mA]'                = @{addr=40014; tipo='u16'; max=20000}
   '40015 carga_T3_T4 [mA]'                = @{addr=40015; tipo='u16'; max=20000}
   '40016 carga_sobre_T4 [mA]'             = @{addr=40016; tipo='u16'}
-  '40037 charge_parameters [hex]'         = @{addr=40037; tipo='u16'}
+  '40037 charge_parameters [hex]'         = @{addr=40037; tipo='u16hex'}
   '40037 jeita_enable (bit 0)'            = @{addr=40037; tipo='bit'; bit=0}
   '40038 corriente_carga_nominal [mA]'    = @{addr=40038; tipo='u16'}
   '40039 tension_carga_nominal [mV]'      = @{addr=40039; tipo='u16'}
@@ -265,21 +265,21 @@ $VARIABLES = [ordered]@{
   # ---- CALEFACTOR ----
   '40034 heater_umbral_cargando [K]'      = @{addr=40034; tipo='u16'; max=300}
   '40035 heater_umbral_descargando [K]'   = @{addr=40035; tipo='u16'; max=300}
-  '40036 heater_options [hex]'            = @{addr=40036; tipo='u16'}
+  '40036 heater_options [hex]'            = @{addr=40036; tipo='u16hex'}
   '40036 heater_histeresis [K] (byte bajo)'= @{addr=40036; tipo='u8lo'; max=20}
   '40036 heater_enable (bit 8)'           = @{addr=40036; tipo='bit'; bit=8}
   # ---- COMUNICACIONES ----
   '40022 timeout_com_NCU [min]'           = @{addr=40022; tipo='u16'; max=1092}
   '40029 watchdog_zigbee [min]'           = @{addr=40029; tipo='u16'}
-  '41004 zigbee_config [hex]'             = @{addr=41004; tipo='u16'}
+  '41004 zigbee_config [hex]'             = @{addr=41004; tipo='u16hex'}
   '41004 zigbee_slave_id (byte bajo)'     = @{addr=41004; tipo='u8lo'}
   '41004 zigbee_apply (bit 8)'            = @{addr=41004; tipo='bit'; bit=8}
-  '41006 rs485_config [hex]'              = @{addr=41006; tipo='u16'}
+  '41006 rs485_config [hex]'              = @{addr=41006; tipo='u16hex'}
   '41006 rs485_slave_id (byte bajo)'      = @{addr=41006; tipo='u8lo'}
   '41006 rs485_apply (bit 8)'             = @{addr=41006; tipo='bit'; bit=8}
   '41070 zigbee_pan_id_bajo [u32]'        = @{addr=41070; tipo='u32'}
   '41072 zigbee_pan_id_alto [u32]'        = @{addr=41072; tipo='u32'}
-  '41074 zigbee_encryption [hex]'         = @{addr=41074; tipo='u16'}
+  '41074 zigbee_encryption [hex]'         = @{addr=41074; tipo='u16hex'}
   '41074 zigbee_encr_enable (bit 0)'      = @{addr=41074; tipo='bit'; bit=0}
   '41075 zigbee_user_key [u32]'           = @{addr=41075; tipo='u32'}
   # ---- POSICION / GEOMETRIA ----
@@ -293,8 +293,12 @@ $VARIABLES = [ordered]@{
   '41100 west_grade_azimuth [deg]'        = @{addr=41100; tipo='f32deg'}
   '41102 east_grade_slope [deg]'          = @{addr=41102; tipo='f32deg'}
   '41104 east_grade_azimuth [deg]'        = @{addr=41104; tipo='f32deg'}
+  # OJO: el manual v6.1 pone 'Radians 0..pi/4' en 41106, pero es una errata
+  # heredada de la fila de arriba: es la separacion entre ejes, como 41033
+  # (Meters). Confirmado en campo: Ayora lee 6, que como radianes (344 deg)
+  # seria imposible en un campo cuyo maximo declarado es pi/4 (45 deg).
   '41106 east_pitch [m]'                  = @{addr=41106; tipo='f32'}
-  '41018 tracker_options [hex]'           = @{addr=41018; tipo='u16'}
+  '41018 tracker_options [hex]'           = @{addr=41018; tipo='u16hex'}
   '41018 inclinometro_invertido (bit 9)'  = @{addr=41018; tipo='bit'; bit=9}
   '41018 motor_invertido (bit 11)'        = @{addr=41018; tipo='bit'; bit=11}
   # ---- UMBRALES DE ALARMA ----
@@ -320,7 +324,7 @@ $VARIABLES = [ordered]@{
   '41052 safe_pos_5 [deg]'                = @{addr=41052; tipo='f32deg'}
   '41054 safe_pos_6 [deg]'                = @{addr=41054; tipo='f32deg'}
   '41056 safe_pos_7 [deg]'                = @{addr=41056; tipo='f32deg'}
-  '41068 safe_pos_options [hex]'          = @{addr=41068; tipo='u16'}
+  '41068 safe_pos_options [hex]'          = @{addr=41068; tipo='u16hex'}
   '41069 safe_pos_sign_threshold'         = @{addr=41069; tipo='s16'}
   # ---- RANGOS DE TILT (limite oeste = maximo) ----
   '41111 max_tilt_west_r1 [deg]'          = @{addr=41111; tipo='f32deg'}
@@ -1135,7 +1139,9 @@ function Palabras-A-F32([int[]]$w) {
 function Valor-A-Escritura([hashtable]$vdef, [string]$texto) {
     $a = Dir-Trama $vdef.addr
     switch ($vdef.tipo) {
-        'u16' {
+        # u16hex es un u16 que se MUESTRA en hexadecimal (mascaras de bits);
+        # a la hora de escribir admite igual "0x0A00" que "2560"
+        { $_ -eq 'u16' -or $_ -eq 'u16hex' } {
             $v = Entero-Estricto $texto
             if ($v -lt 0 -or $v -gt 65535) { throw "fuera de rango U16" }
             if ($null -ne $vdef.min -and $v -lt $vdef.min) { throw "por debajo del minimo del mapa ($($vdef.min))" }
