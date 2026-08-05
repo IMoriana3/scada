@@ -30,6 +30,8 @@ Cuando una NCU tiene varios gateways, el desplegable ofrece además una entrada 
 | **Firmware** | Planifica la **campaña de actualización** (v4.4). La toolbox **no** actualiza firmware — eso lo hace el *TCU Updater* de Sunner — pero resuelve lo caro: a partir del último **Inventario** y de una **versión objetivo**, lista las TCUs pendientes agrupadas en tramos `desde-hasta` **por NCU y gateway**, que es justo lo que pide el updater (*Add from … to …*). Cada tramo es un **carril**: el updater admite varias ventanas a la vez, una por NCU+gateway, así que la campaña se divide por el número de carriles (con 20 min/TCU, Ayora pasa de ~250 h en serie a las horas del carril más cargado). Muestra la estimación en serie y en paralelo, marca las TCUs que no respondieron al inventario (no se puede actualizar lo que no comunica), exporta el plan a CSV y, al terminar, **VERIFICAR TRAS ACTUALIZAR** relee el FW de las TCUs del plan y dice cuáles subieron y cuáles siguen pendientes. |
 | **Utilidades** | **Sincronizar reloj**: escribe la hora del PC en un rango de TCUs (40001–40006 + secuencia 40007 bit0→bit1) y verifica leyendo el reloj real (30079). **Identificación**: FW principal/fábrica, MCU secundario, BQ, HW, Xbee HW/FW, **MAC Xbee**, **número de serie**, fecha de fabricación y lote (bloque 30300+). |
 
+En las operaciones de **planta completa**, cada línea de la consola lleva delante la **NCU** además del TCU (v5.8): los números de TCU se repiten en cada NCU, así que sin eso una línea no dice de qué equipo habla. El resumen de fallidas y el botón **Reintentar fallidas** también van por NCU — reintentar sobre la NCU equivocada sería escribir en el seguidor de al lado.
+
 Consola común con colores, botón **CANCELAR** para abortar operaciones largas, y **log automático** a `logs/tcu_toolbox_AAAAMMDD.log`. La ventana es **redimensionable y maximizable** (v4.6): al agrandarla crecen las tablas y la consola, que es lo que interesa en una planta de cientos de TCUs.
 
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
@@ -55,7 +57,7 @@ Además, transversales a las pestañas (v3.1):
 
 ## Pruebas
 
-`tests/` lleva un simulador Modbus TCP y **262 comprobaciones** de toda la lógica no-GUI, para poder tocar el script sin planta delante:
+`tests/` lleva un simulador Modbus TCP y **265 comprobaciones** de toda la lógica no-GUI, para poder tocar el script sin planta delante:
 
 ```bash
 cd tests && python3 mb_server.py &

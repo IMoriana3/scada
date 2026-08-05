@@ -23,7 +23,8 @@ $i3 = $src.IndexOf('function Params-Conexion'); $f3 = $src.IndexOf('function Ran
 $i4 = $src.IndexOf('function Nombres-Legibles'); $f4 = $src.IndexOf('function Refrescar-FiltroLeer')
 $i5 = $src.IndexOf('function Hsu-Recorrer'); $f5 = $src.IndexOf('function Hsu-Mostrar')
 $i6 = $src.IndexOf('function Anclaje-Para'); $f6 = $src.IndexOf('# Anclar contra un contenedor')
-$logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6)
+$i7 = $src.IndexOf('function Eti-Tcu'); $f7 = $src.IndexOf('# Divide una lista de TCUs')
+$logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7)
 Invoke-Expression $logica
 
 $fallos = 0
@@ -615,6 +616,17 @@ Check 'ancla nota larga baja y estira' (Anclaje-Para $gEtiq) 'Bottom,Left,Right'
 # sin tablas en el contenedor, nada cambia
 $gSin = @{tipo='boton'; top=292; left=180; ancho=120; alto=30; anchoRef=$anchoRef; crece=$false; abajoTabla=-1}
 Check 'sin tabla, boton sin anclaje' (Anclaje-Para $gSin) ''
+
+# ---------- la consola dice de que NCU es cada TCU ----------
+# En Planta completa los numeros de TCU se repiten en cada NCU: sin la NCU
+# delante, una linea de log no dice de que equipo habla.
+$script:NcuLog = ''
+Check 'eti sin ncu' (Eti-Tcu 7) 'TCU   7'
+$script:NcuLog = '2'
+Check 'eti con ncu' (Eti-Tcu 7) 'NCU2   TCU   7'
+$script:NcuLog = '13'
+Check 'eti ncu de dos cifras' (Eti-Tcu 105) 'NCU13  TCU 105'
+$script:NcuLog = ''
 
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }
