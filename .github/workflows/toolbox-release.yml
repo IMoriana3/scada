@@ -32,6 +32,16 @@ jobs:
           cd ..
           unzip -l "TCU_Toolbox_v${VER}.zip"
 
+      - name: Generar fichas de Seguimiento PEM (una por planta)
+        run: |
+          pip install --quiet openpyxl
+          mkdir -p fichas
+          cd fichas
+          for f in ../tools/tcu-toolbox/plantas/*.json; do
+            python ../tools/tcu-toolbox/make_seguimiento.py "$f"
+          done
+          ls -l
+
       - name: Crear o actualizar la release
         run: |
           VER="${{ steps.v.outputs.ver }}"
@@ -39,7 +49,7 @@ jobs:
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
               --title "TCU Toolbox v${VER}" \
-              --notes "Herramienta offline de campo (configuracion y diagnostico de TCUs Sunner). Descarga el ZIP, copia la carpeta tcu-toolbox al portatil (las plantas van dentro, en plantas/) y doble clic en TCU_Toolbox.bat." \
+              --notes "Herramienta offline de campo (configuracion y diagnostico de TCUs Sunner). Descarga el ZIP, copia la carpeta tcu-toolbox al portatil (las plantas van dentro, en plantas/) y doble clic en TCU_Toolbox.bat. Las fichas Seguimiento_PEM_*.xlsx (una por planta) se generan solas desde la topologia." \
               --latest
           fi
-          gh release upload "$TAG" "TCU_Toolbox_v${VER}.zip" --clobber
+          gh release upload "$TAG" "TCU_Toolbox_v${VER}.zip" fichas/Seguimiento_PEM_*.xlsx --clobber
