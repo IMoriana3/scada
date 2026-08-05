@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '4.5'
+$VERSION_TOOLBOX = '4.6'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1317,7 +1317,11 @@ $form = New-Object System.Windows.Forms.Form
 $form.Text = "TCU Toolbox v$VERSION_TOOLBOX - Sunner  (mapa $VERSION_MAPA)"
 $form.Size = New-Object System.Drawing.Size(960, 820)
 $form.StartPosition = 'CenterScreen'
-$form.FormBorderStyle = 'FixedSingle'; $form.MaximizeBox = $false
+# Ventana redimensionable y maximizable: los anclajes del final del script
+# hacen que crezcan las listas y la consola. MinimumSize = el diseno original,
+# asi que nunca puede quedar mas pequena de lo que cabe.
+$form.FormBorderStyle = 'Sizable'; $form.MaximizeBox = $true
+$form.MinimumSize = New-Object System.Drawing.Size(960, 820)
 
 $gbCon = New-Object System.Windows.Forms.GroupBox
 $gbCon.Text = ' Conexion '
@@ -1751,17 +1755,23 @@ $cbGVerNcu.DropDownStyle = 'DropDownList'
 [void]$cbGVerNcu.Items.Add('NCU - todas')
 $cbGVerNcu.SelectedIndex = 0
 $tabG.Controls.Add($cbGVerNcu)
-$cbGVerSalud = New-Object System.Windows.Forms.ComboBox
-$cbGVerSalud.Location = New-Object System.Drawing.Point(162, 86)
-$cbGVerSalud.Size = New-Object System.Drawing.Size(130, 22)
-$cbGVerSalud.DropDownStyle = 'DropDownList'
-foreach ($s in @('Salud - todas','Solo problemas','ALARMA','AVISO','OFFLINE','OK')) { [void]$cbGVerSalud.Items.Add($s) }
-$cbGVerSalud.SelectedIndex = 0
-$tabG.Controls.Add($cbGVerSalud)
+# casillas de salud: se pueden marcar VARIAS a la vez (p. ej. ALARMA y
+# OFFLINE); ninguna marcada = se muestran todas
+$script:ChksSalud = @{}
+$xChk = 162
+foreach ($s in @('OK','AVISO','ALARMA','OFFLINE')) {
+    $ch = New-Object System.Windows.Forms.CheckBox
+    $ch.Text = $s
+    $ch.Location = New-Object System.Drawing.Point($xChk, 86)
+    $ch.Size = New-Object System.Drawing.Size($(if ($s -eq 'OFFLINE') { 78 } else { 72 }), 22)
+    $tabG.Controls.Add($ch)
+    $script:ChksSalud[$s] = $ch
+    $xChk += $ch.Size.Width
+}
 $lblGVer = New-Object System.Windows.Forms.Label
 $lblGVer.Text = ''
-$lblGVer.Location = New-Object System.Drawing.Point(302, 89)
-$lblGVer.Size = New-Object System.Drawing.Size(606, 20)
+$lblGVer.Location = New-Object System.Drawing.Point(462, 89)
+$lblGVer.Size = New-Object System.Drawing.Size(446, 20)
 $lblGVer.ForeColor = [System.Drawing.Color]::Gray
 $tabG.Controls.Add($lblGVer)
 
@@ -3298,14 +3308,15 @@ function Diag-Correr {
 # CSV/JSON siempre llevan el diagnostico completo, sin estos filtros.
 function Diag-Refrescar {
     $fNcu = "$($cbGVerNcu.SelectedItem)"
-    $fSal = "$($cbGVerSalud.SelectedItem)"
+    # saludes marcadas (varias a la vez); ninguna = todas
+    $sal = @()
+    foreach ($k in @('OK','AVISO','ALARMA','OFFLINE')) { if ($script:ChksSalud[$k].Checked) { $sal += $k } }
     $lvG.BeginUpdate()
     $lvG.Items.Clear()
     $n = 0
     foreach ($d in $script:UltimoDiag) {
         if ($fNcu -ne 'NCU - todas' -and ("NCU$($d.NCU)") -ne $fNcu) { continue }
-        if ($fSal -eq 'Solo problemas') { if ("$($d.Salud)" -eq 'OK') { continue } }
-        elseif ($fSal -ne 'Salud - todas' -and "$($d.Salud)" -ne $fSal) { continue }
+        if ($sal.Count -gt 0 -and $sal -notcontains "$($d.Salud)") { continue }
         $item = New-Object System.Windows.Forms.ListViewItem("$($d.NCU)")
         foreach ($c in @($d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
         switch ("$($d.Salud)") {
@@ -3319,8 +3330,8 @@ function Diag-Refrescar {
     }
     $lvG.EndUpdate()
     $tot = @($script:UltimoDiag).Count
-    if ($fNcu -eq 'NCU - todas' -and $fSal -eq 'Salud - todas') { $lblGVer.Text = "$tot filas" }
-    else { $lblGVer.Text = "$n de $tot filas  ($fNcu / $fSal) - el CSV/JSON exporta siempre todo" }
+    if ($fNcu -eq 'NCU - todas' -and $sal.Count -eq 0) { $lblGVer.Text = "$tot filas" }
+    else { $lblGVer.Text = "$n de $tot filas  ($fNcu / $(if ($sal.Count) { $sal -join '+' } else { 'todas' })) - el CSV/JSON exporta siempre todo" }
 }
 
 $btnDiag.Add_Click({ Lanzar { $script:UltimoEsComm = $false; Diag-Correr } })
@@ -3398,7 +3409,9 @@ $btnGComm.Add_Click({ Lanzar {
 } })
 
 $cbGVerNcu.Add_SelectedIndexChanged({ if (-not $script:Ocupado) { Diag-Refrescar } })
-$cbGVerSalud.Add_SelectedIndexChanged({ if (-not $script:Ocupado) { Diag-Refrescar } })
+foreach ($k in @('OK','AVISO','ALARMA','OFFLINE')) {
+    $script:ChksSalud[$k].Add_CheckedChanged({ if (-not $script:Ocupado) { Diag-Refrescar } })
+}
 
 # Mini-registrador: diagnostico en bucle cada X minutos, acumulando cada pase
 # (con fecha/hora y alarmas desglosadas) en informes/registro_<ts>.csv.
@@ -4808,6 +4821,34 @@ foreach ($m in $script:MsgsInicio) { Con $m ([System.Drawing.Color]::SteelBlue) 
 if ($PLANTAS.Count -le 1) {
     Con 'Sin plantas cargadas: usa el boton Cargar... (o copia los JSON de la plataforma en la subcarpeta plantas/).' ([System.Drawing.Color]::Orange)
 }
+# ------------------------- ventana redimensionable -------------------------
+# Anclajes para que al maximizar crezcan las tablas y la consola (el diseno
+# usa posiciones fijas, asi que sin esto la ventana grande dejaria huecos).
+$gbCon.Anchor      = 'Top,Left,Right'
+$btnCancelar.Anchor = 'Top,Right'
+$tabs.Anchor       = 'Top,Left,Right,Bottom'
+$rtb.Anchor        = 'Left,Right,Bottom'
+$lblLog.Anchor     = 'Left,Bottom'
+$btnLog.Anchor     = 'Right,Bottom'
+$btnInforme.Anchor = 'Right,Bottom'
+$anchoTab = $tabs.Width - 24
+function Anclar-Contenedor($cont, $anchoRef) {
+    foreach ($c in $cont.Controls) {
+        if ($c -is [System.Windows.Forms.ListView] -or $c -is [System.Windows.Forms.DataGridView] -or $c -is [System.Windows.Forms.RichTextBox]) {
+            $c.Anchor = 'Top,Left,Right,Bottom'
+        } elseif ($c -is [System.Windows.Forms.GroupBox]) {
+            # en Flota hay dos grupos apilados: el de abajo es el que crece
+            if ($c.Top -gt 150) { $c.Anchor = 'Top,Left,Right,Bottom' } else { $c.Anchor = 'Top,Left,Right' }
+            Anclar-Contenedor $c ($c.Width - 24)
+        } elseif (($c -is [System.Windows.Forms.Button]) -and (($c.Left + $c.Width) -gt ($anchoRef - 60))) {
+            $c.Anchor = 'Top,Right'      # botones pegados al borde derecho
+        } elseif (($c -is [System.Windows.Forms.Label]) -and ($c.Width -gt 300)) {
+            $c.Anchor = 'Top,Left,Right' # notas y resumenes largos
+        }
+    }
+}
+foreach ($tp in $tabs.TabPages) { Anclar-Contenedor $tp $anchoTab }
+
 Config-Restaurar
 [void]$form.ShowDialog()
 Modbus-Cerrar
