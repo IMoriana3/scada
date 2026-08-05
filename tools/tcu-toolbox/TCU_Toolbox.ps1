@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '4.0'
+$VERSION_TOOLBOX = '4.1'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2297,7 +2297,8 @@ $cbPlanta.Add_SelectedIndexChanged({
         $txtGIni.Text = 'NA'; $txtGFin.Text = 'NA'
         $txtAIni.Text = 'NA'; $txtAFin.Text = 'NA'
         $txtVIni.Text = 'NA'; $txtVFin.Text = 'NA'
-        Con "Planta completa seleccionada ($(@($p.ncus).Count) NCUs): vale en Diagnostico y Flota (auditoria e inventario), con rangos automaticos por NCU; el filtro NCUs del diagnostico admite '1,3-5' (vacio = todas)." ([System.Drawing.Color]::SteelBlue)
+        $txtLIni.Text = 'NA'; $txtLFin.Text = 'NA'
+        Con "Planta completa seleccionada ($(@($p.ncus).Count) NCUs): vale en Diagnostico, Leer variable, Flota (auditoria e inventario) y comisionado, con rangos automaticos por NCU; el filtro NCUs del diagnostico admite '1,3-5' (vacio = todas)." ([System.Drawing.Color]::SteelBlue)
         return
     }
     if ($p) {
@@ -2401,9 +2402,13 @@ function Escribir-EnTcus([int[]]$tcus) {
         foreach ($tcu in $seg.tcus) {
             if (Chequear-Cancelado) { break }
             $fallo = $null; $hecho = $true
+            $cambios = @()
             if (-not $segOk) { $hecho = $false; $fallo = "sin conexion ($($cx.ip):$($seg.puerto))" }
             else {
                 foreach ($v in $vars) {
+                    # valor anterior, para dejar rastro "antes -> despues" en el log
+                    $previo = '?'
+                    try { $previo = Leer-Decodificado $tcu $VARIABLES[$v.nombre] } catch {}
                     $hecho = $false
                     for ($i = 1; $i -le $cx.reint -and -not $hecho; $i++) {
                         if ($script:Cancelar) { break }
@@ -2425,6 +2430,7 @@ function Escribir-EnTcus([int[]]$tcus) {
                                 }
                             }
                             $hecho = $true
+                            $cambios += "$($v.nombre): $previo -> $($v.texto)"
                         } catch {
                             $fallo = "$($v.nombre): $_"
                             if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
@@ -2440,7 +2446,7 @@ function Escribir-EnTcus([int[]]$tcus) {
                 Con ("TCU {0,3}  FALLO   {1}" -f $tcu, $fallo) ([System.Drawing.Color]::Salmon)
             } else {
                 $ok++
-                Con ("TCU {0,3}  OK" -f $tcu) ([System.Drawing.Color]::LightGreen)
+                Con ("TCU {0,3}  OK   {1}" -f $tcu, ($cambios -join ' | ')) ([System.Drawing.Color]::LightGreen)
             }
         }
     }
@@ -2577,30 +2583,46 @@ $btnLeer.Add_Click({ Lanzar {
     if ($nombres.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('Elige una variable (o anade varias a la lista).','Aviso'); return }
     $defs = @($nombres | ForEach-Object { @{nombre=[string]$_; vdef=(Def-DeLectura $_)} })
     $cx = Params-Conexion
-    $tcus = Rango-Tcus $txtLIni.Text $txtLFin.Text 'Leer'
+    $tcus = $null
+    if (-not $cx.multi) { $tcus = Rango-Tcus $txtLIni.Text $txtLFin.Text 'Leer' }
+    $trabajos = @(Trabajos-Planta $cx $tcus)
+    if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
     $lvL.Items.Clear(); $lvL.Columns.Clear(); $script:UltimaLectura = @()
+    [void]$lvL.Columns.Add('NCU', 44)
     [void]$lvL.Columns.Add('TCU', 48)
-    foreach ($d in $defs) { [void]$lvL.Columns.Add($d.nombre, [math]::Max(110, [math]::Min(220, [int](790 / $defs.Count)))) }
+    foreach ($d in $defs) { [void]$lvL.Columns.Add($d.nombre, [math]::Max(110, [math]::Min(220, [int](746 / $defs.Count)))) }
     [void]$lvL.Columns.Add('Estado', 130)
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Leyendo $($defs.Count) variable(s) en TCUs $($tcus[0])-$($tcus[-1])  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
+    if ($cx.multi) {
+        $totTcus = 0; foreach ($tr in $trabajos) { $totTcus += @($tr.tcus).Count }
+        Con "Leyendo $($defs.Count) variable(s) en PLANTA completa: $($trabajos.Count) NCUs, $totTcus TCUs (rangos automaticos)" ([System.Drawing.Color]::SteelBlue)
+    } else {
+        Con "Leyendo $($defs.Count) variable(s) en TCUs $($tcus[0])-$($tcus[-1])  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
+    }
     $valores = @{}
     foreach ($d in $defs) { $valores[$d.nombre] = @{} }
-    $segs = @(Plan-Segmentos $tcus $cx)
+    foreach ($tr in $trabajos) {
+    if ($script:Cancelar) { break }
+    $etNcu = ''
+    if ($null -ne $tr.ncu) {
+        $etNcu = "$($tr.ncu)"
+        Con ("--- NCU{0}  ({1})  TCUs {2}-{3} ---" -f $tr.ncu, $tr.ip, $tr.tcus[0], $tr.tcus[-1]) ([System.Drawing.Color]::SteelBlue)
+    }
+    $segs = @(Plan-Segmentos $tr.tcus $tr.cx)
     foreach ($seg in $segs) {
         if ($script:Cancelar) { break }
         $segOk = $true; $errSeg = ''
-        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
-        catch { $segOk = $false; $errSeg = "sin conexion ($($cx.ip):$($seg.puerto))"; Con "ERROR: $errSeg : $_" ([System.Drawing.Color]::Salmon) }
+        try { Modbus-Conectar $tr.ip $seg.puerto $tr.cx.to }
+        catch { $segOk = $false; $errSeg = "sin conexion ($($tr.ip):$($seg.puerto))"; Con "ERROR: $errSeg : $_" ([System.Drawing.Color]::Salmon) }
         foreach ($tcu in $seg.tcus) {
             if (Chequear-Cancelado) { break }
-            $fila = [ordered]@{TCU=[int]$tcu}
+            $fila = [ordered]@{NCU=$etNcu; TCU=[int]$tcu}
             $errores = 0; $err = $errSeg
             foreach ($d in $defs) {
                 if ($script:Cancelar) { break }
                 $val = $null
                 if ($segOk) {
-                    for ($i = 1; $i -le $cx.reint -and $null -eq $val; $i++) {
+                    for ($i = 1; $i -le $tr.cx.reint -and $null -eq $val; $i++) {
                         try { $val = Leer-Decodificado $tcu $d.vdef }
                         catch {
                             $err = "$_"
@@ -2618,7 +2640,8 @@ $btnLeer.Add_Click({ Lanzar {
             $estado = 'OK'
             if ($errores -gt 0) { $estado = "$errores fallos: $err" }
             $fila['Estado'] = $estado
-            $item = New-Object System.Windows.Forms.ListViewItem("$tcu")
+            $item = New-Object System.Windows.Forms.ListViewItem($etNcu)
+            [void]$item.SubItems.Add("$tcu")
             foreach ($d in $defs) {
                 $v = $fila[$d.nombre]
                 if ("$v" -eq '') { $v = '-' }
@@ -2630,6 +2653,7 @@ $btnLeer.Add_Click({ Lanzar {
             $script:UltimaLectura += [pscustomobject]$fila
             [System.Windows.Forms.Application]::DoEvents()
         }
+    }
     }
     Modbus-Cerrar
     foreach ($d in $defs) {
@@ -3311,9 +3335,13 @@ $btnCsvTcu.Add_Click({ Lanzar {
         foreach ($tcu in $seg.tcus) {
             if (Chequear-Cancelado) { break }
             $fallo = $null; $todoOk = $segOk
+            $cambios = @()
             if (-not $segOk) { $fallo = "sin conexion ($($cx.ip):$($seg.puerto))" }
             else {
                 foreach ($j in $porTcu[[int]$tcu]) {
+                    # valor anterior, para dejar rastro "antes -> despues" en el log
+                    $previo = '?'
+                    try { $previo = Leer-Decodificado $tcu $VARIABLES[$j.nombre] } catch {}
                     $hecho = $false
                     for ($i = 1; $i -le $cx.reint -and -not $hecho; $i++) {
                         if ($script:Cancelar) { break }
@@ -3326,6 +3354,7 @@ $btnCsvTcu.Add_Click({ Lanzar {
                                 if (-not $cmp.ok) { throw "verificacion: leido $($cmp.leidoRaw)" }
                             }
                             $hecho = $true
+                            $cambios += "$($j.nombre): $previo -> $($j.texto)"
                         } catch {
                             $fallo = "$($j.nombre) = $($j.texto): $_"
                             if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
@@ -3335,7 +3364,7 @@ $btnCsvTcu.Add_Click({ Lanzar {
                     if (-not $hecho) { $todoOk = $false; break }
                 }
             }
-            if ($todoOk) { $ok++; Con ("TCU {0,3}  OK  ({1} valores)" -f $tcu, $porTcu[[int]$tcu].Count) ([System.Drawing.Color]::LightGreen) }
+            if ($todoOk) { $ok++; Con ("TCU {0,3}  OK   {1}" -f $tcu, ($cambios -join ' | ')) ([System.Drawing.Color]::LightGreen) }
             else { $ko++; Con ("TCU {0,3}  FALLO  {1}" -f $tcu, $fallo) ([System.Drawing.Color]::Salmon) }
         }
     }
