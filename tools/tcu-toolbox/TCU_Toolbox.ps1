@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '4.7'
+$VERSION_TOOLBOX = '4.8'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -560,16 +560,18 @@ function Html-Esc([string]$s) {
 function Informe-Html([hashtable]$m) {
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.AppendLine('<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Informe PEM - ' + (Html-Esc $m.planta) + '</title><style>')
-    [void]$sb.AppendLine('body{font-family:Segoe UI,Arial,sans-serif;font-size:13px;margin:24px;color:#222}h1{font-size:20px}h2{font-size:15px;margin-top:26px;border-bottom:2px solid #345;padding-bottom:4px}table{border-collapse:collapse;width:100%;margin-top:8px}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;font-size:12px}th{background:#eef2f6;cursor:pointer;user-select:none}tr.ok td{background:#eaf7ee}tr.aviso td{background:#fff6e0}tr.alarma td{background:#fdeaea}tr.off td{background:#f0f0f0;color:#777}.meta{color:#555}.res{font-weight:600;margin:6px 0}')
+    [void]$sb.AppendLine('body{font-family:Segoe UI,Arial,sans-serif;font-size:13px;margin:24px;color:#222}h1{font-size:20px}h2{font-size:15px;margin-top:26px;border-bottom:2px solid #345;padding-bottom:4px}table{border-collapse:collapse;width:100%;margin-top:8px}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;font-size:12px}th{background:#eef2f6;cursor:pointer;user-select:none}tr.ok td{background:#eaf7ee}tr.aviso td{background:#fff6e0}tr.alarma td{background:#fdeaea}tr.off td{background:#f0f0f0;color:#777}.meta{color:#555}.res{font-weight:600;margin:6px 0}.ok2{color:#137333;font-weight:400}.ko2{color:#a50e0e;font-weight:400}')
     [void]$sb.AppendLine('tr.filtros td{background:#f7f9fb;padding:2px 4px}tr.filtros select,tr.filtros input{width:100%;box-sizing:border-box;font-size:11px;padding:2px;border:1px solid #bbb;border-radius:3px}.vis{color:#555;font-weight:400;font-size:12px}th:hover{background:#dde6ef}th .fl{color:#06c}')
     [void]$sb.AppendLine('</style></head><body>')
     [void]$sb.AppendLine('<h1>Informe de puesta en marcha &mdash; ' + (Html-Esc $m.planta) + '</h1>')
     [void]$sb.AppendLine('<p class="meta">Fecha: ' + (Html-Esc $m.fecha) + ' &middot; IP/conexion: ' + (Html-Esc $m.ip) + ' &middot; Tecnico: ' + (Html-Esc $m.usuario) + '<br>TCU Toolbox v' + (Html-Esc $m.version) + ' &middot; Mapa: ' + (Html-Esc $m.mapa) + '</p>')
     $clase = { param($s) switch -Wildcard ("$s") { 'OK*'{'ok'} 'PASA*'{'ok'} 'ALARMA*'{'alarma'} 'FALLA*'{'alarma'} 'AVISO*'{'aviso'} 'DUDOSO*'{'aviso'} 'PENDIENTE*'{'aviso'} 'OFFLINE*'{'off'} 'SALTADO*'{'off'} default{''} } }
     $tabla = {
-        param($titulo, $filas, $cols, $colEstado)
+        param($titulo, $filas, $cols, $colEstado, $clave)
         if (-not $filas -or @($filas).Count -eq 0) { return }
-        [void]$sb.AppendLine('<h2>' + (Html-Esc $titulo) + ' <span class="meta">(' + @($filas).Count + ' filas)</span></h2>')
+        $hh = ''
+        if ($m.horas -and $m.horas[$clave]) { $hh = ' <span class="meta">(' + (Html-Esc $m.horas[$clave]) + ')</span>' }
+        [void]$sb.AppendLine('<h2>' + (Html-Esc $titulo) + $hh + ' <span class="meta">(' + @($filas).Count + ' filas)</span></h2>')
         $grupos = @($filas) | Group-Object $colEstado | ForEach-Object { "$($_.Count) $($_.Name)" }
         [void]$sb.AppendLine('<div class="res">' + (Html-Esc ($grupos -join ' | ')) + ' <span class="vis"></span></div>')
         [void]$sb.AppendLine('<table class="filtrable"><thead><tr>' + (($cols | ForEach-Object { '<th title="clic para ordenar">' + (Html-Esc $_) + '<span class="fl"></span></th>' }) -join '') + '</tr></thead><tbody>')
@@ -579,12 +581,42 @@ function Informe-Html([hashtable]$m) {
         }
         [void]$sb.AppendLine('</tbody></table>')
     }
-    & $tabla 'Diagnostico de flota' $m.diag @('NCU','TCU','Salud','Modo','Tilt','Objetivo','Dif','SoC','Alarmas') 'Salud'
-    & $tabla 'Puesta en marcha (PEM)' $m.pem @('NCU','TCU','Resultado','Detalle') 'Resultado'
-    & $tabla 'Auditoria contra preset de referencia' $m.aud @('NCU','TCU','Variable','Esperado','Leido','Nota') 'Nota'
-    & $tabla 'Inventario de flota' $m.inv @('NCU','TCU','Serie','MAC','FW','FW_fabrica','HW','Fecha_fab','Nota') 'Nota'
-    if ((-not $m.diag -or @($m.diag).Count -eq 0) -and (-not $m.pem -or @($m.pem).Count -eq 0) -and (-not $m.aud -or @($m.aud).Count -eq 0) -and (-not $m.inv -or @($m.inv).Count -eq 0)) {
-        [void]$sb.AppendLine('<p>Sin datos en esta sesion: ejecuta Diagnostico, PEM, Auditoria o Inventario antes de generar el informe.</p>')
+    # Lectura de variables: columnas dinamicas (una por variable leida) y
+    # resumen de discrepancias, que es lo que interesa de una lectura masiva:
+    # que TCUs se salen del valor mayoritario.
+    if ($m.lectura -and @($m.lectura).Count -gt 0) {
+        $filasL = @($m.lectura)
+        $colsL = @($filasL[0].PSObject.Properties.Name)
+        [void]$sb.AppendLine('<h2>Lectura de variables' + $(if ($m.horas -and $m.horas['lectura']) { ' <span class="meta">(' + (Html-Esc $m.horas['lectura']) + ')</span>' } else { '' }) + ' <span class="meta">(' + $filasL.Count + ' TCUs)</span></h2>')
+        $disc = @()
+        foreach ($c in $colsL) {
+            if (@('NCU','TCU','Estado') -contains $c) { continue }
+            # a mano, no con Group-Object: los nombres llevan corchetes ([m],
+            # [deg]) y Group-Object los tomaria como comodines
+            $cuenta = @{}
+            foreach ($f in $filasL) { $v = "$($f.$c)"; if ($v -ne '') { $cuenta[$v] = 1 + [int]$cuenta[$v] } }
+            $claves = @($cuenta.Keys | Sort-Object { - [int]$cuenta[$_] }, { "$_" })
+            if ($claves.Count -eq 1) {
+                $disc += '<span class="ok2">' + (Html-Esc $c) + ': todas coinciden = ' + (Html-Esc $claves[0]) + '</span>'
+            } elseif ($claves.Count -gt 1) {
+                $det = ($claves | ForEach-Object { (Html-Esc $_) + ' en ' + $cuenta[$_] + ' TCUs' }) -join ' &middot; '
+                $disc += '<span class="ko2">' + (Html-Esc $c) + ': ' + $claves.Count + ' valores distintos &rarr; ' + $det + '</span>'
+            }
+        }
+        if ($disc.Count) { [void]$sb.AppendLine('<div class="res">' + ($disc -join '<br>') + '</div>') }
+        [void]$sb.AppendLine('<table class="filtrable"><thead><tr>' + (($colsL | ForEach-Object { '<th title="clic para ordenar">' + (Html-Esc $_) + '<span class="fl"></span></th>' }) -join '') + '</tr></thead><tbody>')
+        foreach ($f in $filasL) {
+            $cl = $(if ("$($f.Estado)" -and "$($f.Estado)" -ne 'OK') { ' class="alarma"' } else { '' })
+            [void]$sb.AppendLine('<tr' + $cl + '>' + (($colsL | ForEach-Object { '<td>' + (Html-Esc "$($f.$_)") + '</td>' }) -join '') + '</tr>')
+        }
+        [void]$sb.AppendLine('</tbody></table>')
+    }
+    & $tabla 'Diagnostico de flota' $m.diag @('NCU','TCU','Salud','Modo','Tilt','Objetivo','Dif','SoC','Alarmas') 'Salud' 'diag'
+    & $tabla 'Puesta en marcha (PEM)' $m.pem @('NCU','TCU','Resultado','Detalle') 'Resultado' 'pem'
+    & $tabla 'Auditoria contra preset de referencia' $m.aud @('NCU','TCU','Variable','Esperado','Leido','Nota') 'Nota' 'aud'
+    & $tabla 'Inventario de flota' $m.inv @('NCU','TCU','Serie','MAC','FW','FW_fabrica','HW','Fecha_fab','Nota') 'Nota' 'inv'
+    if ((-not $m.diag -or @($m.diag).Count -eq 0) -and (-not $m.pem -or @($m.pem).Count -eq 0) -and (-not $m.aud -or @($m.aud).Count -eq 0) -and (-not $m.inv -or @($m.inv).Count -eq 0) -and (-not $m.lectura -or @($m.lectura).Count -eq 0)) {
+        [void]$sb.AppendLine('<p>Sin datos en esta sesion: ejecuta una Lectura de variables, un Diagnostico, PEM, Auditoria o Inventario antes de generar el informe.</p>')
     }
     [void]$sb.AppendLine('<p class="meta">Generado por TCU Toolbox &mdash; Factiun. Filtra con la fila bajo la cabecera (desplegable = valor exacto; caja de texto = contiene) y ordena con un clic en la cabecera.</p>')
     # Filtros por columna y orden al clicar la cabecera. JS embebido, sin red y
@@ -2289,6 +2321,7 @@ $script:UltimoPem = @()
 $script:PresetRef = $null
 $script:PresetRefNombre = ''
 $script:UltimoEsComm = $false   # el ultimo resultado de la lista es un TEST COMM, no un diagnostico
+$script:HoraDe = @{}            # hora a la que se ejecuto cada bloque, para el informe
 $script:SegMotor = @{}   # "ncu|tcu" -> @{ncu;tcu;estado;obs} del test de motor
 $script:SegComis = @{}   # idem, de LEER ESTADO de comisionado
 $script:SegAud = @{}     # idem, de la auditoria contra preset
@@ -2868,6 +2901,7 @@ $btnLeer.Add_Click({ Lanzar {
             foreach ($k in $v.Keys) { Con ("     {0}  en {1} TCUs" -f $k, $v[$k]) ([System.Drawing.Color]::Orange) }
         }
     }
+    $script:HoraDe['lectura'] = (Get-Date -Format 'HH:mm')
 } })
 
 $btnLCsv.Add_Click({
@@ -3293,6 +3327,7 @@ function Diag-Correr {
     $lblGResumen.Text = "OK: $nOk  Aviso: $nAviso  Alarma: $nAlarma  Off: $nOff"
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Diagnostico: OK $nOk | AVISO $nAviso | ALARMA $nAlarma | OFFLINE $nOff" ([System.Drawing.Color]::SteelBlue)
+    $script:HoraDe['diag'] = (Get-Date -Format 'HH:mm')
     # resumen general por NCU (planta completa) y refresco de los filtros de vista
     if ($cx.multi) {
         foreach ($g in @($script:UltimoDiag | Where-Object { $_.NCU } | Group-Object NCU)) {
@@ -3405,6 +3440,7 @@ $btnGComm.Add_Click({ Lanzar {
     $lblGResumen.Text = "Comm: $nOk / $($nOk + $nOff)"
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "TEST COMM en $seg s: NCUs $nNcuOk OK / $nNcuKo sin respuesta | TCUs $nOk comunican / $nOff sin comunicacion | HSUs $nHsuOk OK / $nHsuKo sin comunicacion" ([System.Drawing.Color]::SteelBlue)
+    $script:HoraDe['diag'] = (Get-Date -Format 'HH:mm')
     Con "Es solo una prueba de comunicacion (lastComm): para alarmas, modo y posiciones usa DIAGNOSTICAR." ([System.Drawing.Color]::Gainsboro)
     $selV = $cbGVerNcu.SelectedItem
     $cbGVerNcu.Items.Clear()
@@ -3817,6 +3853,7 @@ $btnAud.Add_Click({ Lanzar {
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Auditoria: $nOk TCUs conformes | $nDesv con desviaciones | $nErr sin respuesta. $($script:UltimaAud.Count) filas listadas." ([System.Drawing.Color]::SteelBlue)
     if ($script:UltimaAud.Count -eq 0) { Con 'Toda la flota coincide con el preset de referencia.' ([System.Drawing.Color]::LightGreen) }
+    $script:HoraDe['aud'] = (Get-Date -Format 'HH:mm')
 } })
 
 $btnAudCsv.Add_Click({
@@ -3926,6 +3963,7 @@ $btnInvF.Add_Click({ Lanzar {
         foreach ($g in $fws) { Con ("   {0}  en {1} TCUs" -f $g.Name, $g.Count) ([System.Drawing.Color]::Orange) }
     }
     Con "Inventario terminado: $ok leidas, $ko sin respuesta" ([System.Drawing.Color]::SteelBlue)
+    $script:HoraDe['inv'] = (Get-Date -Format 'HH:mm')
 } })
 
 $btnInvFCsv.Add_Click({
@@ -3970,6 +4008,7 @@ function Pem-Fila([string]$tcu, [string]$res, [string]$det, [string]$ncu = '') {
     }
     $lvP.Items.Add($item) | Out-Null
     $script:UltimoPem += [pscustomobject]@{NCU=$ncu; TCU=$tcu; Resultado=$res; Detalle=$det}
+    $script:HoraDe['pem'] = (Get-Date -Format 'HH:mm')
     $pre = $(if ($ncu) { "NCU$ncu " } else { '' })
     if ($res -notlike 'PASA*' -and $res -notlike 'OK*') { Con ("{0}TCU {1,3}  {2}  {3}" -f $pre, $tcu, $res, $det) ([System.Drawing.Color]::Orange) }
     else { Con ("{0}TCU {1,3}  {2}  {3}" -f $pre, $tcu, $res, $det) ([System.Drawing.Color]::LightGreen) }
@@ -4768,6 +4807,7 @@ $btnInforme.Add_Click({
             version = $VERSION_TOOLBOX; mapa = $VERSION_MAPA
             diag = $script:UltimoDiag; pem = $script:UltimoPem
             aud = $script:UltimaAud; inv = $script:UltimoInv
+            lectura = $script:UltimaLectura; horas = $script:HoraDe
         }
         $fich = Join-Path $dir ('informe_' + ($m.planta -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.html')
         Set-Content -Path $fich -Value (Informe-Html $m) -Encoding UTF8
