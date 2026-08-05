@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '3.3'
+$VERSION_TOOLBOX = '3.4'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -614,6 +614,37 @@ function Rollback-Crear([array]$pares, [hashtable]$cx) {
     if ($lineas.Count -le 1) { throw "no se pudo leer ningun valor actual ($errs errores)" }
     Set-Content -Path $fich -Value $lineas -Encoding UTF8
     return @{fichero=$fich; filas=($lineas.Count - 1); errores=$errs}
+}
+
+# Combina lo medido en la sesion (comisionado, auditoria, test de motor) en
+# las filas de la ficha de Seguimiento PEM: una por TCU con sus tres tareas
+# (OK / NOK / '' = pendiente) y observaciones. Lee $script:SegComis /
+# $script:SegAud / $script:SegMotor (clave "ncu|tcu" -> @{ncu;tcu;estado;obs}).
+function Seguimiento-Filas {
+    $claves = @(@($script:SegComis.Keys) + @($script:SegAud.Keys) + @($script:SegMotor.Keys) | Sort-Object -Unique)
+    $filas = foreach ($k in $claves) {
+        $par = $k -split '\|', 2
+        $obs = @()
+        $cold = ''; $conf = ''; $mov = ''
+        if ($script:SegComis.ContainsKey($k)) {
+            $e = $script:SegComis[$k]
+            $cold = $e.estado
+            if ($e.estado -ne 'OK' -and $e.obs) { $obs += "comisionado: $($e.obs)" }
+        }
+        if ($script:SegAud.ContainsKey($k)) {
+            $e = $script:SegAud[$k]
+            $conf = $e.estado
+            if ($e.estado -ne 'OK' -and $e.obs) { $obs += "config: $($e.obs)" }
+        }
+        if ($script:SegMotor.ContainsKey($k)) {
+            $e = $script:SegMotor[$k]
+            $mov = $e.estado
+            if ($e.estado -ne 'OK' -and $e.obs) { $obs += "motor: $($e.obs)" }
+        }
+        [pscustomobject]@{ncu = $par[0]; tcu = [int]$par[1]; cold_commissioning = $cold
+            config_tcu = $conf; prueba_movimiento = $mov; observaciones = ($obs -join ' | ')}
+    }
+    return @($filas | Sort-Object ncu, tcu)
 }
 
 # Tramos consecutivos de una lista ordenada de TCUs: @(1,2,3,5) -> (1-3),(5-5)
@@ -1763,8 +1794,15 @@ $btnPComisSet.Location = New-Object System.Drawing.Point(368, 76)
 $btnPComisSet.Size = New-Object System.Drawing.Size(64, 24)
 $tabP.Controls.Add($btnPComisSet)
 
-$lblPNota = LG $tabP 'Secuencias con guardia de viento (HSU via NCU), parada de motor garantizada y verificacion por efecto en 30001.' 442 466 82
+$lblPNota = LG $tabP 'Guardia de viento, parada garantizada y verificacion por efecto.' 442 296 82
 $lblPNota.ForeColor = [System.Drawing.Color]::Gray
+
+$btnPSeg = New-Object System.Windows.Forms.Button
+$btnPSeg.Text = 'SEGUIMIENTO JSON'
+$btnPSeg.Location = New-Object System.Drawing.Point(744, 74)
+$btnPSeg.Size = New-Object System.Drawing.Size(164, 26)
+$btnPSeg.Enabled = $false
+$tabP.Controls.Add($btnPSeg)
 
 $lvP = New-Object System.Windows.Forms.ListView
 $lvP.Location = New-Object System.Drawing.Point(10, 108)
@@ -1958,6 +1996,9 @@ $script:UltimoInv = @()
 $script:UltimoPem = @()
 $script:PresetRef = $null
 $script:PresetRefNombre = ''
+$script:SegMotor = @{}   # "ncu|tcu" -> @{ncu;tcu;estado;obs} del test de motor
+$script:SegComis = @{}   # idem, de LEER ESTADO de comisionado
+$script:SegAud = @{}     # idem, de la auditoria contra preset
 $script:MetaVolcado = $null
 $script:Ocupado = $false
 $script:Cancelar = $false
@@ -1988,7 +2029,7 @@ $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $
                     $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnInvF, $btnInvFCsv,
                     $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm,
                     $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComis, $btnPComisSet, $btnPCsv,
-                    $btnGBucle)
+                    $btnGBucle, $btnPSeg)
 
 function Set-UIOcupada([bool]$ocupada) {
     foreach ($b in $BOTONES_ACCION) { $b.Enabled = (-not $ocupada) }
@@ -2005,6 +2046,7 @@ function Set-UIOcupada([bool]$ocupada) {
         $btnAudCsv.Enabled     = ($script:UltimaAud.Count -gt 0)
         $btnInvFCsv.Enabled    = ($script:UltimoInv.Count -gt 0)
         $btnPCsv.Enabled       = ($script:UltimoPem.Count -gt 0)
+        $btnPSeg.Enabled       = (($script:SegMotor.Count + $script:SegComis.Count + $script:SegAud.Count) -gt 0)
     }
     $btnCancelar.Enabled = $ocupada
     [System.Windows.Forms.Application]::DoEvents()
@@ -3356,6 +3398,10 @@ $btnAud.Add_Click({ Lanzar {
             if ($errTcu -gt 0) { $nErr++ }
             elseif ($desvTcu -gt 0) { $nDesv++; Con ("{0}TCU {1,3}  {2} desviaciones" -f $(if ($etNcu) { "NCU$etNcu " } else { '' }), $tcu, $desvTcu) ([System.Drawing.Color]::Orange) }
             else { $nOk++ }
+            # alimenta la tarea "Configuracion TCU" del seguimiento PEM
+            $script:SegAud["$etNcu|$tcu"] = @{ncu=$etNcu; tcu=[int]$tcu
+                estado=$(if ($errTcu -gt 0) { '' } elseif ($desvTcu -gt 0) { 'NOK' } else { 'OK' })
+                obs=$(if ($errTcu -gt 0) { "sin respuesta en $errTcu variables" } elseif ($desvTcu -gt 0) { "$desvTcu desviaciones vs '$($script:PresetRefNombre)'" } else { '' })}
             [System.Windows.Forms.Application]::DoEvents()
         }
     }
@@ -3582,6 +3628,12 @@ $btnPMotor.Add_Click({ Lanzar {
     Modbus-Cerrar
     $lblPResumen.Text = "PASA $nPasa | FALLA $nFalla | saltados $nSalta"
     Con "TEST DE MOTOR terminado: PASA $nPasa | FALLA $nFalla | SALTADOS $nSalta" ([System.Drawing.Color]::SteelBlue)
+    # alimenta la tarea "Prueba movimiento" del seguimiento PEM
+    foreach ($p in $script:UltimoPem) {
+        if ($p.Resultado -eq 'SALTADO') { continue }
+        $est = switch ($p.Resultado) { 'PASA' { 'OK' } 'FALLA' { 'NOK' } default { '' } }
+        $script:SegMotor["|$($p.TCU)"] = @{ncu=''; tcu=[int]$p.TCU; estado=$est; obs="$($p.Resultado): $($p.Detalle)"}
+    }
 } })
 
 $btnPModo.Add_Click({ Lanzar {
@@ -3705,6 +3757,11 @@ $btnPComis.Add_Click({ Lanzar {
     }
     Modbus-Cerrar
     $lblPResumen.Text = (@($cuenta.Keys | ForEach-Object { "$($cuenta[$_]) $_" }) -join ' | ')
+    # alimenta la tarea "Cold commissioning" del seguimiento PEM
+    foreach ($p in $script:UltimoPem) {
+        $est = if ($p.Resultado -eq 'OK') { 'OK' } else { '' }   # pendiente/fallo no marca NOK: falta comisionar
+        $script:SegComis["|$($p.TCU)"] = @{ncu=''; tcu=[int]$p.TCU; estado=$est; obs=$p.Detalle}
+    }
 } })
 
 $btnPComisSet.Add_Click({ Lanzar {
@@ -3748,6 +3805,32 @@ $btnPCsv.Add_Click({
         $script:UltimoPem | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8
         Con "CSV exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
     }
+})
+
+# Seguimiento PEM de la sesion: una fila por TCU con las tres tareas de la
+# ficha (Cold commissioning = LEER ESTADO de comisionado, Configuracion TCU =
+# auditoria contra preset, Prueba movimiento = TEST DE MOTOR). Se sube a la
+# plataforma en la pagina de Historico, como los diagnosticos.
+$btnPSeg.Add_Click({
+    $filas = @(Seguimiento-Filas)
+    if ($filas.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('Aun no hay datos: ejecuta LEER ESTADO (comisionado), la Auditoria de Flota o el TEST DE MOTOR.','Aviso'); return }
+    $dlg = New-Object System.Windows.Forms.SaveFileDialog
+    $dlg.Filter = 'JSON (*.json)|*.json'
+    $dlg.FileName = 'seguimiento_pem_' + ((Nombre-Planta) -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.json'
+    if ($dlg.ShowDialog() -ne 'OK') { return }
+    $obj = [ordered]@{
+        tipo    = 'seguimiento_pem'
+        mapa    = $VERSION_MAPA
+        toolbox = $VERSION_TOOLBOX
+        planta  = Nombre-Planta
+        ip      = $txtIp.Text.Trim()
+        fecha   = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        tecnico = "$env:USERNAME"
+        tcus    = $filas
+    }
+    ConvertTo-Json $obj -Depth 5 | Set-Content $dlg.FileName -Encoding UTF8
+    $nOk = @($filas | Where-Object { $_.cold_commissioning -eq 'OK' -and $_.config_tcu -eq 'OK' -and $_.prueba_movimiento -eq 'OK' }).Count
+    Con "Seguimiento PEM exportado: $($dlg.FileName)  ($($filas.Count) TCUs, $nOk con las 3 tareas OK). Subelo en la pagina Historico de la plataforma." ([System.Drawing.Color]::SteelBlue)
 })
 
 # ------------------------- HSU (METEO) -------------------------
@@ -4021,6 +4104,7 @@ Con 'Diagnostico: salud OK/AVISO/ALARMA/OFFLINE de un rango con alarmas en texto
 Con 'Registrador (Diagnostico): BUCLE CSV repite el diagnostico cada X min y lo acumula en informes/registro_*.csv.' ([System.Drawing.Color]::Gainsboro)
 Con 'INFORME HTML: volcado de la sesion (diagnostico, PEM, auditoria e inventario) a un informe con colores.' ([System.Drawing.Color]::Gainsboro)
 Con 'Escritura masiva (>3 TCUs): se crea antes un rollback en backups/ restaurable con "CSV por TCU...".' ([System.Drawing.Color]::Gainsboro)
+Con 'PEM > SEGUIMIENTO JSON: exporta la ficha de seguimiento (comisionado + auditoria + motor) para subirla al Historico de la plataforma.' ([System.Drawing.Color]::Gainsboro)
 foreach ($m in $script:MsgsInicio) { Con $m ([System.Drawing.Color]::SteelBlue) }
 if ($PLANTAS.Count -le 1) {
     Con 'Sin plantas cargadas: usa el boton Cargar... (o copia los JSON de la plataforma en la subcarpeta plantas/).' ([System.Drawing.Color]::Orange)

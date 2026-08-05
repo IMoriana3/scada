@@ -38,6 +38,14 @@ Además, transversales a las pestañas (v3.1):
 - **Mini-registrador** (Diagnóstico → **BUCLE CSV**): repite el diagnóstico cada X minutos y acumula cada pase (con fecha/hora y las alarmas desglosadas en columnas) en `informes/registro_<fecha>.csv`. Se para con CANCELAR. Para vigilar una TCU intermitente o una tarde de viento sin quedarse mirando.
 - **Recordar sesión**: al cerrar se guarda `config_local.json` (planta, IP, puerto, timeout, reintentos, esclavo HSU) y al arrancar se restaura — el PC de planta arranca ya apuntando a su planta.
 
+## Seguimiento PEM (v3.4)
+
+El seguimiento de puesta en marcha de una planta tiene tres piezas:
+
+- **Ficha Excel automática**: `python make_seguimiento.py plantas/<planta>.json` genera `Seguimiento_PEM_<planta>.xlsx` — hoja Resumen con el % de avance por NCU (se calcula sola) y una pestaña por NCU con sus TCUs reales (número y gateway desde la topología), las tres tareas por TCU (*Cold commissioning / Configuración TCU / Prueba movimiento*, desplegable OK/NOK/N.A. con colores), HSUs, fecha, técnico y observaciones. La release de GitHub **adjunta una ficha por planta ya generada** (se regeneran solas en cada release).
+- **Exportar desde la toolbox**: botón **SEGUIMIENTO JSON** (pestaña PEM). Combina lo medido en la sesión — **LEER ESTADO** de comisionado → *Cold commissioning*, **Auditoría** de Flota → *Configuración TCU*, **TEST DE MOTOR** → *Prueba movimiento* — en un `seguimiento_pem_<planta>_<fecha>.json` con una fila por TCU (OK / NOK / pendiente + observaciones).
+- **Subirlo a la plataforma**: ese JSON se sube en la página **Histórico** de factiun-cartera (mismo botón que los diagnósticos): queda guardado por planta con su % de TCUs al 100 % y **diff contra el seguimiento anterior** (qué tareas se completaron o se rompieron entre visitas).
+
 ## Vínculo con la plataforma (sin dejar de ser offline)
 
 - **Mismo programa para todas las plantas, un fichero por planta**: el desplegable muestra **solo** las plantas de los ficheros cargados (no hay lista integrada en el script). Al arrancar se cargan todos los JSON/CSV de la subcarpeta `plantas/`, más un `plantas.json`/`plantas.csv` clásicos si existen; el botón **Cargar...** **reemplaza** la lista por las NCUs del fichero que elijas (y ofrece guardarlo en `plantas/` para próximas sesiones) — quita de `plantas/` los ficheros de plantas que no quieras ver. Así el programa nunca cambia por añadir plantas: solo se descargan ficheros. El CSV (separado por `;`, editable desde Excel sin necesitar Office en el PC de campo) usa una fila por gateway:
