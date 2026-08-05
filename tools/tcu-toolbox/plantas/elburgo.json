@@ -29,6 +29,13 @@
       "puerto": 504,
       "tcu_ini": 46,
       "tcu_fin": 107
+    },
+    {
+      "nombre": "El Burgo I NCU2 GW2 (TCU 109-109)",
+      "ip": "10.100.1.56",
+      "puerto": 504,
+      "tcu_ini": 109,
+      "tcu_fin": 109
     }
   ]
 }

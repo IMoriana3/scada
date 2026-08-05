@@ -44,6 +44,9 @@ ncus:
     gateways:
       - { puerto: 503, tcu_ini: 1,  tcu_fin: 45 }
       - { puerto: 504, tcu_ini: 46, tcu_fin: 107 }
+      # TCU 109 suelta en GW2 (rangos sacados de los .bat de Sunner; la 108
+      # no existe). Confirmar en campo.
+      - { puerto: 504, tcu_ini: 109, tcu_fin: 109 }
 
 influxdb:
   url: "http://influxdb:8086"

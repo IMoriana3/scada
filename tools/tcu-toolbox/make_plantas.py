@@ -68,14 +68,26 @@ def main() -> None:
             continue
         gws = ncu.get("gateways") or []
         if gws:
-            for i, gw in enumerate(gws, start=1):
-                sufijo = f" GW{i}" if len(gws) > 1 else ""
+            # mismo puerto = mismo gateway fisico; una fila extra del mismo
+            # puerto (p.ej. TCU suelta 109) se distingue por su rango
+            indice_gw = {}
+            vistos = {}
+            for gw in gws:
+                puerto = int(gw["puerto"])
+                if puerto not in indice_gw:
+                    indice_gw[puerto] = len(indice_gw) + 1
+                ini = int(gw.get("tcu_ini", 1))
+                fin = int(gw.get("tcu_fin", ncu.get("tcu_count") or 1))
+                sufijo = f" GW{indice_gw[puerto]}" if len(gws) > 1 else ""
+                if puerto in vistos:
+                    sufijo += f" (TCU {ini}-{fin})"
+                vistos[puerto] = True
                 plantas.append({
                     "nombre": gw.get("nombre") or f"{nombre_planta} {ncu.get('id', host)}{sufijo}",
                     "ip": host,
-                    "puerto": int(gw["puerto"]),
-                    "tcu_ini": int(gw.get("tcu_ini", 1)),
-                    "tcu_fin": int(gw.get("tcu_fin", ncu.get("tcu_count") or 1)),
+                    "puerto": puerto,
+                    "tcu_ini": ini,
+                    "tcu_fin": fin,
                 })
         else:
             # fallback sin gateways declarados: rangos 1..tcu_count a ajustar a mano

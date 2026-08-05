@@ -12,6 +12,10 @@ Es el complemento de **escritura** del SCADA de este repo: el SCADA es solo-lect
 
 Mapa de registros: **SUNNER TCU Modbus Map v6.1 (FW v1.4.3)**. La NCU actúa de gateway: el *unit id* Modbus es el número de TCU; en El Burgo el passthrough escucha en los puertos 503 (GW1) y 504 (GW2) de cada NCU.
 
+### Entradas "(auto)": adiós al error de puerto
+
+Cuando una NCU tiene varios gateways, el desplegable ofrece además una entrada **"… (auto)"** que cubre la NCU completa: la toolbox resuelve sola el puerto de cada TCU según los rangos (p. ej. en El Burgo NCU1, la TCU 30 va al 503 y la 80 al 504) y recorre los gateways **en secuencia** en las operaciones por rango (Escribir, Leer, Diagnóstico, Reloj, NVM). Los TCU que no caen en ningún gateway (p. ej. el hueco 108 de NCU2) se saltan con aviso. Nota de campo: la **TCU 109 de NCU2** está declarada como fila suelta del GW2 — rangos sacados de los `.bat` de Sunner, pendiente de confirmar en planta.
+
 ## Pestañas
 
 | Pestaña | Qué hace |
@@ -26,7 +30,13 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 ## Vínculo con la plataforma (sin dejar de ser offline)
 
-- **Mismo programa para todas las plantas, un JSON por planta**: la toolbox carga al arrancar todos los JSON de la subcarpeta `plantas/` (uno por planta, p. ej. `elburgo.json`) más un `plantas.json` clásico si existe. El botón **Cargar...** (junto al desplegable de plantas) importa un JSON recién descargado de la plataforma y ofrece guardarlo en `plantas/` para próximas sesiones. Así el programa nunca cambia por añadir plantas: solo se descargan ficheros.
+- **Mismo programa para todas las plantas, un fichero por planta**: la toolbox carga al arrancar todos los JSON/CSV de la subcarpeta `plantas/` (uno por planta, p. ej. `elburgo.json`), más un `plantas.json` o `plantas.csv` clásicos junto al script si existen. El botón **Cargar...** (junto al desplegable de plantas) importa un fichero recién descargado de la plataforma y ofrece guardarlo en `plantas/` para próximas sesiones. Así el programa nunca cambia por añadir plantas: solo se descargan ficheros. El CSV (separado por `;`, editable desde Excel sin necesitar Office en el PC de campo) usa una fila por gateway:
+
+  ```
+  Planta;NCU;IP;Puerto;TCU_ini;TCU_fin
+  El Burgo I;NCU1;10.100.1.52;503;1;56
+  El Burgo I;NCU1;10.100.1.52;504;57;108
+  ```
 
   La fuente de verdad es el mismo `config/plants.yml` que usa el collector del SCADA: cada NCU declara ahí sus gateways passthrough (clave `gateways`, que el collector ignora):
 
