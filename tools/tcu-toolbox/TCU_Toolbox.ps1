@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '3.6'
+$VERSION_TOOLBOX = '3.7'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -575,7 +575,7 @@ function Informe-Html([hashtable]$m) {
         [void]$sb.AppendLine('</table>')
     }
     & $tabla 'Diagnostico de flota' $m.diag @('NCU','TCU','Salud','Modo','Tilt','Objetivo','Dif','SoC','Alarmas') 'Salud'
-    & $tabla 'Puesta en marcha (PEM)' $m.pem @('TCU','Resultado','Detalle') 'Resultado'
+    & $tabla 'Puesta en marcha (PEM)' $m.pem @('NCU','TCU','Resultado','Detalle') 'Resultado'
     & $tabla 'Auditoria contra preset de referencia' $m.aud @('NCU','TCU','Variable','Esperado','Leido','Nota') 'Nota'
     & $tabla 'Inventario de flota' $m.inv @('NCU','TCU','Serie','MAC','FW','FW_fabrica','HW','Fecha_fab','Nota') 'Nota'
     if ((-not $m.diag -or @($m.diag).Count -eq 0) -and (-not $m.pem -or @($m.pem).Count -eq 0) -and (-not $m.aud -or @($m.aud).Count -eq 0) -and (-not $m.inv -or @($m.inv).Count -eq 0)) {
@@ -1883,9 +1883,10 @@ $lvP = New-Object System.Windows.Forms.ListView
 $lvP.Location = New-Object System.Drawing.Point(10, 108)
 $lvP.Size = New-Object System.Drawing.Size(898, 252)
 $lvP.View = 'Details'; $lvP.FullRowSelect = $true; $lvP.GridLines = $true
+[void]$lvP.Columns.Add('NCU', 45)
 [void]$lvP.Columns.Add('TCU', 50)
 [void]$lvP.Columns.Add('Resultado', 100)
-[void]$lvP.Columns.Add('Detalle', 730)
+[void]$lvP.Columns.Add('Detalle', 685)
 $tabP.Controls.Add($lvP)
 
 # ============================ TAB HSU (METEO) ============================
@@ -3628,9 +3629,9 @@ $btnInvJson.Add_Click({
 })
 
 # ------------------------- PEM (PUESTA EN MARCHA) -------------------------
-function Pem-Fila([string]$tcu, [string]$res, [string]$det) {
-    $item = New-Object System.Windows.Forms.ListViewItem("$tcu")
-    [void]$item.SubItems.Add($res); [void]$item.SubItems.Add($det)
+function Pem-Fila([string]$tcu, [string]$res, [string]$det, [string]$ncu = '') {
+    $item = New-Object System.Windows.Forms.ListViewItem($ncu)
+    [void]$item.SubItems.Add("$tcu"); [void]$item.SubItems.Add($res); [void]$item.SubItems.Add($det)
     switch -Wildcard ($res) {
         'PASA*'   { $item.ForeColor = [System.Drawing.Color]::DarkGreen }
         'OK*'     { $item.ForeColor = [System.Drawing.Color]::DarkGreen }
@@ -3639,9 +3640,10 @@ function Pem-Fila([string]$tcu, [string]$res, [string]$det) {
         default   { $item.ForeColor = [System.Drawing.Color]::DarkOrange }
     }
     $lvP.Items.Add($item) | Out-Null
-    $script:UltimoPem += [pscustomobject]@{TCU=$tcu; Resultado=$res; Detalle=$det}
-    if ($res -notlike 'PASA*' -and $res -notlike 'OK*') { Con ("TCU {0,3}  {1}  {2}" -f $tcu, $res, $det) ([System.Drawing.Color]::Orange) }
-    else { Con ("TCU {0,3}  {1}  {2}" -f $tcu, $res, $det) ([System.Drawing.Color]::LightGreen) }
+    $script:UltimoPem += [pscustomobject]@{NCU=$ncu; TCU=$tcu; Resultado=$res; Detalle=$det}
+    $pre = $(if ($ncu) { "NCU$ncu " } else { '' })
+    if ($res -notlike 'PASA*' -and $res -notlike 'OK*') { Con ("{0}TCU {1,3}  {2}  {3}" -f $pre, $tcu, $res, $det) ([System.Drawing.Color]::Orange) }
+    else { Con ("{0}TCU {1,3}  {2}  {3}" -f $pre, $tcu, $res, $det) ([System.Drawing.Color]::LightGreen) }
     [System.Windows.Forms.Application]::DoEvents()
 }
 
@@ -3752,7 +3754,7 @@ $btnPMotor.Add_Click({ Lanzar {
     foreach ($p in $script:UltimoPem) {
         if ($p.Resultado -eq 'SALTADO') { continue }
         $est = switch ($p.Resultado) { 'PASA' { 'OK' } 'FALLA' { 'NOK' } default { '' } }
-        $script:SegMotor["|$($p.TCU)"] = @{ncu=''; tcu=[int]$p.TCU; estado=$est; obs="$($p.Resultado): $($p.Detalle)"}
+        $script:SegMotor["$($p.NCU)|$($p.TCU)"] = @{ncu="$($p.NCU)"; tcu=[int]$p.TCU; estado=$est; obs="$($p.Resultado): $($p.Detalle)"}
     }
 } })
 
@@ -3852,27 +3854,54 @@ $btnPUnstow.Add_Click({ Lanzar { Stow-Aplicar 0 } })
 
 $btnPComis.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    if ($cx.multi) { throw 'elige una entrada (auto)/GW' }
-    $tcus = Rango-Tcus $txtPIni.Text $txtPFin.Text 'Comisionado'
     $lvP.Items.Clear(); $script:UltimoPem = @()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Estado de comisionado (30001 bits 4:3) en TCUs $($tcus[0])-$($tcus[-1])" ([System.Drawing.Color]::SteelBlue)
     $cuenta = @{}
-    $segs = @(Plan-Segmentos $tcus $cx)
-    foreach ($seg in $segs) {
-        if ($script:Cancelar) { break }
-        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
-        catch { foreach ($tcu in $seg.tcus) { Pem-Fila $tcu 'FALLA' "sin conexion" }; continue }
-        foreach ($tcu in $seg.tcus) {
-            if (Chequear-Cancelado) { break }
-            try {
-                $v = (FC03-Leer $tcu (Dir-Trama 30001) 1)[0]
+    if ($cx.multi) {
+        # PLANTA completa: el estado de comisionado viaja en los bits 4:3 del
+        # registro de estado que la NCU cachea (bloque compacto, puerto 502)
+        # - toda la planta en segundos, sin rondas Zigbee
+        $trabajos = @(Trabajos-Planta $cx $null)
+        Con "Comisionado de PLANTA completa via NCU: $($trabajos.Count) NCUs (bloque compacto, sin Zigbee)" ([System.Drawing.Color]::SteelBlue)
+        foreach ($tr in $trabajos) {
+            if ($script:Cancelar) { break }
+            Con ("--- NCU{0}  ({1})  TCUs {2}-{3} ---" -f $tr.ncu, $tr.ip, $tr.tcus[0], $tr.tcus[-1]) ([System.Drawing.Color]::SteelBlue)
+            $dm = $null
+            try { Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to; $dm = Ncu-DiagCompat $tr.tcus }
+            catch { Con "ERROR via NCU ($($tr.ip):$PUERTO_NCU): $_" ([System.Drawing.Color]::Salmon) }
+            Modbus-Cerrar
+            foreach ($tcu in $tr.tcus) {
+                if (Chequear-Cancelado) { break }
+                $d = $null; if ($dm) { $d = $dm[[int]$tcu] }
+                if ($null -eq $d) { Pem-Fila $tcu 'FALLA' 'sin datos via NCU' "$($tr.ncu)"; continue }
+                if ($d.Salud -eq 'OFFLINE') { Pem-Fila $tcu 'SALTADO' "OFFLINE: $($d.Alarmas)" "$($tr.ncu)"; continue }
+                $v = [Convert]::ToInt32($d.main_status, 16)
                 $e = ($v -shr 3) -band 0x3
                 $nom = $ESTADOS_COMIS[[int]$e]
                 if (-not $cuenta.ContainsKey($nom)) { $cuenta[$nom] = 0 }
                 $cuenta[$nom]++
-                Pem-Fila $tcu $(if ($e -eq 0) { 'OK' } else { 'PENDIENTE' }) "$e - $nom"
-            } catch { Pem-Fila $tcu 'FALLA' "$_"; if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar } }
+                Pem-Fila $tcu $(if ($e -eq 0) { 'OK' } else { 'PENDIENTE' }) "$e - $nom" "$($tr.ncu)"
+            }
+        }
+    } else {
+        $tcus = Rango-Tcus $txtPIni.Text $txtPFin.Text 'Comisionado'
+        Con "Estado de comisionado (30001 bits 4:3) en TCUs $($tcus[0])-$($tcus[-1])" ([System.Drawing.Color]::SteelBlue)
+        $segs = @(Plan-Segmentos $tcus $cx)
+        foreach ($seg in $segs) {
+            if ($script:Cancelar) { break }
+            try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
+            catch { foreach ($tcu in $seg.tcus) { Pem-Fila $tcu 'FALLA' "sin conexion" }; continue }
+            foreach ($tcu in $seg.tcus) {
+                if (Chequear-Cancelado) { break }
+                try {
+                    $v = (FC03-Leer $tcu (Dir-Trama 30001) 1)[0]
+                    $e = ($v -shr 3) -band 0x3
+                    $nom = $ESTADOS_COMIS[[int]$e]
+                    if (-not $cuenta.ContainsKey($nom)) { $cuenta[$nom] = 0 }
+                    $cuenta[$nom]++
+                    Pem-Fila $tcu $(if ($e -eq 0) { 'OK' } else { 'PENDIENTE' }) "$e - $nom"
+                } catch { Pem-Fila $tcu 'FALLA' "$_"; if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar } }
+            }
         }
     }
     Modbus-Cerrar
@@ -3880,7 +3909,7 @@ $btnPComis.Add_Click({ Lanzar {
     # alimenta la tarea "Cold commissioning" del seguimiento PEM
     foreach ($p in $script:UltimoPem) {
         $est = if ($p.Resultado -eq 'OK') { 'OK' } else { '' }   # pendiente/fallo no marca NOK: falta comisionar
-        $script:SegComis["|$($p.TCU)"] = @{ncu=''; tcu=[int]$p.TCU; estado=$est; obs=$p.Detalle}
+        $script:SegComis["$($p.NCU)|$($p.TCU)"] = @{ncu="$($p.NCU)"; tcu=[int]$p.TCU; estado=$est; obs=$p.Detalle}
     }
 } })
 
