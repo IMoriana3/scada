@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '5.6'
+$VERSION_TOOLBOX = '5.7'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2752,17 +2752,23 @@ function Recoger-Variables {
     return $lista
 }
 
-function Escribir-EnTcus([int[]]$tcus) {
+function Escribir-EnTcus($tcus) {
     $vars = @(Recoger-Variables)
     if ($vars.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('No hay variables con valor.','Aviso'); return }
     $cx = Params-Conexion
+    # Con (Planta completa) se recorren todas las NCUs con sus rangos
+    # automaticos, igual que en Leer y en Diagnostico.
+    $trabajos = @(Trabajos-Planta $cx $tcus)
+    if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
+    $nTcus = 0; foreach ($tr in $trabajos) { $nTcus += @($tr.tcus).Count }
+    $donde = $(if ($cx.multi) { "$($trabajos.Count) NCUs de la PLANTA COMPLETA" } else { "$($cx.ip):$($cx.etiqueta)" })
     $resumen = ($vars | ForEach-Object {
         $hex = if ($_.esc.modo -eq 'fc16') { ($_.esc.palabras | ForEach-Object { '{0:X4}' -f $_ }) -join ' ' }
                else { 'AND {0:X4} OR {1:X4}' -f $_.esc.and, $_.esc.or }
         "  $($_.nombre) = $($_.texto)   [$hex]"
     }) -join "`r`n"
     $r = [System.Windows.Forms.MessageBox]::Show(
-        "Se escribiran $($vars.Count) variables en $($tcus.Count) TCUs de $($cx.ip):$($cx.puerto):`r`n`r`n$resumen`r`n`r`nContinuar?",
+        "Se escribiran $($vars.Count) variables en $nTcus TCUs de ${donde}:`r`n`r`n$resumen`r`n`r`nContinuar?",
         'Confirmar', 'YesNo', 'Warning')
     if ($r -ne 'Yes') { return }
 
@@ -2775,19 +2781,37 @@ function Escribir-EnTcus([int[]]$tcus) {
         if ($r2 -ne 'Yes') { return }
     }
 
-    if ($tcus.Count -gt 3) {
+    if ($nTcus -gt 3) {
         # escritura masiva: copia de seguridad previa (rollback) de los valores
         # actuales, restaurable con "CSV por TCU...". Los registros de comando
         # se excluyen: reescribirlos relanzaria ordenes.
-        $paresRb = @()
-        foreach ($t in $tcus) {
-            foreach ($v in $vars) { if ($ADDR_COMANDO -notcontains $v.addr) { $paresRb += ,@{tcu=[int]$t; nombre=$v.nombre} } }
+        $nRb = 0
+        foreach ($tr in $trabajos) { foreach ($t in $tr.tcus) { foreach ($v in $vars) { if ($ADDR_COMANDO -notcontains $v.addr) { $nRb++ } } } }
+        # El rollback lee uno a uno: en una planta entera son miles de lecturas
+        # y puede tardar mas que la propia escritura, asi que se avisa antes.
+        $saltarRb = $false
+        if ($nRb -gt 400) {
+            $rMasivo = [System.Windows.Forms.MessageBox]::Show(
+                "La copia de seguridad previa leeria $nRb valores uno a uno; en una planta entera eso puede tardar bastante mas que la propia escritura.`r`n`r`nSI: crear la copia igualmente (recomendado).`r`nNO: escribir sin copia de seguridad.`r`nCANCELAR: no escribir nada.",
+                'Rollback de planta completa', 'YesNoCancel', 'Warning')
+            if ($rMasivo -eq 'Cancel') { return }
+            if ($rMasivo -eq 'No') { $saltarRb = $true }
         }
-        if ($paresRb.Count -gt 0) {
-            Con "Creando copia de seguridad (rollback) de $($paresRb.Count) valores actuales..." ([System.Drawing.Color]::SteelBlue)
+        if ($nRb -gt 0 -and -not $saltarRb) {
+            Con "Creando copia de seguridad (rollback) de $nRb valores actuales..." ([System.Drawing.Color]::SteelBlue)
             try {
-                $rb = Rollback-Crear $paresRb $cx
-                Con "Rollback guardado: $($rb.fichero)  ($($rb.filas) valores$(if ($rb.errores) { ", $($rb.errores) sin leer" })). Restaurable con 'CSV por TCU...'." ([System.Drawing.Color]::SteelBlue)
+                $filasRb = 0; $errRb = 0; $ficheroRb = ''
+                foreach ($tr in $trabajos) {
+                    if ($script:Cancelar) { break }
+                    $paresRb = @()
+                    foreach ($t in $tr.tcus) {
+                        foreach ($v in $vars) { if ($ADDR_COMANDO -notcontains $v.addr) { $paresRb += ,@{tcu=[int]$t; nombre=$v.nombre} } }
+                    }
+                    if ($paresRb.Count -eq 0) { continue }
+                    $rb = Rollback-Crear $paresRb $tr.cx
+                    $filasRb += $rb.filas; $errRb += $rb.errores; $ficheroRb = $rb.fichero
+                }
+                Con "Rollback guardado: $ficheroRb  ($filasRb valores$(if ($errRb) { ", $errRb sin leer" })). Restaurable con 'CSV por TCU...'." ([System.Drawing.Color]::SteelBlue)
             } catch {
                 $r3 = [System.Windows.Forms.MessageBox]::Show(
                     "No se pudo crear la copia de seguridad previa (rollback):`r`n$_`r`n`r`nEscribir AUN ASI, sin copia?", 'Rollback', 'YesNo', 'Warning')
@@ -2800,15 +2824,18 @@ function Escribir-EnTcus([int[]]$tcus) {
     $script:Fallidas.Clear(); $btnFallidas.Enabled = $false
     $ok = 0
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Escribiendo $($vars.Count) variables en $($tcus.Count) TCUs  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
-    $segs = @(Plan-Segmentos $tcus $cx)
-    if ($segs.Count -eq 0) { Con 'Ningun TCU cae en los gateways de la NCU.' ([System.Drawing.Color]::Orange); return }
+    Con "Escribiendo $($vars.Count) variables en $nTcus TCUs  ($donde)" ([System.Drawing.Color]::SteelBlue)
+    foreach ($tr in $trabajos) {
+    if ($script:Cancelar) { break }
+    if ($null -ne $tr.ncu) { Con ("--- NCU{0}  ({1})  TCUs {2}-{3} ---" -f $tr.ncu, $tr.ip, $tr.tcus[0], $tr.tcus[-1]) ([System.Drawing.Color]::SteelBlue) }
+    $segs = @(Plan-Segmentos $tr.tcus $tr.cx)
+    if ($segs.Count -eq 0) { Con 'Ningun TCU cae en los gateways de la NCU.' ([System.Drawing.Color]::Orange); continue }
     foreach ($seg in $segs) {
         if ($script:Cancelar) { break }
         $segOk = $true
-        if ($cx.gws) { Con ("-- gateway {0}:{1}  ({2} TCUs)" -f $cx.ip, $seg.puerto, $seg.tcus.Count) ([System.Drawing.Color]::SteelBlue) }
-        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
-        catch { $segOk = $false; Con "ERROR de conexion ($($cx.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
+        if ($tr.cx.gws) { Con ("-- gateway {0}:{1}  ({2} TCUs)" -f $tr.ip, $seg.puerto, $seg.tcus.Count) ([System.Drawing.Color]::SteelBlue) }
+        try { Modbus-Conectar $tr.ip $seg.puerto $tr.cx.to }
+        catch { $segOk = $false; Con "ERROR de conexion ($($tr.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
         foreach ($tcu in $seg.tcus) {
             if (Chequear-Cancelado) { break }
             $fallo = $null; $hecho = $true
@@ -2860,6 +2887,7 @@ function Escribir-EnTcus([int[]]$tcus) {
             }
         }
     }
+    }
     Modbus-Cerrar
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "OK: $ok   Fallidas: $($script:Fallidas.Count)" ([System.Drawing.Color]::SteelBlue)
@@ -2868,7 +2896,12 @@ function Escribir-EnTcus([int[]]$tcus) {
     }
 }
 
-$btnEscribir.Add_Click({ Lanzar { Escribir-EnTcus (Rango-Tcus $txtWIni.Text $txtWFin.Text 'Escribir') } })
+$btnEscribir.Add_Click({ Lanzar {
+    $cxW = Params-Conexion
+    $tcusW = $null
+    if (-not $cxW.multi) { $tcusW = Rango-Tcus $txtWIni.Text $txtWFin.Text 'Escribir' }
+    Escribir-EnTcus $tcusW
+} })
 $btnFallidas.Add_Click({ Lanzar { if ($script:Fallidas.Count -gt 0) { Escribir-EnTcus @($script:Fallidas | ForEach-Object { [int]$_ }) } } })
 
 $btnNvm.Add_Click({ Lanzar {
@@ -5378,38 +5411,62 @@ $lblLog.Anchor     = 'Left,Bottom'
 $btnLog.Anchor     = 'Right,Bottom'
 $btnInforme.Anchor = 'Right,Bottom'
 
+# Decide el anclaje de un control a partir de su geometria. Va aparte del
+# recorrido de controles para poder probarlo sin abrir una ventana.
+#   tipo: 'tabla' | 'grupo' | 'boton' | 'etiqueta' | 'otro'
+#   crece: es la tabla mas baja del contenedor (la unica que puede estirarse)
+#   abajoTabla: borde inferior de esa tabla, o -1 si el contenedor no tiene
+function Anclaje-Para([hashtable]$g) {
+    if ($g.tipo -eq 'tabla') {
+        if ($g.crece) { return 'Top,Left,Right,Bottom' }
+        return 'Top,Left,Right'
+    }
+    # Lo que esta POR DEBAJO de la tabla que crece tiene que bajar con la
+    # ventana. Si se queda anclado arriba, al maximizar la tabla se estira y se
+    # lo come: es lo que pasaba con ESCRIBIR y con las casillas de su fila.
+    if ($g.abajoTabla -ge 0 -and $g.top -ge ($g.abajoTabla - 4)) {
+        if ($g.tipo -eq 'etiqueta' -and $g.ancho -gt 300) { return 'Bottom,Left,Right' }
+        if (($g.left + $g.ancho) -gt ($g.anchoRef - 60)) { return 'Bottom,Right' }
+        return 'Bottom,Left'
+    }
+    if ($g.tipo -eq 'grupo') {
+        # en Flota hay dos grupos apilados: el de abajo es el que crece
+        if ($g.top -gt 150) { return 'Top,Left,Right,Bottom' }
+        return 'Top,Left,Right'
+    }
+    if ($g.tipo -eq 'boton' -and (($g.left + $g.ancho) -gt ($g.anchoRef - 60))) { return 'Top,Right' }
+    if ($g.tipo -eq 'etiqueta' -and $g.ancho -gt 300) { return 'Top,Left,Right' }
+    return ''
+}
+
 # Anclar contra un contenedor que todavia no tiene su tamano definitivo deja
-# los controles pegados al borde derecho (Anadir, LEER, Exportar CSV...) fuera
-# de la vista, y las tablas mas largas que su pestana, con la barra de
-# desplazamiento por debajo del borde. Por eso todo esto se hace con la
-# ventana ya mostrada y con una guarda por si algun contenedor sigue sin
-# medir lo que deberia.
+# los controles pegados al borde derecho fuera de la vista, y las tablas mas
+# largas que su pestana. Por eso esto se hace con la ventana ya mostrada y con
+# una guarda por si algun contenedor sigue sin medir lo que deberia.
 function Anclar-Contenedor($cont, $anchoRef) {
     $ancho = $cont.ClientSize.Width
-    # Si hay varias tablas apiladas (Leer variable: la de eleccion arriba y la
-    # de resultados abajo), solo la de abajo crece al agrandar la ventana; las
-    # de arriba mantienen su alto. Ancladas todas abajo se solaparian.
+    $alto = $cont.ClientSize.Height
     $tablas = @($cont.Controls | Where-Object {
         $_ -is [System.Windows.Forms.ListView] -or $_ -is [System.Windows.Forms.DataGridView] -or $_ -is [System.Windows.Forms.RichTextBox] })
     $topeAbajo = -1
     foreach ($t in $tablas) { if ($t.Top -gt $topeAbajo) { $topeAbajo = $t.Top } }
+    $abajoTabla = -1
+    foreach ($t in $tablas) { if ($t.Top -eq $topeAbajo) { $abajoTabla = $t.Top + $t.Height } }
     foreach ($c in $cont.Controls) {
-        $cabe = ($ancho -ge ($c.Left + $c.Width)) -and ($cont.ClientSize.Height -ge ($c.Top + $c.Height))
-        if ($c -is [System.Windows.Forms.ListView] -or $c -is [System.Windows.Forms.DataGridView] -or $c -is [System.Windows.Forms.RichTextBox]) {
-            if ($cabe) {
-                if ($c.Top -eq $topeAbajo) { $c.Anchor = 'Top,Left,Right,Bottom' } else { $c.Anchor = 'Top,Left,Right' }
-            }
-        } elseif ($c -is [System.Windows.Forms.GroupBox]) {
-            # en Flota hay dos grupos apilados: el de abajo es el que crece
-            if ($cabe) {
-                if ($c.Top -gt 150) { $c.Anchor = 'Top,Left,Right,Bottom' } else { $c.Anchor = 'Top,Left,Right' }
-            }
-            Anclar-Contenedor $c ($c.Width - 24)
-        } elseif (($c -is [System.Windows.Forms.Button]) -and (($c.Left + $c.Width) -gt ($anchoRef - 60))) {
-            if ($cabe) { $c.Anchor = 'Top,Right' }   # botones pegados al borde derecho
-        } elseif (($c -is [System.Windows.Forms.Label]) -and ($c.Width -gt 300)) {
-            if ($cabe) { $c.Anchor = 'Top,Left,Right' } # notas y resumenes largos
+        if (($ancho -lt ($c.Left + $c.Width)) -or ($alto -lt ($c.Top + $c.Height))) {
+            # el contenedor no mide lo que deberia: mejor no anclar nada
+            if ($c -is [System.Windows.Forms.GroupBox]) { Anclar-Contenedor $c ($c.Width - 24) }
+            continue
         }
+        $tipo = 'otro'
+        if ($c -is [System.Windows.Forms.ListView] -or $c -is [System.Windows.Forms.DataGridView] -or $c -is [System.Windows.Forms.RichTextBox]) { $tipo = 'tabla' }
+        elseif ($c -is [System.Windows.Forms.GroupBox]) { $tipo = 'grupo' }
+        elseif ($c -is [System.Windows.Forms.Button]) { $tipo = 'boton' }
+        elseif ($c -is [System.Windows.Forms.Label]) { $tipo = 'etiqueta' }
+        $a = Anclaje-Para @{tipo=$tipo; top=$c.Top; left=$c.Left; ancho=$c.Width; alto=$c.Height
+                            anchoRef=$anchoRef; crece=($c.Top -eq $topeAbajo); abajoTabla=$abajoTabla}
+        if ($a) { $c.Anchor = $a }
+        if ($tipo -eq 'grupo') { Anclar-Contenedor $c ($c.Width - 24) }
     }
 }
 
