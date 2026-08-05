@@ -1,6 +1,6 @@
 # Pruebas de la TCU Toolbox
 
-245 comprobaciones de la lógica no-GUI de `TCU_Toolbox.ps1` contra un simulador
+248 comprobaciones de la lógica no-GUI de `TCU_Toolbox.ps1` contra un simulador
 Modbus TCP, sin tocar una planta.
 
 ```bash
@@ -10,6 +10,21 @@ pwsh -NoProfile -File test_toolbox.ps1
 
 Sale `TODAS LAS PRUEBAS OK` y código 0, o la lista de fallos y código 1.
 Necesita **PowerShell 7** (`pwsh`) y Python 3; en Windows vale el `pwsh` normal.
+
+## Prueba de navegador (opcional)
+
+Los filtros y el orden del informe HTML son JavaScript, así que se comprueban
+en un navegador de verdad:
+
+```bash
+pwsh -NoProfile -File gen_informe.ps1   # informe_muestra.html con datos inventados
+npm i playwright && node test_informe.js
+```
+
+Cubre el filtro **multiopción** (marcar ALARMA y OFFLINE a la vez), el cruce de
+filtros de dos columnas, "todas"/"ninguna", que abrir un panel cierre el
+anterior, la caja de texto de las columnas con muchos valores y la ordenación.
+Con `CHROMIUM_PATH` se le puede pasar un Chromium ya instalado.
 
 ## Qué cubre
 

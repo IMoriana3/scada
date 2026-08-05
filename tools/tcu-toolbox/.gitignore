@@ -3,3 +3,4 @@ logs/
 backups/
 informes/
 config_local.json
+tests/informe_muestra.html

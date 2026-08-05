@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '5.4'
+$VERSION_TOOLBOX = '5.5'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -561,7 +561,10 @@ function Informe-Html([hashtable]$m) {
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.AppendLine('<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Informe PEM - ' + (Html-Esc $m.planta) + '</title><style>')
     [void]$sb.AppendLine('body{font-family:Segoe UI,Arial,sans-serif;font-size:13px;margin:24px;color:#222}h1{font-size:20px}h2{font-size:15px;margin-top:26px;border-bottom:2px solid #345;padding-bottom:4px}table{border-collapse:collapse;width:100%;margin-top:8px}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;font-size:12px}th{background:#eef2f6;cursor:pointer;user-select:none}tr.ok td{background:#eaf7ee}tr.aviso td{background:#fff6e0}tr.alarma td{background:#fdeaea}tr.off td{background:#f0f0f0;color:#777}.meta{color:#555}.res{font-weight:600;margin:6px 0}.ok2{color:#137333;font-weight:400}.ko2{color:#a50e0e;font-weight:400}')
-    [void]$sb.AppendLine('tr.filtros td{background:#f7f9fb;padding:2px 4px}tr.filtros select,tr.filtros input{width:100%;box-sizing:border-box;font-size:11px;padding:2px;border:1px solid #bbb;border-radius:3px}.vis{color:#555;font-weight:400;font-size:12px}th:hover{background:#dde6ef}th .fl{color:#06c}')
+    [void]$sb.AppendLine('tr.filtros td{background:#f7f9fb;padding:2px 4px}tr.filtros input[type=text],tr.filtros input:not([type]){width:100%;box-sizing:border-box;font-size:11px;padding:2px;border:1px solid #bbb;border-radius:3px}.vis{color:#555;font-weight:400;font-size:12px}th:hover{background:#dde6ef}th .fl{color:#06c}')
+    [void]$sb.AppendLine('.fm{position:relative;display:block}.fmb{width:100%;box-sizing:border-box;font:inherit;font-size:11px;padding:2px 4px;border:1px solid #bbb;border-radius:3px;background:#fff;cursor:pointer;text-align:left;overflow:hidden;white-space:nowrap}.fmb.act{border-color:#06c;color:#06c;font-weight:700}')
+    [void]$sb.AppendLine('.fmp{position:absolute;z-index:30;top:100%;left:0;min-width:100%;max-height:250px;overflow:auto;background:#fff;border:1px solid #bbb;border-radius:3px;box-shadow:0 6px 18px rgba(20,30,45,.2);padding:5px 7px;display:none;white-space:nowrap;text-align:left}')
+    [void]$sb.AppendLine('.fmp label{display:block;font-weight:400;font-size:12px;padding:1px 0;cursor:pointer}.fmp .fmt{border-bottom:1px solid #e6ebf0;margin-bottom:4px;padding-bottom:4px}.fmp .fmt a{color:#06c;cursor:pointer;text-decoration:underline;margin-right:10px;font-size:11px}')
     [void]$sb.AppendLine('</style></head><body>')
     [void]$sb.AppendLine('<h1>Informe de puesta en marcha &mdash; ' + (Html-Esc $m.planta) + '</h1>')
     [void]$sb.AppendLine('<p class="meta">Fecha: ' + (Html-Esc $m.fecha) + ' &middot; IP/conexion: ' + (Html-Esc $m.ip) + ' &middot; Tecnico: ' + (Html-Esc $m.usuario) + '<br>TCU Toolbox v' + (Html-Esc $m.version) + ' &middot; Mapa: ' + (Html-Esc $m.mapa) + '</p>')
@@ -626,6 +629,16 @@ function Informe-Html([hashtable]$m) {
     [void]$sb.AppendLine(@'
 <script>
 (function(){
+  // Sin librerias y a la antigua (bucles for, attachEvent): estos informes se
+  // abren a veces en el IE del PC de planta.
+  var paneles = [];
+  function cerrarPaneles() { for (var i = 0; i < paneles.length; i++) { paneles[i].style.display = "none"; } }
+  if (document.addEventListener) { document.addEventListener("click", cerrarPaneles, false); }
+  else if (document.attachEvent) { document.attachEvent("onclick", cerrarPaneles); }
+  function parar(e) {
+    e = e || window.event;
+    if (e.stopPropagation) { e.stopPropagation(); } else { e.cancelBubble = true; }
+  }
   var tablas = document.getElementsByTagName("table");
   for (var i = 0; i < tablas.length; i++) {
     if (tablas[i].className.indexOf("filtrable") < 0) continue;
@@ -651,7 +664,7 @@ function Informe-Html([hashtable]$m) {
     }
     var tf = (tb.tHead || tb).insertRow(tb.tHead ? -1 : 1);
     tf.className = "filtros";
-    var ctrls = [];
+    var filtros = [];
     for (var c = 0; c < nCols; c++) {
       var celda = tf.insertCell(-1);
       var vals = {}, lista = [];
@@ -660,40 +673,100 @@ function Informe-Html([hashtable]$m) {
         if (t && !vals[t]) { vals[t] = 1; lista.push(t); }
       }
       lista.sort();
-      var ctrl;
-      if (lista.length > 0 && lista.length <= 30) {
-        ctrl = document.createElement("select");
-        ctrl.appendChild(new Option("(todas)", ""));
-        for (var v = 0; v < lista.length; v++) { ctrl.appendChild(new Option(lista[v], lista[v])); }
-      } else {
-        ctrl = document.createElement("input");
-        ctrl.setAttribute("placeholder", "filtrar...");
+      filtros.push((lista.length > 0 && lista.length <= 30) ? multi(celda, lista) : caja(celda));
+    }
+    function enganchar(el, fn) {
+      if (el.addEventListener) { el.addEventListener("change", fn, false); el.addEventListener("input", fn, false); }
+      else if (el.attachEvent) { el.attachEvent("onchange", fn); el.attachEvent("onkeyup", fn); }
+    }
+    // Caja "contiene" cuando la columna tiene demasiados valores distintos
+    function caja(celda) {
+      var inp = document.createElement("input");
+      inp.setAttribute("placeholder", "filtrar...");
+      enganchar(inp, aplicar);
+      celda.appendChild(inp);
+      return { pasa: function (t) {
+        var v = (inp.value || "").replace(/^\s+|\s+$/g, "");
+        if (!v) return true;
+        return t.toLowerCase().indexOf(v.toLowerCase()) >= 0;
+      } };
+    }
+    // Varias opciones a la vez: boton + panel de casillas. Ninguna marcada =
+    // todas, que es lo que se espera de un filtro recien abierto.
+    function multi(celda, lista) {
+      var env = document.createElement("div"); env.className = "fm";
+      var bot = document.createElement("button");
+      bot.type = "button"; bot.className = "fmb";
+      var pan = document.createElement("div"); pan.className = "fmp";
+      paneles.push(pan);
+      var cab = document.createElement("div"); cab.className = "fmt";
+      var aT = document.createElement("a"); aT.appendChild(document.createTextNode("todas"));
+      var aN = document.createElement("a"); aN.appendChild(document.createTextNode("ninguna"));
+      cab.appendChild(aT); cab.appendChild(aN); pan.appendChild(cab);
+      var cajas = [];
+      for (var v = 0; v < lista.length; v++) { cajas.push(anadir(lista[v])); }
+      function anadir(valor) {
+        var lab = document.createElement("label");
+        var ch = document.createElement("input");
+        ch.type = "checkbox"; ch.value = valor;
+        lab.appendChild(ch);
+        lab.appendChild(document.createTextNode(" " + valor));
+        pan.appendChild(lab);
+        enganchar(ch, refrescar);
+        return ch;
       }
-      if (ctrl.addEventListener) {
-        ctrl.addEventListener("input", aplicar, false);
-        ctrl.addEventListener("change", aplicar, false);
-      } else { ctrl.attachEvent("onchange", aplicar); ctrl.attachEvent("onkeyup", aplicar); }
-      celda.appendChild(ctrl);
-      ctrls.push(ctrl);
+      function marcarTodas(v) {
+        return function (e) {
+          for (var i = 0; i < cajas.length; i++) { cajas[i].checked = v; }
+          refrescar(); parar(e);
+        };
+      }
+      if (aT.addEventListener) { aT.addEventListener("click", marcarTodas(true), false); aN.addEventListener("click", marcarTodas(false), false); }
+      else if (aT.attachEvent) { aT.attachEvent("onclick", marcarTodas(true)); aN.attachEvent("onclick", marcarTodas(false)); }
+      function rotulo(txt) {
+        while (bot.firstChild) { bot.removeChild(bot.firstChild); }
+        bot.appendChild(document.createTextNode(txt));
+      }
+      function refrescar() {
+        var n = 0, ultimo = "";
+        for (var i = 0; i < cajas.length; i++) { if (cajas[i].checked) { n++; ultimo = cajas[i].value; } }
+        rotulo(n === 0 ? "(todas)" : (n === 1 ? ultimo : (n + " opciones")));
+        bot.className = n === 0 ? "fmb" : "fmb act";
+        aplicar();
+      }
+      function alternar(e) {
+        var abierto = (pan.style.display === "block");
+        cerrarPaneles();
+        pan.style.display = abierto ? "none" : "block";
+        parar(e);
+      }
+      if (bot.addEventListener) { bot.addEventListener("click", alternar, false); pan.addEventListener("click", parar, false); }
+      else if (bot.attachEvent) { bot.attachEvent("onclick", alternar); pan.attachEvent("onclick", parar); }
+      env.appendChild(bot); env.appendChild(pan); celda.appendChild(env);
+      rotulo("(todas)");
+      return { pasa: function (t) {
+        var alguna = false;
+        for (var i = 0; i < cajas.length; i++) {
+          if (!cajas[i].checked) continue;
+          alguna = true;
+          if (cajas[i].value === t) return true;
+        }
+        return !alguna;
+      } };
     }
     function aplicar() {
       var n = 0;
       for (var f = 0; f < filas.length; f++) {
         var ok = true;
-        for (var c = 0; c < ctrls.length && ok; c++) {
-          var val = (ctrls[c].value || "").replace(/^\s+|\s+$/g, "");
-          if (!val) continue;
-          var t = texto(filas[f].cells[c]);
-          ok = (ctrls[c].tagName === "SELECT") ? (t === val) : (t.toLowerCase().indexOf(val.toLowerCase()) >= 0);
-        }
+        for (var c = 0; c < filtros.length && ok; c++) { ok = filtros[c].pasa(texto(filas[f].cells[c])); }
         filas[f].style.display = ok ? "" : "none";
         if (ok) n++;
       }
       if (visor) visor.innerHTML = (n === filas.length) ? "" : ("- filtro: " + n + " de " + filas.length + " visibles");
     }
     var dir = {};
-    for (var h = 0; h < cabecera.cells.length; h++) { enganchar(cabecera.cells[h], h); }
-    function enganchar(th, c) {
+    for (var h = 0; h < cabecera.cells.length; h++) { engancharOrden(cabecera.cells[h], h); }
+    function engancharOrden(th, c) {
       function ordenar() {
         dir[c] = (dir[c] === 1) ? -1 : 1;
         var d = dir[c];
@@ -710,7 +783,7 @@ function Informe-Html([hashtable]$m) {
         }
       }
       if (th.addEventListener) { th.addEventListener("click", ordenar, false); }
-      else { th.attachEvent("onclick", ordenar); }
+      else if (th.attachEvent) { th.attachEvent("onclick", ordenar); }
     }
   }
 })();
