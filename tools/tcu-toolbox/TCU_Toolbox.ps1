@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '2.3'
+$VERSION_TOOLBOX = '2.4'
 $VERSION_MAPA    = 'SUNNER v6.1 (FW 1.4.3)'
 
 # ---------------------------------------------------------------------------
@@ -605,6 +605,57 @@ function Filtrar-Nombres([string[]]$nombres, [string]$filtro) {
     return ($nombres | Where-Object { $_.IndexOf($f, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
 }
 
+# Resuelve el nombre de una variable de forma tolerante: clave exacta, o una
+# unica coincidencia por subcadena ("41010" -> '41010 longitud [deg]').
+function Resolver-Variable([string]$texto) {
+    $t = "$texto".Trim()
+    if ($VARIABLES.Contains($t)) { return $t }
+    $m = @(Filtrar-Nombres @($VARIABLES.Keys) $t)
+    if ($m.Count -eq 1) { return $m[0] }
+    if ($m.Count -eq 0) { throw "'$t' no coincide con ninguna variable del mapa" }
+    throw "'$t' es ambiguo ($($m.Count) coincidencias: $($m[0]), $($m[1])...)"
+}
+
+# Compara el valor actual de un registro con una escritura esperada (misma
+# semantica que 'verificar tras escribir'). Devuelve @{ok; leidoRaw}.
+function Comparar-Escritura([byte]$tcu, [hashtable]$esc) {
+    if ($esc.modo -eq 'fc16') {
+        $leido = FC03-Leer $tcu $esc.addr $esc.palabras.Count
+        for ($k = 0; $k -lt $esc.palabras.Count; $k++) {
+            if ($leido[$k] -ne $esc.esperado[$k]) {
+                return @{ok=$false; leidoRaw=(($leido | ForEach-Object { '{0:X4}' -f $_ }) -join ' ')}
+            }
+        }
+        return @{ok=$true}
+    }
+    $v = (FC03-Leer $tcu $esc.addr 1)[0]
+    return @{ok=(($v -band $esc.mascara) -eq $esc.esperadoByte); leidoRaw=('{0:X4}' -f $v)}
+}
+
+# Parsea un CSV de escritura por TCU: cabecera TCU;variable;valor (admite ,).
+# Devuelve @{jobs=@(@{tcu;nombre;texto;esc});errores=@('...')}.
+function Parse-CsvPorTcu([string[]]$lineas) {
+    $jobs = @(); $errores = @()
+    $datos = @($lineas | Where-Object { "$_".Trim() -ne '' })
+    if ($datos.Count -lt 2) { return @{jobs=@(); errores=@('CSV vacio (cabecera TCU;variable;valor + filas)')} }
+    $sep = ';'
+    if (-not $datos[0].Contains(';')) { $sep = ',' }
+    for ($i = 1; $i -lt $datos.Count; $i++) {
+        $c = $datos[$i].Split($sep)
+        if ($c.Count -lt 3) { $errores += "linea $($i+1): faltan columnas (TCU${sep}variable${sep}valor)"; continue }
+        try {
+            $tcu = Val-Int $c[0] "linea $($i+1) TCU" 1 247
+            $nombre = Resolver-Variable $c[1]
+            # el valor puede llevar el separador decimal: reunir el resto de columnas
+            $texto = (($c | Select-Object -Skip 2) -join $sep).Trim()
+            if ($texto -eq '') { throw 'valor vacio' }
+            $esc = Valor-A-Escritura $VARIABLES[$nombre] $texto
+            $jobs += @{tcu=$tcu; nombre=$nombre; texto=$texto; esc=$esc}
+        } catch { $errores += "linea $($i+1): $_" }
+    }
+    return @{jobs=$jobs; errores=$errores}
+}
+
 function Leer-Decodificado([byte]$unit, [hashtable]$vdef) {
     $a = Dir-Trama $vdef.addr
     switch ($vdef.tipo) {
@@ -821,8 +872,14 @@ $tabW.Controls.Add($btnFallidas)
 $btnCargarBackup = New-Object System.Windows.Forms.Button
 $btnCargarBackup.Text = 'Backup JSON como preset'
 $btnCargarBackup.Location = New-Object System.Drawing.Point(450, 292)
-$btnCargarBackup.Size = New-Object System.Drawing.Size(180, 30)
+$btnCargarBackup.Size = New-Object System.Drawing.Size(175, 30)
 $tabW.Controls.Add($btnCargarBackup)
+
+$btnCsvTcu = New-Object System.Windows.Forms.Button
+$btnCsvTcu.Text = 'CSV por TCU...'
+$btnCsvTcu.Location = New-Object System.Drawing.Point(632, 292)
+$btnCsvTcu.Size = New-Object System.Drawing.Size(118, 30)
+$tabW.Controls.Add($btnCsvTcu)
 
 $btnNvm = New-Object System.Windows.Forms.Button
 $btnNvm.Text = 'GUARDAR EN NVM'
@@ -957,6 +1014,17 @@ $btnComparar.Size = New-Object System.Drawing.Size(210, 28)
 $btnComparar.Enabled = $false
 $tabD.Controls.Add($btnComparar)
 
+[void](LG $tabD 'Backup NCU de' 250 95 340)
+$txtBIni = TG $tabD '1' 348 337 40
+[void](LG $tabD 'a' 394 10 340)
+$txtBFin = TG $tabD '44' 406 337 40
+
+$btnBackupNcu = New-Object System.Windows.Forms.Button
+$btnBackupNcu.Text = 'BACKUP NCU (un JSON por TCU)...'
+$btnBackupNcu.Location = New-Object System.Drawing.Point(458, 335)
+$btnBackupNcu.Size = New-Object System.Drawing.Size(230, 28)
+$tabD.Controls.Add($btnBackupNcu)
+
 # ============================ TAB DIAGNOSTICO ============================
 $tabG = New-Object System.Windows.Forms.TabPage
 $tabG.Text = 'Diagnostico'
@@ -1013,6 +1081,100 @@ $lvG.View = 'Details'; $lvG.FullRowSelect = $true; $lvG.GridLines = $true
 [void]$lvG.Columns.Add('Cargador', 90)
 [void]$lvG.Columns.Add('Alarmas / notas', 270)
 $tabG.Controls.Add($lvG)
+
+# ============================ TAB FLOTA ============================
+$tabF = New-Object System.Windows.Forms.TabPage
+$tabF.Text = 'Flota'
+$tabs.TabPages.Add($tabF)
+
+$gbAud = New-Object System.Windows.Forms.GroupBox
+$gbAud.Text = ' Auditoria contra preset de referencia (lista solo las desviaciones) '
+$gbAud.Location = New-Object System.Drawing.Point(10, 6)
+$gbAud.Size = New-Object System.Drawing.Size(898, 182)
+$tabF.Controls.Add($gbAud)
+
+[void](LG $gbAud 'TCU de' 10 52)
+$txtAIni = TG $gbAud '1' 62 22 40
+[void](LG $gbAud 'a' 108 10)
+$txtAFin = TG $gbAud '44' 120 22 40
+
+$btnPresetRef = New-Object System.Windows.Forms.Button
+$btnPresetRef.Text = 'Preset referencia...'
+$btnPresetRef.Location = New-Object System.Drawing.Point(172, 19)
+$btnPresetRef.Size = New-Object System.Drawing.Size(140, 26)
+$gbAud.Controls.Add($btnPresetRef)
+
+$lblPresetRef = LG $gbAud '(sin preset de referencia)' 320 300
+$lblPresetRef.ForeColor = [System.Drawing.Color]::Gray
+
+$btnAud = New-Object System.Windows.Forms.Button
+$btnAud.Text = 'AUDITAR'
+$btnAud.Location = New-Object System.Drawing.Point(640, 18)
+$btnAud.Size = New-Object System.Drawing.Size(115, 28)
+$btnAud.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnAud.ForeColor = [System.Drawing.Color]::White
+$gbAud.Controls.Add($btnAud)
+
+$btnAudCsv = New-Object System.Windows.Forms.Button
+$btnAudCsv.Text = 'CSV'
+$btnAudCsv.Location = New-Object System.Drawing.Point(765, 18)
+$btnAudCsv.Size = New-Object System.Drawing.Size(110, 28)
+$btnAudCsv.Enabled = $false
+$gbAud.Controls.Add($btnAudCsv)
+
+$lvA = New-Object System.Windows.Forms.ListView
+$lvA.Location = New-Object System.Drawing.Point(10, 52)
+$lvA.Size = New-Object System.Drawing.Size(878, 120)
+$lvA.View = 'Details'; $lvA.FullRowSelect = $true; $lvA.GridLines = $true
+[void]$lvA.Columns.Add('TCU', 50)
+[void]$lvA.Columns.Add('Variable', 330)
+[void]$lvA.Columns.Add('Esperado', 150)
+[void]$lvA.Columns.Add('Leido', 150)
+[void]$lvA.Columns.Add('Nota', 190)
+$gbAud.Controls.Add($lvA)
+
+$gbInvF = New-Object System.Windows.Forms.GroupBox
+$gbInvF.Text = ' Inventario de flota (FW, numero de serie, MAC Xbee por rango) '
+$gbInvF.Location = New-Object System.Drawing.Point(10, 194)
+$gbInvF.Size = New-Object System.Drawing.Size(898, 168)
+$tabF.Controls.Add($gbInvF)
+
+[void](LG $gbInvF 'TCU de' 10 52)
+$txtVIni = TG $gbInvF '1' 62 22 40
+[void](LG $gbInvF 'a' 108 10)
+$txtVFin = TG $gbInvF '44' 120 22 40
+
+$btnInvF = New-Object System.Windows.Forms.Button
+$btnInvF.Text = 'INVENTARIO'
+$btnInvF.Location = New-Object System.Drawing.Point(172, 18)
+$btnInvF.Size = New-Object System.Drawing.Size(125, 28)
+$btnInvF.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnInvF.ForeColor = [System.Drawing.Color]::White
+$gbInvF.Controls.Add($btnInvF)
+
+$lblInvF = LG $gbInvF '' 310 320
+$lblInvF.ForeColor = [System.Drawing.Color]::Gray
+
+$btnInvFCsv = New-Object System.Windows.Forms.Button
+$btnInvFCsv.Text = 'CSV'
+$btnInvFCsv.Location = New-Object System.Drawing.Point(765, 18)
+$btnInvFCsv.Size = New-Object System.Drawing.Size(110, 28)
+$btnInvFCsv.Enabled = $false
+$gbInvF.Controls.Add($btnInvFCsv)
+
+$lvV = New-Object System.Windows.Forms.ListView
+$lvV.Location = New-Object System.Drawing.Point(10, 52)
+$lvV.Size = New-Object System.Drawing.Size(878, 106)
+$lvV.View = 'Details'; $lvV.FullRowSelect = $true; $lvV.GridLines = $true
+[void]$lvV.Columns.Add('TCU', 45)
+[void]$lvV.Columns.Add('Num. serie', 170)
+[void]$lvV.Columns.Add('MAC Xbee', 140)
+[void]$lvV.Columns.Add('FW', 100)
+[void]$lvV.Columns.Add('FW fabrica', 100)
+[void]$lvV.Columns.Add('HW PCBA', 70)
+[void]$lvV.Columns.Add('Fecha fab.', 90)
+[void]$lvV.Columns.Add('Nota', 150)
+$gbInvF.Controls.Add($lvV)
 
 # ============================ TAB UTILIDADES ============================
 $tabU = New-Object System.Windows.Forms.TabPage
@@ -1107,6 +1269,10 @@ $script:UltimaLectura = @()
 $script:UltimoVolcado = @()
 $script:UltimoDiag = @()
 $script:UltimaIdent = @()
+$script:UltimaAud = @()
+$script:UltimoInv = @()
+$script:PresetRef = $null
+$script:PresetRefNombre = ''
 $script:MetaVolcado = $null
 $script:Ocupado = $false
 $script:Cancelar = $false
@@ -1133,7 +1299,8 @@ function Con([string]$t, $color) {
 
 $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $btnDiag, $btnSync, $btnIdent,
                     $btnPresetSave, $btnPresetLoad, $btnCargarBackup, $btnLCsv, $btnDCsv, $btnBackupJson,
-                    $btnComparar, $btnGCsv, $btnGJson, $btnICsv)
+                    $btnComparar, $btnGCsv, $btnGJson, $btnICsv,
+                    $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnInvF, $btnInvFCsv)
 
 function Set-UIOcupada([bool]$ocupada) {
     foreach ($b in $BOTONES_ACCION) { $b.Enabled = (-not $ocupada) }
@@ -1147,6 +1314,8 @@ function Set-UIOcupada([bool]$ocupada) {
         $btnGCsv.Enabled       = ($script:UltimoDiag.Count -gt 0)
         $btnGJson.Enabled      = ($script:UltimoDiag.Count -gt 0)
         $btnICsv.Enabled       = ($script:UltimaIdent.Count -gt 0)
+        $btnAudCsv.Enabled     = ($script:UltimaAud.Count -gt 0)
+        $btnInvFCsv.Enabled    = ($script:UltimoInv.Count -gt 0)
     }
     $btnCancelar.Enabled = $ocupada
     [System.Windows.Forms.Application]::DoEvents()
@@ -1274,6 +1443,9 @@ $cbPlanta.Add_SelectedIndexChanged({
         $txtLIni.Text = "$($p.ini)"; $txtLFin.Text = "$($p.fin)"
         $txtGIni.Text = "$($p.ini)"; $txtGFin.Text = "$($p.fin)"
         $txtSIni.Text = "$($p.ini)"; $txtSFin.Text = "$($p.fin)"
+        $txtAIni.Text = "$($p.ini)"; $txtAFin.Text = "$($p.fin)"
+        $txtVIni.Text = "$($p.ini)"; $txtVFin.Text = "$($p.fin)"
+        $txtBIni.Text = "$($p.ini)"; $txtBFin.Text = "$($p.fin)"
     }
 })
 
@@ -1984,6 +2156,296 @@ $btnSync.Add_Click({ Lanzar {
     Con "Sincronizacion: $ok OK, $ko fallos" ([System.Drawing.Color]::SteelBlue)
 } })
 
+# ------------------------- ESCRIBIR CSV POR TCU -------------------------
+$btnCsvTcu.Add_Click({ Lanzar {
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    $dlg.Filter = 'CSV (*.csv)|*.csv'
+    $dlg.Title = 'CSV con cabecera TCU;variable;valor (valores distintos por TCU)'
+    if ($dlg.ShowDialog() -ne 'OK') { return }
+    $res = Parse-CsvPorTcu (Get-Content $dlg.FileName)
+    foreach ($e in $res.errores) { Con "AVISO CSV: $e" ([System.Drawing.Color]::Orange) }
+    $jobs = @($res.jobs)
+    if ($jobs.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('El CSV no tiene filas validas.','Aviso'); return }
+    $cx = Params-Conexion
+    $tcus = @($jobs | ForEach-Object { $_.tcu } | Sort-Object -Unique)
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "CSV: $($jobs.Count) escrituras en $($tcus.Count) TCUs de $($cx.ip):$($cx.etiqueta)" +
+        $(if ($res.errores.Count -gt 0) { "`r`n($($res.errores.Count) lineas con error se saltan - ver consola)" } else { '' }) +
+        "`r`n`r`nContinuar?", 'Confirmar CSV por TCU', 'YesNo', 'Warning')
+    if ($r -ne 'Yes') { return }
+    $peligro = @($jobs | Where-Object { $ADDR_COMANDO -contains $VARIABLES[$_.nombre].addr })
+    if ($peligro.Count -gt 0) {
+        $r2 = [System.Windows.Forms.MessageBox]::Show(
+            "ATENCION: el CSV toca $($peligro.Count) registros de COMANDO. Seguro?",
+            'REGISTROS DE COMANDO', 'YesNo', 'Stop')
+        if ($r2 -ne 'Yes') { return }
+    }
+    $porTcu = @{}
+    foreach ($j in $jobs) { if (-not $porTcu.ContainsKey($j.tcu)) { $porTcu[$j.tcu] = @() }; $porTcu[$j.tcu] += ,$j }
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "CSV por TCU: $($jobs.Count) escrituras en $($tcus.Count) TCUs  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
+    $ok = 0; $ko = 0
+    $segs = @(Plan-Segmentos $tcus $cx)
+    foreach ($seg in $segs) {
+        if ($script:Cancelar) { break }
+        $segOk = $true
+        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
+        catch { $segOk = $false; Con "ERROR de conexion ($($cx.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
+        foreach ($tcu in $seg.tcus) {
+            if (Chequear-Cancelado) { break }
+            $fallo = $null; $todoOk = $segOk
+            if (-not $segOk) { $fallo = "sin conexion ($($cx.ip):$($seg.puerto))" }
+            else {
+                foreach ($j in $porTcu[[int]$tcu]) {
+                    $hecho = $false
+                    for ($i = 1; $i -le $cx.reint -and -not $hecho; $i++) {
+                        if ($script:Cancelar) { break }
+                        try {
+                            $e = $j.esc
+                            if ($e.modo -eq 'fc16') { FC16-Escribir $tcu $e.addr $e.palabras }
+                            else { FC22-Mascara $tcu $e.addr $e.and $e.or }
+                            if ($chkVerif.Checked) {
+                                $cmp = Comparar-Escritura $tcu $e
+                                if (-not $cmp.ok) { throw "verificacion: leido $($cmp.leidoRaw)" }
+                            }
+                            $hecho = $true
+                        } catch {
+                            $fallo = "$($j.nombre) = $($j.texto): $_"
+                            if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+                            Start-Sleep -Milliseconds (300 * $i)
+                        }
+                    }
+                    if (-not $hecho) { $todoOk = $false; break }
+                }
+            }
+            if ($todoOk) { $ok++; Con ("TCU {0,3}  OK  ({1} valores)" -f $tcu, $porTcu[[int]$tcu].Count) ([System.Drawing.Color]::LightGreen) }
+            else { $ko++; Con ("TCU {0,3}  FALLO  {1}" -f $tcu, $fallo) ([System.Drawing.Color]::Salmon) }
+        }
+    }
+    Modbus-Cerrar
+    Con "CSV por TCU terminado: $ok OK, $ko con fallo. Recuerda GUARDAR EN NVM si procede." ([System.Drawing.Color]::SteelBlue)
+} })
+
+# ------------------------- BACKUP MASIVO DE NCU -------------------------
+$btnBackupNcu.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    $tcus = Rango-Tcus $txtBIni.Text $txtBFin.Text 'Backup NCU'
+    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dlg.Description = "Carpeta donde guardar los backups JSON (uno por TCU, $($tcus.Count) ficheros)"
+    if ($dlg.ShowDialog() -ne 'OK') { return }
+    $dir = $dlg.SelectedPath
+    $ts = Get-Date -Format 'yyyyMMdd_HHmm'
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Backup NCU: TCUs $($tcus[0])-$($tcus[-1]) -> $dir  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
+    $ok = 0; $ko = 0
+    $segs = @(Plan-Segmentos $tcus $cx)
+    foreach ($seg in $segs) {
+        if ($script:Cancelar) { break }
+        $segOk = $true
+        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
+        catch { $segOk = $false; Con "ERROR de conexion ($($cx.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
+        foreach ($tcu in $seg.tcus) {
+            if (Chequear-Cancelado) { break }
+            if (-not $segOk) { $ko++; Con ("TCU {0,3}  FALLO  sin conexion" -f $tcu) ([System.Drawing.Color]::Salmon); continue }
+            $vars = @(); $errs = 0
+            foreach ($nombre in $VARIABLES.Keys) {
+                if ($script:Cancelar) { break }
+                $vdef = $VARIABLES[$nombre]
+                $val = $null
+                for ($i = 1; $i -le $cx.reint -and $null -eq $val; $i++) {
+                    try { $val = Leer-Decodificado $tcu $vdef }
+                    catch {
+                        if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+                        Start-Sleep -Milliseconds 150
+                    }
+                }
+                if ($null -eq $val) { $errs++; $val = '' }
+                $vars += [ordered]@{variable=$nombre; valor=$val; grupo='config'}
+            }
+            if ($script:Cancelar) { break }
+            $completo = ($errs -eq 0)
+            $obj = [ordered]@{
+                tipo='backup_tcu'; mapa=$VERSION_MAPA; toolbox=$VERSION_TOOLBOX
+                planta=(Nombre-Planta); ip=$cx.ip; puerto=$seg.puerto; tcu=[int]$tcu
+                fecha=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); completo=$completo; errores=$errs
+                variables=$vars
+            }
+            $suf = ''
+            if (-not $completo) { $suf = '_INCOMPLETO' }
+            $fich = Join-Path $dir ("backup_tcu{0}_{1}{2}.json" -f $tcu, $ts, $suf)
+            ConvertTo-Json $obj -Depth 5 | Set-Content $fich -Encoding UTF8
+            if ($completo) { $ok++; Con ("TCU {0,3}  backup OK" -f $tcu) ([System.Drawing.Color]::LightGreen) }
+            else { $ko++; Con ("TCU {0,3}  backup INCOMPLETO ({1} errores)" -f $tcu, $errs) ([System.Drawing.Color]::Orange) }
+        }
+    }
+    Modbus-Cerrar
+    Con "Backup NCU terminado: $ok completos, $ko incompletos/fallidos. Carpeta: $dir" ([System.Drawing.Color]::SteelBlue)
+} })
+
+# ------------------------- AUDITORIA GOLDEN PRESET -------------------------
+$btnPresetRef.Add_Click({
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    $dlg.Filter = 'Preset o backup (*.json)|*.json'
+    if ($dlg.ShowDialog() -ne 'OK') { return }
+    try { $obj = Get-Content $dlg.FileName -Raw | ConvertFrom-Json }
+    catch { [void][System.Windows.Forms.MessageBox]::Show("No se pudo leer: $_",'Error'); return }
+    $pares = @()
+    if ($obj.tipo -eq 'backup_tcu') { $pares = @($obj.variables) } else { $pares = @($obj) }
+    $ref = @()
+    foreach ($e in $pares) {
+        $nombre = [string]$e.variable
+        if (-not $VARIABLES.Contains($nombre)) { continue }
+        $def = $VARIABLES[$nombre]
+        if ($ADDR_COMANDO -contains $def.addr) { continue }
+        if ($ADDR_TIEMPO -contains $def.addr) { continue }
+        if ("$($e.valor)" -eq '') { continue }
+        try { $ref += @{nombre=$nombre; texto="$($e.valor)"; esc=(Valor-A-Escritura $def "$($e.valor)")} }
+        catch { Con "AVISO preset ref: '$nombre' valor '$($e.valor)' invalido - fuera de la auditoria" ([System.Drawing.Color]::Orange) }
+    }
+    if ($ref.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('El fichero no tiene variables de configuracion utilizables.','Error'); return }
+    $script:PresetRef = $ref
+    $script:PresetRefNombre = [System.IO.Path]::GetFileName($dlg.FileName)
+    $lblPresetRef.Text = "$($script:PresetRefNombre)  ($($ref.Count) variables)"
+    Con "Preset de referencia cargado: $($script:PresetRefNombre) con $($ref.Count) variables" ([System.Drawing.Color]::SteelBlue)
+})
+
+$btnAud.Add_Click({ Lanzar {
+    if (-not $script:PresetRef) { [void][System.Windows.Forms.MessageBox]::Show('Carga primero un preset de referencia (o un backup completo).','Aviso'); return }
+    $cx = Params-Conexion
+    $tcus = Rango-Tcus $txtAIni.Text $txtAFin.Text 'Auditoria'
+    $lvA.Items.Clear(); $script:UltimaAud = @()
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Auditoria de TCUs $($tcus[0])-$($tcus[-1]) contra '$($script:PresetRefNombre)' ($($script:PresetRef.Count) variables)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
+    $nOk = 0; $nDesv = 0; $nErr = 0
+    $segs = @(Plan-Segmentos $tcus $cx)
+    foreach ($seg in $segs) {
+        if ($script:Cancelar) { break }
+        $segOk = $true
+        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
+        catch { $segOk = $false; Con "ERROR de conexion ($($cx.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
+        foreach ($tcu in $seg.tcus) {
+            if (Chequear-Cancelado) { break }
+            $desvTcu = 0; $errTcu = 0
+            foreach ($refv in $script:PresetRef) {
+                if ($script:Cancelar) { break }
+                $cmp = $null
+                if ($segOk) {
+                    for ($i = 1; $i -le $cx.reint -and $null -eq $cmp; $i++) {
+                        try { $cmp = Comparar-Escritura $tcu $refv.esc }
+                        catch {
+                            if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+                            Start-Sleep -Milliseconds 150
+                        }
+                    }
+                }
+                if ($null -eq $cmp) {
+                    $errTcu++
+                    $script:UltimaAud += [pscustomobject]@{TCU=[int]$tcu; Variable=$refv.nombre; Esperado=$refv.texto; Leido=''; Nota='sin respuesta'}
+                    $item = New-Object System.Windows.Forms.ListViewItem("$tcu")
+                    [void]$item.SubItems.Add($refv.nombre); [void]$item.SubItems.Add($refv.texto); [void]$item.SubItems.Add('-'); [void]$item.SubItems.Add('sin respuesta')
+                    $item.ForeColor = [System.Drawing.Color]::Gray
+                    $lvA.Items.Add($item) | Out-Null
+                } elseif (-not $cmp.ok) {
+                    $desvTcu++
+                    $leidoDec = ''
+                    try { $leidoDec = Leer-Decodificado $tcu $VARIABLES[$refv.nombre] } catch { $leidoDec = "raw $($cmp.leidoRaw)" }
+                    $script:UltimaAud += [pscustomobject]@{TCU=[int]$tcu; Variable=$refv.nombre; Esperado=$refv.texto; Leido=$leidoDec; Nota='DESVIACION'}
+                    $item = New-Object System.Windows.Forms.ListViewItem("$tcu")
+                    [void]$item.SubItems.Add($refv.nombre); [void]$item.SubItems.Add($refv.texto); [void]$item.SubItems.Add($leidoDec); [void]$item.SubItems.Add('DESVIACION')
+                    $item.ForeColor = [System.Drawing.Color]::DarkOrange
+                    $lvA.Items.Add($item) | Out-Null
+                }
+            }
+            if ($errTcu -gt 0) { $nErr++ }
+            elseif ($desvTcu -gt 0) { $nDesv++; Con ("TCU {0,3}  {1} desviaciones" -f $tcu, $desvTcu) ([System.Drawing.Color]::Orange) }
+            else { $nOk++ }
+            [System.Windows.Forms.Application]::DoEvents()
+        }
+    }
+    Modbus-Cerrar
+    Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Auditoria: $nOk TCUs conformes | $nDesv con desviaciones | $nErr sin respuesta. $($script:UltimaAud.Count) filas listadas." ([System.Drawing.Color]::SteelBlue)
+    if ($script:UltimaAud.Count -eq 0) { Con 'Toda la flota coincide con el preset de referencia.' ([System.Drawing.Color]::LightGreen) }
+} })
+
+$btnAudCsv.Add_Click({
+    $dlg = New-Object System.Windows.Forms.SaveFileDialog
+    $dlg.Filter = 'CSV (*.csv)|*.csv'
+    $dlg.FileName = 'auditoria_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
+    if ($dlg.ShowDialog() -eq 'OK') {
+        $script:UltimaAud | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8
+        Con "CSV exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
+    }
+})
+
+# ------------------------- INVENTARIO DE FLOTA -------------------------
+$btnInvF.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    $tcus = Rango-Tcus $txtVIni.Text $txtVFin.Text 'Inventario'
+    $lvV.Items.Clear(); $script:UltimoInv = @(); $lblInvF.Text = ''
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Inventario de TCUs $($tcus[0])-$($tcus[-1])  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
+    $ok = 0; $ko = 0
+    $segs = @(Plan-Segmentos $tcus $cx)
+    foreach ($seg in $segs) {
+        if ($script:Cancelar) { break }
+        $segOk = $true
+        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
+        catch { $segOk = $false; Con "ERROR de conexion ($($cx.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
+        foreach ($tcu in $seg.tcus) {
+            if (Chequear-Cancelado) { break }
+            $campos = $null; $err = ''
+            if ($segOk) {
+                for ($i = 1; $i -le $cx.reint -and $null -eq $campos; $i++) {
+                    try { $campos = Ident-Leer $tcu }
+                    catch {
+                        $err = "$_"
+                        if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+                        Start-Sleep -Milliseconds (300 * $i)
+                    }
+                }
+            } else { $err = "sin conexion ($($cx.ip):$($seg.puerto))" }
+            $item = New-Object System.Windows.Forms.ListViewItem("$tcu")
+            if ($null -ne $campos) {
+                $h = @{}
+                foreach ($c in $campos) { $h[$c.Campo] = $c.Valor }
+                foreach ($col in @($h['Numero de serie'], $h['MAC Xbee'], $h['FW principal'], $h['FW de fabrica'], $h['HW PCBA'], $h['Fecha de fabricacion'], '')) {
+                    [void]$item.SubItems.Add("$col")
+                }
+                $ok++
+                $script:UltimoInv += [pscustomobject]@{TCU=[int]$tcu; Serie=$h['Numero de serie']; MAC=$h['MAC Xbee']
+                    FW=$h['FW principal']; FW_fabrica=$h['FW de fabrica']; HW=$h['HW PCBA']; Fecha_fab=$h['Fecha de fabricacion']; Nota='OK'}
+            } else {
+                foreach ($n in 1..6) { [void]$item.SubItems.Add('-') }
+                [void]$item.SubItems.Add($err)
+                $item.ForeColor = [System.Drawing.Color]::Firebrick
+                $ko++
+                $script:UltimoInv += [pscustomobject]@{TCU=[int]$tcu; Serie=''; MAC=''; FW=''; FW_fabrica=''; HW=''; Fecha_fab=''; Nota=$err}
+            }
+            $lvV.Items.Add($item) | Out-Null
+            [System.Windows.Forms.Application]::DoEvents()
+        }
+    }
+    Modbus-Cerrar
+    $lblInvF.Text = "$ok leidas, $ko sin respuesta"
+    $fws = @($script:UltimoInv | Where-Object { $_.FW } | Group-Object FW)
+    if ($fws.Count -gt 1) {
+        Con "ATENCION: FW mezclados en la flota:" ([System.Drawing.Color]::Orange)
+        foreach ($g in $fws) { Con ("   {0}  en {1} TCUs" -f $g.Name, $g.Count) ([System.Drawing.Color]::Orange) }
+    }
+    Con "Inventario terminado: $ok leidas, $ko sin respuesta" ([System.Drawing.Color]::SteelBlue)
+} })
+
+$btnInvFCsv.Add_Click({
+    $dlg = New-Object System.Windows.Forms.SaveFileDialog
+    $dlg.Filter = 'CSV (*.csv)|*.csv'
+    $dlg.FileName = 'inventario_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
+    if ($dlg.ShowDialog() -eq 'OK') {
+        $script:UltimoInv | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8
+        Con "CSV exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
+    }
+})
+
 # ------------------------- log manual -------------------------
 $btnLog.Add_Click({
     $dlg = New-Object System.Windows.Forms.SaveFileDialog
@@ -1997,6 +2459,7 @@ Con "TCU Toolbox v$VERSION_TOOLBOX listo. Mapa de registros: $VERSION_MAPA." ([S
 Con 'Escribir: tabla + presets + backup como preset. Leer: una variable en un rango, con resumen de discrepancias.' ([System.Drawing.Color]::Gainsboro)
 Con 'Filtro de variables: escribe p.ej. "soc" o "tilt" en el campo Filtro y el desplegable se reduce a lo que casa.' ([System.Drawing.Color]::Gainsboro)
 Con 'Entradas (auto): NCU completa con puerto resuelto por TCU; los gateways se recorren en secuencia.' ([System.Drawing.Color]::Gainsboro)
+Con 'Flota: auditoria contra preset de referencia e inventario (FW/serie/MAC). Volcar: BACKUP NCU masivo. Escribir: CSV por TCU.' ([System.Drawing.Color]::Gainsboro)
 Con 'Volcar: backup completo de una TCU (CSV/JSON) y comparacion contra un backup anterior.' ([System.Drawing.Color]::Gainsboro)
 Con 'Diagnostico: salud OK/AVISO/ALARMA/OFFLINE de un rango con alarmas en texto. Utilidades: reloj e identificacion.' ([System.Drawing.Color]::Gainsboro)
 foreach ($m in $script:MsgsInicio) { Con $m ([System.Drawing.Color]::SteelBlue) }
