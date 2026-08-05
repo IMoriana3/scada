@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '2.9'
+$VERSION_TOOLBOX = '3.0'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -244,14 +244,14 @@ $VARIABLES = [ordered]@{
   '40005 input_date_mes'                  = @{addr=40005; tipo='u16'}
   '40006 input_date_ano'                  = @{addr=40006; tipo='u16'}
   # ---- CARGA / BATERIA ----
-  '40008 jeita_T1 [K]'                    = @{addr=40008; tipo='u16'}
-  '40009 jeita_T2 [K]'                    = @{addr=40009; tipo='u16'}
-  '40010 jeita_T3 [K]'                    = @{addr=40010; tipo='u16'}
-  '40011 jeita_T4 [K]'                    = @{addr=40011; tipo='u16'}
-  '40012 carga_bajo_T1 [mA]'              = @{addr=40012; tipo='u16'}
-  '40013 carga_T1_T2 [mA]'                = @{addr=40013; tipo='u16'}
-  '40014 carga_T2_T3 [mA]'                = @{addr=40014; tipo='u16'}
-  '40015 carga_T3_T4 [mA]'                = @{addr=40015; tipo='u16'}
+  '40008 jeita_T1 [K]'                    = @{addr=40008; tipo='u16'; min=233; max=398}
+  '40009 jeita_T2 [K]'                    = @{addr=40009; tipo='u16'; min=233; max=398}
+  '40010 jeita_T3 [K]'                    = @{addr=40010; tipo='u16'; min=233; max=398}
+  '40011 jeita_T4 [K]'                    = @{addr=40011; tipo='u16'; min=233; max=398}
+  '40012 carga_bajo_T1 [mA]'              = @{addr=40012; tipo='u16'; max=20000}
+  '40013 carga_T1_T2 [mA]'                = @{addr=40013; tipo='u16'; max=20000}
+  '40014 carga_T2_T3 [mA]'                = @{addr=40014; tipo='u16'; max=20000}
+  '40015 carga_T3_T4 [mA]'                = @{addr=40015; tipo='u16'; max=20000}
   '40016 carga_sobre_T4 [mA]'             = @{addr=40016; tipo='u16'}
   '40037 charge_parameters [hex]'         = @{addr=40037; tipo='u16'}
   '40037 jeita_enable (bit 0)'            = @{addr=40037; tipo='bit'; bit=0}
@@ -260,15 +260,15 @@ $VARIABLES = [ordered]@{
   '40040 corriente_fin_carga [mA]'        = @{addr=40040; tipo='u16'}
   '40041 limite_tiempo_carga [s]'         = @{addr=40041; tipo='u16'}
   '40042 limite_tiempo_CV [s]'            = @{addr=40042; tipo='u16'}
-  '40043 tension_panel_MPP [mV]'          = @{addr=40043; tipo='u16'}
+  '40043 tension_panel_MPP [mV]'          = @{addr=40043; tipo='u16'; max=50000}
   # ---- CALEFACTOR ----
-  '40034 heater_umbral_cargando [K]'      = @{addr=40034; tipo='u16'}
-  '40035 heater_umbral_descargando [K]'   = @{addr=40035; tipo='u16'}
+  '40034 heater_umbral_cargando [K]'      = @{addr=40034; tipo='u16'; max=300}
+  '40035 heater_umbral_descargando [K]'   = @{addr=40035; tipo='u16'; max=300}
   '40036 heater_options [hex]'            = @{addr=40036; tipo='u16'}
-  '40036 heater_histeresis [K] (byte bajo)'= @{addr=40036; tipo='u8lo'}
+  '40036 heater_histeresis [K] (byte bajo)'= @{addr=40036; tipo='u8lo'; max=20}
   '40036 heater_enable (bit 8)'           = @{addr=40036; tipo='bit'; bit=8}
   # ---- COMUNICACIONES ----
-  '40022 timeout_com_NCU [min]'           = @{addr=40022; tipo='u16'}
+  '40022 timeout_com_NCU [min]'           = @{addr=40022; tipo='u16'; max=1092}
   '40029 watchdog_zigbee [min]'           = @{addr=40029; tipo='u16'}
   '41004 zigbee_config [hex]'             = @{addr=41004; tipo='u16'}
   '41004 zigbee_slave_id (byte bajo)'     = @{addr=41004; tipo='u8lo'}
@@ -339,22 +339,22 @@ $VARIABLES = [ordered]@{
   '41137 min_tilt_east_r7 [deg]'          = @{addr=41137; tipo='f32deg'}
   # ---- MOTOR ----
   '41039 motor_velocity_eval [ms]'        = @{addr=41039; tipo='u16'}
-  '41040 motor_overcurrent_limit [mA]'    = @{addr=41040; tipo='u16'}
+  '41040 motor_overcurrent_limit [mA]'    = @{addr=41040; tipo='u16'; max=30000}
   '41041 mask_time_overcurrent [ms]'      = @{addr=41041; tipo='u16'}
   '41064 axis_block_det_time [s] (b.bajo)'= @{addr=41064; tipo='u8lo'}
   '41064 axis_block_retry [x0.1s] (b.alto)'= @{addr=41064; tipo='u8hi'}
-  '41065 motor_fault_retries'             = @{addr=41065; tipo='u16'}
+  '41065 motor_fault_retries'             = @{addr=41065; tipo='u16'; min=1; max=10}
   '41066 lowspeed_det_time [s] (b.bajo)'  = @{addr=41066; tipo='u8lo'}
   '41066 lowspeed_umbral [%] (b.alto)'    = @{addr=41066; tipo='u8hi'}
-  '41067 motor_speed_no_load [mdeg/s]'    = @{addr=41067; tipo='u16'}
+  '41067 motor_speed_no_load [mdeg/s]'    = @{addr=41067; tipo='u16'; min=170; max=200}
   '41079 min_motor_off_time [ms]'         = @{addr=41079; tipo='u16'}
-  '41080 pulse_resolution [pulsos]'       = @{addr=41080; tipo='u16'}
-  '41093 duty_approach (b.bajo)'          = @{addr=41093; tipo='u8lo'}
-  '41093 duty_max_manual (b.alto)'        = @{addr=41093; tipo='u8hi'}
-  '41094 duty_max_auto (b.bajo)'          = @{addr=41094; tipo='u8lo'}
-  '41094 duty_startup (b.alto)'           = @{addr=41094; tipo='u8hi'}
-  '41095 ramp_acel (b.bajo)'              = @{addr=41095; tipo='u8lo'}
-  '41095 ramp_decel (b.alto)'             = @{addr=41095; tipo='u8hi'}
+  '41080 pulse_resolution [pulsos]'       = @{addr=41080; tipo='u16'; min=1; max=64}
+  '41093 duty_approach (b.bajo)'          = @{addr=41093; tipo='u8lo'; max=250}
+  '41093 duty_max_manual (b.alto)'        = @{addr=41093; tipo='u8hi'; max=250}
+  '41094 duty_max_auto (b.bajo)'          = @{addr=41094; tipo='u8lo'; max=250}
+  '41094 duty_startup (b.alto)'           = @{addr=41094; tipo='u8hi'; max=250}
+  '41095 ramp_acel (b.bajo)'              = @{addr=41095; tipo='u8lo'; min=4; max=82}
+  '41095 ramp_decel (b.alto)'             = @{addr=41095; tipo='u8hi'; min=4; max=82}
   # ---- NIVELES DE SoC ----
   '41081 soc_critico_enter [%] (b.bajo)'  = @{addr=41081; tipo='u8lo'}
   '41081 soc_critico_exit [%] (b.alto)'   = @{addr=41081; tipo='u8hi'}
@@ -362,12 +362,12 @@ $VARIABLES = [ordered]@{
   '41082 soc_muy_bajo_exit [%] (b.alto)'  = @{addr=41082; tipo='u8hi'}
   '41083 soc_bajo_enter [%] (b.bajo)'     = @{addr=41083; tipo='u8lo'}
   '41083 soc_bajo_exit [%] (b.alto)'      = @{addr=41083; tipo='u8hi'}
-  '41084 preservacion_high [%] (b.bajo)'  = @{addr=41084; tipo='u8lo'}
-  '41084 preservacion_low [%] (b.alto)'   = @{addr=41084; tipo='u8hi'}
-  '42001 dias_sin_carga_completa'         = @{addr=42001; tipo='u16'}
-  '42005 soc_min_auto [%] (b.bajo)'       = @{addr=42005; tipo='u8lo'}
-  '42005 soc_min_bootloader [%] (b.alto)' = @{addr=42005; tipo='u8hi'}
-  '42006 vbat_min_bootloader [mV]'        = @{addr=42006; tipo='u16'}
+  '41084 preservacion_high [%] (b.bajo)'  = @{addr=41084; tipo='u8lo'; min=75; max=100}
+  '41084 preservacion_low [%] (b.alto)'   = @{addr=41084; tipo='u8hi'; min=50; max=75}
+  '42001 dias_sin_carga_completa'         = @{addr=42001; tipo='u16'; min=1; max=30}
+  '42005 soc_min_auto [%] (b.bajo)'       = @{addr=42005; tipo='u8lo'; max=25}
+  '42005 soc_min_bootloader [%] (b.alto)' = @{addr=42005; tipo='u8hi'; max=50}
+  '42006 vbat_min_bootloader [mV]'        = @{addr=42006; tipo='u16'; max=28000}
 }
 
 # Registros de comando: exigen doble confirmacion y no entran en backups
@@ -502,6 +502,49 @@ function Hsu-CajaFila([int[]]$w, [int]$minuto) {
         Irr_Wm2     = [math]::Round($w[3] / 10.0, 1)
     }
 }
+
+# Desglose de alarmas en columnas 0/1 para el CSV (filtrables en Excel).
+# Recibe los hex '0x....' de alarmas_1/2; si vienen vacios, columnas vacias.
+$DESGLOSE_AL1 = @(@(2,'al1_tilt_rango'),@(4,'al1_seta'),@(6,'al1_sensor_Tbat'),@(7,'al1_config_nvm'),
+    @(8,'al1_xbee'),@(9,'al1_com_nvm'),@(10,'al1_bat_descon'),@(11,'al1_soc_L2'),@(12,'al1_soc_L3'),
+    @(13,'al1_soc_L1'),@(14,'al1_soc_critico'),@(15,'al1_fw_test'))
+$DESGLOSE_AL2 = @(@(2,'al2_reloj'),@(4,'al2_cortocircuito'),@(5,'al2_sobrecorriente'),@(8,'al2_eje_bloq'),
+    @(12,'al2_com_ncu'),@(14,'al2_motor_lento'),@(15,'al2_driver'))
+function Alarmas-Desglose([string]$hex1, [string]$hex2) {
+    $cols = [ordered]@{}
+    $a1 = -1; $a2 = -1
+    if ($hex1 -match '^0x([0-9A-Fa-f]+)$') { $a1 = [Convert]::ToInt32($Matches[1], 16) }
+    if ($hex2 -match '^0x([0-9A-Fa-f]+)$') { $a2 = [Convert]::ToInt32($Matches[1], 16) }
+    foreach ($d in $DESGLOSE_AL1) { $cols[$d[1]] = $(if ($a1 -lt 0) { '' } elseif ($a1 -band (1 -shl $d[0])) { 1 } else { 0 }) }
+    foreach ($d in $DESGLOSE_AL2) { $cols[$d[1]] = $(if ($a2 -lt 0) { '' } elseif ($a2 -band (1 -shl $d[0])) { 1 } else { 0 }) }
+    return $cols
+}
+
+# Guardia de viento para tests de movimiento: consulta las HSU cacheadas por
+# la NCU. Devuelve @{nivel;alarma} o $null si no hay datos de HSU.
+function Viento-Seguro([string]$ipNcu, [int]$to, [int]$puerto = 0) {
+    if ($puerto -eq 0) { $puerto = $PUERTO_NCU }
+    try {
+        Modbus-Conectar $ipNcu $puerto $to
+        $hs = @(Ncu-HsuCompat)
+        Modbus-Cerrar
+        $nivel = -1; $alarma = $false
+        foreach ($h in $hs) {
+            if ($h.Salud -eq 'OFFLINE') { continue }
+            if ($h.main_status -match '^0x([0-9A-Fa-f]+)$') {
+                $n = [Convert]::ToInt32($Matches[1], 16) -band 0x7
+                if ($n -gt $nivel) { $nivel = $n }
+            }
+            if ($h.alarmas_1 -match '^0x([0-9A-Fa-f]+)$') {
+                if ([Convert]::ToInt32($Matches[1], 16) -band 0x200) { $alarma = $true }
+            }
+        }
+        if ($nivel -lt 0) { return $null }
+        return @{nivel=$nivel; alarma=$alarma}
+    } catch { Modbus-Cerrar; return $null }
+}
+
+$ESTADOS_COMIS = @{3='Factory'; 2='TCU configurado'; 1='Motor verificado'; 0='COMISIONADO'}
 
 # Tramos consecutivos de una lista ordenada de TCUs: @(1,2,3,5) -> (1-3),(5-5)
 function Runs-Consecutivos([int[]]$tcus) {
@@ -816,11 +859,15 @@ function Valor-A-Escritura([hashtable]$vdef, [string]$texto) {
         'u16' {
             $v = Entero-Estricto $texto
             if ($v -lt 0 -or $v -gt 65535) { throw "fuera de rango U16" }
+            if ($null -ne $vdef.min -and $v -lt $vdef.min) { throw "por debajo del minimo del mapa ($($vdef.min))" }
+            if ($null -ne $vdef.max -and $v -gt $vdef.max) { throw "por encima del maximo del mapa ($($vdef.max))" }
             return @{modo='fc16'; addr=$a; palabras=@($v); esperado=@($v)}
         }
         's16' {
             $v = Entero-Estricto $texto
             if ($v -lt -32768 -or $v -gt 32767) { throw "fuera de rango S16" }
+            if ($null -ne $vdef.min -and $v -lt $vdef.min) { throw "por debajo del minimo del mapa ($($vdef.min))" }
+            if ($null -ne $vdef.max -and $v -gt $vdef.max) { throw "por encima del maximo del mapa ($($vdef.max))" }
             $w = $v -band 0xFFFF
             return @{modo='fc16'; addr=$a; palabras=@($w); esperado=@($w)}
         }
@@ -846,11 +893,15 @@ function Valor-A-Escritura([hashtable]$vdef, [string]$texto) {
         'u8lo' {
             $v = Entero-Estricto $texto
             if ($v -lt 0 -or $v -gt 255) { throw "fuera de rango U8" }
+            if ($null -ne $vdef.min -and $v -lt $vdef.min) { throw "por debajo del minimo del mapa ($($vdef.min))" }
+            if ($null -ne $vdef.max -and $v -gt $vdef.max) { throw "por encima del maximo del mapa ($($vdef.max))" }
             return @{modo='fc22'; addr=$a; and=0xFF00; or=$v; mascara=0x00FF; esperadoByte=$v}
         }
         'u8hi' {
             $v = Entero-Estricto $texto
             if ($v -lt 0 -or $v -gt 255) { throw "fuera de rango U8" }
+            if ($null -ne $vdef.min -and $v -lt $vdef.min) { throw "por debajo del minimo del mapa ($($vdef.min))" }
+            if ($null -ne $vdef.max -and $v -gt $vdef.max) { throw "por encima del maximo del mapa ($($vdef.max))" }
             return @{modo='fc22'; addr=$a; and=0x00FF; or=($v -shl 8); mascara=0xFF00; esperadoByte=($v -shl 8)}
         }
         'bit' {
@@ -1497,6 +1548,122 @@ $lvV.View = 'Details'; $lvV.FullRowSelect = $true; $lvV.GridLines = $true
 [void]$lvV.Columns.Add('Nota', 150)
 $gbInvF.Controls.Add($lvV)
 
+# ============================ TAB PEM (PUESTA EN MARCHA) ============================
+$tabP = New-Object System.Windows.Forms.TabPage
+$tabP.Text = 'PEM'
+$tabs.TabPages.Add($tabP)
+
+[void](LG $tabP 'TCU de' 10 50 18)
+$txtPIni = TG $tabP '1' 60 14 42
+[void](LG $tabP 'a' 108 10 18)
+$txtPFin = TG $tabP '5' 120 14 42
+[void](LG $tabP 'Pulso s' 172 46 18)
+$txtPPulso = TG $tabP '5' 220 14 34
+[void](LG $tabP 'Umbral deg' 262 68 18)
+$txtPUmbral = TG $tabP '0.5' 332 14 38
+
+$chkPViento = New-Object System.Windows.Forms.CheckBox
+$chkPViento.Text = 'guardia viento'
+$chkPViento.Checked = $true
+$chkPViento.Location = New-Object System.Drawing.Point(380, 13)
+$chkPViento.Size = New-Object System.Drawing.Size(105, 22)
+$tabP.Controls.Add($chkPViento)
+
+$btnPMotor = New-Object System.Windows.Forms.Button
+$btnPMotor.Text = 'TEST DE MOTOR'
+$btnPMotor.Location = New-Object System.Drawing.Point(492, 11)
+$btnPMotor.Size = New-Object System.Drawing.Size(130, 26)
+$btnPMotor.BackColor = [System.Drawing.Color]::FromArgb(0,120,60)
+$btnPMotor.ForeColor = [System.Drawing.Color]::White
+$tabP.Controls.Add($btnPMotor)
+
+$btnPCsv = New-Object System.Windows.Forms.Button
+$btnPCsv.Text = 'CSV'
+$btnPCsv.Location = New-Object System.Drawing.Point(630, 11)
+$btnPCsv.Size = New-Object System.Drawing.Size(64, 26)
+$btnPCsv.Enabled = $false
+$tabP.Controls.Add($btnPCsv)
+
+$lblPResumen = LG $tabP '' 704 200 18
+$lblPResumen.ForeColor = [System.Drawing.Color]::Gray
+
+[void](LG $tabP 'Modo' 10 38 50)
+$cbPModo = New-Object System.Windows.Forms.ComboBox
+$cbPModo.Location = New-Object System.Drawing.Point(50, 46)
+$cbPModo.Size = New-Object System.Drawing.Size(90, 22)
+$cbPModo.DropDownStyle = 'DropDownList'
+foreach ($m in @('AUTO','MANUAL','OFF')) { [void]$cbPModo.Items.Add($m) }
+$cbPModo.SelectedIndex = 0
+$tabP.Controls.Add($cbPModo)
+
+$btnPModo = New-Object System.Windows.Forms.Button
+$btnPModo.Text = 'APLICAR MODO'
+$btnPModo.Location = New-Object System.Drawing.Point(148, 44)
+$btnPModo.Size = New-Object System.Drawing.Size(118, 24)
+$tabP.Controls.Add($btnPModo)
+
+$btnPClear = New-Object System.Windows.Forms.Button
+$btnPClear.Text = 'CLEAR ALARMAS'
+$btnPClear.Location = New-Object System.Drawing.Point(274, 44)
+$btnPClear.Size = New-Object System.Drawing.Size(122, 24)
+$tabP.Controls.Add($btnPClear)
+
+[void](LG $tabP 'Safe pos' 408 52 50)
+$cbPStow = New-Object System.Windows.Forms.ComboBox
+$cbPStow.Location = New-Object System.Drawing.Point(462, 46)
+$cbPStow.Size = New-Object System.Drawing.Size(40, 22)
+$cbPStow.DropDownStyle = 'DropDownList'
+foreach ($m in 1..7) { [void]$cbPStow.Items.Add("$m") }
+$cbPStow.SelectedIndex = 0
+$tabP.Controls.Add($cbPStow)
+
+$btnPStow = New-Object System.Windows.Forms.Button
+$btnPStow.Text = 'STOW'
+$btnPStow.Location = New-Object System.Drawing.Point(510, 44)
+$btnPStow.Size = New-Object System.Drawing.Size(64, 24)
+$btnPStow.BackColor = [System.Drawing.Color]::FromArgb(160,80,0)
+$btnPStow.ForeColor = [System.Drawing.Color]::White
+$tabP.Controls.Add($btnPStow)
+
+$btnPUnstow = New-Object System.Windows.Forms.Button
+$btnPUnstow.Text = 'QUITAR STOW'
+$btnPUnstow.Location = New-Object System.Drawing.Point(580, 44)
+$btnPUnstow.Size = New-Object System.Drawing.Size(108, 24)
+$tabP.Controls.Add($btnPUnstow)
+
+[void](LG $tabP 'Comisionado:' 10 82 82)
+$btnPComis = New-Object System.Windows.Forms.Button
+$btnPComis.Text = 'LEER ESTADO'
+$btnPComis.Location = New-Object System.Drawing.Point(94, 76)
+$btnPComis.Size = New-Object System.Drawing.Size(108, 24)
+$tabP.Controls.Add($btnPComis)
+
+$cbPComis = New-Object System.Windows.Forms.ComboBox
+$cbPComis.Location = New-Object System.Drawing.Point(210, 78)
+$cbPComis.Size = New-Object System.Drawing.Size(150, 22)
+$cbPComis.DropDownStyle = 'DropDownList'
+foreach ($k in @(0,1,2,3)) { [void]$cbPComis.Items.Add("$k - $($ESTADOS_COMIS[$k])") }
+$cbPComis.SelectedIndex = 0
+$tabP.Controls.Add($cbPComis)
+
+$btnPComisSet = New-Object System.Windows.Forms.Button
+$btnPComisSet.Text = 'FIJAR'
+$btnPComisSet.Location = New-Object System.Drawing.Point(368, 76)
+$btnPComisSet.Size = New-Object System.Drawing.Size(64, 24)
+$tabP.Controls.Add($btnPComisSet)
+
+$lblPNota = LG $tabP 'Secuencias con guardia de viento (HSU via NCU), parada de motor garantizada y verificacion por efecto en 30001.' 442 466 82
+$lblPNota.ForeColor = [System.Drawing.Color]::Gray
+
+$lvP = New-Object System.Windows.Forms.ListView
+$lvP.Location = New-Object System.Drawing.Point(10, 108)
+$lvP.Size = New-Object System.Drawing.Size(898, 252)
+$lvP.View = 'Details'; $lvP.FullRowSelect = $true; $lvP.GridLines = $true
+[void]$lvP.Columns.Add('TCU', 50)
+[void]$lvP.Columns.Add('Resultado', 100)
+[void]$lvP.Columns.Add('Detalle', 730)
+$tabP.Controls.Add($lvP)
+
 # ============================ TAB HSU (METEO) ============================
 $tabH = New-Object System.Windows.Forms.TabPage
 $tabH.Text = 'HSU'
@@ -1671,6 +1838,7 @@ $script:UltimoDiag = @()
 $script:UltimaIdent = @()
 $script:UltimaAud = @()
 $script:UltimoInv = @()
+$script:UltimoPem = @()
 $script:PresetRef = $null
 $script:PresetRefNombre = ''
 $script:MetaVolcado = $null
@@ -1701,7 +1869,8 @@ $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $
                     $btnPresetSave, $btnPresetLoad, $btnCargarBackup, $btnLCsv, $btnDCsv, $btnBackupJson,
                     $btnComparar, $btnGCsv, $btnGJson, $btnICsv,
                     $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnInvF, $btnInvFCsv,
-                    $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm)
+                    $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm,
+                    $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComis, $btnPComisSet, $btnPCsv)
 
 function Set-UIOcupada([bool]$ocupada) {
     foreach ($b in $BOTONES_ACCION) { $b.Enabled = (-not $ocupada) }
@@ -1717,6 +1886,7 @@ function Set-UIOcupada([bool]$ocupada) {
         $btnICsv.Enabled       = ($script:UltimaIdent.Count -gt 0)
         $btnAudCsv.Enabled     = ($script:UltimaAud.Count -gt 0)
         $btnInvFCsv.Enabled    = ($script:UltimoInv.Count -gt 0)
+        $btnPCsv.Enabled       = ($script:UltimoPem.Count -gt 0)
     }
     $btnCancelar.Enabled = $ocupada
     [System.Windows.Forms.Application]::DoEvents()
@@ -1866,6 +2036,7 @@ $cbPlanta.Add_SelectedIndexChanged({
         $txtAIni.Text = "$($p.ini)"; $txtAFin.Text = "$($p.fin)"
         $txtVIni.Text = "$($p.ini)"; $txtVFin.Text = "$($p.fin)"
         $txtBIni.Text = "$($p.ini)"; $txtBFin.Text = "$($p.fin)"
+        $txtPIni.Text = "$($p.ini)"; $txtPFin.Text = "$($p.fin)"
         if ($p.hsu) { $txtHSlave.Text = "$($p.hsu)" }
     }
 })
@@ -2614,8 +2785,16 @@ $btnGCsv.Add_Click({
     $dlg.Filter = 'CSV (*.csv)|*.csv'
     $dlg.FileName = 'diagnostico_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
     if ($dlg.ShowDialog() -eq 'OK') {
-        $script:UltimoDiag | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8
-        Con "CSV exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
+        # con las alarmas desglosadas en columnas 0/1 (filtrables en Excel)
+        $filas = foreach ($d in $script:UltimoDiag) {
+            $o = [ordered]@{}
+            foreach ($pr in $d.PSObject.Properties) { $o[$pr.Name] = $pr.Value }
+            $des = Alarmas-Desglose "$($d.alarmas_1)" "$($d.alarmas_2)"
+            foreach ($k in $des.Keys) { $o[$k] = $des[$k] }
+            [pscustomobject]$o
+        }
+        $filas | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8
+        Con "CSV exportado con alarmas desglosadas: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
     }
 })
 
@@ -2990,6 +3169,295 @@ $btnInvFCsv.Add_Click({
     }
 })
 
+# ------------------------- PEM (PUESTA EN MARCHA) -------------------------
+function Pem-Fila([string]$tcu, [string]$res, [string]$det) {
+    $item = New-Object System.Windows.Forms.ListViewItem("$tcu")
+    [void]$item.SubItems.Add($res); [void]$item.SubItems.Add($det)
+    switch -Wildcard ($res) {
+        'PASA*'   { $item.ForeColor = [System.Drawing.Color]::DarkGreen }
+        'OK*'     { $item.ForeColor = [System.Drawing.Color]::DarkGreen }
+        'FALLA*'  { $item.ForeColor = [System.Drawing.Color]::Firebrick }
+        'SALTADO*'{ $item.ForeColor = [System.Drawing.Color]::Gray }
+        default   { $item.ForeColor = [System.Drawing.Color]::DarkOrange }
+    }
+    $lvP.Items.Add($item) | Out-Null
+    $script:UltimoPem += [pscustomobject]@{TCU=$tcu; Resultado=$res; Detalle=$det}
+    if ($res -notlike 'PASA*' -and $res -notlike 'OK*') { Con ("TCU {0,3}  {1}  {2}" -f $tcu, $res, $det) ([System.Drawing.Color]::Orange) }
+    else { Con ("TCU {0,3}  {1}  {2}" -f $tcu, $res, $det) ([System.Drawing.Color]::LightGreen) }
+    [System.Windows.Forms.Application]::DoEvents()
+}
+
+# Fija el modo (0 OFF / 1 MANUAL / 2 AUTO) tocando SOLO los bits 9:8 de 40000
+# y verifica por efecto en 30001. Devuelve $true si el TCU llego al modo.
+function Fijar-Modo([byte]$tcu, [int]$modo) {
+    FC22-Mascara $tcu 40000 0xFCFF ($modo -shl 8)
+    for ($i = 0; $i -lt 6; $i++) {
+        Start-Sleep -Milliseconds 500
+        $v = (FC03-Leer $tcu (Dir-Trama 30001) 1)[0]
+        if (((($v -shr 8) -band 0x3)) -eq $modo) { return $true }
+    }
+    return $false
+}
+
+function Guardia-Viento([hashtable]$cx) {
+    if (-not $chkPViento.Checked) { return $true }
+    Con 'Guardia de viento: consultando HSUs via NCU...' ([System.Drawing.Color]::Gainsboro)
+    $v = Viento-Seguro $cx.ip $cx.to
+    if ($null -eq $v) {
+        $r = [System.Windows.Forms.MessageBox]::Show(
+            "No hay datos de HSU via NCU: no puedo comprobar el viento.`r`nContinuar BAJO TU RESPONSABILIDAD?",
+            'Guardia de viento', 'YesNo', 'Warning')
+        return ($r -eq 'Yes')
+    }
+    if ($v.alarma -or $v.nivel -gt 0) {
+        Con ("GUARDIA DE VIENTO: nivel {0}{1} - test de movimiento BLOQUEADO." -f $v.nivel, $(if ($v.alarma) { ' con ALARMA DE VIENTO' } else { '' })) ([System.Drawing.Color]::Salmon)
+        [void][System.Windows.Forms.MessageBox]::Show("Hay viento (nivel $($v.nivel)). Test de movimiento bloqueado por seguridad.", 'Guardia de viento', 'OK', 'Stop')
+        return $false
+    }
+    Con 'Guardia de viento: nivel 0, sin alarmas - adelante.' ([System.Drawing.Color]::LightGreen)
+    return $true
+}
+
+$btnPMotor.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    if ($cx.multi) { throw 'el test de motor va por NCU: elige una entrada (auto)/GW, no PLANTA completa' }
+    $tcus = Rango-Tcus $txtPIni.Text $txtPFin.Text 'Test motor'
+    $pulso = Val-Int $txtPPulso.Text 'Pulso' 1 30
+    $umbral = Parse-RealFinito $txtPUmbral.Text
+    if ($umbral -le 0 -or $umbral -gt 10) { throw 'umbral fuera de rango (0-10 deg)' }
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "TEST DE MOTOR en $($tcus.Count) TCUs: cada uno pasara a MANUAL, movera OESTE ${pulso}s y ESTE ${pulso}s midiendo angulo y corriente, y volvera a su modo original.`r`n`r`nLos seguidores SE VAN A MOVER. Continuar?",
+        'TEST DE MOTOR', 'YesNo', 'Warning')
+    if ($r -ne 'Yes') { return }
+    if (-not (Guardia-Viento $cx)) { return }
+    $lvP.Items.Clear(); $script:UltimoPem = @(); $lblPResumen.Text = ''
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "TEST DE MOTOR: TCUs $($tcus[0])-$($tcus[-1]), pulso ${pulso}s, umbral $umbral deg" ([System.Drawing.Color]::SteelBlue)
+    $nPasa = 0; $nFalla = 0; $nSalta = 0
+    $segs = @(Plan-Segmentos $tcus $cx)
+    foreach ($seg in $segs) {
+        if ($script:Cancelar) { break }
+        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
+        catch { foreach ($tcu in $seg.tcus) { Pem-Fila $tcu 'SALTADO' "sin conexion ($($cx.ip):$($seg.puerto))"; $nSalta++ }; continue }
+        foreach ($tcu in $seg.tcus) {
+            if (Chequear-Cancelado) { break }
+            $modo0 = $null
+            try {
+                $v0 = FC03-Leer $tcu (Dir-Trama 30001) 3          # 30001..30003: estado + alarmas 1/2
+                $modo0 = ($v0[0] -shr 8) -band 0x3
+                if ((($v0[1] -band $CRIT_AL1) -ne 0) -or (($v0[2] -band $CRIT_AL2) -ne 0)) {
+                    Pem-Fila $tcu 'SALTADO' 'alarma critica activa - resolver antes del test'; $nSalta++; continue
+                }
+                $t0 = (FC03-Leer $tcu (Dir-Trama 30111) 1)[0]; if ($t0 -gt 32767) { $t0 -= 65536 }
+                if (-not (Fijar-Modo $tcu 1)) { Pem-Fila $tcu 'FALLA' 'no entra en modo MANUAL'; $nFalla++; continue }
+                # OESTE
+                FC16-Escribir $tcu 40017 @(1)
+                Start-Sleep -Milliseconds ([int]($pulso * 500))
+                $iW = (FC03-Leer $tcu (Dir-Trama 30011) 1)[0]
+                Start-Sleep -Milliseconds ([int]($pulso * 500))
+                FC16-Escribir $tcu 40017 @(0)
+                Start-Sleep -Milliseconds 700
+                $tW = (FC03-Leer $tcu (Dir-Trama 30111) 1)[0]; if ($tW -gt 32767) { $tW -= 65536 }
+                # ESTE
+                FC16-Escribir $tcu 40017 @(2)
+                Start-Sleep -Milliseconds ([int]($pulso * 500))
+                $iE = (FC03-Leer $tcu (Dir-Trama 30011) 1)[0]
+                Start-Sleep -Milliseconds ([int]($pulso * 500))
+                FC16-Escribir $tcu 40017 @(0)
+                Start-Sleep -Milliseconds 700
+                $tE = (FC03-Leer $tcu (Dir-Trama 30111) 1)[0]; if ($tE -gt 32767) { $tE -= 65536 }
+                $dW = ($tW - $t0) / 10.0; $dE = ($tE - $tW) / 10.0
+                $det = ("dW {0:+0.0;-0.0} deg (I {1} mA), dE {2:+0.0;-0.0} deg (I {3} mA)" -f $dW, $iW, $dE, $iE)
+                if ([math]::Abs($dW) -lt $umbral -and [math]::Abs($dE) -lt $umbral) {
+                    $causa = $(if ($iW -lt 30 -and $iE -lt 30) { 'sin corriente de motor' } else { 'no se mueve' })
+                    Pem-Fila $tcu 'FALLA' "$causa - $det"; $nFalla++
+                } elseif ($dW -lt -$umbral -and $dE -gt $umbral) {
+                    Pem-Fila $tcu 'FALLA' "sentido INVERTIDO (revisar polaridad / bit 11 de 41018) - $det"; $nFalla++
+                } elseif ($dW -gt $umbral -and $dE -lt -$umbral) {
+                    Pem-Fila $tcu 'PASA' $det; $nPasa++
+                } else {
+                    Pem-Fila $tcu 'DUDOSO' "movimiento asimetrico - $det"; $nFalla++
+                }
+            } catch {
+                Pem-Fila $tcu 'FALLA' "error durante el test: $_"; $nFalla++
+                if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+            } finally {
+                try { FC16-Escribir $tcu 40017 @(0) } catch {}     # parada de motor garantizada
+                if ($null -ne $modo0) { try { [void](Fijar-Modo $tcu $modo0) } catch {} }
+            }
+        }
+    }
+    Modbus-Cerrar
+    $lblPResumen.Text = "PASA $nPasa | FALLA $nFalla | saltados $nSalta"
+    Con "TEST DE MOTOR terminado: PASA $nPasa | FALLA $nFalla | SALTADOS $nSalta" ([System.Drawing.Color]::SteelBlue)
+} })
+
+$btnPModo.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    if ($cx.multi) { throw 'el cambio de modo va por NCU: elige una entrada (auto)/GW' }
+    $tcus = Rango-Tcus $txtPIni.Text $txtPFin.Text 'Modo'
+    $modo = @{'OFF'=0; 'MANUAL'=1; 'AUTO'=2}[[string]$cbPModo.SelectedItem]
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "Pasar $($tcus.Count) TCUs a modo $($cbPModo.SelectedItem)?", 'Cambio de modo', 'YesNo', 'Warning')
+    if ($r -ne 'Yes') { return }
+    $lvP.Items.Clear(); $script:UltimoPem = @()
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Cambio de modo a $($cbPModo.SelectedItem) en TCUs $($tcus[0])-$($tcus[-1])" ([System.Drawing.Color]::SteelBlue)
+    $segs = @(Plan-Segmentos $tcus $cx)
+    foreach ($seg in $segs) {
+        if ($script:Cancelar) { break }
+        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
+        catch { foreach ($tcu in $seg.tcus) { Pem-Fila $tcu 'FALLA' "sin conexion ($($cx.ip):$($seg.puerto))" }; continue }
+        foreach ($tcu in $seg.tcus) {
+            if (Chequear-Cancelado) { break }
+            try {
+                if (Fijar-Modo $tcu $modo) { Pem-Fila $tcu 'OK' "en modo $($cbPModo.SelectedItem)" }
+                else { Pem-Fila $tcu 'FALLA' "no confirma el modo (30001)" }
+            } catch { Pem-Fila $tcu 'FALLA' "$_"; if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar } }
+        }
+    }
+    Modbus-Cerrar
+} })
+
+$btnPClear.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    if ($cx.multi) { throw 'elige una entrada (auto)/GW' }
+    $tcus = Rango-Tcus $txtPIni.Text $txtPFin.Text 'Clear'
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "Desenclavar alarmas de motor (40007 bit 13) en $($tcus.Count) TCUs?", 'Clear alarmas', 'YesNo', 'Question')
+    if ($r -ne 'Yes') { return }
+    $lvP.Items.Clear(); $script:UltimoPem = @()
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Clear de alarmas enclavadas en TCUs $($tcus[0])-$($tcus[-1])" ([System.Drawing.Color]::SteelBlue)
+    $segs = @(Plan-Segmentos $tcus $cx)
+    foreach ($seg in $segs) {
+        if ($script:Cancelar) { break }
+        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
+        catch { foreach ($tcu in $seg.tcus) { Pem-Fila $tcu 'FALLA' "sin conexion" }; continue }
+        foreach ($tcu in $seg.tcus) {
+            if (Chequear-Cancelado) { break }
+            try {
+                FC22-Mascara $tcu 40007 0xDFFF 0x2000
+                Start-Sleep -Milliseconds 400
+                $st = (FC03-Leer $tcu (Dir-Trama 30006) 1)[0]
+                if (($st -shr 11) -band 1) { Pem-Fila $tcu 'AVISO' 'la alarma sigue enclavada (revisar causa)' }
+                else { Pem-Fila $tcu 'OK' 'sin alarmas de motor enclavadas' }
+            } catch { Pem-Fila $tcu 'FALLA' "$_"; if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar } }
+        }
+    }
+    Modbus-Cerrar
+} })
+
+function Stow-Aplicar([int]$n) {
+    $cx = Params-Conexion
+    if ($cx.multi) { throw 'el stow va por NCU: elige una entrada (auto)/GW' }
+    $tcus = Rango-Tcus $txtPIni.Text $txtPFin.Text 'Stow'
+    $txtAccion = $(if ($n -gt 0) { "ACTIVAR safe position $n" } else { 'QUITAR el stow' })
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "$txtAccion en $($tcus.Count) TCUs? Los seguidores se moveran.", 'Stow', 'YesNo', 'Warning')
+    if ($r -ne 'Yes') { return }
+    $lvP.Items.Clear(); $script:UltimoPem = @()
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "$txtAccion en TCUs $($tcus[0])-$($tcus[-1])" ([System.Drawing.Color]::SteelBlue)
+    $segs = @(Plan-Segmentos $tcus $cx)
+    foreach ($seg in $segs) {
+        if ($script:Cancelar) { break }
+        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
+        catch { foreach ($tcu in $seg.tcus) { Pem-Fila $tcu 'FALLA' "sin conexion" }; continue }
+        foreach ($tcu in $seg.tcus) {
+            if (Chequear-Cancelado) { break }
+            try {
+                FC22-Mascara $tcu 42000 0xFFF8 $n
+                Start-Sleep -Milliseconds 800
+                $v = (FC03-Leer $tcu (Dir-Trama 30001) 1)[0]
+                $activo = ($v -shr 13) -band 0x7
+                if ($n -gt 0) {
+                    if ($activo -eq $n) { Pem-Fila $tcu 'OK' "safe position $n activa (en movimiento hacia stow)" }
+                    else { Pem-Fila $tcu 'AVISO' "solicitada $n pero 30001 marca $activo (puede haber otra fuente de safe pos)" }
+                } else {
+                    if ($activo -eq 0) { Pem-Fila $tcu 'OK' 'stow retirado' }
+                    else { Pem-Fila $tcu 'AVISO' "sigue en safe position $activo (otra fuente: NCU/viento?)" }
+                }
+            } catch { Pem-Fila $tcu 'FALLA' "$_"; if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar } }
+        }
+    }
+    Modbus-Cerrar
+}
+$btnPStow.Add_Click({ Lanzar { Stow-Aplicar ([int][string]$cbPStow.SelectedItem) } })
+$btnPUnstow.Add_Click({ Lanzar { Stow-Aplicar 0 } })
+
+$btnPComis.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    if ($cx.multi) { throw 'elige una entrada (auto)/GW' }
+    $tcus = Rango-Tcus $txtPIni.Text $txtPFin.Text 'Comisionado'
+    $lvP.Items.Clear(); $script:UltimoPem = @()
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Estado de comisionado (30001 bits 4:3) en TCUs $($tcus[0])-$($tcus[-1])" ([System.Drawing.Color]::SteelBlue)
+    $cuenta = @{}
+    $segs = @(Plan-Segmentos $tcus $cx)
+    foreach ($seg in $segs) {
+        if ($script:Cancelar) { break }
+        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
+        catch { foreach ($tcu in $seg.tcus) { Pem-Fila $tcu 'FALLA' "sin conexion" }; continue }
+        foreach ($tcu in $seg.tcus) {
+            if (Chequear-Cancelado) { break }
+            try {
+                $v = (FC03-Leer $tcu (Dir-Trama 30001) 1)[0]
+                $e = ($v -shr 3) -band 0x3
+                $nom = $ESTADOS_COMIS[[int]$e]
+                if (-not $cuenta.ContainsKey($nom)) { $cuenta[$nom] = 0 }
+                $cuenta[$nom]++
+                Pem-Fila $tcu $(if ($e -eq 0) { 'OK' } else { 'PENDIENTE' }) "$e - $nom"
+            } catch { Pem-Fila $tcu 'FALLA' "$_"; if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar } }
+        }
+    }
+    Modbus-Cerrar
+    $lblPResumen.Text = (@($cuenta.Keys | ForEach-Object { "$($cuenta[$_]) $_" }) -join ' | ')
+} })
+
+$btnPComisSet.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    if ($cx.multi) { throw 'elige una entrada (auto)/GW' }
+    $tcus = Rango-Tcus $txtPIni.Text $txtPFin.Text 'Comisionado'
+    $obj = [int]([string]$cbPComis.SelectedItem).Split(' ')[0]
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "Fijar estado de comisionado '$($ESTADOS_COMIS[$obj])' ($obj) en $($tcus.Count) TCUs?`r`nRecuerda GUARDAR EN NVM despues.",
+        'Comisionado', 'YesNo', 'Warning')
+    if ($r -ne 'Yes') { return }
+    $lvP.Items.Clear(); $script:UltimoPem = @()
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Fijando comisionado=$obj ($($ESTADOS_COMIS[$obj])) en TCUs $($tcus[0])-$($tcus[-1])" ([System.Drawing.Color]::SteelBlue)
+    $segs = @(Plan-Segmentos $tcus $cx)
+    foreach ($seg in $segs) {
+        if ($script:Cancelar) { break }
+        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
+        catch { foreach ($tcu in $seg.tcus) { Pem-Fila $tcu 'FALLA' "sin conexion" }; continue }
+        foreach ($tcu in $seg.tcus) {
+            if (Chequear-Cancelado) { break }
+            try {
+                FC22-Mascara $tcu 40000 0xFF1F ($obj -shl 5)
+                Start-Sleep -Milliseconds 500
+                $v = (FC03-Leer $tcu (Dir-Trama 30001) 1)[0]
+                $e = ($v -shr 3) -band 0x3
+                if ($e -eq $obj) { Pem-Fila $tcu 'OK' "comisionado = $e ($($ESTADOS_COMIS[[int]$e]))" }
+                else { Pem-Fila $tcu 'AVISO' "solicitado $obj pero 30001 marca $e" }
+            } catch { Pem-Fila $tcu 'FALLA' "$_"; if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar } }
+        }
+    }
+    Modbus-Cerrar
+    Con 'Recuerda GUARDAR EN NVM (pestana Escribir) para que el estado sobreviva a un reinicio.' ([System.Drawing.Color]::Orange)
+} })
+
+$btnPCsv.Add_Click({
+    $dlg = New-Object System.Windows.Forms.SaveFileDialog
+    $dlg.Filter = 'CSV (*.csv)|*.csv'
+    $dlg.FileName = 'pem_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
+    if ($dlg.ShowDialog() -eq 'OK') {
+        $script:UltimoPem | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8
+        Con "CSV exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
+    }
+})
+
 # ------------------------- HSU (METEO) -------------------------
 function Params-Hsu {
     $cx = Params-Conexion
@@ -3204,6 +3672,7 @@ Con 'Entradas (auto): NCU completa con puerto resuelto por TCU; los gateways se 
 Con 'Flota: auditoria contra preset de referencia e inventario (FW/serie/MAC). Volcar: BACKUP NCU masivo. Escribir: CSV por TCU.' ([System.Drawing.Color]::Gainsboro)
 Con 'Diagnostico de PLANTA completa: recorre todas las NCUs (filtro NCUs: 1,3-5) e incluye la salud de cada NCU (GW1/GW2, UPS, seta).' ([System.Drawing.Color]::Gainsboro)
 Con 'HSU: meteo en vivo, umbrales de viento, reloj UTC, calibracion de nieve y caja negra de 24h a CSV.' ([System.Drawing.Color]::Gainsboro)
+Con 'PEM: test de motor con guardia de viento, modo masivo, clear de alarmas, stow test y estado de comisionado.' ([System.Drawing.Color]::Gainsboro)
 Con 'Volcar: backup completo de una TCU (CSV/JSON) y comparacion contra un backup anterior.' ([System.Drawing.Color]::Gainsboro)
 Con 'Diagnostico: salud OK/AVISO/ALARMA/OFFLINE de un rango con alarmas en texto. Utilidades: reloj e identificacion.' ([System.Drawing.Color]::Gainsboro)
 foreach ($m in $script:MsgsInicio) { Con $m ([System.Drawing.Color]::SteelBlue) }
