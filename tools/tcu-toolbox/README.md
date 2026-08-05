@@ -21,7 +21,7 @@ Cuando una NCU tiene varios gateways, el desplegable ofrece además una entrada 
 | Pestaña | Qué hace |
 |---|---|
 | **Escribir** | Tabla de variables (todo el mapa 4xxxx: carga, calefactor, comunicaciones, geometría, umbrales, deadbands, safe positions, rangos de tilt, motor, SoC) con verificación tras escribir, reintentos, "reintentar fallidas" y guardado en NVM (40007 bit 15). Campo **Filtro**: escribe `soc`, `tilt`, `zigbee`… y el desplegable de variables se reduce a lo que casa (las filas ya elegidas nunca se pierden). Presets JSON y carga de un **backup como preset** (excluye comandos y fecha/hora). Botón **CSV por TCU...**: escribe valores distintos a cada TCU desde un CSV `TCU;variable;valor` (la variable admite nombre exacto o prefijo único, p. ej. `41010`). Los registros de comando piden **doble confirmación**. |
-| **Leer variable** | Una variable en un rango de TCUs con resumen de discrepancias (cuántos TCU tienen cada valor). Campo **Filtro** con contador de coincidencias (busca también en los registros de estado `ESTADO …`; si solo queda una, se autoselecciona). Export CSV. |
+| **Leer variable** | **Varias variables a la vez** (lista con Añadir/Quitar; una columna por variable) en un rango de TCUs, con resumen de discrepancias por variable (cuántos TCU tienen cada valor). Campo **Filtro** con contador de coincidencias (busca también en los registros `ESTADO …`). Export CSV. |
 | **Volcar TCU** | Todas las variables de un TCU (config + estado + identidad opcional). Export CSV y **backup JSON** con metadatos (planta, IP, TCU, fecha, versión de mapa). Botón **Comparar con backup JSON**: marca en naranja las diferencias con un volcado anterior — ideal para verificar una TCU recién sustituida. **BACKUP NCU**: vuelca todas las TCUs de un rango a una carpeta, un JSON por TCU, con marca de completitud — el seguro antes de tocar nada. |
 | **Diagnóstico** | Escanea un rango de TCUs y clasifica cada uno en `OK / AVISO / ALARMA / OFFLINE` con el **mismo criterio de salud que el SCADA** (eje bloqueado, sobrecorriente, batería crítica, seta, fuera de rango ⇒ alarma; resto de bits, `system_ok=0` o desviación >5° ⇒ aviso). Las alarmas se muestran **decodificadas bit a bit en texto** (registros 30002–30005), más SoC/SoH, tensiones, temperaturas y estado del cargador. Export CSV y JSON. |
 | **Flota** | **Auditoría**: compara un rango de TCUs contra un *preset de referencia* (un preset o un backup completo) y lista **solo las desviaciones** (esperado vs leído), con export CSV — el "¿está toda la NCU igual?" en un clic. **Inventario**: FW principal/fábrica, nº de serie, MAC Xbee, HW y fecha de fabricación de todo el rango, con aviso si hay firmwares mezclados y export CSV. |
@@ -31,7 +31,7 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 ## Vínculo con la plataforma (sin dejar de ser offline)
 
-- **Mismo programa para todas las plantas, un fichero por planta**: la toolbox carga al arrancar todos los JSON/CSV de la subcarpeta `plantas/` (uno por planta, p. ej. `elburgo.json`), más un `plantas.json` o `plantas.csv` clásicos junto al script si existen. El botón **Cargar...** (junto al desplegable de plantas) importa un fichero recién descargado de la plataforma y ofrece guardarlo en `plantas/` para próximas sesiones. Así el programa nunca cambia por añadir plantas: solo se descargan ficheros. El CSV (separado por `;`, editable desde Excel sin necesitar Office en el PC de campo) usa una fila por gateway:
+- **Mismo programa para todas las plantas, un fichero por planta**: el desplegable muestra **solo** las plantas de los ficheros cargados (no hay lista integrada en el script). Al arrancar se cargan todos los JSON/CSV de la subcarpeta `plantas/`, más un `plantas.json`/`plantas.csv` clásicos si existen; el botón **Cargar...** **reemplaza** la lista por las NCUs del fichero que elijas (y ofrece guardarlo en `plantas/` para próximas sesiones) — quita de `plantas/` los ficheros de plantas que no quieras ver. Así el programa nunca cambia por añadir plantas: solo se descargan ficheros. El CSV (separado por `;`, editable desde Excel sin necesitar Office en el PC de campo) usa una fila por gateway:
 
   ```
   Planta;NCU;IP;Puerto;TCU_ini;TCU_fin
@@ -86,7 +86,7 @@ Diagnóstico (`Diagnóstico → JSON`): igual, con `"tipo": "diagnostico_tcu"` y
 
 ## Notas técnicas
 
-- Las variables de los desplegables siguen el orden del mapa, agrupadas por categoría como en el PDF (comandos → fecha/hora → carga → calefactor → comunicaciones → geometría → umbrales → límites → safe positions → rangos de tilt → motor → SoC); el filtro busca por subcadena sin distinguir mayúsculas y sin interpretar `[ ] * ?` como comodines.
+- Las variables de los desplegables van en **orden ascendente por número de registro**; el filtro busca por subcadena sin distinguir mayúsculas y sin interpretar `[ ] * ?` como comodines.
 - Modbus TCP con framing MBAP propio (sin dependencias): FC03 lectura, FC16 escritura múltiple, FC22 mask-write para bytes y bits sueltos.
 - Tipos soportados: `u16, s16, u16hex, u32, u32hex, f32, f32deg, u8lo, u8hi, bit, dt_bcd (fecha BCD 3 regs), charger, serial`.
 - F32/U32 en orden *little-endian word swap* (2-1-4-3) según el mapa: registro N = palabra baja.
