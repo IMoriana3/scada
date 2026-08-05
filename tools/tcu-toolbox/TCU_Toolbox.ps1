@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '5.6'
+$VERSION_TOOLBOX = '5.7'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -5378,38 +5378,62 @@ $lblLog.Anchor     = 'Left,Bottom'
 $btnLog.Anchor     = 'Right,Bottom'
 $btnInforme.Anchor = 'Right,Bottom'
 
+# Decide el anclaje de un control a partir de su geometria. Va aparte del
+# recorrido de controles para poder probarlo sin abrir una ventana.
+#   tipo: 'tabla' | 'grupo' | 'boton' | 'etiqueta' | 'otro'
+#   crece: es la tabla mas baja del contenedor (la unica que puede estirarse)
+#   abajoTabla: borde inferior de esa tabla, o -1 si el contenedor no tiene
+function Anclaje-Para([hashtable]$g) {
+    if ($g.tipo -eq 'tabla') {
+        if ($g.crece) { return 'Top,Left,Right,Bottom' }
+        return 'Top,Left,Right'
+    }
+    # Lo que esta POR DEBAJO de la tabla que crece tiene que bajar con la
+    # ventana. Si se queda anclado arriba, al maximizar la tabla se estira y se
+    # lo come: es lo que pasaba con ESCRIBIR y con las casillas de su fila.
+    if ($g.abajoTabla -ge 0 -and $g.top -ge ($g.abajoTabla - 4)) {
+        if ($g.tipo -eq 'etiqueta' -and $g.ancho -gt 300) { return 'Bottom,Left,Right' }
+        if (($g.left + $g.ancho) -gt ($g.anchoRef - 60)) { return 'Bottom,Right' }
+        return 'Bottom,Left'
+    }
+    if ($g.tipo -eq 'grupo') {
+        # en Flota hay dos grupos apilados: el de abajo es el que crece
+        if ($g.top -gt 150) { return 'Top,Left,Right,Bottom' }
+        return 'Top,Left,Right'
+    }
+    if ($g.tipo -eq 'boton' -and (($g.left + $g.ancho) -gt ($g.anchoRef - 60))) { return 'Top,Right' }
+    if ($g.tipo -eq 'etiqueta' -and $g.ancho -gt 300) { return 'Top,Left,Right' }
+    return ''
+}
+
 # Anclar contra un contenedor que todavia no tiene su tamano definitivo deja
-# los controles pegados al borde derecho (Anadir, LEER, Exportar CSV...) fuera
-# de la vista, y las tablas mas largas que su pestana, con la barra de
-# desplazamiento por debajo del borde. Por eso todo esto se hace con la
-# ventana ya mostrada y con una guarda por si algun contenedor sigue sin
-# medir lo que deberia.
+# los controles pegados al borde derecho fuera de la vista, y las tablas mas
+# largas que su pestana. Por eso esto se hace con la ventana ya mostrada y con
+# una guarda por si algun contenedor sigue sin medir lo que deberia.
 function Anclar-Contenedor($cont, $anchoRef) {
     $ancho = $cont.ClientSize.Width
-    # Si hay varias tablas apiladas (Leer variable: la de eleccion arriba y la
-    # de resultados abajo), solo la de abajo crece al agrandar la ventana; las
-    # de arriba mantienen su alto. Ancladas todas abajo se solaparian.
+    $alto = $cont.ClientSize.Height
     $tablas = @($cont.Controls | Where-Object {
         $_ -is [System.Windows.Forms.ListView] -or $_ -is [System.Windows.Forms.DataGridView] -or $_ -is [System.Windows.Forms.RichTextBox] })
     $topeAbajo = -1
     foreach ($t in $tablas) { if ($t.Top -gt $topeAbajo) { $topeAbajo = $t.Top } }
+    $abajoTabla = -1
+    foreach ($t in $tablas) { if ($t.Top -eq $topeAbajo) { $abajoTabla = $t.Top + $t.Height } }
     foreach ($c in $cont.Controls) {
-        $cabe = ($ancho -ge ($c.Left + $c.Width)) -and ($cont.ClientSize.Height -ge ($c.Top + $c.Height))
-        if ($c -is [System.Windows.Forms.ListView] -or $c -is [System.Windows.Forms.DataGridView] -or $c -is [System.Windows.Forms.RichTextBox]) {
-            if ($cabe) {
-                if ($c.Top -eq $topeAbajo) { $c.Anchor = 'Top,Left,Right,Bottom' } else { $c.Anchor = 'Top,Left,Right' }
-            }
-        } elseif ($c -is [System.Windows.Forms.GroupBox]) {
-            # en Flota hay dos grupos apilados: el de abajo es el que crece
-            if ($cabe) {
-                if ($c.Top -gt 150) { $c.Anchor = 'Top,Left,Right,Bottom' } else { $c.Anchor = 'Top,Left,Right' }
-            }
-            Anclar-Contenedor $c ($c.Width - 24)
-        } elseif (($c -is [System.Windows.Forms.Button]) -and (($c.Left + $c.Width) -gt ($anchoRef - 60))) {
-            if ($cabe) { $c.Anchor = 'Top,Right' }   # botones pegados al borde derecho
-        } elseif (($c -is [System.Windows.Forms.Label]) -and ($c.Width -gt 300)) {
-            if ($cabe) { $c.Anchor = 'Top,Left,Right' } # notas y resumenes largos
+        if (($ancho -lt ($c.Left + $c.Width)) -or ($alto -lt ($c.Top + $c.Height))) {
+            # el contenedor no mide lo que deberia: mejor no anclar nada
+            if ($c -is [System.Windows.Forms.GroupBox]) { Anclar-Contenedor $c ($c.Width - 24) }
+            continue
         }
+        $tipo = 'otro'
+        if ($c -is [System.Windows.Forms.ListView] -or $c -is [System.Windows.Forms.DataGridView] -or $c -is [System.Windows.Forms.RichTextBox]) { $tipo = 'tabla' }
+        elseif ($c -is [System.Windows.Forms.GroupBox]) { $tipo = 'grupo' }
+        elseif ($c -is [System.Windows.Forms.Button]) { $tipo = 'boton' }
+        elseif ($c -is [System.Windows.Forms.Label]) { $tipo = 'etiqueta' }
+        $a = Anclaje-Para @{tipo=$tipo; top=$c.Top; left=$c.Left; ancho=$c.Width; alto=$c.Height
+                            anchoRef=$anchoRef; crece=($c.Top -eq $topeAbajo); abajoTabla=$abajoTabla}
+        if ($a) { $c.Anchor = $a }
+        if ($tipo -eq 'grupo') { Anclar-Contenedor $c ($c.Width - 24) }
     }
 }
 

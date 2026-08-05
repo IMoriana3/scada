@@ -34,6 +34,8 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
 
+**Botones tapados al maximizar (v5.7)** — con la ventana maximizada, la tabla de cada pestaña se estiraba hacia abajo y **se comía los controles que van debajo**: el botón **ESCRIBIR**, la casilla de verificación, NVM… La tabla crecía pero los botones seguían anclados arriba. Ahora todo lo que está por debajo de la tabla que crece se ancla al borde inferior y baja con la ventana. La regla de anclaje se ha separado en una función pura (`Anclaje-Para`) que la suite comprueba con la geometría real de cada pestaña, sin abrir una ventana.
+
 **Maquetación de la ventana (v5.1)** — corregida una regresión del tema de la v5.0: los botones pegados al borde derecho (**Añadir** en Leer variable, **LEER**, **Exportar CSV**, **SINCRONIZAR**, **Cargar preset…**) desaparecían, y las tablas quedaban más largas que su pestaña con la barra de desplazamiento por debajo del borde. Los anclajes se calculaban antes de que la ventana estuviera visible, cuando las pestañas que no están seleccionadas todavía no tienen su tamaño definitivo. Ahora se aplican con la ventana ya mostrada, con una guarda que no ancla nada contra un contenedor que no mide lo que debería, y una pasada final que devuelve a su sitio cualquier control que hubiera quedado fuera.
 
 **HSU en Planta completa (v5.1)** — las operaciones directas de HSU (meteo, config, umbrales, reloj, nieve, NVM, caja negra) ya no exigen cambiar la entrada de conexión: si has elegido una HSU en el desplegable de **BUSCAR HSUs**, el programa ya sabe de qué NCU cuelga y usa su IP y el primer gateway de esa NCU, avisando en consola de cuál ha cogido (si cuelga del otro, se pone el puerto a mano).
@@ -53,7 +55,7 @@ Además, transversales a las pestañas (v3.1):
 
 ## Pruebas
 
-`tests/` lleva un simulador Modbus TCP y **254 comprobaciones** de toda la lógica no-GUI, para poder tocar el script sin planta delante:
+`tests/` lleva un simulador Modbus TCP y **262 comprobaciones** de toda la lógica no-GUI, para poder tocar el script sin planta delante:
 
 ```bash
 cd tests && python3 mb_server.py &

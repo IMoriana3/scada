@@ -22,7 +22,8 @@ $i2 = $src.IndexOf('function Diag-LeerTcu'); $f2 = $src.IndexOf('$btnDiag.Add_Cl
 $i3 = $src.IndexOf('function Params-Conexion'); $f3 = $src.IndexOf('function Rango-Tcus')
 $i4 = $src.IndexOf('function Nombres-Legibles'); $f4 = $src.IndexOf('function Refrescar-FiltroLeer')
 $i5 = $src.IndexOf('function Hsu-Recorrer'); $f5 = $src.IndexOf('function Hsu-Mostrar')
-$logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5)
+$i6 = $src.IndexOf('function Anclaje-Para'); $f6 = $src.IndexOf('# Anclar contra un contenedor')
+$logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6)
 Invoke-Expression $logica
 
 $fallos = 0
@@ -589,6 +590,31 @@ Check 'informe: sin indice con una sola seccion' ($hUna.Contains('En esta sesion
 # informes de versiones viejas, sin marca de orden: no deben romperse
 $hSin = Informe-Html ($base + @{diag=$dg; inv=$iv})
 Check 'informe: sin orden sigue saliendo' ($hSin.Contains('Inventario de flota') -and $hSin.Contains('Diagnostico de flota')) 'True'
+
+# ---------- anclajes: lo que va debajo de la tabla no puede quedar tapado ----------
+# Geometria real de la pestana Escribir: la tabla ocupa 55..283 y el boton
+# ESCRIBIR esta en 292. Al maximizar, la tabla crece hacia abajo; si el boton
+# sigue anclado arriba, la tabla se lo come y no hay forma de escribir.
+$anchoRef = 901
+$gTabla  = @{tipo='tabla'; top=55; left=10; ancho=898; alto=228; anchoRef=$anchoRef; crece=$true; abajoTabla=283}
+$gBoton  = @{tipo='boton'; top=292; left=180; ancho=120; alto=30; anchoRef=$anchoRef; crece=$false; abajoTabla=283}
+$gChk    = @{tipo='otro'; top=296; left=10; ancho=160; alto=22; anchoRef=$anchoRef; crece=$false; abajoTabla=283}
+$gNvm    = @{tipo='boton'; top=292; left=760; ancho=148; alto=30; anchoRef=$anchoRef; crece=$false; abajoTabla=283}
+$gPreset = @{tipo='boton'; top=18; left=766; ancho=140; alto=28; anchoRef=$anchoRef; crece=$false; abajoTabla=283}
+Check 'ancla tabla que crece'        (Anclaje-Para $gTabla)  'Top,Left,Right,Bottom'
+Check 'ancla ESCRIBIR baja'          (Anclaje-Para $gBoton)  'Bottom,Left'
+Check 'ancla casilla baja'           (Anclaje-Para $gChk)    'Bottom,Left'
+Check 'ancla NVM baja y a la derecha' (Anclaje-Para $gNvm)   'Bottom,Right'
+Check 'ancla boton de arriba a la derecha' (Anclaje-Para $gPreset) 'Top,Right'
+# tabla que NO es la mas baja (Leer variable: la de eleccion arriba)
+$gTabla2 = @{tipo='tabla'; top=55; left=10; ancho=898; alto=118; anchoRef=$anchoRef; crece=$false; abajoTabla=360}
+Check 'ancla tabla de arriba no crece' (Anclaje-Para $gTabla2) 'Top,Left,Right'
+# etiqueta larga por debajo de la tabla
+$gEtiq = @{tipo='etiqueta'; top=300; left=10; ancho=600; alto=20; anchoRef=$anchoRef; crece=$false; abajoTabla=283}
+Check 'ancla nota larga baja y estira' (Anclaje-Para $gEtiq) 'Bottom,Left,Right'
+# sin tablas en el contenedor, nada cambia
+$gSin = @{tipo='boton'; top=292; left=180; ancho=120; alto=30; anchoRef=$anchoRef; crece=$false; abajoTabla=-1}
+Check 'sin tabla, boton sin anclaje' (Anclaje-Para $gSin) ''
 
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }
