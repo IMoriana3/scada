@@ -1,0 +1,45 @@
+# Publica cada version de la TCU Toolbox como Release de GitHub con un ZIP
+# que lleva la version en el nombre (TCU_Toolbox_v2.4.zip). Asi la descarga
+# de campo dice siempre que version es, sin abrir la herramienta.
+name: Release de TCU Toolbox
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/tcu-toolbox/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Leer version y empaquetar ZIP
+        id: v
+        run: |
+          VER=$(grep -oP "VERSION_TOOLBOX = '\K[0-9.]+" tools/tcu-toolbox/TCU_Toolbox.ps1)
+          test -n "$VER"
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+          cd tools
+          zip -r "../TCU_Toolbox_v${VER}.zip" tcu-toolbox -x "tcu-toolbox/logs/*"
+          cd ..
+          unzip -l "TCU_Toolbox_v${VER}.zip"
+
+      - name: Crear o actualizar la release
+        run: |
+          VER="${{ steps.v.outputs.ver }}"
+          TAG="toolbox-v${VER}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --title "TCU Toolbox v${VER}" \
+              --notes "Herramienta offline de campo (configuracion y diagnostico de TCUs Sunner). Descarga el ZIP, copia la carpeta tcu-toolbox al portatil (las plantas van dentro, en plantas/) y doble clic en TCU_Toolbox.bat." \
+              --latest
+          fi
+          gh release upload "$TAG" "TCU_Toolbox_v${VER}.zip" --clobber
