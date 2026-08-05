@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '4.3'
+$VERSION_TOOLBOX = '4.4'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -745,6 +745,44 @@ function Seguimiento-Filas {
             config_tcu = $conf; prueba_movimiento = $mov; observaciones = ($obs -join ' | ')}
     }
     return @($filas | Sort-Object ncu, tcu)
+}
+
+# Plan de campana de firmware: a partir de un inventario (filas con NCU, TCU y
+# FW) y una version objetivo, agrupa las TCUs pendientes por NCU y gateway y
+# las expresa como tramos "desde-hasta", que es justo lo que pide el TCU
+# Updater de Sunner ("Add from ... to ..."). Las TCUs sin respuesta en el
+# inventario salen aparte: no se puede planificar lo que no comunica.
+function Plan-Firmware([array]$inv, [string]$objetivo, [hashtable]$gwsPorNcu) {
+    $obj = "$objetivo".Trim()
+    if (-not $obj) { throw 'indica la version de firmware objetivo (p. ej. v1.6.0)' }
+    $pend = @{}; $mudas = @(); $alDia = 0
+    foreach ($f in $inv) {
+        $tcu = 0
+        if (-not [int]::TryParse("$($f.TCU)", [ref]$tcu)) { continue }
+        $ncu = "$($f.NCU)"
+        $fw = "$($f.FW)".Trim()
+        if (-not $fw) { $mudas += ,@{ncu=$ncu; tcu=$tcu; nota="$($f.Nota)"}; continue }
+        if ($fw -like "*$obj*") { $alDia++; continue }
+        $puerto = ''
+        foreach ($g in @($gwsPorNcu[$ncu])) {
+            if ($tcu -ge [int]$g.ini -and $tcu -le [int]$g.fin) { $puerto = "$($g.puerto)"; break }
+        }
+        $k = "$ncu|$puerto"
+        if (-not $pend.ContainsKey($k)) { $pend[$k] = @() }
+        $pend[$k] += $tcu
+    }
+    $filas = @()
+    foreach ($k in @($pend.Keys | Sort-Object { [int]("0" + ($_ -split '\|')[0]) }, { $_ })) {
+        $p = $k -split '\|', 2
+        foreach ($run in @(Runs-Consecutivos @($pend[$k] | Sort-Object -Unique))) {
+            $filas += [pscustomobject]@{
+                NCU = $p[0]; Puerto = $p[1]; Desde = [int]$run.ini; Hasta = [int]$run.fin
+                TCUs = ([int]$run.fin - [int]$run.ini + 1)
+            }
+        }
+    }
+    $totalPend = 0; foreach ($k in $pend.Keys) { $totalPend += @($pend[$k]).Count }
+    return @{tramos=$filas; pendientes=$totalPend; al_dia=$alDia; sin_respuesta=$mudas}
 }
 
 # Tramos consecutivos de una lista ordenada de TCUs: @(1,2,3,5) -> (1-3),(5-5)
@@ -1975,6 +2013,57 @@ $lvP.View = 'Details'; $lvP.FullRowSelect = $true; $lvP.GridLines = $true
 [void]$lvP.Columns.Add('Resultado', 100)
 [void]$lvP.Columns.Add('Detalle', 685)
 $tabP.Controls.Add($lvP)
+
+# ============================ TAB FIRMWARE ============================
+$tabFW = New-Object System.Windows.Forms.TabPage
+$tabFW.Text = 'Firmware'
+$tabs.TabPages.Add($tabFW)
+
+[void](LG $tabFW 'Version objetivo' 10 100)
+$txtFwObj = TG $tabFW 'v1.6.0' 112 22 90
+[void](LG $tabFW 'min/TCU' 700 52)
+$txtFwMin = TG $tabFW '20' 754 22 34
+
+$btnFwPlan = New-Object System.Windows.Forms.Button
+$btnFwPlan.Text = 'PLAN DE ACTUALIZACION'
+$btnFwPlan.Location = New-Object System.Drawing.Point(212, 18)
+$btnFwPlan.Size = New-Object System.Drawing.Size(180, 28)
+$btnFwPlan.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnFwPlan.ForeColor = [System.Drawing.Color]::White
+$tabFW.Controls.Add($btnFwPlan)
+
+$btnFwVerif = New-Object System.Windows.Forms.Button
+$btnFwVerif.Text = 'VERIFICAR TRAS ACTUALIZAR'
+$btnFwVerif.Location = New-Object System.Drawing.Point(400, 18)
+$btnFwVerif.Size = New-Object System.Drawing.Size(200, 28)
+$btnFwVerif.Enabled = $false
+$tabFW.Controls.Add($btnFwVerif)
+
+$btnFwCsv = New-Object System.Windows.Forms.Button
+$btnFwCsv.Text = 'CSV'
+$btnFwCsv.Location = New-Object System.Drawing.Point(798, 18)
+$btnFwCsv.Size = New-Object System.Drawing.Size(110, 28)
+$btnFwCsv.Enabled = $false
+$tabFW.Controls.Add($btnFwCsv)
+
+$lblFw = LG $tabFW 'Haz primero un Inventario (pestana Flota) y luego el plan.' 610 180
+$lblFw.ForeColor = [System.Drawing.Color]::Gray
+
+$lblFwNota = LG $tabFW 'Cada tramo es un CARRIL (una NCU + un gateway): el updater de Sunner admite varias ventanas a la vez, una por carril, y asi la campana se divide por el numero de carriles en paralelo.' 10 898 52
+$lblFwNota.ForeColor = [System.Drawing.Color]::Gray
+
+$lvFW = New-Object System.Windows.Forms.ListView
+$lvFW.Location = New-Object System.Drawing.Point(10, 78)
+$lvFW.Size = New-Object System.Drawing.Size(898, 282)
+$lvFW.View = 'Details'; $lvFW.FullRowSelect = $true; $lvFW.GridLines = $true
+[void]$lvFW.Columns.Add('NCU', 50)
+[void]$lvFW.Columns.Add('IP', 110)
+[void]$lvFW.Columns.Add('Gateway', 70)
+[void]$lvFW.Columns.Add('Desde', 60)
+[void]$lvFW.Columns.Add('Hasta', 60)
+[void]$lvFW.Columns.Add('TCUs', 55)
+[void]$lvFW.Columns.Add('Estado / nota', 470)
+$tabFW.Controls.Add($lvFW)
 
 # ============================ TAB HSU (METEO) ============================
 $tabH = New-Object System.Windows.Forms.TabPage
@@ -4190,6 +4279,111 @@ $btnPSeg.Add_Click({
     ConvertTo-Json $obj -Depth 5 | Set-Content $dlg.FileName -Encoding UTF8
     $nOk = @($filas | Where-Object { $_.cold_commissioning -eq 'OK' -and $_.config_tcu -eq 'OK' -and $_.prueba_movimiento -eq 'OK' }).Count
     Con "Seguimiento PEM exportado: $($dlg.FileName)  ($($filas.Count) TCUs, $nOk con las 3 tareas OK). Subelo en la pagina Historico de la plataforma." ([System.Drawing.Color]::SteelBlue)
+})
+
+# ------------------------- CAMPANA DE FIRMWARE -------------------------
+# La toolbox no actualiza firmware (eso lo hace el TCU Updater de Sunner):
+# planifica la campana desde el inventario y verifica el resultado.
+$script:PlanFw = @()
+$btnFwPlan.Add_Click({ Lanzar {
+    if (@($script:UltimoInv).Count -eq 0) {
+        [void][System.Windows.Forms.MessageBox]::Show("Haz primero un INVENTARIO en la pestana Flota (puede ser de la planta completa).`r`nEl plan se calcula con esos datos, sin volver a leer nada.", 'Falta el inventario')
+        return
+    }
+    $cx = Params-Conexion
+    $trabajos = @(Trabajos-Planta $cx $null)
+    $gws = @{}; $ips = @{}
+    foreach ($tr in $trabajos) {
+        $k = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
+        $ips[$k] = $tr.ip
+        $gws[$k] = $(if ($tr.cx.gws) { $tr.cx.gws } else { @(@{puerto=$tr.cx.puerto; ini=1; fin=247}) })
+    }
+    $plan = Plan-Firmware $script:UltimoInv $txtFwObj.Text $gws
+    $script:PlanFw = @($plan.tramos)
+    $lvFW.Items.Clear()
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "PLAN DE FIRMWARE hacia $($txtFwObj.Text.Trim()): $($plan.pendientes) TCUs pendientes, $($plan.al_dia) ya al dia, $(@($plan.sin_respuesta).Count) sin respuesta en el inventario" ([System.Drawing.Color]::SteelBlue)
+    # carril = NCU + gateway: cada uno puede llevar su propia ventana del updater
+    $minTcu = Val-Int $txtFwMin.Text 'min/TCU' 1 600
+    $carga = @{}
+    foreach ($t in $script:PlanFw) {
+        $k = "$($t.NCU)|$($t.Puerto)"
+        $carga[$k] = [int]$carga[$k] + [int]$t.TCUs
+    }
+    foreach ($t in $script:PlanFw) {
+        $k = "$($t.NCU)|$($t.Puerto)"
+        $h = [math]::Round(($carga[$k] * $minTcu) / 60.0, 1)
+        $item = New-Object System.Windows.Forms.ListViewItem("$($t.NCU)")
+        foreach ($c in @($ips["$($t.NCU)"], $t.Puerto, $t.Desde, $t.Hasta, $t.TCUs, "carril NCU$($t.NCU)/GW$($t.Puerto): $($carga[$k]) TCUs ~ $h h")) { [void]$item.SubItems.Add("$c") }
+        $item.ForeColor = [System.Drawing.Color]::DarkOrange
+        $lvFW.Items.Add($item) | Out-Null
+        Con ("  NCU{0,-3} {1,-15} GW {2}   TCUs {3}-{4}  ({5})" -f $t.NCU, $ips["$($t.NCU)"], $t.Puerto, $t.Desde, $t.Hasta, $t.TCUs) ([System.Drawing.Color]::Gainsboro)
+    }
+    if ($plan.pendientes -gt 0) {
+        $hSec = [math]::Round(($plan.pendientes * $minTcu) / 60.0, 1)
+        $hPar = [math]::Round(((@($carga.Values | Measure-Object -Maximum).Maximum) * $minTcu) / 60.0, 1)
+        Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
+        Con ("A {0} min/TCU: una sola ventana = {1} h ({2} dias de 8 h). Con {3} carriles en paralelo (una ventana del updater por NCU+gateway) = {4} h, marcadas por el carril mas cargado." -f `
+            $minTcu, $hSec, [math]::Round($hSec / 8.0, 1), $carga.Count, $hPar) ([System.Drawing.Color]::Orange)
+    }
+    foreach ($m in @($plan.sin_respuesta)) {
+        $item = New-Object System.Windows.Forms.ListViewItem("$($m.ncu)")
+        foreach ($c in @($ips["$($m.ncu)"], '-', $m.tcu, $m.tcu, 1, "sin respuesta en el inventario: $($m.nota)")) { [void]$item.SubItems.Add("$c") }
+        $item.ForeColor = [System.Drawing.Color]::Gray
+        $lvFW.Items.Add($item) | Out-Null
+    }
+    $lblFw.Text = "$($plan.pendientes) pendientes | $($plan.al_dia) al dia | $(@($plan.sin_respuesta).Count) sin respuesta"
+    if ($script:PlanFw.Count -eq 0 -and $plan.al_dia -gt 0) { Con "Toda la flota inventariada ya esta en $($txtFwObj.Text.Trim())." ([System.Drawing.Color]::LightGreen) }
+    else { Con 'Pega cada tramo en el TCU Updater (NCU IP + Gateway port + Add from...to) y al terminar pulsa VERIFICAR TRAS ACTUALIZAR.' ([System.Drawing.Color]::Gainsboro) }
+    $btnFwCsv.Enabled = ($lvFW.Items.Count -gt 0)
+    $btnFwVerif.Enabled = ($script:PlanFw.Count -gt 0)
+} })
+
+$btnFwVerif.Add_Click({ Lanzar {
+    if ($script:PlanFw.Count -eq 0) { return }
+    $cx = Params-Conexion
+    $obj = $txtFwObj.Text.Trim()
+    $trabajos = @(Trabajos-Planta $cx $null)
+    $porNcu = @{}
+    foreach ($tr in $trabajos) { $porNcu[$(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })] = $tr }
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Verificando firmware de las TCUs del plan (objetivo $obj)..." ([System.Drawing.Color]::SteelBlue)
+    $ok = 0; $ko = 0; $err = 0
+    foreach ($t in $script:PlanFw) {
+        if ($script:Cancelar) { break }
+        $tr = $porNcu["$($t.NCU)"]
+        if (-not $tr) { continue }
+        $tcus = @([int]$t.Desde..[int]$t.Hasta)
+        foreach ($seg in @(Plan-Segmentos $tcus $tr.cx)) {
+            try { Modbus-Conectar $tr.ip $seg.puerto $tr.cx.to } catch { $err += @($seg.tcus).Count; continue }
+            foreach ($tcu in $seg.tcus) {
+                if (Chequear-Cancelado) { break }
+                $fw = $null
+                try {
+                    $campos = Ident-Leer $tcu
+                    $fw = ($campos | Where-Object { $_.Campo -eq 'FW principal' }).Valor
+                } catch { $err++; continue }
+                if ("$fw" -like "*$obj*") { $ok++ }
+                else { $ko++; Con ("  NCU{0} TCU {1,3}  sigue en {2}" -f $t.NCU, $tcu, $fw) ([System.Drawing.Color]::Orange) }
+            }
+            Modbus-Cerrar
+        }
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    Modbus-Cerrar
+    $lblFw.Text = "Verificacion: $ok en $obj | $ko pendientes | $err sin respuesta"
+    Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Verificacion: $ok TCUs ya en $obj, $ko siguen pendientes, $err sin respuesta. Lanza un INVENTARIO nuevo para dejar constancia (y subirlo al Historico)." ([System.Drawing.Color]::SteelBlue)
+} })
+
+$btnFwCsv.Add_Click({
+    $dlg = New-Object System.Windows.Forms.SaveFileDialog
+    $dlg.Filter = 'CSV (*.csv)|*.csv'
+    $dlg.FileName = 'plan_firmware_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
+    if ($dlg.ShowDialog() -eq 'OK') {
+        $script:PlanFw | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+        Con "Plan exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
+    }
 })
 
 # ------------------------- HSU (METEO) -------------------------
