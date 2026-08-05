@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '3.9'
+$VERSION_TOOLBOX = '4.0'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -125,16 +125,17 @@ function Construir-EntradasAuto {
         $planta = $m.Groups[1].Value.Trim(); $ncu = [int]$m.Groups[2].Value
         # ojo: hashtable normal, no [ordered] (con clave int lo trataria como indice)
         if (-not $porPlanta.Contains($planta)) { $porPlanta[$planta] = @{} }
-        if (-not $porPlanta[$planta].Contains($ncu)) { $porPlanta[$planta][$ncu] = @{ip=$p.ip; gws=@()} }
+        if (-not $porPlanta[$planta].Contains($ncu)) { $porPlanta[$planta][$ncu] = @{ip=$p.ip; gws=@(); hsu=$null} }
         if ($porPlanta[$planta][$ncu].ip -ne $p.ip) { continue }   # inconsistencia: ignorar
         $porPlanta[$planta][$ncu].gws += ,@{puerto=$p.puerto; ini=$p.ini; fin=$p.fin}
+        if ($p.hsu -and -not $porPlanta[$planta][$ncu].hsu) { $porPlanta[$planta][$ncu].hsu = $p.hsu }
     }
     foreach ($planta in $porPlanta.Keys) {
         $ncus = $porPlanta[$planta]
         if ($ncus.Count -lt 2) { continue }
         $lista = @()
         foreach ($n in ($ncus.Keys | Sort-Object)) {
-            $lista += ,@{ncu=[int]$n; ip=$ncus[$n].ip; gws=@($ncus[$n].gws | Sort-Object { $_.ini })}
+            $lista += ,@{ncu=[int]$n; ip=$ncus[$n].ip; gws=@($ncus[$n].gws | Sort-Object { $_.ini }); hsu=$ncus[$n].hsu}
         }
         $PLANTAS["$planta (Planta completa)"] = @{ip=$null; puerto=$null; ini=$null; fin=$null; ncus=$lista}
     }
@@ -1959,9 +1960,23 @@ $tabH.Controls.Add($btnHUmb)
 $lblHNota = LG $tabH 'La HSU cuelga de un gateway concreto: usa una entrada GW (o puerto manual), no (auto).' 700 210 46
 $lblHNota.ForeColor = [System.Drawing.Color]::Gray
 
+# buscador de HSUs de la planta: escanea los bloques compactos de las NCUs
+$btnHBuscar = New-Object System.Windows.Forms.Button
+$btnHBuscar.Text = 'BUSCAR HSUs'
+$btnHBuscar.Location = New-Object System.Drawing.Point(10, 80)
+$btnHBuscar.Size = New-Object System.Drawing.Size(115, 26)
+$tabH.Controls.Add($btnHBuscar)
+$cbHsuSel = New-Object System.Windows.Forms.ComboBox
+$cbHsuSel.Location = New-Object System.Drawing.Point(133, 82)
+$cbHsuSel.Size = New-Object System.Drawing.Size(300, 22)
+$cbHsuSel.DropDownStyle = 'DropDownList'
+$tabH.Controls.Add($cbHsuSel)
+$lblHSel = LG $tabH 'Escanea la planta para listar sus HSUs y de que NCU cuelga cada una.' 443 465 85
+$lblHSel.ForeColor = [System.Drawing.Color]::Gray
+
 $lvH = New-Object System.Windows.Forms.ListView
-$lvH.Location = New-Object System.Drawing.Point(10, 84)
-$lvH.Size = New-Object System.Drawing.Size(898, 276)
+$lvH.Location = New-Object System.Drawing.Point(10, 112)
+$lvH.Size = New-Object System.Drawing.Size(898, 248)
 $lvH.View = 'Details'; $lvH.FullRowSelect = $true; $lvH.GridLines = $true
 [void]$lvH.Columns.Add('Campo', 240)
 [void]$lvH.Columns.Add('Valor', 160)
@@ -2105,7 +2120,7 @@ $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $
                     $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnInvF, $btnInvFCsv,
                     $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm,
                     $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComis, $btnPComisSet, $btnPCsv,
-                    $btnGBucle, $btnPSeg, $btnAudJson, $btnInvJson)
+                    $btnGBucle, $btnPSeg, $btnAudJson, $btnInvJson, $btnHBuscar)
 
 function Set-UIOcupada([bool]$ocupada) {
     foreach ($b in $BOTONES_ACCION) { $b.Enabled = (-not $ocupada) }
@@ -3983,6 +3998,66 @@ $btnPSeg.Add_Click({
 })
 
 # ------------------------- HSU (METEO) -------------------------
+# Busca las HSUs de la planta: recorre las NCUs de la seleccion (planta
+# completa, (auto) o entrada suelta) y lee el bloque compacto de HSUs que
+# cada NCU cachea (30200+, puerto 502). Rellena la lista y el desplegable.
+$script:HsusPlanta = @()
+$btnHBuscar.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    $p = $null; if ($cbPlanta.SelectedItem) { $p = $PLANTAS[$cbPlanta.SelectedItem] }
+    $ncus = @()
+    if ($cx.multi) {
+        foreach ($n in $cx.multi) { $ncus += ,@{ncu="$($n.ncu)"; ip=$n.ip; hsu=$n.hsu} }
+    } else {
+        $eti = ''
+        $m = [regex]::Match("$($cbPlanta.SelectedItem)", 'NCU(\d+)')
+        if ($m.Success) { $eti = $m.Groups[1].Value }
+        $ncus += ,@{ncu=$eti; ip=$cx.ip; hsu=$(if ($p) { $p.hsu } else { $null })}
+    }
+    $lvH.Items.Clear()
+    $script:HsusPlanta = @()
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Buscando HSUs en $($ncus.Count) NCU(s) via bloque compacto (puerto $PUERTO_NCU)..." ([System.Drawing.Color]::SteelBlue)
+    foreach ($n in $ncus) {
+        if ($script:Cancelar) { break }
+        $filas = @()
+        try { Modbus-Conectar $n.ip $PUERTO_NCU $cx.to; $filas = @(Ncu-HsuCompat) }
+        catch { Con "AVISO: NCU$($n.ncu) ($($n.ip)): sin respuesta en ${PUERTO_NCU}: $_" ([System.Drawing.Color]::Orange) }
+        Modbus-Cerrar
+        if ($filas.Count -eq 0) { Con "$(if ($n.ncu) { "NCU$($n.ncu)" } else { $n.ip }): sin HSUs en el bloque compacto." ([System.Drawing.Color]::Gainsboro); continue }
+        foreach ($f in $filas) {
+            $eti = ($(if ($n.ncu) { "NCU$($n.ncu) - " } else { '' }) + $f.TCU)
+            $script:HsusPlanta += ,@{etiqueta=$eti; ncu="$($n.ncu)"; ip=$n.ip; hsu=$n.hsu; salud=$f.Salud; texto=$f.Alarmas}
+            $item = New-Object System.Windows.Forms.ListViewItem($eti)
+            [void]$item.SubItems.Add("$($f.Salud)"); [void]$item.SubItems.Add("$($f.Alarmas)")
+            switch ($f.Salud) {
+                'OK'      { $item.ForeColor = [System.Drawing.Color]::DarkGreen }
+                'AVISO'   { $item.ForeColor = [System.Drawing.Color]::DarkOrange }
+                'ALARMA'  { $item.ForeColor = [System.Drawing.Color]::Firebrick }
+                'OFFLINE' { $item.ForeColor = [System.Drawing.Color]::Gray }
+            }
+            $lvH.Items.Add($item) | Out-Null
+            Con ("{0,-14} {1,-8} {2}" -f $eti, $f.Salud, $f.Alarmas) $(if ($f.Salud -eq 'OK') { [System.Drawing.Color]::LightGreen } else { [System.Drawing.Color]::Orange })
+        }
+    }
+    $cbHsuSel.Items.Clear()
+    [void]$cbHsuSel.Items.Add("(todas: $($script:HsusPlanta.Count) HSUs)")
+    foreach ($h in $script:HsusPlanta) { [void]$cbHsuSel.Items.Add("$($h.etiqueta)  [$($h.ip)]") }
+    $cbHsuSel.SelectedIndex = 0
+    $lblHSel.Text = "$($script:HsusPlanta.Count) HSUs encontradas. Elige una para fijar su IP" + $(if (@($script:HsusPlanta | Where-Object { $_.hsu }).Count) { ' y esclavo' } else { '' }) + ' (las operaciones directas van por su GW).'
+    Con "HSUs encontradas: $($script:HsusPlanta.Count). Al elegir una en el desplegable se fija su IP (y esclavo si la topologia lo trae) para las operaciones directas." ([System.Drawing.Color]::SteelBlue)
+} })
+
+$cbHsuSel.Add_SelectedIndexChanged({
+    if ($script:Ocupado) { return }
+    $i = $cbHsuSel.SelectedIndex
+    if ($i -le 0 -or $i -gt $script:HsusPlanta.Count) { return }
+    $h = $script:HsusPlanta[$i - 1]
+    $txtIp.Text = $h.ip
+    if ($h.hsu) { $txtHSlave.Text = "$($h.hsu)" }
+    Con "HSU seleccionada: $($h.etiqueta) -> IP $($h.ip)$(if ($h.hsu) { ", esclavo $($h.hsu)" } else { '' }). Pon el puerto del GW del que cuelga para METEO/CONFIG/caja negra." ([System.Drawing.Color]::SteelBlue)
+})
+
 function Params-Hsu {
     $cx = Params-Conexion
     if ($cx.multi -or -not $cx.puerto) {
