@@ -27,6 +27,7 @@ Cuando una NCU tiene varios gateways, el desplegable ofrece además una entrada 
 | **PEM** | La pestaña de puesta en marcha. **TEST DE MOTOR** por rango: cada TCU pasa a MANUAL, pulsa Oeste y Este midiendo Δángulo y corriente, vuelve a su modo, y da veredicto **PASA / FALLA (no se mueve, sin corriente, sentido invertido) / DUDOSO** — con **guardia de viento** (consulta las HSU vía NCU y se bloquea si hay nivel > 0), parada de motor garantizada y TCUs con alarma crítica saltados. **APLICAR MODO** (OFF/MANUAL/AUTO) y **LIMPIAR ALARMAS** (reset de las alarmas enclavadas, 40007 bit 13) masivos con verificación por efecto en 30001/30006. **STOW / QUITAR STOW** (42000) con verificación de la safe position activa. **Comisionado**: leer el estado (30001 bits 4:3: Factory → Configurado → Motor verificado → COMISIONADO) por rango — o de la **Planta completa vía NCU** (los bits van en el registro de estado que la NCU cachea en su bloque compacto: toda la planta en segundos, sin Zigbee, con columna NCU y los TCUs offline marcados) — y fijarlo (40000 bits 7:5). Todo exportable a CSV. |
 | **HSU** | La estación meteo. Botón **BUSCAR HSUs** (v4.0): escanea las NCUs de la selección (Planta completa, (auto) o una entrada suelta) leyendo el bloque compacto que cada NCU cachea (30200+, puerto 502) y lista **qué HSUs hay y de qué NCU cuelga cada una**, con su salud y su viento/nieve; el desplegable permite elegir una — fija su IP y su esclavo si la topología lo trae — o "(todas)" para ver el resumen conjunto. Las operaciones directas van por su esclavo Modbus (default 185, editable; se preselecciona desde la topología si el fichero de plantas trae `hsu_esclavo`): **meteo en vivo** (viento m/s y km/h, dirección, nieve, lluvia, T/HR, irradiancia) con **alarmas decodificadas**; **config y umbrales de viento** (leer y escribir, con confirmación de seguridad y verificación); **reloj UTC**; **calibración del cero de nieve**; **NVM**; y la **caja negra de 24 h** (viento medio/máx, nieve e irradiancia minuto a minuto) descargada a CSV — para investigar un stow después de que pase. |
 | **Flota** | **Auditoría**: compara un rango de TCUs contra un *preset de referencia* (un preset o un backup completo) y lista **solo las desviaciones** (esperado vs leído), con export CSV — el "¿está toda la NCU igual?" en un clic. **Inventario**: FW principal/fábrica, nº de serie, MAC Xbee, HW y fecha de fabricación de todo el rango, con aviso si hay firmwares mezclados y export CSV. Ambas aceptan también la entrada **"(Planta completa)"**: recorren todas las NCUs en secuencia con sus rangos automáticos (los campos de TCU muestran NA) y añaden la columna NCU a la vista, al CSV y al informe HTML. |
+| **Firmware** | Planifica la **campaña de actualización** (v4.4). La toolbox **no** actualiza firmware — eso lo hace el *TCU Updater* de Sunner — pero resuelve lo caro: a partir del último **Inventario** y de una **versión objetivo**, lista las TCUs pendientes agrupadas en tramos `desde-hasta` **por NCU y gateway**, que es justo lo que pide el updater (*Add from … to …*). Cada tramo es un **carril**: el updater admite varias ventanas a la vez, una por NCU+gateway, así que la campaña se divide por el número de carriles (con 20 min/TCU, Ayora pasa de ~250 h en serie a las horas del carril más cargado). Muestra la estimación en serie y en paralelo, marca las TCUs que no respondieron al inventario (no se puede actualizar lo que no comunica), exporta el plan a CSV y, al terminar, **VERIFICAR TRAS ACTUALIZAR** relee el FW de las TCUs del plan y dice cuáles subieron y cuáles siguen pendientes. |
 | **Utilidades** | **Sincronizar reloj**: escribe la hora del PC en un rango de TCUs (40001–40006 + secuencia 40007 bit0→bit1) y verifica leyendo el reloj real (30079). **Identificación**: FW principal/fábrica, MCU secundario, BQ, HW, Xbee HW/FW, **MAC Xbee**, **número de serie**, fecha de fabricación y lote (bloque 30300+). |
 
 Consola común con colores, botón **CANCELAR** para abortar operaciones largas, y **log automático** a `logs/tcu_toolbox_AAAAMMDD.log`.
@@ -102,6 +103,24 @@ Diagnóstico (`Diagnóstico → JSON`): igual, con `"tipo": "diagnostico_tcu"` y
 | `seguimiento_pem` | PEM → SEGUIMIENTO JSON | qué tareas se completan o se rompen |
 | `inventario_tcu` | Flota → Inventario → JSON | cambios de FW y TCUs sustituidas (cambio de nº de serie) |
 | `auditoria_tcu` | Flota → Auditoría → JSON | desviaciones nuevas, resueltas y cambiadas (avisa si el preset difiere) |
+
+## Campaña de firmware y captura del protocolo OTA
+
+El firmware de las TCUs lo actualiza el **TCU Updater de Sunner** (Rust + Modbus TCP, GUI sin línea de comandos): pide *NCU IP* y *Gateway port*, reinicia la TCU a bootloader y sube el binario por bloques con CRC32, con reanudación desde dirección. Tarda **~20 min por TCU y va de una en una**, así que una planta grande es inviable en serie (754 TCUs ≈ 250 h).
+
+Lo que aporta la toolbox, sin tocar el firmware:
+
+1. **A quién hay que actualizar**: Inventario → pestaña **Firmware** → plan por NCU y gateway.
+2. **Cuántas ventanas lanzar**: cada tramo es un carril independiente (NCU + gateway = red Zigbee distinta). El updater no tiene bloqueo de instancia única: se pueden abrir varias a la vez, una por carril, y la campaña se divide por ese número.
+3. **Qué subió de verdad**: VERIFICAR TRAS ACTUALIZAR + un Inventario nuevo, cuyo **diff** en el Histórico de la plataforma deja constancia de qué TCUs pasaron de una versión a otra.
+
+**`TCU_ProxyOTA.ps1`** — capturador del protocolo OTA, paso previo a cualquier actualizador propio:
+
+```powershell
+.\TCU_ProxyOTA.ps1 -Ncu 10.100.1.52 -Puerto 503     # y en el updater: NCU IP 127.0.0.1, port 5020
+```
+
+Se coloca entre el updater y la NCU, **reenvía byte a byte sin modificar nada** y registra cada trama Modbus (sentido, unit = nº de TCU, función, dirección, nº de registros y hex) en `capturas/ota_<fecha>.csv`, con un resumen de las direcciones escritas (candidatas al bloque OTA). Con una TCU en banco y una actualización completa capturada queda documentado un protocolo que no está en ningún mapa — imprescindible para diagnosticar por qué una TCU falla siempre al actualizar, y requisito previo para un OTA nativo (que además necesitaría el visto bueno de Sunner sobre los binarios de firmware).
 
 ## Seguridad
 
