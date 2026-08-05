@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '2.1'
+$VERSION_TOOLBOX = '2.3'
 $VERSION_MAPA    = 'SUNNER v6.1 (FW 1.4.3)'
 
 # ---------------------------------------------------------------------------
@@ -37,31 +37,101 @@ $PLANTAS = [ordered]@{
   'El Burgo I NCU1 GW2'   = @{ip='10.100.1.52'; puerto=504; ini=57; fin=108}
   'El Burgo I NCU2 GW1'   = @{ip='10.100.1.56'; puerto=503; ini=1;  fin=45}
   'El Burgo I NCU2 GW2'   = @{ip='10.100.1.56'; puerto=504; ini=46; fin=107}
+  'El Burgo I NCU2 TCU109'= @{ip='10.100.1.56'; puerto=504; ini=109; fin=109}
   'Planta 192.168.4.60'   = @{ip='192.168.4.60'; puerto=503; ini=1; fin=44}
   'Planta 192.168.4.65'   = @{ip='192.168.4.65'; puerto=503; ini=1; fin=41}
 }
 
 $script:MsgsInicio = @()
-$rutaPlantas = Join-Path $PSScriptRoot 'plantas.json'
-if (Test-Path $rutaPlantas) {
-    try {
-        $jp = Get-Content $rutaPlantas -Raw | ConvertFrom-Json
-        $nCargadas = 0
-        foreach ($p in $jp.plantas) {
-            if (-not $p.nombre -or -not $p.ip) { continue }
-            $PLANTAS[[string]$p.nombre] = @{
-                ip     = [string]$p.ip
-                puerto = [int]$p.puerto
-                ini    = [int]$p.tcu_ini
-                fin    = [int]$p.tcu_fin
+
+# Fusiona un fichero de plantas en $PLANTAS. Devuelve cuantas entradas cargo;
+# lanza si el fichero es ilegible. Dos formatos:
+#  - JSON: {version, plantas:[{nombre,ip,puerto,tcu_ini,tcu_fin}]}
+#  - CSV con punto y coma (editable desde Excel, sin Office en el PC de campo):
+#      Planta;NCU;IP;Puerto;TCU_ini;TCU_fin
+function Cargar-FicheroPlantas([string]$ruta) {
+    $n = 0
+    if ($ruta -match '\.csv$') {
+        $filas = @(Import-Csv -Path $ruta -Delimiter ';')
+        if ($filas.Count -eq 0) { throw "CSV vacio o sin cabecera Planta;NCU;IP;Puerto;TCU_ini;TCU_fin" }
+        foreach ($r in $filas) {
+            if (-not $r.Planta -or -not $r.IP -or -not $r.Puerto) { continue }
+            $nombre = ("$($r.Planta) $($r.NCU) GW$($r.Puerto)").Trim()
+            # varias filas del mismo gateway (p.ej. TCU suelta 109): nombre unico
+            if ($PLANTAS.Contains($nombre)) { $nombre = "$nombre ($($r.TCU_ini)-$($r.TCU_fin))" }
+            $PLANTAS[$nombre] = @{
+                ip     = [string]$r.IP
+                puerto = [int]$r.Puerto
+                ini    = [int]$r.TCU_ini
+                fin    = [int]$r.TCU_fin
             }
-            $nCargadas++
+            $n++
         }
-        $script:MsgsInicio += "plantas.json cargado: $nCargadas plantas"
-    } catch {
-        $script:MsgsInicio += "AVISO: plantas.json ilegible ($_) - uso la lista integrada"
+        return $n
+    }
+    $jp = Get-Content $ruta -Raw | ConvertFrom-Json
+    if (-not $jp.plantas) { throw "sin lista 'plantas'" }
+    foreach ($p in $jp.plantas) {
+        if (-not $p.nombre -or -not $p.ip) { continue }
+        $PLANTAS[[string]$p.nombre] = @{
+            ip     = [string]$p.ip
+            puerto = [int]$p.puerto
+            ini    = [int]$p.tcu_ini
+            fin    = [int]$p.tcu_fin
+        }
+        $n++
+    }
+    return $n
+}
+
+# Entradas "(auto)": si varias entradas comparten IP (una por gateway de la
+# misma NCU), se anade una entrada agregada que cubre el rango completo y
+# resuelve sola el puerto de cada TCU (adios al error de puerto).
+function Construir-EntradasAuto {
+    $porIp = @{}
+    foreach ($k in @($PLANTAS.Keys)) {
+        $p = $PLANTAS[$k]
+        if (-not $p -or $p.gws) { continue }
+        if (-not $porIp.ContainsKey($p.ip)) { $porIp[$p.ip] = @() }
+        $porIp[$p.ip] += ,@{nombre=$k; p=$p}
+    }
+    foreach ($ip in $porIp.Keys) {
+        $grupo = $porIp[$ip]
+        if ($grupo.Count -lt 2) { continue }
+        $prefijo = $grupo[0].nombre
+        foreach ($g in $grupo) {
+            while ($prefijo -and -not $g.nombre.StartsWith($prefijo)) { $prefijo = $prefijo.Substring(0, $prefijo.Length - 1) }
+        }
+        $prefijo = ($prefijo -replace '(GW|TCU)\S*$', '').Trim()
+        if (-not $prefijo) { $prefijo = "NCU $ip" }
+        $gws = @($grupo | ForEach-Object { @{puerto=$_.p.puerto; ini=$_.p.ini; fin=$_.p.fin} } | Sort-Object { $_.ini })
+        $ini = @($gws | ForEach-Object { $_.ini } | Measure-Object -Minimum).Minimum
+        $fin = @($gws | ForEach-Object { $_.fin } | Measure-Object -Maximum).Maximum
+        $PLANTAS["$prefijo (auto)"] = @{ip=$ip; puerto=$null; ini=[int]$ini; fin=[int]$fin; gws=$gws}
     }
 }
+
+# El programa es el mismo para todas las plantas; la configuracion viaja en
+# JSON: la carpeta plantas/ lleva un fichero por planta (generados por la
+# plataforma) y plantas.json unico se mantiene por compatibilidad.
+$rutaPlantas = Join-Path $PSScriptRoot 'plantas.json'
+if (Test-Path $rutaPlantas) {
+    try { $script:MsgsInicio += "plantas.json: $(Cargar-FicheroPlantas $rutaPlantas) plantas" }
+    catch { $script:MsgsInicio += "AVISO: plantas.json ilegible ($_) - ignorado" }
+}
+$rutaCsv = Join-Path $PSScriptRoot 'plantas.csv'
+if (Test-Path $rutaCsv) {
+    try { $script:MsgsInicio += "plantas.csv: $(Cargar-FicheroPlantas $rutaCsv) gateways" }
+    catch { $script:MsgsInicio += "AVISO: plantas.csv ilegible ($_) - ignorado" }
+}
+$dirPlantas = Join-Path $PSScriptRoot 'plantas'
+if (Test-Path $dirPlantas) {
+    foreach ($f in @(Get-ChildItem $dirPlantas | Where-Object { $_.Extension -in '.json', '.csv' } | Sort-Object Name)) {
+        try { $script:MsgsInicio += "plantas/$($f.Name): $(Cargar-FicheroPlantas $f.FullName) entradas" }
+        catch { $script:MsgsInicio += "AVISO: plantas/$($f.Name) ilegible ($_) - ignorado" }
+    }
+}
+Construir-EntradasAuto
 
 # ---------------------------------------------------------------------------
 #  Mapa de registros de ESTADO (solo lectura, 30xxx)
@@ -607,20 +677,26 @@ function TG($p, [string]$t, [int]$x, [int]$y, [int]$w) {
 
 $cbPlanta = New-Object System.Windows.Forms.ComboBox
 $cbPlanta.Location = New-Object System.Drawing.Point(10, 21)
-$cbPlanta.Size = New-Object System.Drawing.Size(210, 22)
+$cbPlanta.Size = New-Object System.Drawing.Size(175, 22)
 $cbPlanta.DropDownStyle = 'DropDownList'
 foreach ($k in $PLANTAS.Keys) { [void]$cbPlanta.Items.Add($k) }
 $cbPlanta.SelectedIndex = 0
 $gbCon.Controls.Add($cbPlanta)
 
-[void](LG $gbCon 'IP' 235 20)
-$txtIp = TG $gbCon '192.168.4.60' 257 22 110
-[void](LG $gbCon 'Puerto' 380 46)
-$txtPort = TG $gbCon '503' 428 22 50
-[void](LG $gbCon 'Timeout ms' 495 76)
-$txtTo = TG $gbCon '8000' 573 22 55
-[void](LG $gbCon 'Reintentos' 645 72)
-$txtRet = TG $gbCon '3' 719 22 35
+$btnPlantas = New-Object System.Windows.Forms.Button
+$btnPlantas.Text = 'Cargar...'
+$btnPlantas.Location = New-Object System.Drawing.Point(190, 19)
+$btnPlantas.Size = New-Object System.Drawing.Size(62, 26)
+$gbCon.Controls.Add($btnPlantas)
+
+[void](LG $gbCon 'IP' 262 20)
+$txtIp = TG $gbCon '192.168.4.60' 284 22 105
+[void](LG $gbCon 'Puerto' 398 46)
+$txtPort = TG $gbCon '503' 446 22 45
+[void](LG $gbCon 'Timeout ms' 502 76)
+$txtTo = TG $gbCon '8000' 578 22 50
+[void](LG $gbCon 'Reintentos' 638 70)
+$txtRet = TG $gbCon '3' 710 22 30
 
 $btnCancelar = New-Object System.Windows.Forms.Button
 $btnCancelar.Text = 'CANCELAR'
@@ -1101,10 +1177,45 @@ function Chequear-Cancelado {
 function Params-Conexion {
     $ip = $txtIp.Text.Trim()
     if (-not $ip) { throw 'IP vacia' }
-    $puerto = Val-Int $txtPort.Text 'Puerto' 1 65535
     $to     = Val-Int $txtTo.Text 'Timeout' 500 60000
     $reint  = Val-Int $txtRet.Text 'Reintentos' 1 10
-    return @{ip=$ip; puerto=$puerto; to=$to; reint=$reint}
+    $pt = $txtPort.Text.Trim()
+    if ($pt -eq 'auto') {
+        $p = $null
+        if ($cbPlanta.SelectedItem) { $p = $PLANTAS[$cbPlanta.SelectedItem] }
+        if (-not ($p -and $p.gws) -or ($p.ip -ne $ip)) {
+            throw "puerto 'auto' requiere una entrada (auto) seleccionada y su IP sin modificar"
+        }
+        return @{ip=$ip; puerto=$null; gws=$p.gws; etiqueta='auto'; to=$to; reint=$reint}
+    }
+    $puerto = Val-Int $pt 'Puerto' 1 65535
+    return @{ip=$ip; puerto=$puerto; gws=$null; etiqueta="$puerto"; to=$to; reint=$reint}
+}
+
+# Divide una lista de TCUs en segmentos consecutivos por puerto de gateway.
+# Con puerto fijo devuelve un unico segmento; en modo 'auto' resuelve el
+# puerto de cada TCU con los rangos de la NCU (adios al error de puerto) y
+# avisa de los TCUs que no caen en ningun gateway.
+function Plan-Segmentos([int[]]$tcus, [hashtable]$cx) {
+    if (-not $cx.gws) { return @{puerto=$cx.puerto; tcus=$tcus} }
+    $segs = New-Object System.Collections.ArrayList
+    $huerfanos = @()
+    $actual = $null
+    foreach ($tcu in $tcus) {
+        $gw = $null
+        foreach ($g in $cx.gws) { if ($tcu -ge $g.ini -and $tcu -le $g.fin) { $gw = $g; break } }
+        if (-not $gw) { $huerfanos += $tcu; continue }
+        if ($actual -and $actual.puerto -eq $gw.puerto) { [void]$actual.tcus.Add($tcu) }
+        else {
+            $actual = @{puerto=$gw.puerto; tcus=(New-Object System.Collections.ArrayList)}
+            [void]$actual.tcus.Add($tcu)
+            [void]$segs.Add($actual)
+        }
+    }
+    if ($huerfanos.Count -gt 0) {
+        Con ("AVISO: TCUs fuera de los gateways de la NCU (saltados): " + ($huerfanos -join ', ')) ([System.Drawing.Color]::Orange)
+    }
+    return $segs
 }
 
 function Rango-Tcus([string]$tIni, [string]$tFin, [string]$etiqueta) {
@@ -1114,10 +1225,51 @@ function Rango-Tcus([string]$tIni, [string]$tFin, [string]$etiqueta) {
     return @($ini..$fin)
 }
 
+function Refrescar-ComboPlantas {
+    $sel = $cbPlanta.SelectedItem
+    $cbPlanta.Items.Clear()
+    foreach ($k in $PLANTAS.Keys) { [void]$cbPlanta.Items.Add($k) }
+    if ($sel -and $cbPlanta.Items.Contains($sel)) { $cbPlanta.SelectedItem = $sel } else { $cbPlanta.SelectedIndex = 0 }
+}
+
+# Importa uno o varios JSON de plantas descargados de la plataforma y ofrece
+# guardarlos en plantas/ para que se carguen solos en proximas sesiones.
+$btnPlantas.Add_Click({
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    $dlg.Filter = 'Plantas (*.json;*.csv)|*.json;*.csv'
+    $dlg.Multiselect = $true
+    if ($dlg.ShowDialog() -ne 'OK') { return }
+    $importados = @()
+    foreach ($f in $dlg.FileNames) {
+        try {
+            $n = Cargar-FicheroPlantas $f
+            $importados += $f
+            Con "Plantas cargadas de $([System.IO.Path]::GetFileName($f)): $n" ([System.Drawing.Color]::SteelBlue)
+        } catch {
+            Con "AVISO: $([System.IO.Path]::GetFileName($f)) ilegible ($_) - ignorado" ([System.Drawing.Color]::Orange)
+        }
+    }
+    if ($importados.Count -eq 0) { return }
+    Construir-EntradasAuto
+    Refrescar-ComboPlantas
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "Guardar una copia en la carpeta 'plantas' junto al script, para que se carguen solas al arrancar?",
+        'Recordar plantas', 'YesNo', 'Question')
+    if ($r -eq 'Yes') {
+        try {
+            $dir = Join-Path $PSScriptRoot 'plantas'
+            if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+            foreach ($f in $importados) { Copy-Item $f (Join-Path $dir ([System.IO.Path]::GetFileName($f))) -Force }
+            Con "Copiados $($importados.Count) ficheros a plantas/" ([System.Drawing.Color]::SteelBlue)
+        } catch { Con "AVISO: no se pudo copiar a plantas/: $_" ([System.Drawing.Color]::Orange) }
+    }
+})
+
 $cbPlanta.Add_SelectedIndexChanged({
     $p = $PLANTAS[$cbPlanta.SelectedItem]
     if ($p) {
-        $txtIp.Text = $p.ip; $txtPort.Text = "$($p.puerto)"
+        $txtIp.Text = $p.ip
+        if ($p.gws) { $txtPort.Text = 'auto' } else { $txtPort.Text = "$($p.puerto)" }
         $txtWIni.Text = "$($p.ini)"; $txtWFin.Text = "$($p.fin)"
         $txtLIni.Text = "$($p.ini)"; $txtLFin.Text = "$($p.fin)"
         $txtGIni.Text = "$($p.ini)"; $txtGFin.Text = "$($p.fin)"
@@ -1177,48 +1329,59 @@ function Escribir-EnTcus([int[]]$tcus) {
     $script:Fallidas.Clear(); $btnFallidas.Enabled = $false
     $ok = 0
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Escribiendo $($vars.Count) variables en $($tcus.Count) TCUs  ($($cx.ip):$($cx.puerto))" ([System.Drawing.Color]::SteelBlue)
-    try { Modbus-Conectar $cx.ip $cx.puerto $cx.to } catch { Con "ERROR de conexion: $_" ([System.Drawing.Color]::Salmon); return }
-    foreach ($tcu in $tcus) {
-        if (Chequear-Cancelado) { break }
-        $fallo = $null; $hecho = $true
-        foreach ($v in $vars) {
-            $hecho = $false
-            for ($i = 1; $i -le $cx.reint -and -not $hecho; $i++) {
-                if ($script:Cancelar) { break }
-                try {
-                    $e = $v.esc
-                    if ($e.modo -eq 'fc16') {
-                        FC16-Escribir $tcu $e.addr $e.palabras
-                        if ($chkVerif.Checked) {
-                            $leido = FC03-Leer $tcu $e.addr $e.palabras.Count
-                            for ($k = 0; $k -lt $e.palabras.Count; $k++) {
-                                if ($leido[$k] -ne $e.esperado[$k]) { throw "verificacion: escrito $($e.esperado[$k]), leido $($leido[$k])" }
+    Con "Escribiendo $($vars.Count) variables en $($tcus.Count) TCUs  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
+    $segs = @(Plan-Segmentos $tcus $cx)
+    if ($segs.Count -eq 0) { Con 'Ningun TCU cae en los gateways de la NCU.' ([System.Drawing.Color]::Orange); return }
+    foreach ($seg in $segs) {
+        if ($script:Cancelar) { break }
+        $segOk = $true
+        if ($cx.gws) { Con ("-- gateway {0}:{1}  ({2} TCUs)" -f $cx.ip, $seg.puerto, $seg.tcus.Count) ([System.Drawing.Color]::SteelBlue) }
+        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
+        catch { $segOk = $false; Con "ERROR de conexion ($($cx.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
+        foreach ($tcu in $seg.tcus) {
+            if (Chequear-Cancelado) { break }
+            $fallo = $null; $hecho = $true
+            if (-not $segOk) { $hecho = $false; $fallo = "sin conexion ($($cx.ip):$($seg.puerto))" }
+            else {
+                foreach ($v in $vars) {
+                    $hecho = $false
+                    for ($i = 1; $i -le $cx.reint -and -not $hecho; $i++) {
+                        if ($script:Cancelar) { break }
+                        try {
+                            $e = $v.esc
+                            if ($e.modo -eq 'fc16') {
+                                FC16-Escribir $tcu $e.addr $e.palabras
+                                if ($chkVerif.Checked) {
+                                    $leido = FC03-Leer $tcu $e.addr $e.palabras.Count
+                                    for ($k = 0; $k -lt $e.palabras.Count; $k++) {
+                                        if ($leido[$k] -ne $e.esperado[$k]) { throw "verificacion: escrito $($e.esperado[$k]), leido $($leido[$k])" }
+                                    }
+                                }
+                            } else {
+                                FC22-Mascara $tcu $e.addr $e.and $e.or
+                                if ($chkVerif.Checked) {
+                                    $leido = (FC03-Leer $tcu $e.addr 1)[0]
+                                    if (($leido -band $e.mascara) -ne $e.esperadoByte) { throw ("verificacion: mascara no coincide (leido 0x{0:X4})" -f $leido) }
+                                }
                             }
-                        }
-                    } else {
-                        FC22-Mascara $tcu $e.addr $e.and $e.or
-                        if ($chkVerif.Checked) {
-                            $leido = (FC03-Leer $tcu $e.addr 1)[0]
-                            if (($leido -band $e.mascara) -ne $e.esperadoByte) { throw ("verificacion: mascara no coincide (leido 0x{0:X4})" -f $leido) }
+                            $hecho = $true
+                        } catch {
+                            $fallo = "$($v.nombre): $_"
+                            if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+                            Start-Sleep -Milliseconds (300 * $i)
                         }
                     }
-                    $hecho = $true
-                } catch {
-                    $fallo = "$($v.nombre): $_"
-                    if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
-                    Start-Sleep -Milliseconds (300 * $i)
+                    if (-not $hecho) { break }
                 }
             }
-            if (-not $hecho) { break }
-        }
-        if ($script:Cancelar -and -not $hecho) { break }
-        if (-not $hecho) {
-            [void]$script:Fallidas.Add($tcu)
-            Con ("TCU {0,3}  FALLO   {1}" -f $tcu, $fallo) ([System.Drawing.Color]::Salmon)
-        } else {
-            $ok++
-            Con ("TCU {0,3}  OK" -f $tcu) ([System.Drawing.Color]::LightGreen)
+            if ($script:Cancelar -and -not $hecho) { break }
+            if (-not $hecho) {
+                [void]$script:Fallidas.Add($tcu)
+                Con ("TCU {0,3}  FALLO   {1}" -f $tcu, $fallo) ([System.Drawing.Color]::Salmon)
+            } else {
+                $ok++
+                Con ("TCU {0,3}  OK" -f $tcu) ([System.Drawing.Color]::LightGreen)
+            }
         }
     }
     Modbus-Cerrar
@@ -1241,22 +1404,30 @@ $btnNvm.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $tcus = Rango-Tcus $txtWIni.Text $txtWFin.Text 'NVM'
     $r = [System.Windows.Forms.MessageBox]::Show(
-        "Guardar configuracion en NVM (40007 bit 15) en TCUs $($tcus[0]) a $($tcus[-1]) de $($cx.ip):$($cx.puerto)?",
+        "Guardar configuracion en NVM (40007 bit 15) en TCUs $($tcus[0]) a $($tcus[-1]) de $($cx.ip):$($cx.etiqueta)?",
         'Confirmar NVM', 'YesNo', 'Warning')
     if ($r -ne 'Yes') { return }
-    try { Modbus-Conectar $cx.ip $cx.puerto $cx.to } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
-    foreach ($tcu in $tcus) {
-        if (Chequear-Cancelado) { break }
-        $hecho = $false
-        for ($i = 1; $i -le $cx.reint -and -not $hecho; $i++) {
-            try { FC22-Mascara $tcu 40007 0x7FFF 0x8000; $hecho = $true }
-            catch {
-                if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
-                Start-Sleep -Milliseconds (300 * $i)
+    $segs = @(Plan-Segmentos $tcus $cx)
+    foreach ($seg in $segs) {
+        if ($script:Cancelar) { break }
+        $segOk = $true
+        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
+        catch { $segOk = $false; Con "ERROR de conexion ($($cx.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
+        foreach ($tcu in $seg.tcus) {
+            if (Chequear-Cancelado) { break }
+            $hecho = $false
+            if ($segOk) {
+                for ($i = 1; $i -le $cx.reint -and -not $hecho; $i++) {
+                    try { FC22-Mascara $tcu 40007 0x7FFF 0x8000; $hecho = $true }
+                    catch {
+                        if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+                        Start-Sleep -Milliseconds (300 * $i)
+                    }
+                }
             }
+            if ($hecho) { Con ("TCU {0,3}  NVM guardado" -f $tcu) ([System.Drawing.Color]::LightGreen) }
+            else        { Con ("TCU {0,3}  NVM FALLO" -f $tcu) ([System.Drawing.Color]::Salmon) }
         }
-        if ($hecho) { Con ("TCU {0,3}  NVM guardado" -f $tcu) ([System.Drawing.Color]::LightGreen) }
-        else        { Con ("TCU {0,3}  NVM FALLO" -f $tcu) ([System.Drawing.Color]::Salmon) }
     }
     Modbus-Cerrar
 } })
@@ -1346,34 +1517,42 @@ $btnLeer.Add_Click({ Lanzar {
     $tcus = Rango-Tcus $txtLIni.Text $txtLFin.Text 'Leer'
     $lvL.Items.Clear(); $script:UltimaLectura = @()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Leyendo '$($cbLVar.SelectedItem)' en TCUs $($tcus[0])-$($tcus[-1])  ($($cx.ip):$($cx.puerto))" ([System.Drawing.Color]::SteelBlue)
-    try { Modbus-Conectar $cx.ip $cx.puerto $cx.to } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
+    Con "Leyendo '$($cbLVar.SelectedItem)' en TCUs $($tcus[0])-$($tcus[-1])  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     $valores = @{}
-    foreach ($tcu in $tcus) {
-        if (Chequear-Cancelado) { break }
-        $val = $null; $err = ''
-        for ($i = 1; $i -le $cx.reint -and $null -eq $val; $i++) {
-            if ($script:Cancelar) { break }
-            try { $val = Leer-Decodificado $tcu $vdef }
-            catch {
-                $err = "$_"
-                if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
-                Start-Sleep -Milliseconds (300 * $i)
+    $segs = @(Plan-Segmentos $tcus $cx)
+    foreach ($seg in $segs) {
+        if ($script:Cancelar) { break }
+        $segOk = $true; $errSeg = ''
+        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
+        catch { $segOk = $false; $errSeg = "sin conexion ($($cx.ip):$($seg.puerto)): $_"; Con "ERROR: $errSeg" ([System.Drawing.Color]::Salmon) }
+        foreach ($tcu in $seg.tcus) {
+            if (Chequear-Cancelado) { break }
+            $val = $null; $err = $errSeg
+            if ($segOk) {
+                for ($i = 1; $i -le $cx.reint -and $null -eq $val; $i++) {
+                    if ($script:Cancelar) { break }
+                    try { $val = Leer-Decodificado $tcu $vdef }
+                    catch {
+                        $err = "$_"
+                        if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+                        Start-Sleep -Milliseconds (300 * $i)
+                    }
+                }
             }
+            $item = New-Object System.Windows.Forms.ListViewItem("$tcu")
+            if ($null -ne $val) {
+                [void]$item.SubItems.Add($val); [void]$item.SubItems.Add('OK')
+                if (-not $valores.ContainsKey($val)) { $valores[$val] = 0 }
+                $valores[$val]++
+                $script:UltimaLectura += [pscustomobject]@{TCU=$tcu; Valor=$val; Estado='OK'}
+            } else {
+                [void]$item.SubItems.Add('-'); [void]$item.SubItems.Add($err)
+                $item.ForeColor = [System.Drawing.Color]::Firebrick
+                $script:UltimaLectura += [pscustomobject]@{TCU=$tcu; Valor=''; Estado=$err}
+            }
+            $lvL.Items.Add($item) | Out-Null
+            [System.Windows.Forms.Application]::DoEvents()
         }
-        $item = New-Object System.Windows.Forms.ListViewItem("$tcu")
-        if ($null -ne $val) {
-            [void]$item.SubItems.Add($val); [void]$item.SubItems.Add('OK')
-            if (-not $valores.ContainsKey($val)) { $valores[$val] = 0 }
-            $valores[$val]++
-            $script:UltimaLectura += [pscustomobject]@{TCU=$tcu; Valor=$val; Estado='OK'}
-        } else {
-            [void]$item.SubItems.Add('-'); [void]$item.SubItems.Add($err)
-            $item.ForeColor = [System.Drawing.Color]::Firebrick
-            $script:UltimaLectura += [pscustomobject]@{TCU=$tcu; Valor=''; Estado=$err}
-        }
-        $lvL.Items.Add($item) | Out-Null
-        [System.Windows.Forms.Application]::DoEvents()
     }
     Modbus-Cerrar
     if ($valores.Count -eq 1) {
@@ -1429,8 +1608,11 @@ $btnIdent.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $lvI.Items.Clear(); $script:UltimaIdent = @()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Identificando TCU $tcu  ($($cx.ip):$($cx.puerto))" ([System.Drawing.Color]::SteelBlue)
-    try { Modbus-Conectar $cx.ip $cx.puerto $cx.to } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
+    $segs = @(Plan-Segmentos @($tcu) $cx)
+    if ($segs.Count -eq 0 -or $segs[0].tcus.Count -eq 0) { Con "TCU $tcu fuera de los gateways de la NCU" ([System.Drawing.Color]::Salmon); return }
+    $puertoTcu = $segs[0].puerto
+    Con "Identificando TCU $tcu  ($($cx.ip):$puertoTcu)" ([System.Drawing.Color]::SteelBlue)
+    try { Modbus-Conectar $cx.ip $puertoTcu $cx.to } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
     $campos = $null; $err = ''
     for ($i = 1; $i -le $cx.reint -and $null -eq $campos; $i++) {
         try { $campos = Ident-Leer $tcu }
@@ -1467,8 +1649,11 @@ $btnVolcar.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $lvD.Items.Clear(); $script:UltimoVolcado = @()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Volcando TCU $tcu  ($($cx.ip):$($cx.puerto))" ([System.Drawing.Color]::SteelBlue)
-    try { Modbus-Conectar $cx.ip $cx.puerto $cx.to } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
+    $segs = @(Plan-Segmentos @($tcu) $cx)
+    if ($segs.Count -eq 0 -or $segs[0].tcus.Count -eq 0) { Con "TCU $tcu fuera de los gateways de la NCU" ([System.Drawing.Color]::Salmon); return }
+    $puertoTcu = $segs[0].puerto
+    Con "Volcando TCU $tcu  ($($cx.ip):$puertoTcu)" ([System.Drawing.Color]::SteelBlue)
+    try { Modbus-Conectar $cx.ip $puertoTcu $cx.to } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
     $mapas = @(@{m=$VARIABLES; nota='config'})
     if ($chkDEstado.Checked) { $mapas += @{m=$ESTADO; nota='estado'} }
     $okc = 0; $koc = 0
@@ -1517,7 +1702,7 @@ $btnVolcar.Add_Click({ Lanzar {
     Modbus-Cerrar
     $completo = (-not $script:Cancelar) -and ($koc -eq 0)
     $script:MetaVolcado = @{
-        planta = Nombre-Planta; ip = $cx.ip; puerto = $cx.puerto; tcu = $tcu
+        planta = Nombre-Planta; ip = $cx.ip; puerto = $puertoTcu; tcu = $tcu
         fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         completo = $completo; errores = $koc; cancelado = [bool]$script:Cancelar
     }
@@ -1655,19 +1840,26 @@ $btnDiag.Add_Click({ Lanzar {
     $tcus = Rango-Tcus $txtGIni.Text $txtGFin.Text 'Diagnostico'
     $lvG.Items.Clear(); $script:UltimoDiag = @(); $lblGResumen.Text = ''
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Diagnostico de TCUs $($tcus[0])-$($tcus[-1])  ($($cx.ip):$($cx.puerto))" ([System.Drawing.Color]::SteelBlue)
-    try { Modbus-Conectar $cx.ip $cx.puerto $cx.to } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
+    Con "Diagnostico de TCUs $($tcus[0])-$($tcus[-1])  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     $nOk = 0; $nAviso = 0; $nAlarma = 0; $nOff = 0
-    foreach ($tcu in $tcus) {
+    $segs = @(Plan-Segmentos $tcus $cx)
+    foreach ($seg in $segs) {
+    if ($script:Cancelar) { break }
+    $segOk = $true; $errSeg = ''
+    try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
+    catch { $segOk = $false; $errSeg = "sin conexion ($($cx.ip):$($seg.puerto))"; Con "ERROR: $errSeg : $_" ([System.Drawing.Color]::Salmon) }
+    foreach ($tcu in $seg.tcus) {
         if (Chequear-Cancelado) { break }
-        $d = $null; $err = ''
-        for ($i = 1; $i -le $cx.reint -and $null -eq $d; $i++) {
-            if ($script:Cancelar) { break }
-            try { $d = Diag-LeerTcu $tcu }
-            catch {
-                $err = "$_"
-                if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
-                Start-Sleep -Milliseconds (300 * $i)
+        $d = $null; $err = $errSeg
+        if ($segOk) {
+            for ($i = 1; $i -le $cx.reint -and $null -eq $d; $i++) {
+                if ($script:Cancelar) { break }
+                try { $d = Diag-LeerTcu $tcu }
+                catch {
+                    $err = "$_"
+                    if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+                    Start-Sleep -Milliseconds (300 * $i)
+                }
             }
         }
         if ($null -eq $d) {
@@ -1693,6 +1885,7 @@ $btnDiag.Add_Click({ Lanzar {
             Con ("TCU {0,3}  {1,-8} {2}" -f $d.TCU, $d.Salud, $d.Alarmas) ([System.Drawing.Color]::Orange)
         }
         [System.Windows.Forms.Application]::DoEvents()
+    }
     }
     Modbus-Cerrar
     $lblGResumen.Text = "OK: $nOk   Aviso: $nAviso   Alarma: $nAlarma   Offline: $nOff"
@@ -1738,13 +1931,19 @@ $btnSync.Add_Click({ Lanzar {
         'Confirmar sincronizacion', 'YesNo', 'Question')
     if ($r -ne 'Yes') { return }
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Sincronizando reloj de $($tcus.Count) TCUs con el PC  ($($cx.ip):$($cx.puerto))" ([System.Drawing.Color]::SteelBlue)
-    try { Modbus-Conectar $cx.ip $cx.puerto $cx.to } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
+    Con "Sincronizando reloj de $($tcus.Count) TCUs con el PC  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     $ok = 0; $ko = 0
-    foreach ($tcu in $tcus) {
+    $segs = @(Plan-Segmentos $tcus $cx)
+    foreach ($seg in $segs) {
+    if ($script:Cancelar) { break }
+    $segOk = $true
+    try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
+    catch { $segOk = $false; Con "ERROR de conexion ($($cx.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
+    foreach ($tcu in $seg.tcus) {
         if (Chequear-Cancelado) { break }
         $hecho = $false; $fallo = ''
-        for ($i = 1; $i -le $cx.reint -and -not $hecho; $i++) {
+        if (-not $segOk) { $fallo = "sin conexion ($($cx.ip):$($seg.puerto))" }
+        for ($i = 1; $i -le $cx.reint -and -not $hecho -and $segOk; $i++) {
             if ($script:Cancelar) { break }
             try {
                 # bit 0: permitir introduccion de fecha/hora
@@ -1780,6 +1979,7 @@ $btnSync.Add_Click({ Lanzar {
             Con ("TCU {0,3}  FALLO  {1}" -f $tcu, $fallo) ([System.Drawing.Color]::Salmon)
         }
     }
+    }
     Modbus-Cerrar
     Con "Sincronizacion: $ok OK, $ko fallos" ([System.Drawing.Color]::SteelBlue)
 } })
@@ -1796,6 +1996,7 @@ $btnLog.Add_Click({
 Con "TCU Toolbox v$VERSION_TOOLBOX listo. Mapa de registros: $VERSION_MAPA." ([System.Drawing.Color]::Gainsboro)
 Con 'Escribir: tabla + presets + backup como preset. Leer: una variable en un rango, con resumen de discrepancias.' ([System.Drawing.Color]::Gainsboro)
 Con 'Filtro de variables: escribe p.ej. "soc" o "tilt" en el campo Filtro y el desplegable se reduce a lo que casa.' ([System.Drawing.Color]::Gainsboro)
+Con 'Entradas (auto): NCU completa con puerto resuelto por TCU; los gateways se recorren en secuencia.' ([System.Drawing.Color]::Gainsboro)
 Con 'Volcar: backup completo de una TCU (CSV/JSON) y comparacion contra un backup anterior.' ([System.Drawing.Color]::Gainsboro)
 Con 'Diagnostico: salud OK/AVISO/ALARMA/OFFLINE de un rango con alarmas en texto. Utilidades: reloj e identificacion.' ([System.Drawing.Color]::Gainsboro)
 foreach ($m in $script:MsgsInicio) { Con $m ([System.Drawing.Color]::SteelBlue) }
