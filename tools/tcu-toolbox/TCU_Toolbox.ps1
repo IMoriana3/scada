@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '3.5'
+$VERSION_TOOLBOX = '3.6'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1690,10 +1690,17 @@ $gbAud.Controls.Add($btnAud)
 
 $btnAudCsv = New-Object System.Windows.Forms.Button
 $btnAudCsv.Text = 'CSV'
-$btnAudCsv.Location = New-Object System.Drawing.Point(765, 18)
-$btnAudCsv.Size = New-Object System.Drawing.Size(110, 28)
+$btnAudCsv.Location = New-Object System.Drawing.Point(762, 18)
+$btnAudCsv.Size = New-Object System.Drawing.Size(60, 28)
 $btnAudCsv.Enabled = $false
 $gbAud.Controls.Add($btnAudCsv)
+
+$btnAudJson = New-Object System.Windows.Forms.Button
+$btnAudJson.Text = 'JSON'
+$btnAudJson.Location = New-Object System.Drawing.Point(826, 18)
+$btnAudJson.Size = New-Object System.Drawing.Size(60, 28)
+$btnAudJson.Enabled = $false
+$gbAud.Controls.Add($btnAudJson)
 
 $lvA = New-Object System.Windows.Forms.ListView
 $lvA.Location = New-Object System.Drawing.Point(10, 52)
@@ -1731,10 +1738,17 @@ $lblInvF.ForeColor = [System.Drawing.Color]::Gray
 
 $btnInvFCsv = New-Object System.Windows.Forms.Button
 $btnInvFCsv.Text = 'CSV'
-$btnInvFCsv.Location = New-Object System.Drawing.Point(765, 18)
-$btnInvFCsv.Size = New-Object System.Drawing.Size(110, 28)
+$btnInvFCsv.Location = New-Object System.Drawing.Point(762, 18)
+$btnInvFCsv.Size = New-Object System.Drawing.Size(60, 28)
 $btnInvFCsv.Enabled = $false
 $gbInvF.Controls.Add($btnInvFCsv)
+
+$btnInvJson = New-Object System.Windows.Forms.Button
+$btnInvJson.Text = 'JSON'
+$btnInvJson.Location = New-Object System.Drawing.Point(826, 18)
+$btnInvJson.Size = New-Object System.Drawing.Size(60, 28)
+$btnInvJson.Enabled = $false
+$gbInvF.Controls.Add($btnInvJson)
 
 $lvV = New-Object System.Windows.Forms.ListView
 $lvV.Location = New-Object System.Drawing.Point(10, 52)
@@ -2090,7 +2104,7 @@ $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $
                     $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnInvF, $btnInvFCsv,
                     $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm,
                     $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComis, $btnPComisSet, $btnPCsv,
-                    $btnGBucle, $btnPSeg)
+                    $btnGBucle, $btnPSeg, $btnAudJson, $btnInvJson)
 
 function Set-UIOcupada([bool]$ocupada) {
     foreach ($b in $BOTONES_ACCION) { $b.Enabled = (-not $ocupada) }
@@ -2105,7 +2119,9 @@ function Set-UIOcupada([bool]$ocupada) {
         $btnGJson.Enabled      = ($script:UltimoDiag.Count -gt 0)
         $btnICsv.Enabled       = ($script:UltimaIdent.Count -gt 0)
         $btnAudCsv.Enabled     = ($script:UltimaAud.Count -gt 0)
+        $btnAudJson.Enabled    = ($script:SegAud.Count -gt 0)
         $btnInvFCsv.Enabled    = ($script:UltimoInv.Count -gt 0)
+        $btnInvJson.Enabled    = ($script:UltimoInv.Count -gt 0)
         $btnPCsv.Enabled       = ($script:UltimoPem.Count -gt 0)
         $btnPSeg.Enabled       = (($script:SegMotor.Count + $script:SegComis.Count + $script:SegAud.Count) -gt 0)
     }
@@ -3483,6 +3499,30 @@ $btnAudCsv.Add_Click({
     }
 })
 
+# JSON de auditoria para el Historico de la plataforma (solo desviaciones +
+# recuento de TCUs auditadas/conformes de la ultima pasada)
+$btnAudJson.Add_Click({
+    $dlg = New-Object System.Windows.Forms.SaveFileDialog
+    $dlg.Filter = 'JSON (*.json)|*.json'
+    $dlg.FileName = 'auditoria_' + ((Nombre-Planta) -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.json'
+    if ($dlg.ShowDialog() -ne 'OK') { return }
+    $conformes = @($script:SegAud.Values | Where-Object { $_.estado -eq 'OK' }).Count
+    $obj = [ordered]@{
+        tipo    = 'auditoria_tcu'
+        mapa    = $VERSION_MAPA
+        toolbox = $VERSION_TOOLBOX
+        planta  = Nombre-Planta
+        ip      = $txtIp.Text.Trim()
+        fecha   = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        preset  = $script:PresetRefNombre
+        tcus_auditadas = $script:SegAud.Count
+        conformes      = $conformes
+        desviaciones   = @($script:UltimaAud)
+    }
+    ConvertTo-Json $obj -Depth 5 | Set-Content $dlg.FileName -Encoding UTF8
+    Con "JSON de auditoria exportado: $($dlg.FileName)  ($($script:SegAud.Count) TCUs, $conformes conformes, $($script:UltimaAud.Count) desviaciones). Subelo en la pagina Historico." ([System.Drawing.Color]::SteelBlue)
+})
+
 # ------------------------- INVENTARIO DE FLOTA -------------------------
 $btnInvF.Add_Click({ Lanzar {
     $cx = Params-Conexion
@@ -3566,6 +3606,25 @@ $btnInvFCsv.Add_Click({
         $script:UltimoInv | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8
         Con "CSV exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
     }
+})
+
+# JSON de inventario para el Historico de la plataforma
+$btnInvJson.Add_Click({
+    $dlg = New-Object System.Windows.Forms.SaveFileDialog
+    $dlg.Filter = 'JSON (*.json)|*.json'
+    $dlg.FileName = 'inventario_' + ((Nombre-Planta) -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.json'
+    if ($dlg.ShowDialog() -ne 'OK') { return }
+    $obj = [ordered]@{
+        tipo    = 'inventario_tcu'
+        mapa    = $VERSION_MAPA
+        toolbox = $VERSION_TOOLBOX
+        planta  = Nombre-Planta
+        ip      = $txtIp.Text.Trim()
+        fecha   = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        tcus    = @($script:UltimoInv)
+    }
+    ConvertTo-Json $obj -Depth 5 | Set-Content $dlg.FileName -Encoding UTF8
+    Con "JSON de inventario exportado: $($dlg.FileName)  ($($script:UltimoInv.Count) TCUs). Subelo en la pagina Historico." ([System.Drawing.Color]::SteelBlue)
 })
 
 # ------------------------- PEM (PUESTA EN MARCHA) -------------------------
