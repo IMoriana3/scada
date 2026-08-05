@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '5.3'
+$VERSION_TOOLBOX = '5.4'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1634,7 +1634,7 @@ $tabL.Controls.Add($btnLCsv)
 # Escribir no existen: por eso el combo de esta tabla no es el mismo.
 $dgvL = New-Object System.Windows.Forms.DataGridView
 $dgvL.Location = New-Object System.Drawing.Point(10, 55)
-$dgvL.Size = New-Object System.Drawing.Size(898, 228)
+$dgvL.Size = New-Object System.Drawing.Size(898, 118)
 $dgvL.AllowUserToAddRows = $true
 $dgvL.RowHeadersVisible = $false
 $dgvL.BackgroundColor = [System.Drawing.Color]::White
@@ -1684,6 +1684,15 @@ function Refrescar-FiltroLeer {
 
 $txtLFiltro.Add_TextChanged({ Refrescar-FiltroLeer })
 Refrescar-FiltroLeer
+
+$lvL = New-Object System.Windows.Forms.ListView
+$lvL.Location = New-Object System.Drawing.Point(10, 180)
+$lvL.Size = New-Object System.Drawing.Size(898, 180)
+$lvL.View = 'Details'; $lvL.FullRowSelect = $true; $lvL.GridLines = $true
+[void]$lvL.Columns.Add('TCU', 70)
+[void]$lvL.Columns.Add('Valor', 200)
+[void]$lvL.Columns.Add('Estado', 600)
+$tabL.Controls.Add($lvL)
 
 # Nombres elegidos en la tabla, sin repetidos y en el orden en que estan
 function Vars-DeTablaLeer {
@@ -5268,10 +5277,19 @@ $btnInforme.Anchor = 'Right,Bottom'
 # medir lo que deberia.
 function Anclar-Contenedor($cont, $anchoRef) {
     $ancho = $cont.ClientSize.Width
+    # Si hay varias tablas apiladas (Leer variable: la de eleccion arriba y la
+    # de resultados abajo), solo la de abajo crece al agrandar la ventana; las
+    # de arriba mantienen su alto. Ancladas todas abajo se solaparian.
+    $tablas = @($cont.Controls | Where-Object {
+        $_ -is [System.Windows.Forms.ListView] -or $_ -is [System.Windows.Forms.DataGridView] -or $_ -is [System.Windows.Forms.RichTextBox] })
+    $topeAbajo = -1
+    foreach ($t in $tablas) { if ($t.Top -gt $topeAbajo) { $topeAbajo = $t.Top } }
     foreach ($c in $cont.Controls) {
         $cabe = ($ancho -ge ($c.Left + $c.Width)) -and ($cont.ClientSize.Height -ge ($c.Top + $c.Height))
         if ($c -is [System.Windows.Forms.ListView] -or $c -is [System.Windows.Forms.DataGridView] -or $c -is [System.Windows.Forms.RichTextBox]) {
-            if ($cabe) { $c.Anchor = 'Top,Left,Right,Bottom' }
+            if ($cabe) {
+                if ($c.Top -eq $topeAbajo) { $c.Anchor = 'Top,Left,Right,Bottom' } else { $c.Anchor = 'Top,Left,Right' }
+            }
         } elseif ($c -is [System.Windows.Forms.GroupBox]) {
             # en Flota hay dos grupos apilados: el de abajo es el que crece
             if ($cabe) {

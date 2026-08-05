@@ -31,6 +31,40 @@ function Check([string]$nombre, $real, $esperado) {
     else { Write-Host "FAIL $nombre : obtenido '$real', esperado '$esperado'"; $script:fallos++ }
 }
 
+# ---------- controles usados pero nunca creados ----------
+# En la v5.2 se rehizo la pestana Leer variable y se borro sin querer $lvL, la
+# tabla de resultados, que los manejadores seguian usando: la lectura reventaba
+# con "No se puede llamar a un metodo en una expresion con valor NULL". Este
+# chequeo estatico lo caza sin abrir la ventana.
+$astT = $null; $errT = $null
+$arbol = [System.Management.Automation.Language.Parser]::ParseInput($src, [ref]$astT, [ref]$errT)
+Check 'script sin errores de sintaxis' $errT.Count 0
+# UnqualifiedPath viene vacio para las variables sin ambito: el nombre se saca
+# de UserPath quitando el prefijo (script:, global:...) a mano
+function NomVar($vp) {
+    if ($null -eq $vp -or $vp.IsDriveQualified) { return '' }
+    $n = "$($vp.UserPath)"
+    $i = $n.LastIndexOf(':')
+    if ($i -ge 0) { $n = $n.Substring($i + 1) }
+    return $n
+}
+$definidas = @{}
+foreach ($a in $arbol.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)) {
+    $izq = $a.Left
+    if ($izq -is [System.Management.Automation.Language.ConvertExpressionAst]) { $izq = $izq.Child }
+    if ($izq -is [System.Management.Automation.Language.VariableExpressionAst]) { $n = NomVar $izq.VariablePath; if ($n) { $definidas[$n] = $true } }
+}
+foreach ($pa in $arbol.FindAll({ param($n) $n -is [System.Management.Automation.Language.ParameterAst] }, $true)) { $n = NomVar $pa.Name.VariablePath; if ($n) { $definidas[$n] = $true } }
+foreach ($fe in $arbol.FindAll({ param($n) $n -is [System.Management.Automation.Language.ForEachStatementAst] }, $true)) { $n = NomVar $fe.Variable.VariablePath; if ($n) { $definidas[$n] = $true } }
+$automaticas = @('_','args','true','false','null','PSScriptRoot','PSItem','this','input','error','host','MyInvocation','PSCommandPath','LASTEXITCODE','matches','PSVersionTable','PID','HOME','PWD','StackTrace','foreach','switch','ExecutionContext','PSBoundParameters','OFS')
+$huerfanas = @{}
+foreach ($ve in $arbol.FindAll({ param($n) $n -is [System.Management.Automation.Language.VariableExpressionAst] }, $true)) {
+    $n = NomVar $ve.VariablePath
+    if (-not $n -or ($automaticas -contains $n)) { continue }
+    if (-not $definidas.ContainsKey($n)) { $huerfanas[$n] = $true }
+}
+Check 'sin variables usadas y nunca creadas' (@($huerfanas.Keys | Sort-Object) -join ',') ''
+
 # ---------- conversiones puras ----------
 $e = Valor-A-Escritura @{addr=40038; tipo='u16'} '1500'
 Check 'u16 palabras' ($e.palabras -join ',') '1500'
