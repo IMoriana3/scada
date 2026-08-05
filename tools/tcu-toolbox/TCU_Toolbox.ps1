@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '6.0'
+$VERSION_TOOLBOX = '6.1'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2270,7 +2270,8 @@ $btnFwCsv.Size = New-Object System.Drawing.Size(110, 28)
 $btnFwCsv.Enabled = $false
 $tabFW.Controls.Add($btnFwCsv)
 
-$lblFw = LG $tabFW 'Haz primero un Inventario (pestana Flota) y luego el plan.' 610 180
+# fila de abajo: en la de arriba se solapaba con 'min/TCU' y su cuadro
+$lblFw = LG $tabFW 'Haz primero un Inventario (pestana Flota) y luego el plan.' 590 318 56
 $lblFw.ForeColor = [System.Drawing.Color]::Gray
 
 $lblFwNota = LG $tabFW 'Cada tramo es un CARRIL (NCU + gateway): el updater admite varias ventanas a la vez, una por carril. PREPARAR comprueba viento, comunicacion y alarmas, y hace backup antes de actualizar/capturar una TCU.' 10 898 82
@@ -2473,6 +2474,23 @@ $lblLog.Size = New-Object System.Drawing.Size(680, 20)
 $lblLog.ForeColor = [System.Drawing.Color]::Gray
 $form.Controls.Add($lblLog)
 
+# Menu del boton derecho de la consola. Ctrl+C y Ctrl+A ya funcionaban, pero
+# no se ven; y "copiar toda la consola" es lo que se quiere para pegar un
+# resultado en un correo.
+$menuCon = New-Object System.Windows.Forms.ContextMenuStrip
+$miCopiar = $menuCon.Items.Add('Copiar' + [char]9 + 'Ctrl+C')
+$miCopiar.Add_Click({ if ($rtb.SelectionLength -gt 0) { $rtb.Copy() } })
+$miSelTodo = $menuCon.Items.Add('Seleccionar todo' + [char]9 + 'Ctrl+A')
+$miSelTodo.Add_Click({ $rtb.SelectAll(); $rtb.Focus() })
+$miCopiarTodo = $menuCon.Items.Add('Copiar toda la consola')
+$miCopiarTodo.Add_Click({ if ($rtb.TextLength -gt 0) { try { [System.Windows.Forms.Clipboard]::SetText($rtb.Text) } catch {} } })
+[void]$menuCon.Items.Add('-')
+$miGuardarLog = $menuCon.Items.Add('Guardar log...')
+$miGuardarLog.Add_Click({ $btnLog.PerformClick() })
+$miLimpiarCon = $menuCon.Items.Add('Limpiar consola')
+$miLimpiarCon.Add_Click({ $rtb.Clear() })
+$rtb.ContextMenuStrip = $menuCon
+
 # ---------------------------------------------------------------------------
 #  Estado global, consola y log automatico a fichero
 # ---------------------------------------------------------------------------
@@ -2515,11 +2533,16 @@ try {
 } catch { $lblLog.Text = 'Log automatico no disponible (carpeta logs no escribible)' }
 
 function Con([string]$t, $color) {
+    # Si el usuario tiene texto seleccionado no se le quita ni se le mueve la
+    # vista: en una operacion larga la consola escribe cada pocos segundos y
+    # antes era imposible copiar nada sin que la siguiente linea se lo llevara.
+    $selIni = $rtb.SelectionStart; $selLen = $rtb.SelectionLength
     $rtb.SelectionStart = $rtb.TextLength; $rtb.SelectionLength = 0
     $rtb.SelectionColor = $color
     $rtb.AppendText($t + "`r`n")
     $rtb.SelectionColor = $rtb.ForeColor
-    $rtb.ScrollToCaret()
+    if ($selLen -gt 0) { $rtb.SelectionStart = $selIni; $rtb.SelectionLength = $selLen }
+    else { $rtb.ScrollToCaret() }
     if ($script:LogFile) {
         try { Add-Content -Path $script:LogFile -Value ((Get-Date -Format 'HH:mm:ss') + '  ' + $t) -Encoding UTF8 } catch {}
     }
