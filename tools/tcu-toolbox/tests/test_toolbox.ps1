@@ -488,6 +488,9 @@ Check 'informe js filtros' ($html -like '*tr.filtros*' -and $html -like '*functi
 # el JS del informe debe funcionar en navegadores viejos: nada de NodeList.forEach ni arrow
 Check 'informe js sin nodelist.forEach' ($html -like '*querySelectorAll*forEach*') 'False'
 Check 'informe js con flechas orden' ($html -like '*&#9650;*' -and $html -like '*&#9660;*') 'True'
+Check 'informe filtros multiopcion' ($html.Contains('function multi(celda, lista)')) 'True'
+Check 'informe filtros sin select unico' ($html.Contains('new Option(')) 'False'
+Check 'informe css del panel' ($html.Contains('.fmp{position:absolute')) 'True'
 $mVacio = @{planta='X'; ip=''; fecha=''; usuario=''; version='3.1'; mapa='m'; diag=@(); pem=@(); aud=@(); inv=@()}
 Check 'informe vacio aviso' ((Informe-Html $mVacio) -like '*Sin datos en esta sesion*') 'True'
 Check 'html-esc' (Html-Esc 'a<b>&c') 'a&lt;b&gt;&amp;c'

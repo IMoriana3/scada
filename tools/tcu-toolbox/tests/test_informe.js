@@ -1,0 +1,77 @@
+// Filtros y orden del informe HTML, en un navegador de verdad.
+// Antes:  pwsh -NoProfile -File gen_informe.ps1
+// Luego:  node test_informe.js
+const { chromium } = require('playwright');
+(async () => {
+  const exe = process.env.CHROMIUM_PATH;   // opcional: ruta a un Chromium ya instalado
+  const b = await chromium.launch(exe ? { executablePath: exe } : {});
+  const p = await b.newPage();
+  let fallos = 0;
+  const chk = (n, real, esp) => { const ok = String(real) === String(esp);
+    console.log(`${ok ? 'OK  ' : 'FAIL'} ${n} = ${real}${ok ? '' : ` (esperado ${esp})`}`); if (!ok) fallos++; };
+  const errores = [];
+  p.on('pageerror', e => errores.push(e.message));
+  await p.goto('file://' + require('path').join(__dirname, 'informe_muestra.html'));
+  await p.waitForTimeout(300);
+  chk('sin errores de JS', errores.length, 0);
+
+  const visibles = async () => p.locator('table.filtrable tbody tr:visible').count();
+  chk('filas iniciales', await visibles(), 40);
+
+  // columna Salud = indice 2
+  const botSalud = p.locator('tr.filtros td').nth(2).locator('button.fmb');
+  chk('boton multi presente', await botSalud.count(), 1);
+  chk('rotulo inicial', (await botSalud.textContent()).trim(), '(todas)');
+
+  await botSalud.click();
+  const panel = p.locator('tr.filtros td').nth(2).locator('div.fmp');
+  chk('panel abierto', await panel.isVisible(), true);
+
+  // marcar ALARMA y OFFLINE a la vez
+  await panel.locator('label', { hasText: 'ALARMA' }).locator('input').check();
+  await p.waitForTimeout(120);
+  const soloAlarma = await visibles();
+  await panel.locator('label', { hasText: 'OFFLINE' }).locator('input').check();
+  await p.waitForTimeout(120);
+  const dos = await visibles();
+  chk('dos opciones suman', dos > soloAlarma, true);
+  chk('rotulo con 2', (await botSalud.textContent()).trim(), '2 opciones');
+  const saludes = await p.locator('table.filtrable tbody tr:visible td:nth-child(3)').allTextContents();
+  chk('solo ALARMA/OFFLINE', saludes.every(s => s === 'ALARMA' || s === 'OFFLINE'), true);
+
+  // combinar con otro filtro multi: Modo
+  await p.locator('tr.filtros td').nth(3).locator('button.fmb').click();
+  chk('el panel anterior se cierra', await panel.isVisible(), false);
+  const panModo = p.locator('tr.filtros td').nth(3).locator('div.fmp');
+  await panModo.locator('label', { hasText: 'AUTO' }).locator('input').check();
+  await p.waitForTimeout(120);
+  const cruzado = await visibles();
+  chk('cruce de dos columnas reduce', cruzado < dos && cruzado > 0, true);
+  const modos = await p.locator('table.filtrable tbody tr:visible td:nth-child(4)').allTextContents();
+  chk('modo solo AUTO', modos.every(m => m === 'AUTO'), true);
+
+  // "ninguna" vuelve a dejarlo todo
+  await p.locator('tr.filtros td').nth(2).locator('button.fmb').click();
+  await panel.locator('a', { hasText: 'ninguna' }).click();
+  await p.waitForTimeout(120);
+  chk('ninguna = sin filtrar esa columna', (await visibles()) > cruzado, true);
+  chk('rotulo vuelve a (todas)', (await botSalud.textContent()).trim(), '(todas)');
+
+  // "todas" marca todo (equivale a no filtrar, pero con rotulo)
+  await panel.locator('a', { hasText: 'todas' }).click();
+  await p.waitForTimeout(120);
+  chk('todas marcadas = 4 opciones', (await botSalud.textContent()).trim(), '4 opciones');
+
+  // la caja de texto sigue funcionando (columna Tilt, indice 4)
+  const cajaTilt = p.locator('tr.filtros td').nth(4).locator('input');
+  chk('caja de texto donde hay muchos valores', await cajaTilt.count(), 1);
+
+  // ordenar sigue funcionando
+  await p.locator('table.filtrable thead tr:first-child th').nth(1).click();
+  await p.waitForTimeout(120);
+  chk('sigue ordenando', (await p.locator('table.filtrable thead tr:first-child th').nth(1).textContent()).includes('▲'), true);
+
+  console.log(fallos === 0 ? '\nTODAS OK' : `\n${fallos} FALLOS`);
+  await b.close();
+  process.exit(fallos === 0 ? 0 : 1);
+})();
