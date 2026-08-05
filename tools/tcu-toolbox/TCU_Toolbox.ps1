@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '3.4'
+$VERSION_TOOLBOX = '3.5'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -555,7 +555,8 @@ function Html-Esc([string]$s) {
 function Informe-Html([hashtable]$m) {
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.AppendLine('<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Informe PEM - ' + (Html-Esc $m.planta) + '</title><style>')
-    [void]$sb.AppendLine('body{font-family:Segoe UI,Arial,sans-serif;font-size:13px;margin:24px;color:#222}h1{font-size:20px}h2{font-size:15px;margin-top:26px;border-bottom:2px solid #345;padding-bottom:4px}table{border-collapse:collapse;width:100%;margin-top:8px}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;font-size:12px}th{background:#eef2f6}tr.ok td{background:#eaf7ee}tr.aviso td{background:#fff6e0}tr.alarma td{background:#fdeaea}tr.off td{background:#f0f0f0;color:#777}.meta{color:#555}.res{font-weight:600;margin:6px 0}')
+    [void]$sb.AppendLine('body{font-family:Segoe UI,Arial,sans-serif;font-size:13px;margin:24px;color:#222}h1{font-size:20px}h2{font-size:15px;margin-top:26px;border-bottom:2px solid #345;padding-bottom:4px}table{border-collapse:collapse;width:100%;margin-top:8px}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left;font-size:12px}th{background:#eef2f6;cursor:pointer;user-select:none}tr.ok td{background:#eaf7ee}tr.aviso td{background:#fff6e0}tr.alarma td{background:#fdeaea}tr.off td{background:#f0f0f0;color:#777}.meta{color:#555}.res{font-weight:600;margin:6px 0}')
+    [void]$sb.AppendLine('tr.filtros td{background:#f7f9fb;padding:2px 4px}tr.filtros select,tr.filtros input{width:100%;box-sizing:border-box;font-size:11px;padding:2px;border:1px solid #bbb;border-radius:3px}.vis{color:#555;font-weight:400;font-size:12px}')
     [void]$sb.AppendLine('</style></head><body>')
     [void]$sb.AppendLine('<h1>Informe de puesta en marcha &mdash; ' + (Html-Esc $m.planta) + '</h1>')
     [void]$sb.AppendLine('<p class="meta">Fecha: ' + (Html-Esc $m.fecha) + ' &middot; IP/conexion: ' + (Html-Esc $m.ip) + ' &middot; Tecnico: ' + (Html-Esc $m.usuario) + '<br>TCU Toolbox v' + (Html-Esc $m.version) + ' &middot; Mapa: ' + (Html-Esc $m.mapa) + '</p>')
@@ -565,8 +566,8 @@ function Informe-Html([hashtable]$m) {
         if (-not $filas -or @($filas).Count -eq 0) { return }
         [void]$sb.AppendLine('<h2>' + (Html-Esc $titulo) + ' <span class="meta">(' + @($filas).Count + ' filas)</span></h2>')
         $grupos = @($filas) | Group-Object $colEstado | ForEach-Object { "$($_.Count) $($_.Name)" }
-        [void]$sb.AppendLine('<div class="res">' + (Html-Esc ($grupos -join ' | ')) + '</div>')
-        [void]$sb.AppendLine('<table><tr>' + (($cols | ForEach-Object { '<th>' + (Html-Esc $_) + '</th>' }) -join '') + '</tr>')
+        [void]$sb.AppendLine('<div class="res">' + (Html-Esc ($grupos -join ' | ')) + ' <span class="vis"></span></div>')
+        [void]$sb.AppendLine('<table class="filtrable"><tr>' + (($cols | ForEach-Object { '<th title="clic para ordenar">' + (Html-Esc $_) + '</th>' }) -join '') + '</tr>')
         foreach ($f in @($filas)) {
             $cl = & $clase $f.$colEstado
             [void]$sb.AppendLine('<tr' + $(if ($cl) { ' class="' + $cl + '"' } else { '' }) + '>' + (($cols | ForEach-Object { '<td>' + (Html-Esc "$($f.$_)") + '</td>' }) -join '') + '</tr>')
@@ -580,7 +581,67 @@ function Informe-Html([hashtable]$m) {
     if ((-not $m.diag -or @($m.diag).Count -eq 0) -and (-not $m.pem -or @($m.pem).Count -eq 0) -and (-not $m.aud -or @($m.aud).Count -eq 0) -and (-not $m.inv -or @($m.inv).Count -eq 0)) {
         [void]$sb.AppendLine('<p>Sin datos en esta sesion: ejecuta Diagnostico, PEM, Auditoria o Inventario antes de generar el informe.</p>')
     }
-    [void]$sb.AppendLine('<p class="meta">Generado por TCU Toolbox &mdash; Factiun.</p></body></html>')
+    [void]$sb.AppendLine('<p class="meta">Generado por TCU Toolbox &mdash; Factiun. Filtra con la fila bajo la cabecera (desplegable = valor exacto; caja de texto = contiene) y ordena con un clic en la cabecera.</p>')
+    # filtros por columna y orden al clicar la cabecera - JS embebido, sin red
+    [void]$sb.AppendLine(@'
+<script>
+(function(){
+  document.querySelectorAll("table.filtrable").forEach(function(tb){
+    var filas = Array.prototype.slice.call(tb.rows, 1);
+    if (!filas.length) return;
+    var nCols = tb.rows[0].cells.length;
+    var visor = tb.previousElementSibling ? tb.previousElementSibling.querySelector(".vis") : null;
+    var tf = tb.insertRow(1); tf.className = "filtros";
+    var ctrls = [];
+    for (var c = 0; c < nCols; c++) {
+      var celda = tf.insertCell(-1);
+      var vals = {};
+      filas.forEach(function(r){ var t = r.cells[c].textContent.trim(); if (t) vals[t] = 1; });
+      var lista = Object.keys(vals).sort();
+      var ctrl;
+      if (lista.length > 0 && lista.length <= 30) {
+        ctrl = document.createElement("select");
+        var op = document.createElement("option"); op.value = ""; op.textContent = "(todas)"; ctrl.appendChild(op);
+        lista.forEach(function(v){ var o = document.createElement("option"); o.value = v; o.textContent = v; ctrl.appendChild(o); });
+      } else {
+        ctrl = document.createElement("input"); ctrl.placeholder = "filtrar...";
+      }
+      ctrl.addEventListener("input", aplicar); ctrl.addEventListener("change", aplicar);
+      celda.appendChild(ctrl); ctrls.push(ctrl);
+    }
+    function aplicar(){
+      var n = 0;
+      filas.forEach(function(r){
+        var ok = ctrls.every(function(ctrl, c){
+          var f = ctrl.value.trim(); if (!f) return true;
+          var t = r.cells[c].textContent.trim();
+          return ctrl.tagName === "SELECT" ? t === f : t.toLowerCase().indexOf(f.toLowerCase()) >= 0;
+        });
+        r.style.display = ok ? "" : "none";
+        if (ok) n++;
+      });
+      if (visor) visor.textContent = (n === filas.length) ? "" : "- filtro: " + n + " de " + filas.length + " visibles";
+    }
+    var dir = {};
+    Array.prototype.forEach.call(tb.rows[0].cells, function(th, c){
+      th.addEventListener("click", function(){
+        dir[c] = -(dir[c] || -1);
+        var d = dir[c];
+        filas.sort(function(a, b){
+          var x = a.cells[c].textContent.trim(), y = b.cells[c].textContent.trim();
+          var nx = parseFloat(x.replace(",", ".")), ny = parseFloat(y.replace(",", "."));
+          if (!isNaN(nx) && !isNaN(ny)) return (nx - ny) * d;
+          return x.localeCompare(y) * d;
+        });
+        var cuerpo = filas[0].parentNode;
+        filas.forEach(function(r){ cuerpo.appendChild(r); });
+      });
+    });
+  });
+})();
+</script>
+'@)
+    [void]$sb.AppendLine('</body></html>')
     return $sb.ToString()
 }
 
