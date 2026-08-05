@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '5.2'
+$VERSION_TOOLBOX = '5.4'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1634,7 +1634,7 @@ $tabL.Controls.Add($btnLCsv)
 # Escribir no existen: por eso el combo de esta tabla no es el mismo.
 $dgvL = New-Object System.Windows.Forms.DataGridView
 $dgvL.Location = New-Object System.Drawing.Point(10, 55)
-$dgvL.Size = New-Object System.Drawing.Size(898, 228)
+$dgvL.Size = New-Object System.Drawing.Size(898, 118)
 $dgvL.AllowUserToAddRows = $true
 $dgvL.RowHeadersVisible = $false
 $dgvL.BackgroundColor = [System.Drawing.Color]::White
@@ -1684,6 +1684,15 @@ function Refrescar-FiltroLeer {
 
 $txtLFiltro.Add_TextChanged({ Refrescar-FiltroLeer })
 Refrescar-FiltroLeer
+
+$lvL = New-Object System.Windows.Forms.ListView
+$lvL.Location = New-Object System.Drawing.Point(10, 180)
+$lvL.Size = New-Object System.Drawing.Size(898, 180)
+$lvL.View = 'Details'; $lvL.FullRowSelect = $true; $lvL.GridLines = $true
+[void]$lvL.Columns.Add('TCU', 70)
+[void]$lvL.Columns.Add('Valor', 200)
+[void]$lvL.Columns.Add('Estado', 600)
+$tabL.Controls.Add($lvL)
 
 # Nombres elegidos en la tabla, sin repetidos y en el orden en que estan
 function Vars-DeTablaLeer {
@@ -4690,6 +4699,70 @@ function Params-Hsu {
     return $cx
 }
 
+# Sobre que HSUs actua una lectura: la elegida en el desplegable, TODAS las
+# encontradas si esta en "(todas)", o la del campo IP/puerto si se trabaja a
+# mano. Con Planta completa o (auto) hay que pasar antes por BUSCAR HSUs, que
+# es lo que resuelve de que NCU cuelga cada una y por que gateway se llega.
+function Hsu-Objetivos {
+    $unit = [byte](Val-Int $txtHSlave.Text 'Esclavo HSU' 1 255)
+    $cx = Params-Conexion
+    $lista = New-Object System.Collections.ArrayList
+    $hsus = @($script:HsusPlanta)
+    if ($script:HsuSel -and $script:HsuSel.ip) { $hsus = @($script:HsuSel) }
+    if ($hsus.Count -eq 0) {
+        if ($cx.multi -or -not $cx.puerto) {
+            throw 'pulsa BUSCAR HSUs primero: con Planta completa o (auto) hay que saber de que NCU cuelga cada HSU'
+        }
+        [void]$lista.Add(@{etiqueta="HSU esclavo $unit"; ip=$cx.ip; puerto=[int]$cx.puerto; unit=$unit})
+        return ,$lista
+    }
+    foreach ($h in $hsus) {
+        $puerto = $null
+        $gws = $(if ($h.gws) { $h.gws } else { $cx.gws })
+        if ($gws -and @($gws).Count -gt 0) { $puerto = @($gws | Sort-Object { [int]$_.puerto })[0].puerto }
+        if (-not $puerto -and $cx.puerto) { $puerto = $cx.puerto }
+        if (-not $puerto) { $puerto = 503 }
+        $u = $(if ($h.hsu) { [byte]$h.hsu } else { $unit })
+        [void]$lista.Add(@{etiqueta=$h.etiqueta; ip=$h.ip; puerto=[int]$puerto; unit=$u})
+    }
+    return ,$lista
+}
+
+# Recorre las HSUs objetivo llamando a $leer (recibe el esclavo) y devuelve
+# @{filas; oks} con una cabecera por HSU cuando hay mas de una.
+function Hsu-Recorrer($objs, $cx, [scriptblock]$leer, [scriptblock]$resumen) {
+    $filas = New-Object System.Collections.ArrayList
+    $oks = New-Object System.Collections.ArrayList
+    foreach ($o in $objs) {
+        if (Chequear-Cancelado) { break }
+        if (@($objs).Count -gt 1) {
+            [void]$filas.Add([pscustomobject]@{Campo="--- $($o.etiqueta) ---"; Valor="$($o.ip):$($o.puerto)  esclavo $($o.unit)"; Nota=''})
+        }
+        $r = $null; $err = ''
+        try { Modbus-Conectar $o.ip $o.puerto $cx.to } catch { $err = "$_" }
+        if (-not $err) {
+            for ($i = 1; $i -le $cx.reint -and $null -eq $r; $i++) {
+                try { $r = & $leer $o.unit }
+                catch {
+                    $err = "$_"
+                    if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+                    Start-Sleep -Milliseconds (300 * $i)
+                }
+            }
+        }
+        Modbus-Cerrar
+        if ($null -eq $r) {
+            [void]$filas.Add([pscustomobject]@{Campo=$o.etiqueta; Valor='sin respuesta'; Nota="ALARMA $err"})
+            Con "$($o.etiqueta): sin respuesta: $err" ([System.Drawing.Color]::Salmon)
+            continue
+        }
+        foreach ($f in $r.filas) { [void]$filas.Add($f) }
+        [void]$oks.Add(@{obj=$o; datos=$r})
+        if ($resumen) { & $resumen $o $r }
+    }
+    return @{filas=$filas; oks=$oks}
+}
+
 function Hsu-Mostrar([array]$filas) {
     $lvH.Items.Clear()
     foreach ($f in $filas) {
@@ -4701,49 +4774,41 @@ function Hsu-Mostrar([array]$filas) {
 }
 
 $btnHMeteo.Add_Click({ Lanzar {
-    $cx = Params-Hsu
+    $objs = @(Hsu-Objetivos)
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Leyendo meteo de HSU esclavo $($cx.unitHsu)  ($($cx.ip):$($cx.puerto))" ([System.Drawing.Color]::SteelBlue)
-    try { Modbus-Conectar $cx.ip $cx.puerto $cx.to } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
-    $m = $null; $err = ''
-    for ($i = 1; $i -le $cx.reint -and $null -eq $m; $i++) {
-        try { $m = Hsu-LeerMeteo $cx.unitHsu }
-        catch {
-            $err = "$_"
-            if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
-            Start-Sleep -Milliseconds (300 * $i)
+    Con "Leyendo meteo de $($objs.Count) HSU(s)." ([System.Drawing.Color]::SteelBlue)
+    $r = Hsu-Recorrer $objs (Params-Conexion) { param($u) Hsu-LeerMeteo $u } {
+        param($o, $m)
+        if ($m.nivel -gt 0 -or $m.alarmas.Count -gt 0) {
+            Con ("{0}: nivel de viento {1}; alarmas: {2}" -f $o.etiqueta, $m.nivel, $(if ($m.alarmas.Count) { $m.alarmas -join '; ' } else { 'ninguna' })) ([System.Drawing.Color]::Orange)
+        } else {
+            Con "$($o.etiqueta): sin alarmas, nivel de viento 0." ([System.Drawing.Color]::LightGreen)
         }
     }
-    Modbus-Cerrar
-    if ($null -eq $m) { Con "HSU sin respuesta: $err" ([System.Drawing.Color]::Salmon); return }
-    Hsu-Mostrar $m.filas
-    if ($m.nivel -gt 0 -or $m.alarmas.Count -gt 0) {
-        Con ("HSU: nivel de viento {0}; alarmas: {1}" -f $m.nivel, $(if ($m.alarmas.Count) { $m.alarmas -join '; ' } else { 'ninguna' })) ([System.Drawing.Color]::Orange)
-    } else {
-        Con 'HSU: sin alarmas, nivel de viento 0.' ([System.Drawing.Color]::LightGreen)
+    Hsu-Mostrar $r.filas
+    if (@($objs).Count -gt 1) {
+        $conAlarma = @($r.oks | Where-Object { $_.datos.nivel -gt 0 -or $_.datos.alarmas.Count -gt 0 }).Count
+        Con ("Resumen: {0} de {1} HSUs respondieron; {2} con alarma o viento." -f @($r.oks).Count, @($objs).Count, $conAlarma) ([System.Drawing.Color]::SteelBlue)
     }
 } })
 
 $btnHConfig.Add_Click({ Lanzar {
-    $cx = Params-Hsu
+    $objs = @(Hsu-Objetivos)
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Leyendo configuracion de HSU esclavo $($cx.unitHsu)  ($($cx.ip):$($cx.puerto))" ([System.Drawing.Color]::SteelBlue)
-    try { Modbus-Conectar $cx.ip $cx.puerto $cx.to } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
-    $c = $null; $err = ''
-    for ($i = 1; $i -le $cx.reint -and $null -eq $c; $i++) {
-        try { $c = Hsu-LeerConfig $cx.unitHsu }
-        catch {
-            $err = "$_"
-            if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
-            Start-Sleep -Milliseconds (300 * $i)
-        }
-    }
-    Modbus-Cerrar
-    if ($null -eq $c) { Con "HSU sin respuesta: $err" ([System.Drawing.Color]::Salmon); return }
-    Hsu-Mostrar $c.filas
+    Con "Leyendo configuracion de $($objs.Count) HSU(s)." ([System.Drawing.Color]::SteelBlue)
+    $r = Hsu-Recorrer $objs (Params-Conexion) { param($u) Hsu-LeerConfig $u } $null
+    Hsu-Mostrar $r.filas
+    if (@($r.oks).Count -eq 0) { return }
+    # los cuadros de umbrales se cargan con la primera que conteste; si las
+    # HSUs no llevan los mismos umbrales, se avisa en vez de disimularlo
+    $c = @($r.oks)[0].datos
     $txtHMid.Text = $c.mid.ToString('0.##', $INV); $txtHLow.Text = $c.low.ToString('0.##', $INV)
     $txtHTMid.Text = "$($c.tMid)"; $txtHTLow.Text = "$($c.tLow)"
-    Con "Config leida; umbrales cargados en los cuadros (ON $($txtHMid.Text) / OFF $($txtHLow.Text) m/s)." ([System.Drawing.Color]::SteelBlue)
+    Con "Umbrales cargados en los cuadros desde $(@($r.oks)[0].obj.etiqueta) (ON $($txtHMid.Text) / OFF $($txtHLow.Text) m/s)." ([System.Drawing.Color]::SteelBlue)
+    $distintas = @($r.oks | Where-Object { $_.datos.mid -ne $c.mid -or $_.datos.low -ne $c.low -or $_.datos.tMid -ne $c.tMid -or $_.datos.tLow -ne $c.tLow })
+    if ($distintas.Count) {
+        Con ("ATENCION: {0} HSU(s) con umbrales distintos: {1}" -f $distintas.Count, (($distintas | ForEach-Object { "$($_.obj.etiqueta) ON $($_.datos.mid)/OFF $($_.datos.low)" }) -join ' | ')) ([System.Drawing.Color]::Orange)
+    }
 } })
 
 $btnHUmb.Add_Click({ Lanzar {
@@ -5212,10 +5277,19 @@ $btnInforme.Anchor = 'Right,Bottom'
 # medir lo que deberia.
 function Anclar-Contenedor($cont, $anchoRef) {
     $ancho = $cont.ClientSize.Width
+    # Si hay varias tablas apiladas (Leer variable: la de eleccion arriba y la
+    # de resultados abajo), solo la de abajo crece al agrandar la ventana; las
+    # de arriba mantienen su alto. Ancladas todas abajo se solaparian.
+    $tablas = @($cont.Controls | Where-Object {
+        $_ -is [System.Windows.Forms.ListView] -or $_ -is [System.Windows.Forms.DataGridView] -or $_ -is [System.Windows.Forms.RichTextBox] })
+    $topeAbajo = -1
+    foreach ($t in $tablas) { if ($t.Top -gt $topeAbajo) { $topeAbajo = $t.Top } }
     foreach ($c in $cont.Controls) {
         $cabe = ($ancho -ge ($c.Left + $c.Width)) -and ($cont.ClientSize.Height -ge ($c.Top + $c.Height))
         if ($c -is [System.Windows.Forms.ListView] -or $c -is [System.Windows.Forms.DataGridView] -or $c -is [System.Windows.Forms.RichTextBox]) {
-            if ($cabe) { $c.Anchor = 'Top,Left,Right,Bottom' }
+            if ($cabe) {
+                if ($c.Top -eq $topeAbajo) { $c.Anchor = 'Top,Left,Right,Bottom' } else { $c.Anchor = 'Top,Left,Right' }
+            }
         } elseif ($c -is [System.Windows.Forms.GroupBox]) {
             # en Flota hay dos grupos apilados: el de abajo es el que crece
             if ($cabe) {
