@@ -25,21 +25,16 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '2.4'
+$VERSION_TOOLBOX = '2.5'
 $VERSION_MAPA    = 'SUNNER v6.1 (FW 1.4.3)'
 
 # ---------------------------------------------------------------------------
-#  Plantas: lista integrada + plantas.json opcional
+#  Plantas: SOLO las de los ficheros cargados (plantas/ + plantas.json/csv +
+#  boton Cargar..., que REEMPLAZA la lista). Sin lista integrada: el programa
+#  es el mismo para todas las plantas y la configuracion viaja en ficheros.
 # ---------------------------------------------------------------------------
 $PLANTAS = [ordered]@{
-  '(manual)'              = $null
-  'El Burgo I NCU1 GW1'   = @{ip='10.100.1.52'; puerto=503; ini=1;  fin=56}
-  'El Burgo I NCU1 GW2'   = @{ip='10.100.1.52'; puerto=504; ini=57; fin=108}
-  'El Burgo I NCU2 GW1'   = @{ip='10.100.1.56'; puerto=503; ini=1;  fin=45}
-  'El Burgo I NCU2 GW2'   = @{ip='10.100.1.56'; puerto=504; ini=46; fin=107}
-  'El Burgo I NCU2 TCU109'= @{ip='10.100.1.56'; puerto=504; ini=109; fin=109}
-  'Planta 192.168.4.60'   = @{ip='192.168.4.60'; puerto=503; ini=1; fin=44}
-  'Planta 192.168.4.65'   = @{ip='192.168.4.65'; puerto=503; ini=1; fin=41}
+  '(manual)' = $null
 }
 
 $script:MsgsInicio = @()
@@ -605,6 +600,12 @@ function Filtrar-Nombres([string[]]$nombres, [string]$filtro) {
     return ($nombres | Where-Object { $_.IndexOf($f, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
 }
 
+# Orden natural para los desplegables: ascendente por numero de registro
+# (los nombres empiezan por el; el mapa interno se define por grupos).
+function Nombres-Ordenados([string[]]$nombres) {
+    return ($nombres | Sort-Object @{Expression={ [int](($_ -split ' ')[0]) }}, @{Expression={ $_ }})
+}
+
 # Resuelve el nombre de una variable de forma tolerante: clave exacta, o una
 # unica coincidencia por subcadena ("41010" -> '41010 longitud [deg]').
 function Resolver-Variable([string]$texto) {
@@ -835,7 +836,7 @@ function Refrescar-FiltroEscribir {
     foreach ($fila in $dgv.Rows) {
         if (-not $fila.IsNewRow -and $fila.Cells[0].Value) { $usados[[string]$fila.Cells[0].Value] = $true }
     }
-    $coinciden = @(Filtrar-Nombres @($VARIABLES.Keys) $txtWFiltro.Text)
+    $coinciden = @(Nombres-Ordenados @(Filtrar-Nombres @($VARIABLES.Keys) $txtWFiltro.Text))
     $colVar.Items.Clear()
     foreach ($k in $coinciden) { [void]$colVar.Items.Add($k) }
     foreach ($k in $VARIABLES.Keys) {
@@ -902,15 +903,21 @@ $lblLFiltro.ForeColor = [System.Drawing.Color]::Gray
 [void](LG $tabL 'Variable' 360 58)
 $cbLVar = New-Object System.Windows.Forms.ComboBox
 $cbLVar.Location = New-Object System.Drawing.Point(420, 21)
-$cbLVar.Size = New-Object System.Drawing.Size(488, 22)
+$cbLVar.Size = New-Object System.Drawing.Size(380, 22)
 $cbLVar.DropDownStyle = 'DropDownList'
 $tabL.Controls.Add($cbLVar)
+
+$btnLAdd = New-Object System.Windows.Forms.Button
+$btnLAdd.Text = 'Anadir'
+$btnLAdd.Location = New-Object System.Drawing.Point(806, 19)
+$btnLAdd.Size = New-Object System.Drawing.Size(102, 26)
+$tabL.Controls.Add($btnLAdd)
 
 # Rellena el combo aplicando el filtro; conserva la seleccion si sigue visible
 # y autoselecciona cuando solo queda una coincidencia.
 function Refrescar-FiltroLeer {
     $sel = $cbLVar.SelectedItem
-    $todos = @($VARIABLES.Keys) + @($ESTADO.Keys | ForEach-Object { 'ESTADO ' + $_ })
+    $todos = @(Nombres-Ordenados @($VARIABLES.Keys)) + @(Nombres-Ordenados @($ESTADO.Keys) | ForEach-Object { 'ESTADO ' + $_ })
     $coinciden = @(Filtrar-Nombres $todos $txtLFiltro.Text)
     $cbLVar.BeginUpdate()
     $cbLVar.Items.Clear()
@@ -925,29 +932,57 @@ function Refrescar-FiltroLeer {
 $txtLFiltro.Add_TextChanged({ Refrescar-FiltroLeer })
 Refrescar-FiltroLeer
 
-[void](LG $tabL 'TCU de' 10 52 56)
-$txtLIni = TG $tabL '1' 62 52 45
-[void](LG $tabL 'a' 116 12 56)
-$txtLFin = TG $tabL '44' 131 52 45
+# lista de variables a leer (varias a la vez, como la tabla de Escribir)
+$lbLSel = New-Object System.Windows.Forms.ListBox
+$lbLSel.Location = New-Object System.Drawing.Point(10, 50)
+$lbLSel.Size = New-Object System.Drawing.Size(500, 58)
+$lbLSel.IntegralHeight = $false
+$tabL.Controls.Add($lbLSel)
+
+$btnLQuitar = New-Object System.Windows.Forms.Button
+$btnLQuitar.Text = 'Quitar'
+$btnLQuitar.Location = New-Object System.Drawing.Point(516, 50)
+$btnLQuitar.Size = New-Object System.Drawing.Size(72, 26)
+$tabL.Controls.Add($btnLQuitar)
+
+$btnLVaciar = New-Object System.Windows.Forms.Button
+$btnLVaciar.Text = 'Vaciar'
+$btnLVaciar.Location = New-Object System.Drawing.Point(516, 82)
+$btnLVaciar.Size = New-Object System.Drawing.Size(72, 26)
+$tabL.Controls.Add($btnLVaciar)
+
+[void](LG $tabL 'TCU de' 604 50 56)
+$txtLIni = TG $tabL '1' 654 52 40
+[void](LG $tabL 'a' 700 10 56)
+$txtLFin = TG $tabL '44' 712 52 40
 
 $btnLeer = New-Object System.Windows.Forms.Button
 $btnLeer.Text = 'LEER'
-$btnLeer.Location = New-Object System.Drawing.Point(200, 49)
-$btnLeer.Size = New-Object System.Drawing.Size(110, 28)
+$btnLeer.Location = New-Object System.Drawing.Point(766, 49)
+$btnLeer.Size = New-Object System.Drawing.Size(112, 26)
 $btnLeer.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
 $btnLeer.ForeColor = [System.Drawing.Color]::White
 $tabL.Controls.Add($btnLeer)
 
 $btnLCsv = New-Object System.Windows.Forms.Button
 $btnLCsv.Text = 'Exportar CSV'
-$btnLCsv.Location = New-Object System.Drawing.Point(320, 49)
-$btnLCsv.Size = New-Object System.Drawing.Size(118, 28)
+$btnLCsv.Location = New-Object System.Drawing.Point(766, 82)
+$btnLCsv.Size = New-Object System.Drawing.Size(112, 26)
 $btnLCsv.Enabled = $false
 $tabL.Controls.Add($btnLCsv)
 
+$btnLAdd.Add_Click({
+    $s = $cbLVar.SelectedItem
+    if ($s -and -not $lbLSel.Items.Contains($s)) { [void]$lbLSel.Items.Add($s) }
+})
+$cbLVar.Add_KeyDown({ param($s,$e) if ($e.KeyCode -eq 'Enter') { $btnLAdd.PerformClick() } })
+$btnLQuitar.Add_Click({ if ($lbLSel.SelectedIndex -ge 0) { $lbLSel.Items.RemoveAt($lbLSel.SelectedIndex) } })
+$btnLVaciar.Add_Click({ $lbLSel.Items.Clear() })
+$lbLSel.Add_DoubleClick({ if ($lbLSel.SelectedIndex -ge 0) { $lbLSel.Items.RemoveAt($lbLSel.SelectedIndex) } })
+
 $lvL = New-Object System.Windows.Forms.ListView
-$lvL.Location = New-Object System.Drawing.Point(10, 86)
-$lvL.Size = New-Object System.Drawing.Size(898, 274)
+$lvL.Location = New-Object System.Drawing.Point(10, 114)
+$lvL.Size = New-Object System.Drawing.Size(898, 246)
 $lvL.View = 'Details'; $lvL.FullRowSelect = $true; $lvL.GridLines = $true
 [void]$lvL.Columns.Add('TCU', 70)
 [void]$lvL.Columns.Add('Valor', 200)
@@ -1401,13 +1436,16 @@ function Refrescar-ComboPlantas {
     if ($sel -and $cbPlanta.Items.Contains($sel)) { $cbPlanta.SelectedItem = $sel } else { $cbPlanta.SelectedIndex = 0 }
 }
 
-# Importa uno o varios JSON de plantas descargados de la plataforma y ofrece
-# guardarlos en plantas/ para que se carguen solos en proximas sesiones.
+# Importa uno o varios JSON/CSV de plantas descargados de la plataforma.
+# REEMPLAZA la lista actual: en el desplegable quedan solo las NCUs de los
+# ficheros cargados (mas la entrada manual). Ofrece guardarlos en plantas/.
 $btnPlantas.Add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
     $dlg.Filter = 'Plantas (*.json;*.csv)|*.json;*.csv'
     $dlg.Multiselect = $true
     if ($dlg.ShowDialog() -ne 'OK') { return }
+    # reemplazo: fuera todo menos (manual)
+    foreach ($k in @($PLANTAS.Keys)) { if ($k -ne '(manual)') { $PLANTAS.Remove($k) } }
     $importados = @()
     foreach ($f in $dlg.FileNames) {
         try {
@@ -1418,9 +1456,10 @@ $btnPlantas.Add_Click({
             Con "AVISO: $([System.IO.Path]::GetFileName($f)) ilegible ($_) - ignorado" ([System.Drawing.Color]::Orange)
         }
     }
-    if ($importados.Count -eq 0) { return }
+    if ($importados.Count -eq 0) { Refrescar-ComboPlantas; Con 'Lista de plantas vacia (solo entrada manual).' ([System.Drawing.Color]::Orange); return }
     Construir-EntradasAuto
     Refrescar-ComboPlantas
+    Con "Lista de plantas reemplazada: solo se muestran las de $($importados.Count) fichero(s) cargado(s)." ([System.Drawing.Color]::SteelBlue)
     $r = [System.Windows.Forms.MessageBox]::Show(
         "Guardar una copia en la carpeta 'plantas' junto al script, para que se carguen solas al arrancar?",
         'Recordar plantas', 'YesNo', 'Question')
@@ -1683,55 +1722,75 @@ function Def-DeLectura([string]$sel) {
 }
 
 $btnLeer.Add_Click({ Lanzar {
-    if (-not $cbLVar.SelectedItem) { [void][System.Windows.Forms.MessageBox]::Show('Elige una variable.','Aviso'); return }
-    $vdef = Def-DeLectura $cbLVar.SelectedItem
+    # lista de variables: las anadidas, o la seleccionada en el combo si la lista esta vacia
+    $nombres = @($lbLSel.Items)
+    if ($nombres.Count -eq 0 -and $cbLVar.SelectedItem) { $nombres = @([string]$cbLVar.SelectedItem) }
+    if ($nombres.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('Elige una variable (o anade varias a la lista).','Aviso'); return }
+    $defs = @($nombres | ForEach-Object { @{nombre=[string]$_; vdef=(Def-DeLectura $_)} })
     $cx = Params-Conexion
     $tcus = Rango-Tcus $txtLIni.Text $txtLFin.Text 'Leer'
-    $lvL.Items.Clear(); $script:UltimaLectura = @()
+    $lvL.Items.Clear(); $lvL.Columns.Clear(); $script:UltimaLectura = @()
+    [void]$lvL.Columns.Add('TCU', 48)
+    foreach ($d in $defs) { [void]$lvL.Columns.Add($d.nombre, [math]::Max(110, [math]::Min(220, [int](790 / $defs.Count)))) }
+    [void]$lvL.Columns.Add('Estado', 130)
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Leyendo '$($cbLVar.SelectedItem)' en TCUs $($tcus[0])-$($tcus[-1])  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
+    Con "Leyendo $($defs.Count) variable(s) en TCUs $($tcus[0])-$($tcus[-1])  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     $valores = @{}
+    foreach ($d in $defs) { $valores[$d.nombre] = @{} }
     $segs = @(Plan-Segmentos $tcus $cx)
     foreach ($seg in $segs) {
         if ($script:Cancelar) { break }
         $segOk = $true; $errSeg = ''
         try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
-        catch { $segOk = $false; $errSeg = "sin conexion ($($cx.ip):$($seg.puerto)): $_"; Con "ERROR: $errSeg" ([System.Drawing.Color]::Salmon) }
+        catch { $segOk = $false; $errSeg = "sin conexion ($($cx.ip):$($seg.puerto))"; Con "ERROR: $errSeg : $_" ([System.Drawing.Color]::Salmon) }
         foreach ($tcu in $seg.tcus) {
             if (Chequear-Cancelado) { break }
-            $val = $null; $err = $errSeg
-            if ($segOk) {
-                for ($i = 1; $i -le $cx.reint -and $null -eq $val; $i++) {
-                    if ($script:Cancelar) { break }
-                    try { $val = Leer-Decodificado $tcu $vdef }
-                    catch {
-                        $err = "$_"
-                        if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
-                        Start-Sleep -Milliseconds (300 * $i)
+            $fila = [ordered]@{TCU=[int]$tcu}
+            $errores = 0; $err = $errSeg
+            foreach ($d in $defs) {
+                if ($script:Cancelar) { break }
+                $val = $null
+                if ($segOk) {
+                    for ($i = 1; $i -le $cx.reint -and $null -eq $val; $i++) {
+                        try { $val = Leer-Decodificado $tcu $d.vdef }
+                        catch {
+                            $err = "$_"
+                            if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+                            Start-Sleep -Milliseconds (200 * $i)
+                        }
                     }
                 }
+                if ($null -ne $val) {
+                    $fila[$d.nombre] = $val
+                    if (-not $valores[$d.nombre].ContainsKey($val)) { $valores[$d.nombre][$val] = 0 }
+                    $valores[$d.nombre][$val]++
+                } else { $fila[$d.nombre] = ''; $errores++ }
             }
+            $estado = 'OK'
+            if ($errores -gt 0) { $estado = "$errores fallos: $err" }
+            $fila['Estado'] = $estado
             $item = New-Object System.Windows.Forms.ListViewItem("$tcu")
-            if ($null -ne $val) {
-                [void]$item.SubItems.Add($val); [void]$item.SubItems.Add('OK')
-                if (-not $valores.ContainsKey($val)) { $valores[$val] = 0 }
-                $valores[$val]++
-                $script:UltimaLectura += [pscustomobject]@{TCU=$tcu; Valor=$val; Estado='OK'}
-            } else {
-                [void]$item.SubItems.Add('-'); [void]$item.SubItems.Add($err)
-                $item.ForeColor = [System.Drawing.Color]::Firebrick
-                $script:UltimaLectura += [pscustomobject]@{TCU=$tcu; Valor=''; Estado=$err}
+            foreach ($d in $defs) {
+                $v = $fila[$d.nombre]
+                if ("$v" -eq '') { $v = '-' }
+                [void]$item.SubItems.Add("$v")
             }
+            [void]$item.SubItems.Add($estado)
+            if ($errores -gt 0) { $item.ForeColor = [System.Drawing.Color]::Firebrick }
             $lvL.Items.Add($item) | Out-Null
+            $script:UltimaLectura += [pscustomobject]$fila
             [System.Windows.Forms.Application]::DoEvents()
         }
     }
     Modbus-Cerrar
-    if ($valores.Count -eq 1) {
-        Con ("Todas las TCUs leidas coinciden: " + @($valores.Keys)[0]) ([System.Drawing.Color]::LightGreen)
-    } elseif ($valores.Count -gt 1) {
-        Con "ATENCION: $($valores.Count) valores distintos encontrados:" ([System.Drawing.Color]::Orange)
-        foreach ($k in $valores.Keys) { Con ("   {0}  en {1} TCUs" -f $k, $valores[$k]) ([System.Drawing.Color]::Orange) }
+    foreach ($d in $defs) {
+        $v = $valores[$d.nombre]
+        if ($v.Count -eq 1) {
+            Con ("  {0}: todas coinciden = {1}" -f $d.nombre, @($v.Keys)[0]) ([System.Drawing.Color]::LightGreen)
+        } elseif ($v.Count -gt 1) {
+            Con ("  ATENCION {0}: {1} valores distintos:" -f $d.nombre, $v.Count) ([System.Drawing.Color]::Orange)
+            foreach ($k in $v.Keys) { Con ("     {0}  en {1} TCUs" -f $k, $v[$k]) ([System.Drawing.Color]::Orange) }
+        }
     }
 } })
 
@@ -2456,12 +2515,15 @@ $btnLog.Add_Click({
 
 # ------------------------- arranque -------------------------
 Con "TCU Toolbox v$VERSION_TOOLBOX listo. Mapa de registros: $VERSION_MAPA." ([System.Drawing.Color]::Gainsboro)
-Con 'Escribir: tabla + presets + backup como preset. Leer: una variable en un rango, con resumen de discrepancias.' ([System.Drawing.Color]::Gainsboro)
+Con 'Escribir: tabla + presets + backup como preset. Leer: varias variables a la vez en un rango, con resumen de discrepancias.' ([System.Drawing.Color]::Gainsboro)
 Con 'Filtro de variables: escribe p.ej. "soc" o "tilt" en el campo Filtro y el desplegable se reduce a lo que casa.' ([System.Drawing.Color]::Gainsboro)
 Con 'Entradas (auto): NCU completa con puerto resuelto por TCU; los gateways se recorren en secuencia.' ([System.Drawing.Color]::Gainsboro)
 Con 'Flota: auditoria contra preset de referencia e inventario (FW/serie/MAC). Volcar: BACKUP NCU masivo. Escribir: CSV por TCU.' ([System.Drawing.Color]::Gainsboro)
 Con 'Volcar: backup completo de una TCU (CSV/JSON) y comparacion contra un backup anterior.' ([System.Drawing.Color]::Gainsboro)
 Con 'Diagnostico: salud OK/AVISO/ALARMA/OFFLINE de un rango con alarmas en texto. Utilidades: reloj e identificacion.' ([System.Drawing.Color]::Gainsboro)
 foreach ($m in $script:MsgsInicio) { Con $m ([System.Drawing.Color]::SteelBlue) }
+if ($PLANTAS.Count -le 1) {
+    Con 'Sin plantas cargadas: usa el boton Cargar... (o copia los JSON de la plataforma en la subcarpeta plantas/).' ([System.Drawing.Color]::Orange)
+}
 [void]$form.ShowDialog()
 Modbus-Cerrar
