@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '3.2'
+$VERSION_TOOLBOX = '3.3'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1525,9 +1525,32 @@ $lblGBucle.Size = New-Object System.Drawing.Size(580, 20)
 $lblGBucle.ForeColor = [System.Drawing.Color]::Gray
 $tabG.Controls.Add($lblGBucle)
 
+# filtros de vista sobre el resultado ya leido (no relanzan lecturas)
+[void](LG $tabG 'Ver' 10 30 89)
+$cbGVerNcu = New-Object System.Windows.Forms.ComboBox
+$cbGVerNcu.Location = New-Object System.Drawing.Point(44, 86)
+$cbGVerNcu.Size = New-Object System.Drawing.Size(110, 22)
+$cbGVerNcu.DropDownStyle = 'DropDownList'
+[void]$cbGVerNcu.Items.Add('NCU - todas')
+$cbGVerNcu.SelectedIndex = 0
+$tabG.Controls.Add($cbGVerNcu)
+$cbGVerSalud = New-Object System.Windows.Forms.ComboBox
+$cbGVerSalud.Location = New-Object System.Drawing.Point(162, 86)
+$cbGVerSalud.Size = New-Object System.Drawing.Size(130, 22)
+$cbGVerSalud.DropDownStyle = 'DropDownList'
+foreach ($s in @('Salud - todas','Solo problemas','ALARMA','AVISO','OFFLINE','OK')) { [void]$cbGVerSalud.Items.Add($s) }
+$cbGVerSalud.SelectedIndex = 0
+$tabG.Controls.Add($cbGVerSalud)
+$lblGVer = New-Object System.Windows.Forms.Label
+$lblGVer.Text = ''
+$lblGVer.Location = New-Object System.Drawing.Point(302, 89)
+$lblGVer.Size = New-Object System.Drawing.Size(606, 20)
+$lblGVer.ForeColor = [System.Drawing.Color]::Gray
+$tabG.Controls.Add($lblGVer)
+
 $lvG = New-Object System.Windows.Forms.ListView
-$lvG.Location = New-Object System.Drawing.Point(10, 88)
-$lvG.Size = New-Object System.Drawing.Size(898, 272)
+$lvG.Location = New-Object System.Drawing.Point(10, 116)
+$lvG.Size = New-Object System.Drawing.Size(898, 244)
 $lvG.View = 'Details'; $lvG.FullRowSelect = $true; $lvG.GridLines = $true
 [void]$lvG.Columns.Add('NCU', 45)
 [void]$lvG.Columns.Add('TCU', 45)
@@ -2908,9 +2931,56 @@ function Diag-Correr {
     $lblGResumen.Text = "OK: $nOk  Aviso: $nAviso  Alarma: $nAlarma  Off: $nOff"
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Diagnostico: OK $nOk | AVISO $nAviso | ALARMA $nAlarma | OFFLINE $nOff" ([System.Drawing.Color]::SteelBlue)
+    # resumen general por NCU (planta completa) y refresco de los filtros de vista
+    if ($cx.multi) {
+        foreach ($g in @($script:UltimoDiag | Where-Object { $_.NCU } | Group-Object NCU)) {
+            $c = @{}
+            foreach ($d in $g.Group) { $c[$d.Salud] = 1 + [int]$c[$d.Salud] }
+            Con ("  NCU{0}: OK {1} | AVISO {2} | ALARMA {3} | OFFLINE {4}" -f $g.Name, [int]$c['OK'], [int]$c['AVISO'], [int]$c['ALARMA'], [int]$c['OFFLINE']) ([System.Drawing.Color]::SteelBlue)
+        }
+    }
+    $selV = $cbGVerNcu.SelectedItem
+    $cbGVerNcu.Items.Clear()
+    [void]$cbGVerNcu.Items.Add('NCU - todas')
+    foreach ($nv in @($script:UltimoDiag | ForEach-Object { "$($_.NCU)" } | Where-Object { $_ } | Sort-Object {[int]$_} -Unique)) { [void]$cbGVerNcu.Items.Add("NCU$nv") }
+    if ($selV -and $cbGVerNcu.Items.Contains($selV)) { $cbGVerNcu.SelectedItem = $selV } else { $cbGVerNcu.SelectedIndex = 0 }
+    Diag-Refrescar
+}
+
+# Repinta la lista del diagnostico desde el ultimo resultado aplicando los
+# filtros de vista (NCU y salud) - no relanza ninguna lectura. Los exports
+# CSV/JSON siempre llevan el diagnostico completo, sin estos filtros.
+function Diag-Refrescar {
+    $fNcu = "$($cbGVerNcu.SelectedItem)"
+    $fSal = "$($cbGVerSalud.SelectedItem)"
+    $lvG.BeginUpdate()
+    $lvG.Items.Clear()
+    $n = 0
+    foreach ($d in $script:UltimoDiag) {
+        if ($fNcu -ne 'NCU - todas' -and ("NCU$($d.NCU)") -ne $fNcu) { continue }
+        if ($fSal -eq 'Solo problemas') { if ("$($d.Salud)" -eq 'OK') { continue } }
+        elseif ($fSal -ne 'Salud - todas' -and "$($d.Salud)" -ne $fSal) { continue }
+        $item = New-Object System.Windows.Forms.ListViewItem("$($d.NCU)")
+        foreach ($c in @($d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
+        switch ("$($d.Salud)") {
+            'OK'      { $item.ForeColor = [System.Drawing.Color]::DarkGreen }
+            'AVISO'   { $item.ForeColor = [System.Drawing.Color]::DarkOrange }
+            'ALARMA'  { $item.ForeColor = [System.Drawing.Color]::Firebrick }
+            'OFFLINE' { $item.ForeColor = [System.Drawing.Color]::Gray }
+        }
+        $lvG.Items.Add($item) | Out-Null
+        $n++
+    }
+    $lvG.EndUpdate()
+    $tot = @($script:UltimoDiag).Count
+    if ($fNcu -eq 'NCU - todas' -and $fSal -eq 'Salud - todas') { $lblGVer.Text = "$tot filas" }
+    else { $lblGVer.Text = "$n de $tot filas  ($fNcu / $fSal) - el CSV/JSON exporta siempre todo" }
 }
 
 $btnDiag.Add_Click({ Lanzar { Diag-Correr } })
+
+$cbGVerNcu.Add_SelectedIndexChanged({ if (-not $script:Ocupado) { Diag-Refrescar } })
+$cbGVerSalud.Add_SelectedIndexChanged({ if (-not $script:Ocupado) { Diag-Refrescar } })
 
 # Mini-registrador: diagnostico en bucle cada X minutos, acumulando cada pase
 # (con fecha/hora y alarmas desglosadas) en informes/registro_<ts>.csv.
