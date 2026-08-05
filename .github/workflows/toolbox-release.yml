@@ -29,6 +29,8 @@ jobs:
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
           cd tools
           zip -r "../TCU_Toolbox_v${VER}.zip" tcu-toolbox -x "tcu-toolbox/logs/*" "tcu-toolbox/backups/*" "tcu-toolbox/informes/*" "tcu-toolbox/config_local.json"
+          VAG=$(grep -oP "VERSION_AGENTE = '\K[0-9.]+" tcu-agente/TCU_Agente.ps1)
+          zip -r "../TCU_Agente_v${VAG}.zip" tcu-agente -x "tcu-agente/agente_config.json" "tcu-agente/*.log"
           cd ..
           unzip -l "TCU_Toolbox_v${VER}.zip"
 
@@ -52,4 +54,4 @@ jobs:
               --notes "Herramienta offline de campo (configuracion y diagnostico de TCUs Sunner). Descarga el ZIP, copia la carpeta tcu-toolbox al portatil (las plantas van dentro, en plantas/) y doble clic en TCU_Toolbox.bat. Las fichas Seguimiento_PEM_*.xlsx (una por planta) se generan solas desde la topologia." \
               --latest
           fi
-          gh release upload "$TAG" "TCU_Toolbox_v${VER}.zip" fichas/Seguimiento_PEM_*.xlsx --clobber
+          gh release upload "$TAG" "TCU_Toolbox_v${VER}.zip" TCU_Agente_v*.zip fichas/Seguimiento_PEM_*.xlsx --clobber
