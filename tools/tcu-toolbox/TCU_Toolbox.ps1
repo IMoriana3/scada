@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '6.1'
+$VERSION_TOOLBOX = '6.2'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1663,6 +1663,15 @@ $chkVerif.Location = New-Object System.Drawing.Point(10, 296)
 $chkVerif.Size = New-Object System.Drawing.Size(160, 22); $chkVerif.Checked = $true
 $tabW.Controls.Add($chkVerif)
 
+# La copia previa lee valor a valor antes de escribir nada, asi que en un rango
+# grande la escritura tarda en arrancar. Se puede quitar, pero la confirmacion
+# lo dice cada vez para que no se olvide.
+$chkRoll = New-Object System.Windows.Forms.CheckBox
+$chkRoll.Text = 'Copia de seguridad antes de escribir (rollback)'
+$chkRoll.Location = New-Object System.Drawing.Point(10, 326)
+$chkRoll.Size = New-Object System.Drawing.Size(300, 22); $chkRoll.Checked = $true
+$tabW.Controls.Add($chkRoll)
+
 $btnEscribir = New-Object System.Windows.Forms.Button
 $btnEscribir.Text = 'ESCRIBIR'
 $btnEscribir.Location = New-Object System.Drawing.Point(180, 292)
@@ -2826,8 +2835,9 @@ function Escribir-EnTcus($tcus) {
                else { 'AND {0:X4} OR {1:X4}' -f $_.esc.and, $_.esc.or }
         "  $($_.nombre) = $($_.texto)   [$hex]"
     }) -join "`r`n"
+    $avisoRb = $(if ($nTcus -gt 3 -and -not $chkRoll.Checked) { "SIN copia de seguridad previa: no se podra deshacer.`r`n" } else { '' })
     $r = [System.Windows.Forms.MessageBox]::Show(
-        "Se escribiran $($vars.Count) variables en $nTcus TCUs de ${donde}:`r`n`r`n$resumen`r`n`r`nContinuar?",
+        "Se escribiran $($vars.Count) variables en $nTcus TCUs de ${donde}:`r`n`r`n$resumen`r`n`r`n$avisoRb`r`nContinuar?",
         'Confirmar', 'YesNo', 'Warning')
     if ($r -ne 'Yes') { return }
 
@@ -2840,7 +2850,7 @@ function Escribir-EnTcus($tcus) {
         if ($r2 -ne 'Yes') { return }
     }
 
-    if ($nTcus -gt 3) {
+    if ($nTcus -gt 3 -and $chkRoll.Checked) {
         # escritura masiva: copia de seguridad previa (rollback) de los valores
         # actuales, restaurable con "CSV por TCU...". Los registros de comando
         # se excluyen: reescribirlos relanzaria ordenes.
@@ -2881,6 +2891,9 @@ function Escribir-EnTcus($tcus) {
         }
     }
 
+    if ($nTcus -gt 3 -and -not $chkRoll.Checked) {
+        Con 'Sin copia de seguridad previa (casilla desmarcada): esta escritura no se podra deshacer.' ([System.Drawing.Color]::Orange)
+    }
     $script:Fallidas.Clear(); $btnFallidas.Enabled = $false
     $script:UltimaEscritura = @()
     $ok = 0
@@ -3929,7 +3942,10 @@ $btnCsvTcu.Add_Click({ Lanzar {
             'REGISTROS DE COMANDO', 'YesNo', 'Stop')
         if ($r2 -ne 'Yes') { return }
     }
-    if ($tcus.Count -gt 3) {
+    if ($tcus.Count -gt 3 -and -not $chkRoll.Checked) {
+        Con 'Sin copia de seguridad previa (casilla desmarcada): esta escritura no se podra deshacer.' ([System.Drawing.Color]::Orange)
+    }
+    if ($tcus.Count -gt 3 -and $chkRoll.Checked) {
         # rollback previo con los valores actuales (sin registros de comando)
         $paresRb = @()
         foreach ($j in $jobs) { if ($ADDR_COMANDO -notcontains $VARIABLES[$j.nombre].addr) { $paresRb += ,@{tcu=[int]$j.tcu; nombre=$j.nombre} } }
@@ -5206,7 +5222,7 @@ function Config-Guardar {
         $cfg = [ordered]@{
             planta = "$($cbPlanta.SelectedItem)"; ip = $txtIp.Text.Trim(); puerto = $txtPort.Text.Trim()
             timeout = $txtTo.Text.Trim(); reintentos = $txtRet.Text.Trim(); hsu = $txtHSlave.Text.Trim()
-            tema = $script:TemaNombre
+            tema = $script:TemaNombre; rollback = $chkRoll.Checked
         }
         ConvertTo-Json $cfg | Set-Content $script:FichConfigLocal -Encoding UTF8
     } catch {}
@@ -5225,6 +5241,7 @@ function Config-Restaurar {
         if ("$($cfg.timeout)") { $txtTo.Text = "$($cfg.timeout)" }
         if ("$($cfg.reintentos)") { $txtRet.Text = "$($cfg.reintentos)" }
         if ("$($cfg.hsu)") { $txtHSlave.Text = "$($cfg.hsu)" }
+        if ($null -ne $cfg.rollback) { $chkRoll.Checked = [bool]$cfg.rollback }
         Con "Sesion anterior restaurada: planta '$($cbPlanta.SelectedItem)' (config_local.json)." ([System.Drawing.Color]::SteelBlue)
     } catch { Con "AVISO: config_local.json ilegible ($_) - ignorado" ([System.Drawing.Color]::Orange) }
 }
