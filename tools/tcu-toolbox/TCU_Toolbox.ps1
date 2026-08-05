@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '2.5'
+$VERSION_TOOLBOX = '2.6'
 $VERSION_MAPA    = 'SUNNER v6.1 (FW 1.4.3)'
 
 # ---------------------------------------------------------------------------
@@ -135,6 +135,7 @@ Construir-EntradasAuto
 $ESTADO = [ordered]@{
   '30000 product_id [hex]'         = @{addr=30000; tipo='u16hex'}
   '30001 main_status [hex]'        = @{addr=30001; tipo='u16hex'}
+  '30001 modo (OFF/MANUAL/AUTO)'   = @{addr=30001; tipo='modo'}
   '30002 alarmas_1 [hex]'          = @{addr=30002; tipo='u16hex'}
   '30003 alarmas_2 [hex]'          = @{addr=30003; tipo='u16hex'}
   '30004 alarmas_3_HW [hex]'       = @{addr=30004; tipo='u16hex'}
@@ -697,6 +698,11 @@ function Leer-Decodificado([byte]$unit, [hashtable]$vdef) {
             if ($nom) { return "$v ($nom)" }
             return "$v"
         }
+        'modo' {
+            # 30001 bits 9:8 - modo de operacion del TCU
+            $v = ((FC03-Leer $unit $a 1)[0] -shr 8) -band 0x3
+            return @('OFF','MANUAL','AUTO','?')[$v]
+        }
         default { throw "tipo desconocido $($vdef.tipo)" }
     }
 }
@@ -1102,19 +1108,14 @@ $lvG = New-Object System.Windows.Forms.ListView
 $lvG.Location = New-Object System.Drawing.Point(10, 55)
 $lvG.Size = New-Object System.Drawing.Size(898, 305)
 $lvG.View = 'Details'; $lvG.FullRowSelect = $true; $lvG.GridLines = $true
-[void]$lvG.Columns.Add('TCU', 42)
-[void]$lvG.Columns.Add('Salud', 62)
-[void]$lvG.Columns.Add('Tilt', 50)
-[void]$lvG.Columns.Add('Obj', 50)
-[void]$lvG.Columns.Add('Dif', 44)
-[void]$lvG.Columns.Add('SoC', 42)
-[void]$lvG.Columns.Add('SoH', 42)
-[void]$lvG.Columns.Add('Vbat', 52)
-[void]$lvG.Columns.Add('Ibat', 52)
-[void]$lvG.Columns.Add('Tbat', 46)
-[void]$lvG.Columns.Add('Tpcb', 46)
-[void]$lvG.Columns.Add('Cargador', 90)
-[void]$lvG.Columns.Add('Alarmas / notas', 270)
+[void]$lvG.Columns.Add('TCU', 45)
+[void]$lvG.Columns.Add('Salud', 65)
+[void]$lvG.Columns.Add('Modo', 70)
+[void]$lvG.Columns.Add('Tilt real', 60)
+[void]$lvG.Columns.Add('Objetivo', 60)
+[void]$lvG.Columns.Add('Dif', 48)
+[void]$lvG.Columns.Add('SoC', 48)
+[void]$lvG.Columns.Add('Alarmas / notas', 490)
 $tabG.Controls.Add($lvG)
 
 # ============================ TAB FLOTA ============================
@@ -2022,7 +2023,6 @@ function Diag-LeerTcu([byte]$tcu) {
     $r1 = FC03-Leer $tcu (Dir-Trama 30001) 6    # main, al1..al4, status
     $r2 = FC03-Leer $tcu (Dir-Trama 30094) 5    # vbat, ibat, soc/soh, tbat, tpcb
     $r3 = FC03-Leer $tcu (Dir-Trama 30111) 2    # tilt, target
-    $r4 = FC03-Leer $tcu (Dir-Trama 30153) 1    # charger
 
     $al1 = $r1[1]; $al2 = $r1[2]; $al3 = $r1[3]; $al4 = $r1[4]; $st = $r1[5]
     $ibat = $r2[1]; if ($ibat -gt 32767) { $ibat -= 65536 }
@@ -2050,16 +2050,14 @@ function Diag-LeerTcu([byte]$tcu) {
     if ((($st -shr 15) -band 1) -eq 0) { $notas += 'system OK = 0' }
     if ((($st -shr 11) -band 1) -eq 1) { $notas += 'alarma motor enclavada' }
 
-    $chg = $r4[0]
-    $chgNom = $CHARGER_STATES[[int]$chg]; if (-not $chgNom) { $chgNom = "$chg" }
+    $modo = @('OFF','MANUAL','AUTO','?')[(($r1[0] -shr 8) -band 0x3)]
 
     return [pscustomobject]@{
-        TCU = [int]$tcu; Salud = $salud
+        TCU = [int]$tcu; Salud = $salud; Modo = $modo
         Tilt = [math]::Round($tilt/10.0, 1); Objetivo = [math]::Round($targ/10.0, 1); Dif = [math]::Round($dif, 1)
         SoC = ($r2[2] -band 0xFF); SoH = (($r2[2] -shr 8) -band 0xFF)
         Vbat_mV = $r2[0]; Ibat_mA = $ibat
         Tbat_C = [math]::Round($tbat/10.0, 1); Tpcb_C = [math]::Round($tpcb/10.0, 1)
-        Cargador = $chgNom
         Alarmas = (($alarmas + $notas) -join '; ')
         main_status = ("0x{0:X4}" -f $r1[0]); alarmas_1 = ("0x{0:X4}" -f $al1); alarmas_2 = ("0x{0:X4}" -f $al2)
         alarmas_3 = ("0x{0:X4}" -f $al3); alarmas_4 = ("0x{0:X4}" -f $al4); system_status = ("0x{0:X4}" -f $st)
@@ -2095,13 +2093,13 @@ $btnDiag.Add_Click({ Lanzar {
         }
         if ($null -eq $d) {
             $d = [pscustomobject]@{
-                TCU=[int]$tcu; Salud='OFFLINE'; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
-                Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''; Cargador=''; Alarmas=$err
+                TCU=[int]$tcu; Salud='OFFLINE'; Modo=''; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
+                Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''; Alarmas=$err
                 main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
             }
         }
         $item = New-Object System.Windows.Forms.ListViewItem("$($d.TCU)")
-        foreach ($c in @($d.Salud, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.SoH, $d.Vbat_mV, $d.Ibat_mA, $d.Tbat_C, $d.Tpcb_C, $d.Cargador, $d.Alarmas)) {
+        foreach ($c in @($d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Alarmas)) {
             [void]$item.SubItems.Add("$c")
         }
         switch ($d.Salud) {
