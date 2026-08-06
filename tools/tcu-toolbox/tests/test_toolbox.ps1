@@ -1295,6 +1295,22 @@ Check 'indice: la 34 cuadra con el preset' (Aud-Igual '-10' $idx['9|34|41069 saf
 Check 'indice: la 35 no' (Aud-Igual '-10' $idx['9|35|41069 safe_pos_sign_threshold']) $false
 
 Write-Host ''
+Write-Host '== la auditoria prepara la lectura, no la duplica =='
+# Misma idea que en Cierre: las pestanas se pasan el trabajo, no se copian la
+# logica. Leer en 'Leer variable' da ademas la segunda lectura de anomalos, el
+# resumen de discrepancias y el historial, que la auditoria no tiene.
+Check 'aud->leer: boton creado' ($src.Contains("`$btnAudLeer = New-Object System.Windows.Forms.Button")) $true
+Check 'aud->leer: con handler' ($src.Contains('$btnAudLeer.Add_Click(')) $true
+Check 'aud->leer: exige preset' ($src.Contains('es el que dice que variables hay que leer')) $true
+Check 'aud->leer: carga las variables del preset' ($src.Contains('foreach ($v in @($script:PresetRef)) {')) $true
+Check 'aud->leer: se lleva el rango' ($src.Contains('$txtLIni.Text = $txtAIni.Text')) $true
+Check 'aud->leer: salta a la pestana' ($src.Contains('$tabs.SelectedTab = $tabL')) $true
+Check 'aud->leer: dice como volver' ($src.Contains("Usar la ultima lectura' marcado")) $true
+# y no escribe ni lee nada por su cuenta: solo prepara
+$blqAudLeer = $src.Substring($src.IndexOf('$btnAudLeer.Add_Click'), 1200)
+Check 'aud->leer: no toca la planta' ($blqAudLeer.Contains('Modbus-Conectar')) $false
+
+Write-Host ''
 Write-Host '== la edad del dato es una columna, no una nota =='
 # En modo via NCU no se lee al seguidor: se lee lo ultimo que la NCU le oyo, y
 # cada uno tiene su propio retardo. Sin verlo no hay forma de saber de cuando

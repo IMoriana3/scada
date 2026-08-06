@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '9.4'
+$VERSION_TOOLBOX = '9.5'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2550,8 +2550,8 @@ $txtAFin = TG $gbAud '44' 120 22 40
 
 $btnPresetRef = New-Object System.Windows.Forms.Button
 $btnPresetRef.Text = 'Preset referencia...'
-$btnPresetRef.Location = New-Object System.Drawing.Point(172, 19)
-$btnPresetRef.Size = New-Object System.Drawing.Size(140, 26)
+$btnPresetRef.Location = New-Object System.Drawing.Point(168, 19)
+$btnPresetRef.Size = New-Object System.Drawing.Size(130, 26)
 $gbAud.Controls.Add($btnPresetRef)
 
 # La auditoria hacia SIEMPRE su propia pasada, asi que despues de un barrido se
@@ -2560,32 +2560,42 @@ $gbAud.Controls.Add($btnPresetRef)
 $chkAudLec = New-Object System.Windows.Forms.CheckBox
 $chkAudLec.Text = 'Usar la ultima lectura'
 $chkAudLec.Checked = $true
-$chkAudLec.Location = New-Object System.Drawing.Point(320, 21)
-$chkAudLec.Size = New-Object System.Drawing.Size(160, 22)
+$chkAudLec.Location = New-Object System.Drawing.Point(304, 21)
+$chkAudLec.Size = New-Object System.Drawing.Size(142, 22)
 $gbAud.Controls.Add($chkAudLec)
 
-$lblPresetRef = LG $gbAud '(sin preset de referencia)' 488 145
+$lblPresetRef = LG $gbAud '(sin preset)' 452 106
+
+# La auditoria puede leer por su cuenta, pero leer en 'Leer variable' da la
+# segunda lectura de valores anomalos, el resumen de discrepancias y el
+# historial. Esto lleva alli con las variables del preset ya puestas, y luego
+# se audita contra esa lectura sin volver a tocar la planta.
+$btnAudLeer = New-Object System.Windows.Forms.Button
+$btnAudLeer.Text = 'Leer variables'
+$btnAudLeer.Location = New-Object System.Drawing.Point(564, 19)
+$btnAudLeer.Size = New-Object System.Drawing.Size(126, 26)
+$gbAud.Controls.Add($btnAudLeer)
 $lblPresetRef.ForeColor = [System.Drawing.Color]::Gray
 
 $btnAud = New-Object System.Windows.Forms.Button
 $btnAud.Text = 'AUDITAR'
-$btnAud.Location = New-Object System.Drawing.Point(640, 18)
-$btnAud.Size = New-Object System.Drawing.Size(115, 28)
+$btnAud.Location = New-Object System.Drawing.Point(696, 18)
+$btnAud.Size = New-Object System.Drawing.Size(86, 28)
 $btnAud.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
 $btnAud.ForeColor = [System.Drawing.Color]::White
 $gbAud.Controls.Add($btnAud)
 
 $btnAudCsv = New-Object System.Windows.Forms.Button
 $btnAudCsv.Text = 'CSV'
-$btnAudCsv.Location = New-Object System.Drawing.Point(762, 18)
-$btnAudCsv.Size = New-Object System.Drawing.Size(60, 28)
+$btnAudCsv.Location = New-Object System.Drawing.Point(788, 18)
+$btnAudCsv.Size = New-Object System.Drawing.Size(50, 28)
 $btnAudCsv.Enabled = $false
 $gbAud.Controls.Add($btnAudCsv)
 
 $btnAudJson = New-Object System.Windows.Forms.Button
 $btnAudJson.Text = 'JSON'
-$btnAudJson.Location = New-Object System.Drawing.Point(826, 18)
-$btnAudJson.Size = New-Object System.Drawing.Size(60, 28)
+$btnAudJson.Location = New-Object System.Drawing.Point(842, 18)
+$btnAudJson.Size = New-Object System.Drawing.Size(50, 28)
 $btnAudJson.Enabled = $false
 $gbAud.Controls.Add($btnAudJson)
 
@@ -5845,6 +5855,26 @@ $btnPresetRef.Add_Click({
     $lblPresetRef.Text = "$($script:PresetRefNombre)  ($($ref.Count) variables)"
     Con "Preset de referencia cargado: $($script:PresetRefNombre) con $($ref.Count) variables" ([System.Drawing.Color]::SteelBlue)
     if ($nIdentRef -gt 0) { Con "  fuera de la auditoria $nIdentRef registros de identidad de red: son distintos en cada TCU por definicion" ([System.Drawing.Color]::Orange) }
+})
+
+$btnAudLeer.Add_Click({
+    if (-not $script:PresetRef -or @($script:PresetRef).Count -eq 0) {
+        [void][System.Windows.Forms.MessageBox]::Show('Carga primero un preset de referencia: es el que dice que variables hay que leer.','Falta el preset','OK','Information'); return
+    }
+    $dgvL.Rows.Clear()
+    $n = 0
+    foreach ($v in @($script:PresetRef)) {
+        $nom = "$($v.nombre)"
+        if (-not $VARIABLES.Contains($nom)) { continue }
+        if (-not $colLVar.Items.Contains($nom)) { [void]$colLVar.Items.Add($nom) }
+        [void]$dgvL.Rows.Add($nom, (Info-Lectura $nom))
+        $n++
+    }
+    $txtLIni.Text = $txtAIni.Text; $txtLFin.Text = $txtAFin.Text
+    $tabs.SelectedTab = $tabL
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Preparada la lectura: $n variables de '$($script:PresetRefNombre)' y el rango de la auditoria." ([System.Drawing.Color]::SteelBlue)
+    Con "  Pulsa LEER. Al terminar vuelve a Auditoria con 'Usar la ultima lectura' marcado: comparara contra esos datos sin volver a leer la planta." ([System.Drawing.Color]::Gainsboro)
 })
 
 $btnAud.Add_Click({ Lanzar {

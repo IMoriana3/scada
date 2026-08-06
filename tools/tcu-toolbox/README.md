@@ -60,6 +60,17 @@ cuántos valores salieron de la lectura sin tocar la planta.
 **Y la pestaña *Flota* pasa a llamarse *Auditoría*** — que es lo que se hace ahí.
 El inventario sigue dentro, y Ctrl+K lo encuentra por su nombre.
 
+**La auditoría prepara la lectura (v9.5)** — botón **Leer variables**: carga en
+*Leer variable* las variables del preset de referencia y el rango de la
+auditoría, y te lleva allí. Luego se vuelve con **Usar la última lectura**
+marcado y la auditoría compara contra esos datos sin tocar la planta otra vez.
+
+No es un atajo: leer por *Leer variable* trae tres cosas que la auditoría no
+tiene por su cuenta — la **segunda lectura de los valores anómalos**, el
+**resumen de discrepancias** (qué valores hay y en cuántas TCUs) y el **historial
+local**. Misma idea que la pestaña Cierre: las pestañas se pasan el trabajo, no
+se copian la lógica.
+
 **La edad del dato, a la vista (v9.4)** — en modo *via NCU* no se lee al
 seguidor: se lee **lo último que la NCU le oyó**, y cada TCU tiene su propio
 retardo según cómo le haya ido en la malla. Eso solo se veía como una nota
