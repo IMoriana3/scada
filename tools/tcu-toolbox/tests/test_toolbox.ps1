@@ -26,7 +26,8 @@ $i6 = $src.IndexOf('function Anclaje-Para'); $f6 = $src.IndexOf('# Anclar contra
 $i7 = $src.IndexOf('function Eti-Tcu'); $f7 = $src.IndexOf('# Divide una lista de TCUs')
 $i8 = $src.IndexOf('function Nombres-Unicos'); $f8 = $src.IndexOf('function Vars-DeTablaLeer')
 $i9 = $src.IndexOf('function Def-DeLectura'); $f9 = $src.IndexOf('$btnLeer.Add_Click')
-$logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7) + "`n" + $src.Substring($i8, $f8 - $i8) + "`n" + $src.Substring($i9, $f9 - $i9)
+$i10 = $src.IndexOf('function Aband-Cronologia'); $f10 = $src.IndexOf('#  Interfaz')
+$logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7) + "`n" + $src.Substring($i8, $f8 - $i8) + "`n" + $src.Substring($i9, $f9 - $i9) + "`n" + $src.Substring($i10, $f10 - $i10)
 Invoke-Expression $logica
 
 $fallos = 0
@@ -770,6 +771,46 @@ $fuera = @(
   [pscustomobject]@{dia='2026-08-06'; ncu='1'; equipo='TCU5'; ts=1121}   # 121 s: fuera
 )
 Check 'D.4 a 121 s no cuenta' (@(Sat-DispComms $fuera $intentos 98.5 120))[0].Fallos_computados 0
+
+# ---------- D.2 abanderamiento: cronologia ----------
+# El seguidor sigue al sol en 10 grados, llega la orden de abanderar a 0, va,
+# se queda, y luego vuelve a seguimiento.
+$ab = @(
+  [pscustomobject]@{ts=100; real=10.0; obj=10.0}
+  [pscustomobject]@{ts=110; real=10.0; obj=10.0}
+  [pscustomobject]@{ts=120; real=10.0; obj=0.0}    # llega la orden
+  [pscustomobject]@{ts=130; real=6.0;  obj=0.0}
+  [pscustomobject]@{ts=140; real=0.5;  obj=0.0}    # llegado
+  [pscustomobject]@{ts=150; real=0.4;  obj=0.0}
+  [pscustomobject]@{ts=160; real=0.4;  obj=11.0}   # desabanderamiento
+  [pscustomobject]@{ts=170; real=5.0;  obj=11.0}
+  [pscustomobject]@{ts=180; real=10.8; obj=11.0}   # de vuelta en seguimiento
+)
+$cr = Aband-Cronologia $ab 1.0 2.0
+Check 'D.2 hora de la orden' $cr.t_orden 120
+Check 'D.2 inclinacion al recibir' $cr.tilt_orden 10
+Check 'D.2 objetivo de seguridad' $cr.obj_seguridad 0
+Check 'D.2 hora de llegada' $cr.t_llegada 140
+Check 'D.2 inclinacion en seguridad' $cr.tilt_llegada 0.5
+Check 'D.2 segundos de ida' $cr.segundos_ida 20
+Check 'D.2 hora de desabanderamiento' $cr.t_vuelta 160
+Check 'D.2 hora de vuelta a seguimiento' $cr.t_llegada_vuelta 180
+Check 'D.2 segundos de vuelta' $cr.segundos_vuelta 20
+# si nunca llega la orden, no se inventa nada
+$abSin = @(
+  [pscustomobject]@{ts=100; real=10.0; obj=10.0}
+  [pscustomobject]@{ts=110; real=10.1; obj=10.0}
+)
+Check 'D.2 sin orden no inventa hora' (Aband-Cronologia $abSin 1.0 2.0).t_orden ''
+# si abandera pero no vuelve, la ida si queda registrada
+$abMedio = @(
+  [pscustomobject]@{ts=100; real=10.0; obj=10.0}
+  [pscustomobject]@{ts=110; real=10.0; obj=0.0}
+  [pscustomobject]@{ts=120; real=0.2;  obj=0.0}
+)
+$crM = Aband-Cronologia $abMedio 1.0 2.0
+Check 'D.2 ida sin vuelta: hay llegada' $crM.t_llegada 120
+Check 'D.2 ida sin vuelta: no hay vuelta' $crM.t_vuelta ''
 
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }

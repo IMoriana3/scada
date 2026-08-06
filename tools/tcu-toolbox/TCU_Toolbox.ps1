@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '6.6'
+$VERSION_TOOLBOX = '6.7'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1599,6 +1599,43 @@ function Sat-DispComms($fallos, $intentosPorClave, [double]$minimo = 98.5, [int]
     return $res
 }
 
+# D.2 / D.3: cronologia de un abanderamiento a partir de las muestras de un
+# TCU (ts, real, obj, ordenadas por ts). No hay un bit documentado de "posicion
+# de seguridad activa", asi que la llegada de la orden se detecta por el salto
+# del OBJETIVO, y la llegada del seguidor por que el real alcanza ese objetivo.
+# Queda dicho en el informe: es una inferencia, no la lectura de un flag.
+function Aband-Cronologia($muestras, [double]$tolLlegada = 1.0, [double]$tolCambio = 2.0) {
+    $ms = @($muestras)
+    if ($ms.Count -lt 2) { return $null }
+    $obj0 = [double]$ms[0].obj
+    $r = @{obj_inicial=[math]::Round($obj0,2); tilt_inicial=[math]::Round([double]$ms[0].real,2)
+           t_orden=''; tilt_orden=''; obj_seguridad=''; t_llegada=''; tilt_llegada=''
+           t_vuelta=''; t_llegada_vuelta=''; tilt_final=''; segundos_ida=''; segundos_vuelta=''}
+    $i = 1
+    while ($i -lt $ms.Count -and [math]::Abs([double]$ms[$i].obj - $obj0) -le $tolCambio) { $i++ }
+    if ($i -ge $ms.Count) { return $r }              # nunca llego la orden
+    $r.t_orden = $ms[$i].ts; $r.tilt_orden = [math]::Round([double]$ms[$i].real,2)
+    $objSeg = [double]$ms[$i].obj
+    $r.obj_seguridad = [math]::Round($objSeg,2)
+    $j = $i
+    while ($j -lt $ms.Count -and [math]::Abs([double]$ms[$j].real - [double]$ms[$j].obj) -gt $tolLlegada) { $j++ }
+    if ($j -lt $ms.Count) {
+        $r.t_llegada = $ms[$j].ts; $r.tilt_llegada = [math]::Round([double]$ms[$j].real,2)
+        $r.segundos_ida = [int]($ms[$j].ts - $ms[$i].ts)
+    } else { $j = $ms.Count - 1 }
+    $k = $j
+    while ($k -lt $ms.Count -and [math]::Abs([double]$ms[$k].obj - $objSeg) -le $tolCambio) { $k++ }
+    if ($k -ge $ms.Count) { return $r }              # no hubo desabanderamiento
+    $r.t_vuelta = $ms[$k].ts
+    $l = $k
+    while ($l -lt $ms.Count -and [math]::Abs([double]$ms[$l].real - [double]$ms[$l].obj) -gt $tolLlegada) { $l++ }
+    if ($l -lt $ms.Count) {
+        $r.t_llegada_vuelta = $ms[$l].ts; $r.tilt_final = [math]::Round([double]$ms[$l].real,2)
+        $r.segundos_vuelta = [int]($ms[$l].ts - $ms[$k].ts)
+    }
+    return $r
+}
+
 # ---------------------------------------------------------------------------
 #  Interfaz
 # ---------------------------------------------------------------------------
@@ -2469,12 +2506,46 @@ $btnSatAnal.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
 $btnSatAnal.ForeColor = [System.Drawing.Color]::White
 $tabSAT.Controls.Add($btnSatAnal)
 
-$lblSat = LG $tabSAT 'Anexo 4: D.1.1 precision, D.3.4 disponibilidad de operacion y D.4 de comunicaciones. Deja la ventana abierta los dias que dure el ensayo.' 10 890 56
+[void](LG $tabSAT 'Ensayo' 10 44 57)
+$cbSatEnsayo = New-Object System.Windows.Forms.ComboBox
+$cbSatEnsayo.Location = New-Object System.Drawing.Point(58, 53)
+$cbSatEnsayo.Size = New-Object System.Drawing.Size(268, 22)
+$cbSatEnsayo.DropDownStyle = 'DropDownList'
+foreach ($e in @('D.2.1 abanderamiento por viento','D.2.2 abanderamiento por nieve',
+                 'D.2.3 abanderamiento por fallo de comunicacion','D.2.4 abanderamiento por baja bateria',
+                 'D.2.5 abanderamiento por falta de alimentacion NCU','D.3 posicion objetivo manual')) {
+    [void]$cbSatEnsayo.Items.Add($e)
+}
+$cbSatEnsayo.SelectedIndex = 0
+$tabSAT.Controls.Add($cbSatEnsayo)
+
+$btnSatCron = New-Object System.Windows.Forms.Button
+$btnSatCron.Text = 'INICIAR CRONOMETRO'
+$btnSatCron.Location = New-Object System.Drawing.Point(334, 51)
+$btnSatCron.Size = New-Object System.Drawing.Size(170, 26)
+$btnSatCron.BackColor = [System.Drawing.Color]::FromArgb(160,80,0)
+$btnSatCron.ForeColor = [System.Drawing.Color]::White
+$tabSAT.Controls.Add($btnSatCron)
+
+$btnSatCronFin = New-Object System.Windows.Forms.Button
+$btnSatCronFin.Text = 'PARAR Y EMITIR'
+$btnSatCronFin.Location = New-Object System.Drawing.Point(512, 51)
+$btnSatCronFin.Size = New-Object System.Drawing.Size(140, 26)
+$btnSatCronFin.Enabled = $false
+$tabSAT.Controls.Add($btnSatCronFin)
+
+$btnSatHoja = New-Object System.Windows.Forms.Button
+$btnSatHoja.Text = 'HOJA D.1.2'
+$btnSatHoja.Location = New-Object System.Drawing.Point(660, 51)
+$btnSatHoja.Size = New-Object System.Drawing.Size(106, 26)
+$tabSAT.Controls.Add($btnSatHoja)
+
+$lblSat = LG $tabSAT 'Anexo 4. El registro de arriba cubre D.1.1, D.3.4 y D.4; el cronometro de abajo, los abanderamientos. Deja la ventana abierta mientras dure el ensayo.' 10 890 84
 $lblSat.ForeColor = [System.Drawing.Color]::Gray
 
 $lvSat = New-Object System.Windows.Forms.ListView
-$lvSat.Location = New-Object System.Drawing.Point(10, 82)
-$lvSat.Size = New-Object System.Drawing.Size(898, 278)
+$lvSat.Location = New-Object System.Drawing.Point(10, 108)
+$lvSat.Size = New-Object System.Drawing.Size(898, 252)
 $lvSat.View = 'Details'; $lvSat.FullRowSelect = $true; $lvSat.GridLines = $true
 [void]$lvSat.Columns.Add('Hora', 130)
 [void]$lvSat.Columns.Add('Ensayo', 110)
@@ -5203,6 +5274,156 @@ $btnSatFin.Add_Click({
     Sat-Log 'PARADA' "Detenido a mano. Pases TCU: $($script:SatPasesT), pases comms: $($script:SatPasesC)."
     Con 'Registro SAT detenido.' ([System.Drawing.Color]::Orange)
 })
+
+# ---------------------------------------------------------------------------
+#  D.2 / D.3: cronometro de abanderamiento
+#  Muestrea rapido (bloque compacto de la NCU) mientras dura el ensayo y luego
+#  emite la cronologia por TCU con las columnas que pide el Anexo 4. La
+#  condicion la provoca el operario (bajar el umbral de viento, cortar la
+#  alimentacion de la NCU...); el cronometro solo mira y apunta.
+# ---------------------------------------------------------------------------
+$script:CronOn = $false
+$script:CronMuestras = @{}      # "ncu|tcu" -> lista de @{ts; real; obj}
+$script:CronMeteo = New-Object System.Collections.ArrayList
+$script:CronEnsayo = ''
+$script:CronIni = $null
+
+$tmrCron = New-Object System.Windows.Forms.Timer
+$tmrCron.Interval = 3000
+$tmrCron.Add_Tick({
+    if (-not $script:CronOn -or $script:Ocupado) { return }
+    $script:Ocupado = $true
+    try {
+        $cx = Params-Conexion
+        $ts = [int][double]::Parse((Get-Date -UFormat %s))
+        foreach ($tr in @(Trabajos-Planta $cx $null)) {
+            if (-not $script:CronOn) { break }
+            $dm = $null; $hs = @()
+            try {
+                Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
+                $dm = Ncu-DiagCompat $tr.tcus
+                try { $hs = @(Ncu-HsuCompat) } catch {}
+            } catch { }
+            Modbus-Cerrar
+            if ($null -eq $dm) { continue }
+            foreach ($t in @($dm.Keys)) {
+                $k = "$($tr.ncu)|$t"
+                if (-not $script:CronMuestras.ContainsKey($k)) { $script:CronMuestras[$k] = New-Object System.Collections.ArrayList }
+                [void]$script:CronMuestras[$k].Add(@{ts=$ts; real=[double]$dm[$t].Tilt; obj=[double]$dm[$t].Objetivo})
+            }
+            foreach ($h in $hs) {
+                [void]$script:CronMeteo.Add([pscustomobject]@{ts=$ts; hora_utc=([DateTimeOffset]::FromUnixTimeSeconds($ts).UtcDateTime.ToString('yyyy-MM-dd HH:mm:ss'))
+                    ncu=$tr.ncu; hsu=$h.TCU; salud=$h.Salud; detalle=$h.Alarmas})
+            }
+        }
+    } catch { Sat-Log 'ERROR' "$_" }
+    finally { $script:Ocupado = $false; Modbus-Cerrar }
+})
+
+$btnSatCron.Add_Click({
+    $script:CronEnsayo = "$($cbSatEnsayo.SelectedItem)"
+    $aviso = switch -Wildcard ($script:CronEnsayo) {
+        'D.2.1*' { 'Provoca el abanderamiento bajando el umbral de viento de la HSU (pestana HSU > ESCRIBIR UMBRALES) y devuelvelo a su valor al terminar.' }
+        'D.2.2*' { 'Provoca el abanderamiento con el umbral de nieve de la HSU y devuelvelo a su valor al terminar.' }
+        'D.2.3*' { 'Provoca el fallo de comunicacion in situ (o bajando el watchdog Zigbee 40029) y restaura despues.' }
+        'D.2.4*' { 'Provoca el abanderamiento subiendo el limite de bateria en la pestana Escribir y restaura despues. Hazlo cuando la posicion de seguridad se parezca a la objetivo, como pide el anexo.' }
+        'D.2.5*' { 'Desconecta la alimentacion de la NCU cuando quieras: el cronometro seguira leyendo las TCUs por las NCUs que sigan en pie.' }
+        default  { 'Fuerza la posicion objetivo por grupos desde la NCU y restaura el seguimiento automatico al terminar.' }
+    }
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "$($script:CronEnsayo)`r`n`r`n$aviso`r`n`r`nEl cronometro muestrea cada 3 s y apunta, por TCU, cuando llega la orden, con que inclinacion, cuando llega a la posicion de seguridad y cuando vuelve a seguimiento.`r`n`r`nEmpezar a cronometrar?",
+        'Ensayo de abanderamiento', 'OKCancel', 'Information')
+    if ($r -ne 'OK') { return }
+    $script:CronMuestras = @{}
+    $script:CronMeteo = New-Object System.Collections.ArrayList
+    $script:CronIni = Get-Date
+    $script:CronOn = $true
+    $btnSatCron.Enabled = $false; $btnSatCronFin.Enabled = $true
+    $tmrCron.Start()
+    Sat-Log 'CRONOMETRO' "$($script:CronEnsayo) - iniciado. Provoca ya la condicion."
+    Con "Cronometro de abanderamiento en marcha ($($script:CronEnsayo))." ([System.Drawing.Color]::Orange)
+})
+
+$btnSatCronFin.Add_Click({
+    $script:CronOn = $false; $tmrCron.Stop()
+    $btnSatCron.Enabled = $true; $btnSatCronFin.Enabled = $false
+    try {
+        $dir = Join-Path (Join-Path $PSScriptRoot 'informes') ('sat_' + ((Nombre-Planta) -replace '[^\w\-]', '_'))
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $filas = @()
+        foreach ($k in @($script:CronMuestras.Keys | Sort-Object)) {
+            $p = $k -split '\|'
+            $cr = Aband-Cronologia @($script:CronMuestras[$k] | Sort-Object { $_.ts })
+            if ($null -eq $cr) { continue }
+            $utc = { param($t) if ("$t") { [DateTimeOffset]::FromUnixTimeSeconds([long]$t).UtcDateTime.ToString('yyyy-MM-dd HH:mm:ss') } else { '' } }
+            $filas += [pscustomobject]@{
+                Ensayo = $script:CronEnsayo; NCU = $p[0]; TCU = [int]$p[1]
+                Inclinacion_inicial_deg = $cr.tilt_inicial
+                Hora_UTC_recepcion_señal = (& $utc $cr.t_orden)
+                Inclinacion_al_recibir_deg = $cr.tilt_orden
+                Objetivo_seguridad_deg = $cr.obj_seguridad
+                Hora_UTC_llegada_seguridad = (& $utc $cr.t_llegada)
+                Inclinacion_en_seguridad_deg = $cr.tilt_llegada
+                Segundos_hasta_seguridad = $cr.segundos_ida
+                Hora_UTC_desabanderamiento = (& $utc $cr.t_vuelta)
+                Hora_UTC_vuelta_seguimiento = (& $utc $cr.t_llegada_vuelta)
+                Inclinacion_final_deg = $cr.tilt_final
+                Segundos_hasta_seguimiento = $cr.segundos_vuelta
+                Muestras = @($script:CronMuestras[$k]).Count
+            }
+        }
+        $eti = ($script:CronEnsayo -replace '[^\w\.]', '_')
+        $f1 = Join-Path $dir ("RESULTADO_{0}_{1}.csv" -f $eti, (Get-Date -Format 'yyyyMMdd_HHmm'))
+        $filas | Export-Csv $f1 -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+        if ($script:CronMeteo.Count -gt 0) {
+            $f2 = Join-Path $dir ("RESULTADO_{0}_meteo_{1}.csv" -f $eti, (Get-Date -Format 'yyyyMMdd_HHmm'))
+            $script:CronMeteo | Export-Csv $f2 -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+        }
+        $conOrden = @($filas | Where-Object { "$($_.Hora_UTC_recepcion_señal)" -ne '' })
+        $llegaron = @($conOrden | Where-Object { "$($_.Hora_UTC_llegada_seguridad)" -ne '' })
+        Sat-Log 'CRONOMETRO' ("{0}: {1} TCUs vigiladas, {2} recibieron la orden, {3} llegaron a posicion de seguridad. CSV: {4}" -f $script:CronEnsayo, $filas.Count, $conOrden.Count, $llegaron.Count, $f1)
+        Con "Ensayo emitido: $f1" ([System.Drawing.Color]::LightGreen)
+        if ($conOrden.Count -lt $filas.Count) {
+            Con ("ATENCION: {0} TCUs no recibieron la orden de abanderamiento." -f ($filas.Count - $conOrden.Count)) ([System.Drawing.Color]::Orange)
+        }
+    } catch { Con "ERROR emitiendo el ensayo: $_" ([System.Drawing.Color]::Salmon) }
+})
+
+# D.1.2: la medida la hace una persona con el equipo externo; la hoja se
+# entrega con todo lo demas ya puesto y una columna en blanco para anotarla.
+$btnSatHoja.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    $filas = @()
+    $ts = [int][double]::Parse((Get-Date -UFormat %s))
+    $utc = [DateTimeOffset]::FromUnixTimeSeconds($ts).UtcDateTime.ToString('yyyy-MM-dd HH:mm:ss')
+    foreach ($tr in @(Trabajos-Planta $cx $null)) {
+        if (Chequear-Cancelado) { break }
+        $dm = $null
+        try { Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to; $dm = Ncu-DiagCompat $tr.tcus } catch {}
+        Modbus-Cerrar
+        if ($null -eq $dm) { continue }
+        foreach ($t in @($dm.Keys | Sort-Object)) {
+            $d = $dm[$t]
+            $filas += [pscustomobject]@{
+                Tracker = "NCU$($tr.ncu)-TCU$t"; NCU = $tr.ncu; TCU = [int]$t
+                Hora_UTC = $utc
+                Posicion_tracker_deg = $d.Tilt
+                Posicion_segun_algoritmo_deg = $d.Objetivo
+                Desviacion_interna_deg = $d.Dif
+                Modo = $d.Modo
+                Desviacion_equipo_externo_deg = ''      # <- se anota en campo
+                Observaciones = ''
+            }
+        }
+    }
+    if ($filas.Count -eq 0) { Con 'Sin datos: revisa la conexion.' ([System.Drawing.Color]::Orange); return }
+    $dir = Join-Path (Join-Path $PSScriptRoot 'informes') ('sat_' + ((Nombre-Planta) -replace '[^\w\-]', '_'))
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $f = Join-Path $dir ("HOJA_D1.2_precision_externa_{0}.csv" -f (Get-Date -Format 'yyyyMMdd_HHmm'))
+    $filas | Export-Csv $f -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+    Sat-Log 'D.1.2' "Hoja de $($filas.Count) trackers generada: $f (falta anotar la lectura del equipo externo)"
+    Con "Hoja D.1.2 generada: $f" ([System.Drawing.Color]::LightGreen)
+} })
 
 $btnSatAnal.Add_Click({ Lanzar {
     $dir = $script:SatDir
