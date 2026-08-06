@@ -32,7 +32,7 @@ $i10 = $src.IndexOf('function Aband-Cronologia'); $f10 = $src.IndexOf('#  Usuari
 $i11 = $src.IndexOf('$ROLES = @('); $f11 = $fin   # hasta el arranque de la interfaz
 $i12 = $src.IndexOf('function Lv-Pasa'); $f12 = $src.IndexOf('function Lv-Filtrable')
 $i16 = $src.IndexOf('function Prog-Texto'); $f16 = $src.IndexOf('$script:ProgTotal = 0;')
-$i15 = $src.IndexOf('function Hsu-Cuadre'); $f15 = $src.IndexOf('#  Cierre post-actualizacion (interfaz)')
+$i15 = $src.IndexOf('function Hsu-EsclavoDe'); $f15 = $src.IndexOf('#  Cierre post-actualizacion (interfaz)')
 $i13 = $src.IndexOf('function Esclavos-Barrido'); $f13 = $src.IndexOf('function Params-Hsu')
 $i14 = $src.IndexOf('function Buscar-Norm'); $f14 = $src.IndexOf('function Buscador-Abrir')
 $logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7) + "`n" + $src.Substring($i8, $f8 - $i8) + "`n" + $src.Substring($i9, $f9 - $i9) + "`n" + $src.Substring($i10, $f10 - $i10) + "`n" + $src.Substring($i11, $f11 - $i11) + "`n" + $src.Substring($i12, $f12 - $i12) + "`n" + $src.Substring($i13, $f13 - $i13) + "`n" + $src.Substring($i14, $f14 - $i14) + "`n" + $src.Substring($i15, $f15 - $i15) + "`n" + $src.Substring($i16, $f16 - $i16)
@@ -1124,6 +1124,22 @@ Check 'menu: la casilla aplica al vuelo' ($menu.Contains('$it.Add_Click({ & $apl
 Check 'menu: ya no se aplica al cerrar' ($menu.Contains('Add_Closed')) $false
 Check 'menu: marcar todos' ($menu.Contains("Items.Add('Marcar todos')")) $true
 Check 'menu: desmarcar todos' ($menu.Contains("Items.Add('Desmarcar todos')")) $true
+
+Write-Host ''
+Write-Host '== el esclavo de cada HSU =='
+# Todas las de Ayora son la 230, menos la SEGUNDA de la NCU15, que es la 231.
+# La cache de la NCU numera los huecos HSU1, HSU2... y la lista va en ese orden.
+$n15 = @{ncu='15'; hsu=230; hsuLista=@(230, 231)}
+Check 'esclavo: la primera de la NCU15' (Hsu-EsclavoDe $n15 'HSU1') 230
+Check 'esclavo: la segunda' (Hsu-EsclavoDe $n15 'HSU2') 231
+Check 'esclavo: la etiqueta larga tambien' (Hsu-EsclavoDe $n15 'NCU15 - HSU2') 231
+$n2 = @{ncu='2'; hsu=230; hsuLista=@(230)}
+Check 'esclavo: una sola' (Hsu-EsclavoDe $n2 'HSU1') 230
+# la unica estacion de una NCU puede estar en el hueco 3: mejor el primero que nada
+Check 'esclavo: hueco fuera de la lista' (Hsu-EsclavoDe $n2 'HSU3') 230
+# sin lista se usa el valor suelto de siempre (hsu_esclavo)
+Check 'esclavo: sin lista, el de siempre' (Hsu-EsclavoDe @{hsu=185; hsuLista=@()} 'HSU1') 185
+Check 'esclavo: sin nada, nada' ($null -eq (Hsu-EsclavoDe @{hsu=$null; hsuLista=@()} 'HSU1')) $true
 
 Write-Host ''
 Write-Host '== cuadre de HSUs contra la topologia =='

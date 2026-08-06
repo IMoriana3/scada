@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '10.5'
+$VERSION_TOOLBOX = '10.6'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -83,6 +83,12 @@ function Cargar-FicheroPlantas([string]$ruta) {
         # cuantas estaciones lleva esa NCU segun la topologia (columna RSU del
         # Excel). Sirve para saber si BUSCAR HSUs las ha encontrado todas.
         if ($p.PSObject.Properties['hsus'] -and "$($p.hsus)" -match '^\d+$') { $e.hsus = [int]$p.hsus }
+        # una NCU puede llevar mas de una estacion, cada una con su esclavo, en
+        # el orden de los huecos HSU1, HSU2... de la cache (Ayora NCU15: 230 y 231)
+        if ($p.PSObject.Properties['hsu_esclavos']) {
+            $lstE = @(@($p.hsu_esclavos) | Where-Object { "$_" -match '^\d+$' } | ForEach-Object { [int]$_ })
+            if ($lstE.Count -gt 0) { $e.hsuLista = $lstE; if (-not $e.hsu) { $e.hsu = $lstE[0] } }
+        }
         $PLANTAS[[string]$p.nombre] = $e
         $n++
     }
@@ -129,20 +135,21 @@ function Construir-EntradasAuto {
         $planta = $m.Groups[1].Value.Trim(); $ncu = [int]$m.Groups[2].Value
         # ojo: hashtable normal, no [ordered] (con clave int lo trataria como indice)
         if (-not $porPlanta.Contains($planta)) { $porPlanta[$planta] = @{} }
-        if (-not $porPlanta[$planta].Contains($ncu)) { $porPlanta[$planta][$ncu] = @{ip=$p.ip; gws=@(); hsu=$null; hsus=0} }
+        if (-not $porPlanta[$planta].Contains($ncu)) { $porPlanta[$planta][$ncu] = @{ip=$p.ip; gws=@(); hsu=$null; hsus=0; hsuLista=@()} }
         if ($porPlanta[$planta][$ncu].ip -ne $p.ip) { continue }   # inconsistencia: ignorar
         $porPlanta[$planta][$ncu].gws += ,@{puerto=$p.puerto; ini=$p.ini; fin=$p.fin}
         if ($p.hsu -and -not $porPlanta[$planta][$ncu].hsu) { $porPlanta[$planta][$ncu].hsu = $p.hsu }
         # el mismo numero viene repetido en las entradas de los dos gateways de
         # la NCU: se queda el mayor, no se suman
         if ($p.hsus -and [int]$p.hsus -gt [int]$porPlanta[$planta][$ncu].hsus) { $porPlanta[$planta][$ncu].hsus = [int]$p.hsus }
+        if (@($p.hsuLista).Count -gt @($porPlanta[$planta][$ncu].hsuLista).Count) { $porPlanta[$planta][$ncu].hsuLista = @($p.hsuLista) }
     }
     foreach ($planta in $porPlanta.Keys) {
         $ncus = $porPlanta[$planta]
         if ($ncus.Count -lt 2) { continue }
         $lista = @()
         foreach ($n in ($ncus.Keys | Sort-Object)) {
-            $lista += ,@{ncu=[int]$n; ip=$ncus[$n].ip; gws=@($ncus[$n].gws | Sort-Object { $_.ini }); hsu=$ncus[$n].hsu; hsus=[int]$ncus[$n].hsus}
+            $lista += ,@{ncu=[int]$n; ip=$ncus[$n].ip; gws=@($ncus[$n].gws | Sort-Object { $_.ini }); hsu=$ncus[$n].hsu; hsus=[int]$ncus[$n].hsus; hsuLista=@($ncus[$n].hsuLista)}
         }
         $PLANTAS["$planta (Planta completa)"] = @{ip=$null; puerto=$null; ini=$null; fin=$null; ncus=$lista}
     }
@@ -5959,6 +5966,21 @@ $btnBackupNcu.Add_Click({ Lanzar {
 # lo que convierte "he encontrado 9" en "falta la de NCU15", que es la
 # diferencia entre enterarse y no enterarse. Pura: se prueba sin planta.
 # $ncus: @(@{ncu; hsus}); $halladas: @(@{ncu}). Devuelve @{texto; faltan; sobran}
+# El esclavo Modbus de UNA HSU concreta. La cache de la NCU numera los huecos
+# (HSU1, HSU2...) y la topologia trae la lista de esclavos en ese mismo orden:
+# la NCU15 de Ayora lleva dos, 230 y 231. Si el hueco se sale de la lista -la
+# unica estacion de una NCU puede estar en el hueco 3- se usa el primero, que
+# es mejor que no proponer nada. Pura.
+function Hsu-EsclavoDe($ncu, [string]$etiqueta) {
+    $lst = @($ncu.hsuLista | Where-Object { "$_" -match '^\d+$' })
+    if ($lst.Count -eq 0) { return $ncu.hsu }
+    if ("$etiqueta" -match 'HSU(\d+)') {
+        $i = [int]$Matches[1] - 1
+        if ($i -ge 0 -and $i -lt $lst.Count) { return [int]$lst[$i] }
+    }
+    return [int]$lst[0]
+}
+
 function Hsu-Cuadre($ncus, $halladas) {
     $esperadas = 0; $porNcu = @{}
     foreach ($n in @($ncus)) {
@@ -7568,12 +7590,12 @@ $btnHBuscar.Add_Click({ Lanzar {
     $p = $null; if ($cbPlanta.SelectedItem) { $p = $PLANTAS[$cbPlanta.SelectedItem] }
     $ncus = @()
     if ($cx.multi) {
-        foreach ($n in $cx.multi) { $ncus += ,@{ncu="$($n.ncu)"; ip=$n.ip; hsu=$n.hsu; gws=$n.gws; hsus=[int]$n.hsus} }
+        foreach ($n in $cx.multi) { $ncus += ,@{ncu="$($n.ncu)"; ip=$n.ip; hsu=$n.hsu; gws=$n.gws; hsus=[int]$n.hsus; hsuLista=@($n.hsuLista)} }
     } else {
         $eti = ''
         $m = [regex]::Match("$($cbPlanta.SelectedItem)", 'NCU(\d+)')
         if ($m.Success) { $eti = $m.Groups[1].Value }
-        $ncus += ,@{ncu=$eti; ip=$cx.ip; hsu=$(if ($p) { $p.hsu } else { $null }); gws=$cx.gws; hsus=$(if ($p) { [int]$p.hsus } else { 0 })}
+        $ncus += ,@{ncu=$eti; ip=$cx.ip; hsu=$(if ($p) { $p.hsu } else { $null }); gws=$cx.gws; hsus=$(if ($p) { [int]$p.hsus } else { 0 }); hsuLista=@($(if ($p) { $p.hsuLista } else { @() }))}
     }
     $lvH.Items.Clear()
     $script:HsusPlanta = @()
@@ -7588,7 +7610,7 @@ $btnHBuscar.Add_Click({ Lanzar {
         if ($filas.Count -eq 0) { Con "$(if ($n.ncu) { "NCU$($n.ncu)" } else { $n.ip }): sin HSUs en el bloque compacto." ([System.Drawing.Color]::Gainsboro); continue }
         foreach ($f in $filas) {
             $eti = ($(if ($n.ncu) { "NCU$($n.ncu) - " } else { '' }) + $f.TCU)
-            $script:HsusPlanta += ,@{etiqueta=$eti; ncu="$($n.ncu)"; ip=$n.ip; hsu=$n.hsu; gws=$n.gws; salud=$f.Salud; texto=$f.Alarmas}
+            $script:HsusPlanta += ,@{etiqueta=$eti; ncu="$($n.ncu)"; ip=$n.ip; hsu=(Hsu-EsclavoDe $n "$($f.TCU)"); gws=$n.gws; salud=$f.Salud; texto=$f.Alarmas}
             $item = New-Object System.Windows.Forms.ListViewItem($eti)
             [void]$item.SubItems.Add("$($f.Salud)"); [void]$item.SubItems.Add("$($f.Alarmas)")
             switch ($f.Salud) {

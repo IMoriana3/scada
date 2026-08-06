@@ -15,7 +15,10 @@
       "puerto": 503,
       "tcu_ini": 1,
       "tcu_fin": 69,
-      "hsus": 1
+      "hsus": 1,
+      "hsu_esclavos": [
+        230
+      ]
     },
     {
       "nombre": "Ayora NCU3",
@@ -23,7 +26,10 @@
       "puerto": 503,
       "tcu_ini": 1,
       "tcu_fin": 66,
-      "hsus": 1
+      "hsus": 1,
+      "hsu_esclavos": [
+        230
+      ]
     },
     {
       "nombre": "Ayora NCU4",
@@ -38,7 +44,10 @@
       "puerto": 503,
       "tcu_ini": 1,
       "tcu_fin": 48,
-      "hsus": 1
+      "hsus": 1,
+      "hsu_esclavos": [
+        230
+      ]
     },
     {
       "nombre": "Ayora NCU6",
@@ -60,7 +69,10 @@
       "puerto": 503,
       "tcu_ini": 1,
       "tcu_fin": 44,
-      "hsus": 1
+      "hsus": 1,
+      "hsu_esclavos": [
+        230
+      ]
     },
     {
       "nombre": "Ayora NCU9",
@@ -82,7 +94,10 @@
       "puerto": 503,
       "tcu_ini": 1,
       "tcu_fin": 65,
-      "hsus": 1
+      "hsus": 1,
+      "hsu_esclavos": [
+        230
+      ]
     },
     {
       "nombre": "Ayora NCU12",
@@ -90,7 +105,10 @@
       "puerto": 503,
       "tcu_ini": 1,
       "tcu_fin": 53,
-      "hsus": 1
+      "hsus": 1,
+      "hsu_esclavos": [
+        230
+      ]
     },
     {
       "nombre": "Ayora NCU13",
@@ -98,7 +116,10 @@
       "puerto": 503,
       "tcu_ini": 1,
       "tcu_fin": 72,
-      "hsus": 1
+      "hsus": 1,
+      "hsu_esclavos": [
+        230
+      ]
     },
     {
       "nombre": "Ayora NCU14",
@@ -113,7 +134,11 @@
       "puerto": 503,
       "tcu_ini": 1,
       "tcu_fin": 43,
-      "hsus": 2
+      "hsus": 2,
+      "hsu_esclavos": [
+        230,
+        231
+      ]
     },
     {
       "nombre": "Ayora NCU16",
@@ -121,7 +146,10 @@
       "puerto": 503,
       "tcu_ini": 1,
       "tcu_fin": 45,
-      "hsus": 1
+      "hsus": 1,
+      "hsu_esclavos": [
+        230
+      ]
     }
   ]
 }
