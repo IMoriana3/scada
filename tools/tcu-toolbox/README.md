@@ -70,6 +70,24 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**Cada HSU con su esclavo (v10.6)** — una NCU puede llevar **más de una**
+estación, y cada una tiene su número de esclavo Modbus. En Ayora son todas la
+**230** menos la segunda de la **NCU 15**, que es la **231**. La topología lo
+lleva como lista, en el orden de los huecos `HSU1`, `HSU2`… de la caché de la
+NCU:
+
+```json
+{ "nombre": "Ayora NCU15", "hsus": 2, "hsu_esclavos": [230, 231] }
+```
+
+Al elegir una HSU en el desplegable se fija **su** esclavo, no el de la NCU. El
+campo antiguo `hsu_esclavo` (un solo número) se sigue leyendo.
+
+Como el Excel maestro todavía no trae esa columna, **regenerar no los borra**:
+`make_plantas.py` conserva los que ya tenga el JSON y lo dice por consola. En
+cuanto la hoja tenga una columna **HSU esclavo** —admite `230` o `230,231`—
+manda la hoja.
+
 **BUSCAR HSUs dice si falta alguna (v10.5)** — encontrar nueve no significa nada
 si no sabes que hay diez. La columna **RSU** del Excel maestro (una por gateway)
 ya dice cuántas estaciones lleva cada NCU, así que ahora se cuenta y viaja al

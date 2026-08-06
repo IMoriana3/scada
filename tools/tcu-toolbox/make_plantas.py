@@ -89,10 +89,12 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
     # hoja no lo trae todavia: en cuanto exista una columna 'HSU' (o
     # 'HSU esclavo'), con el numero por fila de NCU, sale solo en el JSON y la
     # toolbox lo preselecciona en vez de tirar del 185 por defecto.
-    i_hsu = col_opcional("HSU", "HSU esclavo", "Esclavo HSU")
+    # Admite un numero ('230') o varios si esa NCU lleva mas de una estacion
+    # ('230,231'), en el orden de los huecos HSU1, HSU2... de la cache de la NCU.
+    i_hsu = col_opcional("HSU esclavo", "Esclavo HSU", "HSU")
     if i_hsu is None:
-        print(f"aviso: la hoja '{hoja}' no tiene columna HSU; "
-              "las entradas saldran sin hsu_esclavo (la toolbox usara 185 y BUSCAR ESCLAVO)")
+        print(f"aviso: la hoja '{hoja}' no tiene columna 'HSU esclavo'; se conservan "
+              "los que ya tenga el JSON y el resto saldra sin el (la toolbox usara 185)")
     # CUANTAS estaciones lleva cada NCU si lo dicen las columnas 'RSU' (una por
     # gateway). Ahi va un numero de orden dentro de la planta (1, 2, 3...), NO
     # el esclavo Modbus: volcarlo en hsu_esclavo mandaria a la toolbox a hablar
@@ -134,6 +136,13 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
             return sum(1 for i in (i_rsu1, i_rsu2)
                        if i is not None and re.match(r"^\d+$", re.sub(r"\.0$", "", v(i))))
 
+        def esclavos_fila():
+            """Los esclavos Modbus que declara esta fila: '230' o '230,231'."""
+            if i_hsu is None:
+                return []
+            crudo = re.sub(r"\.0$", "", v(i_hsu))
+            return [int(x) for x in re.split(r"[,;/ ]+", crudo) if re.match(r"^\d+$", x)]
+
         ip = v(i_ip)
         if not re.match(r"^\d+\.\d+\.\d+\.\d+$", ip):
             # Una NCU con DOS estaciones ocupa dos filas: la segunda solo lleva
@@ -143,6 +152,8 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
             if ultima_entrada is not None and rsus_fila():
                 for e in ultima_entrada:
                     e["hsus"] = e.get("hsus", 0) + rsus_fila()
+                    for esc in esclavos_fila():
+                        e.setdefault("hsu_esclavos", []).append(esc)
             continue
         ncu_auto += 1
         ntxt = re.sub(r"\.0$", "", v(i_ncu))
@@ -151,7 +162,7 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
         gws = [(puertos[k], r) for k, r in enumerate(rangos) if r and k < len(puertos)]
         if not gws:
             continue
-        hsu = re.sub(r"\.0$", "", v(i_hsu)) if i_hsu is not None else ""
+        escl = esclavos_fila()
         nRsu = rsus_fila()
         ultima_entrada = []
         for gidx, (puerto, (ini, fin)) in enumerate(gws, start=1):
@@ -166,8 +177,8 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
             # La HSU cuelga de UN gateway, no de los dos, pero cual es no lo
             # dice el Excel: se pone en las entradas de la NCU y la toolbox ya
             # avisa de cambiar el puerto si no responde por ese.
-            if re.match(r"^\d+$", hsu):
-                entrada["hsu_esclavo"] = int(hsu)
+            if escl:
+                entrada["hsu_esclavos"] = list(escl)
             if nRsu:
                 entrada["hsus"] = nRsu
             plantas[actual].append(entrada)
@@ -179,6 +190,25 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
             continue
         destino = Path("plantas") / f"{num}-{slug(proy)}.json"
         destino.parent.mkdir(parents=True, exist_ok=True)
+        # Los esclavos de las HSUs no estan en el Excel (todavia): si el JSON
+        # anterior los traia puestos a mano, regenerar no puede borrarlos. Solo
+        # se conservan los que el Excel NO manda; en cuanto la hoja tenga la
+        # columna, manda la hoja.
+        if destino.exists():
+            try:
+                previo = json.loads(destino.read_text(encoding="utf-8"))
+                antes = {e.get("nombre"): e for e in previo.get("plantas", [])}
+            except (ValueError, OSError):
+                antes = {}
+            conservados = 0
+            for e in entradas:
+                viejo = antes.get(e.get("nombre"))
+                if viejo and "hsu_esclavos" not in e and viejo.get("hsu_esclavos"):
+                    e["hsu_esclavos"] = viejo["hsu_esclavos"]
+                    conservados += 1
+            if conservados:
+                print(f"  {destino}: conservados los esclavos de HSU de {conservados} entradas "
+                      "(no estan en el Excel)")
         destino.write_text(json.dumps({
             "_comentario": (f"Planta {num} ({proy}) generada desde el Excel maestro "
                             f"(hoja '{hoja}') por make_plantas.py --excel. Solo topologia: "
