@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '10.1'
+$VERSION_TOOLBOX = '10.2'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -4660,15 +4660,32 @@ function Cierre-Fichero([string]$planta) {
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
     return Join-Path $dir (($planta -replace '[^\w\-\.]', '_') + '.json')
 }
+# De lo leido del JSON a la tabla de la lista. Pura: se prueba sin ficheros.
+#
+# El filtro de la TCU no es paranoia. En PowerShell 5.1 -el del PC de planta-
+# ConvertFrom-Json '[]' devuelve $null, y @($null) tiene UN elemento, no cero.
+# Una lista vacia guardada volvia por tanto como una entrada de nada: NCU en
+# blanco, TCU 0 y "falta parametros, NVM, modo AUTO", que ademas no se podia
+# cerrar nunca. Es la misma trampa que ya se llevo por delante un recuadro de la
+# portada del informe.
+function Cierre-DeJson($datos) {
+    $r = @{}
+    foreach ($e in @($datos)) {
+        if ($null -eq $e) { continue }
+        $t = 0
+        if (-not [int]::TryParse("$($e.tcu)", [ref]$t)) { continue }
+        if ($t -le 0) { continue }
+        $r["$($e.ncu)|$t"] = @{ncu="$($e.ncu)"; tcu=$t; fw="$($e.fw)"
+            params="$($e.params)"; nvm="$($e.nvm)"; modo="$($e.modo)"; desde="$($e.desde)"}
+    }
+    return $r
+}
 function Cierre-Cargar([string]$planta) {
     $script:Cierre = @{}
     try {
         $f = Cierre-Fichero $planta
         if (-not (Test-Path $f)) { return }
-        foreach ($e in @(Get-Content $f -Raw | ConvertFrom-Json)) {
-            $script:Cierre["$($e.ncu)|$($e.tcu)"] = @{ncu="$($e.ncu)"; tcu=[int]$e.tcu; fw="$($e.fw)"
-                params="$($e.params)"; nvm="$($e.nvm)"; modo="$($e.modo)"; desde="$($e.desde)"}
-        }
+        $script:Cierre = Cierre-DeJson (Get-Content $f -Raw | ConvertFrom-Json)
     } catch {}
 }
 function Cierre-Guardar([string]$planta) {
@@ -4679,6 +4696,7 @@ function Cierre-Guardar([string]$planta) {
 }
 # Alta o actualizacion de una TCU en la lista. $campo vacio = solo darla de alta.
 function Cierre-Marcar([string]$ncu, [int]$tcu, [string]$campo, [string]$valor, [string]$fw = '') {
+    if ($tcu -le 0) { return }        # no existe la TCU 0: seria una fila que no se puede cerrar
     $k = "$ncu|$tcu"
     if (-not $script:Cierre.ContainsKey($k)) {
         $script:Cierre[$k] = @{ncu=$ncu; tcu=$tcu; fw=$fw; params=''; nvm=''; modo=''; desde=(Get-Date -Format 'yyyy-MM-dd HH:mm')}

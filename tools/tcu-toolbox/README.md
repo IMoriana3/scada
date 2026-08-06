@@ -174,6 +174,17 @@ te lleva, no dispara. Así no hay lógica de escritura duplicada en dos pestaña
 La lista **sobrevive a cerrar el programa** (`cierre/<planta>.json`) y es una por
 planta, que es lo que hace falta cuando la campaña dura días.
 
+**Corregido en v10.2: la TCU 0 fantasma.** Una lista guardada **vacía** volvía
+al arrancar como una entrada de nada —NCU en blanco, TCU 0, *«falta parámetros,
+NVM, modo AUTO»*— que además no había forma de cerrar, y hacía saltar el aviso de
+pendientes todos los días. En PowerShell 5.1 (el del PC de planta)
+`ConvertFrom-Json '[]'` devuelve `$null`, y **`@($null)` tiene un elemento, no
+cero**: el bucle de carga se creaba una fila con todo vacío. Es la misma trampa
+que ya se llevó por delante un recuadro de la portada del informe. Ahora la carga
+descarta lo que no traiga una TCU de verdad, y el alta no admite la TCU 0 venga
+de donde venga. Si ya tienes la fila fantasma, sale sola al actualizar; y si no,
+se quita con **Quitar de la lista**.
+
 **Añadir a mano (v10.1)** — el firmware se instala con el **updater del
 fabricante**, fuera de esta herramienta. Si ese día no se pasa por *Firmware* a
 pulsar `VERIFICAR`, lo actualizado no entra en ninguna lista y se pierde igual
