@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '7.0'
+$VERSION_TOOLBOX = '7.1'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -379,6 +379,73 @@ $VARIABLES = [ordered]@{
 $ADDR_COMANDO = @(40000, 40007, 40017, 40018, 42000)
 $ADDR_TIEMPO  = @(40001, 40002, 40003, 40004, 40005, 40006)
 
+# Registros de IDENTIDAD DE RED: el numero de esclavo, el PAN ID y la clave de
+# cifrado son propios de CADA TCU. Clonarlos de un equipo a otro deja dos TCUs
+# con el mismo esclavo (una de las dos desaparece de la red) o mete a la TCU en
+# la PAN de otra NCU. Por eso no entran en los presets ni se dejan escribir a
+# mas de una TCU a la vez.
+$ADDR_IDENTIDAD = @(41004, 41006, 41070, 41072, 41074, 41075)
+
+# ---------------------------------------------------------------------------
+#  Rangos plausibles por variable (comprobacion de cordura)
+# ---------------------------------------------------------------------------
+# No son limites de escritura (esos van en el mapa, con min/max), sino el
+# intervalo en el que un valor tiene sentido fisico. Sirven para cazar valores
+# que ya estan escritos y son imposibles, como el east_pitch = -0,7854 m que
+# aparecio en Ayora: -0,7854 es exactamente -45 grados en radianes, o sea el
+# crudo de min_tilt metido en el registro de al lado.
+$RANGOS = @{
+  '41033 west_pitch [m]'            = @{min=0.5;    max=30}
+  '41035 panel_width [m]'           = @{min=0.5;    max=30}
+  '41106 east_pitch [m]'            = @{min=0.5;    max=30}
+  '41010 longitud [deg]'            = @{min=-180;   max=180}
+  '41012 latitud [deg]'             = @{min=-90;    max=90}
+  '41014 azimuth_offset [deg]'      = @{min=-180;   max=180}
+  '41058 inclinometer_offset [deg]' = @{min=-30;    max=30}
+  '41098 west_grade_slope [deg]'    = @{min=-45;    max=45}
+  '41102 east_grade_slope [deg]'    = @{min=-45;    max=45}
+  '41100 west_grade_azimuth [deg]'  = @{min=-180;   max=180}
+  '41104 east_grade_azimuth [deg]'  = @{min=-180;   max=180}
+  '41042 nighttime_tilt [deg]'      = @{min=-90;    max=90}
+}
+# los siete rangos de max_tilt/min_tilt comparten limites
+foreach ($r in 1..7) {
+  $RANGOS["4$(1109 + 2 * $r) max_tilt_west_r$r [deg]"] = @{min=0;   max=90}
+  $RANGOS["4$(1123 + 2 * $r) min_tilt_east_r$r [deg]"] = @{min=-90; max=0}
+}
+
+# Un valor en un registro de metros que resulta ser un angulo redondo en
+# radianes casi nunca es casualidad: es el crudo de la variable de al lado.
+function Parece-Radianes([double]$v) {
+    if ([double]::IsNaN($v) -or $v -eq 0) { return '' }
+    if ([Math]::Abs($v) -ge 1.6) { return '' }          # > pi/2: ya no cuela
+    $g = $v * 180.0 / [Math]::PI
+    if ([Math]::Abs($g - [Math]::Round($g / 5.0) * 5.0) -gt 0.05) { return '' }
+    return ('parece un angulo en radianes ({0} rad = {1} grados)' -f $v.ToString('0.####', $INV), ([Math]::Round($g / 5.0) * 5.0).ToString('0.#', $INV))
+}
+
+# Devuelve '' si el valor es plausible, o el motivo por el que no lo es.
+# $texto es el valor ya decodificado tal y como lo pinta la herramienta.
+function Rango-Sospechoso([string]$nombre, [string]$texto) {
+    $t = "$texto".Trim()
+    if ($t -eq '' -or $t -eq '-') { return '' }
+    if ($t.StartsWith('0x')) { return '' }              # hex: sin rango util
+    $v = 0.0
+    if (-not [double]::TryParse($t.Replace(',', '.'), [Globalization.NumberStyles]::Float, $INV, [ref]$v)) { return '' }
+    if ([double]::IsNaN($v) -or [double]::IsInfinity($v)) { return "valor no finito" }
+    $r = $null
+    if ($RANGOS.Contains($nombre)) { $r = $RANGOS[$nombre] }
+    if ($null -eq $r) { return '' }
+    if ($v -lt $r.min -or $v -gt $r.max) {
+        $pista = ''
+        if ($nombre.Contains('[m]')) { $pista = Parece-Radianes $v }
+        $motivo = ('fuera de rango: {0} no esta entre {1} y {2}' -f $t, $r.min, $r.max)
+        if ($pista) { $motivo += " - $pista" }
+        return $motivo
+    }
+    return ''
+}
+
 # ---------------------------------------------------------------------------
 #  Decodificacion de alarmas y estados (mapa v6.1)
 # ---------------------------------------------------------------------------
@@ -608,6 +675,14 @@ function Informe-Html([hashtable]$m) {
             }
         }
         if ($disc.Count) { [void]$sb.AppendLine('<div class="res">' + ($disc -join '<br>') + '</div>') }
+        # valores imposibles: van aparte del reparto de valores porque un valor
+        # puede coincidir en toda la planta y aun asi estar mal
+        $sosp = @(Sospechas-Lectura $filasL)
+        if ($sosp.Count) {
+            $lin = @($sosp | ForEach-Object {
+                '<span class="ko2">' + (Html-Esc $(if ($_.NCU) { "NCU$($_.NCU) TCU $($_.TCU)" } else { "TCU $($_.TCU)" })) + ': ' + (Html-Esc $_.Variable) + ' = ' + (Html-Esc $_.Valor) + ' &rarr; ' + (Html-Esc $_.Motivo) + '</span>' })
+            [void]$sb.AppendLine('<div class="res"><b>Valores imposibles (' + $sosp.Count + ')</b><br>' + ($lin -join '<br>') + '</div>')
+        }
         [void]$sb.AppendLine('<table class="filtrable"><thead><tr>' + (($colsL | ForEach-Object { '<th title="clic para ordenar">' + (Html-Esc $_) + '<span class="fl"></span></th>' }) -join '') + '</tr></thead><tbody>')
         foreach ($f in $filasL) {
             $cl = $(if ("$($f.Estado)" -and "$($f.Estado)" -ne 'OK') { ' class="alarma"' } else { '' })
@@ -3129,6 +3204,24 @@ function Escribir-EnTcus($tcus) {
         'Confirmar', 'YesNo', 'Warning')
     if ($r -ne 'Yes') { return }
 
+    # La identidad de red no se puede escribir en bloque: dos TCUs con el mismo
+    # numero de esclavo hacen desaparecer a una de las dos de la red.
+    $identV = @($vars | Where-Object { $ADDR_IDENTIDAD -contains $_.addr })
+    if ($identV.Count -gt 0) {
+        $lista = ($identV | ForEach-Object { "  $($_.nombre)" }) -join "`r`n"
+        if ($nTcus -gt 1) {
+            [void][System.Windows.Forms.MessageBox]::Show(
+                "No se puede escribir IDENTIDAD DE RED en $nTcus TCUs a la vez:`r`n`r`n$lista`r`n`r`nEl numero de esclavo, el PAN ID y la clave son propios de cada equipo. Escribirlos en bloque dejaria varias TCUs con el mismo esclavo y unas cuantas desaparecerian de la red.`r`n`r`nHazlo TCU a TCU (rango de una sola TCU).",
+                'IDENTIDAD DE RED', 'OK', 'Stop')
+            Con "Escritura cancelada: $($identV.Count) registros de identidad de red apuntando a $nTcus TCUs." ([System.Drawing.Color]::Salmon)
+            return
+        }
+        $rId = [System.Windows.Forms.MessageBox]::Show(
+            "ATENCION: vas a cambiar la IDENTIDAD DE RED de la TCU:`r`n`r`n$lista`r`n`r`nSi te equivocas, la TCU deja de responder por Zigbee y hay que ir a pie de seguidor.`r`n`r`nSeguro?",
+            'IDENTIDAD DE RED', 'YesNo', 'Stop')
+        if ($rId -ne 'Yes') { return }
+    }
+
     $peligrosas = @($vars | Where-Object { $ADDR_COMANDO -contains $_.addr })
     if ($peligrosas.Count -gt 0) {
         $lista = ($peligrosas | ForEach-Object { "  $($_.nombre)" }) -join "`r`n"
@@ -3327,9 +3420,15 @@ $btnPresetSave.Add_Click({
     $dlg.Filter = 'Preset TCU (*.json)|*.json'
     $dlg.FileName = 'preset_tcu.json'
     if ($dlg.ShowDialog() -ne 'OK') { return }
+    # Un preset es para CLONAR, asi que nunca lleva identidad de red: el numero
+    # de esclavo y el PAN ID son de cada TCU.
+    $ident = @($vars | Where-Object { $ADDR_IDENTIDAD -contains $_.addr })
+    $vars  = @($vars | Where-Object { $ADDR_IDENTIDAD -notcontains $_.addr })
+    if ($vars.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('La tabla solo tiene registros de identidad de red (esclavo, PAN ID, clave), que no se guardan en un preset.','Aviso'); return }
     $obj = @($vars | ForEach-Object { @{variable=$_.nombre; valor=$_.texto} })
     ConvertTo-Json $obj | Set-Content $dlg.FileName -Encoding UTF8
     Con "Preset guardado: $($dlg.FileName)  ($($vars.Count) variables)" ([System.Drawing.Color]::SteelBlue)
+    if ($ident.Count -gt 0) { Con "  fuera del preset $($ident.Count) registros de identidad de red (esclavo/PAN ID/clave): son propios de cada TCU: $(($ident | ForEach-Object { $_.nombre }) -join ', ')" ([System.Drawing.Color]::Orange) }
 })
 
 function Cargar-FilasEnGrid($pares) {
@@ -3377,21 +3476,39 @@ $btnCargarBackup.Add_Click({
             'Backup incompleto', 'YesNo', 'Warning')
         if ($r -ne 'Yes') { return }
     }
-    # Solo variables de configuracion: fuera comandos y fecha/hora de entrada
-    $pares = @()
+    # Solo variables de configuracion: fuera comandos, fecha/hora e identidad de
+    # red. Un backup se carga aqui para CLONARLO en otra TCU, y el numero de
+    # esclavo y el PAN ID del equipo original no se pueden clonar.
+    $pares = @(); $nIdent = 0
     foreach ($v in $obj.variables) {
         if (-not $VARIABLES.Contains([string]$v.variable)) { continue }
         $def = $VARIABLES[[string]$v.variable]
         if ($ADDR_COMANDO -contains $def.addr) { continue }
         if ($ADDR_TIEMPO -contains $def.addr) { continue }
+        if ($ADDR_IDENTIDAD -contains $def.addr) { $nIdent++; continue }
         if ("$($v.valor)" -eq '') { continue }
         $pares += [pscustomobject]@{variable=$v.variable; valor=$v.valor}
     }
     $n = Cargar-FilasEnGrid $pares
     Con "Backup de TCU $($obj.tcu) ($($obj.fecha)) cargado como preset: $n variables de configuracion (comandos y fecha/hora excluidos)" ([System.Drawing.Color]::SteelBlue)
+    if ($nIdent -gt 0) { Con "  excluidos $nIdent registros de identidad de red (zigbee_slave_id, rs485_slave_id, PAN ID, cifrado): son de la TCU $($obj.tcu), no se clonan" ([System.Drawing.Color]::Orange) }
 })
 
 # ------------------------- logica LEER VARIABLE -------------------------
+# Recorre las filas de una lectura masiva y devuelve las celdas cuyo valor no
+# tiene sentido fisico. Pura: se prueba sin planta ni ventana.
+function Sospechas-Lectura($filas) {
+    $r = New-Object System.Collections.ArrayList
+    foreach ($f in @($filas)) {
+        foreach ($pr in $f.PSObject.Properties) {
+            if (@('NCU','TCU','Estado') -contains $pr.Name) { continue }
+            $motivo = Rango-Sospechoso $pr.Name "$($pr.Value)"
+            if ($motivo) { [void]$r.Add([pscustomobject]@{NCU="$($f.NCU)"; TCU=$f.TCU; Variable=$pr.Name; Valor="$($pr.Value)"; Motivo=$motivo}) }
+        }
+    }
+    return $r.ToArray()
+}
+
 function Def-DeLectura([string]$sel) {
     if ($sel -like 'ESTADO *') { return $ESTADO[$sel.Substring(7)] }
     return $VARIABLES[$sel]
@@ -3497,6 +3614,14 @@ $btnLeer.Add_Click({ Lanzar {
             Con ("  ATENCION {0}: {1} valores distintos:" -f $d.nombre, $v.Count) ([System.Drawing.Color]::Orange)
             foreach ($k in $v.Keys) { Con ("     {0}  en {1} TCUs" -f $k, $v[$k]) ([System.Drawing.Color]::Orange) }
         }
+    }
+    # Cordura: un valor puede coincidir en toda la planta y aun asi ser
+    # imposible, asi que esto va aparte del reparto de valores.
+    $sospechas = @(Sospechas-Lectura $script:UltimaLectura)
+    if ($sospechas.Count -gt 0) {
+        Con ('-' * 96) ([System.Drawing.Color]::Salmon)
+        Con "VALORES IMPOSIBLES: $($sospechas.Count) TCUs con algun valor fuera del rango fisico de la variable." ([System.Drawing.Color]::Salmon)
+        foreach ($sp in $sospechas) { Con ("  {0}{1,3}  {2} = {3}  -> {4}" -f $(if ($sp.NCU) { "NCU$($sp.NCU) TCU " } else { 'TCU ' }), $sp.TCU, $sp.Variable, $sp.Valor, $sp.Motivo) ([System.Drawing.Color]::Salmon) }
     }
     Marcar-Bloque 'lectura'
 } })
@@ -4366,14 +4491,19 @@ $btnPresetRef.Add_Click({
     catch { [void][System.Windows.Forms.MessageBox]::Show("No se pudo leer: $_",'Error'); return }
     $pares = @()
     if ($obj.tipo -eq 'backup_tcu') { $pares = @($obj.variables) } else { $pares = @($obj) }
-    $ref = @()
+    $ref = @(); $nIdentRef = 0
     foreach ($e in $pares) {
         $nombre = [string]$e.variable
         if (-not $VARIABLES.Contains($nombre)) { continue }
         $def = $VARIABLES[$nombre]
         if ($ADDR_COMANDO -contains $def.addr) { continue }
         if ($ADDR_TIEMPO -contains $def.addr) { continue }
+        # la identidad de red es distinta en cada TCU: auditarla daria una
+        # desviacion en todas menos en la del propio preset
+        if ($ADDR_IDENTIDAD -contains $def.addr) { $nIdentRef++; continue }
         if ("$($e.valor)" -eq '') { continue }
+        $sosp = Rango-Sospechoso $nombre "$($e.valor)"
+        if ($sosp) { Con "AVISO preset ref: '$nombre' = $($e.valor) $sosp. Si el preset esta mal, la auditoria dara por buenas las TCUs malas." ([System.Drawing.Color]::Orange) }
         try { $ref += @{nombre=$nombre; texto="$($e.valor)"; esc=(Valor-A-Escritura $def "$($e.valor)")} }
         catch { Con "AVISO preset ref: '$nombre' valor '$($e.valor)' invalido - fuera de la auditoria" ([System.Drawing.Color]::Orange) }
     }
@@ -4382,6 +4512,7 @@ $btnPresetRef.Add_Click({
     $script:PresetRefNombre = [System.IO.Path]::GetFileName($dlg.FileName)
     $lblPresetRef.Text = "$($script:PresetRefNombre)  ($($ref.Count) variables)"
     Con "Preset de referencia cargado: $($script:PresetRefNombre) con $($ref.Count) variables" ([System.Drawing.Color]::SteelBlue)
+    if ($nIdentRef -gt 0) { Con "  fuera de la auditoria $nIdentRef registros de identidad de red: son distintos en cada TCU por definicion" ([System.Drawing.Color]::Orange) }
 })
 
 $btnAud.Add_Click({ Lanzar {
@@ -4440,10 +4571,13 @@ $btnAud.Add_Click({ Lanzar {
                     $desvTcu++
                     $leidoDec = ''
                     try { $leidoDec = Leer-Decodificado $tcu $VARIABLES[$refv.nombre] } catch { $leidoDec = "raw $($cmp.leidoRaw)" }
-                    $script:UltimaAud += [pscustomobject]@{NCU=$etNcu; TCU=[int]$tcu; Variable=$refv.nombre; Esperado=$refv.texto; Leido=$leidoDec; Nota='DESVIACION'}
+                    # no solo distinto del preset: ademas puede ser imposible
+                    $sosp = Rango-Sospechoso $refv.nombre $leidoDec
+                    $nota = $(if ($sosp) { "DESVIACION - $sosp" } else { 'DESVIACION' })
+                    $script:UltimaAud += [pscustomobject]@{NCU=$etNcu; TCU=[int]$tcu; Variable=$refv.nombre; Esperado=$refv.texto; Leido=$leidoDec; Nota=$nota}
                     $item = New-Object System.Windows.Forms.ListViewItem($etNcu)
-                    [void]$item.SubItems.Add("$tcu"); [void]$item.SubItems.Add($refv.nombre); [void]$item.SubItems.Add($refv.texto); [void]$item.SubItems.Add($leidoDec); [void]$item.SubItems.Add('DESVIACION')
-                    $item.ForeColor = [System.Drawing.Color]::DarkOrange
+                    [void]$item.SubItems.Add("$tcu"); [void]$item.SubItems.Add($refv.nombre); [void]$item.SubItems.Add($refv.texto); [void]$item.SubItems.Add($leidoDec); [void]$item.SubItems.Add($nota)
+                    $item.ForeColor = $(if ($sosp) { [System.Drawing.Color]::Firebrick } else { [System.Drawing.Color]::DarkOrange })
                     $lvA.Items.Add($item) | Out-Null
                 }
             }

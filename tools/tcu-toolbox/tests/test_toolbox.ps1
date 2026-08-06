@@ -1,4 +1,4 @@
-# Prueba funcional de la logica no-GUI de TCU_Toolbox.ps1 contra mb_server.py
+﻿# Prueba funcional de la logica no-GUI de TCU_Toolbox.ps1 contra mb_server.py
 $ErrorActionPreference = 'Stop'
 $raizTb = Split-Path $PSScriptRoot -Parent
 $src = Get-Content (Join-Path $raizTb 'TCU_Toolbox.ps1') -Raw
@@ -25,7 +25,7 @@ $i5 = $src.IndexOf('function Hsu-Recorrer'); $f5 = $src.IndexOf('function Hsu-Mo
 $i6 = $src.IndexOf('function Anclaje-Para'); $f6 = $src.IndexOf('# Anclar contra un contenedor')
 $i7 = $src.IndexOf('function Eti-Tcu'); $f7 = $src.IndexOf('# Divide una lista de TCUs')
 $i8 = $src.IndexOf('function Nombres-Unicos'); $f8 = $src.IndexOf('function Vars-DeTablaLeer')
-$i9 = $src.IndexOf('function Def-DeLectura'); $f9 = $src.IndexOf('$btnLeer.Add_Click')
+$i9 = $src.IndexOf('function Sospechas-Lectura'); $f9 = $src.IndexOf('$btnLeer.Add_Click')
 $i10 = $src.IndexOf('function Aband-Cronologia'); $f10 = $src.IndexOf('#  Interfaz')
 $logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7) + "`n" + $src.Substring($i8, $f8 - $i8) + "`n" + $src.Substring($i9, $f9 - $i9) + "`n" + $src.Substring($i10, $f10 - $i10)
 Invoke-Expression $logica
@@ -834,6 +834,69 @@ $abMedio = @(
 $crM = Aband-Cronologia $abMedio 1.0 2.0
 Check 'D.2 ida sin vuelta: hay llegada' $crM.t_llegada 120
 Check 'D.2 ida sin vuelta: no hay vuelta' $crM.t_vuelta ''
+
+# --------------------------------------------------------------------------
+#  Rangos plausibles e identidad de red
+# --------------------------------------------------------------------------
+Write-Host ''
+Write-Host '== rangos plausibles =='
+Check 'rango: east_pitch bueno' (Rango-Sospechoso '41106 east_pitch [m]' '6') ''
+Check 'rango: east_pitch en radianes' ((Rango-Sospechoso '41106 east_pitch [m]' '-0,7854').Contains('-45')) $true
+Check 'rango: east_pitch en radianes avisa del rango' ((Rango-Sospechoso '41106 east_pitch [m]' '-0,7854').Contains('fuera de rango')) $true
+Check 'rango: coma o punto dan igual' ((Rango-Sospechoso '41106 east_pitch [m]' '-0.7854') -ne '') $true
+Check 'rango: max_tilt bueno' (Rango-Sospechoso '41111 max_tilt_west_r1 [deg]' '55') ''
+Check 'rango: max_tilt negativo es imposible' ((Rango-Sospechoso '41111 max_tilt_west_r1 [deg]' '-45') -ne '') $true
+Check 'rango: min_tilt bueno' (Rango-Sospechoso '41125 min_tilt_east_r1 [deg]' '-45') ''
+Check 'rango: min_tilt con el valor de max_tilt' ((Rango-Sospechoso '41125 min_tilt_east_r1 [deg]' '55') -ne '') $true
+Check 'rango: los 7 rangos de tilt estan' ($RANGOS.Contains('41137 min_tilt_east_r7 [deg]')) $true
+Check 'rango: max_tilt_west_r7 esta' ($RANGOS.Contains('41123 max_tilt_west_r7 [deg]')) $true
+Check 'rango: variable sin rango no molesta' (Rango-Sospechoso '40022 timeout_com_NCU [min]' '99999') ''
+Check 'rango: vacio no molesta' (Rango-Sospechoso '41106 east_pitch [m]' '') ''
+Check 'rango: guion no molesta' (Rango-Sospechoso '41106 east_pitch [m]' '-') ''
+Check 'rango: hex no molesta' (Rango-Sospechoso '41068 safe_pos_options [hex]' '0x0000') ''
+Check 'rango: latitud valida' (Rango-Sospechoso '41012 latitud [deg]' '39,05') ''
+Check 'rango: latitud imposible' ((Rango-Sospechoso '41012 latitud [deg]' '139,05') -ne '') $true
+# la pista de radianes solo aplica a metros: 45 grados en un campo [deg] es normal
+Check 'radianes: 6 m no es un angulo' (Parece-Radianes 6.0) ''
+Check 'radianes: -0,7854 es -45' ((Parece-Radianes -0.7854).Contains('-45')) $true
+Check 'radianes: 0,5236 es 30' ((Parece-Radianes 0.5236).Contains('30')) $true
+Check 'radianes: 0,9 no es angulo redondo' (Parece-Radianes 0.9) ''
+Check 'radianes: cero no cuenta' (Parece-Radianes 0.0) ''
+
+Write-Host ''
+Write-Host '== sospechas sobre una lectura masiva =='
+$filasSosp = @(
+  [pscustomobject]@{NCU='9'; TCU=33; '41111 max_tilt_west_r1 [deg]'='55'; '41125 min_tilt_east_r1 [deg]'='-45'; '41106 east_pitch [m]'='6'; Estado='OK'}
+  [pscustomobject]@{NCU='9'; TCU=34; '41111 max_tilt_west_r1 [deg]'='55'; '41125 min_tilt_east_r1 [deg]'='55'; '41106 east_pitch [m]'='-0,7854'; Estado='OK'}
+  [pscustomobject]@{NCU='10'; TCU=19; '41111 max_tilt_west_r1 [deg]'='55'; '41125 min_tilt_east_r1 [deg]'='-45'; '41106 east_pitch [m]'='-0,7854'; Estado='OK'}
+  [pscustomobject]@{NCU='10'; TCU=20; '41111 max_tilt_west_r1 [deg]'=''; '41125 min_tilt_east_r1 [deg]'=''; '41106 east_pitch [m]'=''; Estado='no responde'}
+)
+$sos = @(Sospechas-Lectura $filasSosp)
+Check 'sospechas: tres celdas malas' $sos.Count 3
+Check 'sospechas: la TCU muda no cuenta' (@($sos | Where-Object { $_.TCU -eq 20 }).Count) 0
+Check 'sospechas: TCU 34 con dos' (@($sos | Where-Object { $_.TCU -eq 34 }).Count) 2
+Check 'sospechas: TCU 19 con una' (@($sos | Where-Object { $_.TCU -eq 19 }).Count) 1
+Check 'sospechas: lleva la NCU' (@($sos | Where-Object { $_.TCU -eq 19 })[0].NCU) '10'
+Check 'sospechas: no toca las buenas' (@($sos | Where-Object { $_.TCU -eq 33 }).Count) 0
+Check 'sospechas: lista vacia no revienta' (@(Sospechas-Lectura @()).Count) 0
+
+Write-Host ''
+Write-Host '== identidad de red =='
+Check 'identidad: zigbee_slave_id dentro' ($ADDR_IDENTIDAD -contains $VARIABLES['41004 zigbee_slave_id (byte bajo)'].addr) $true
+Check 'identidad: rs485_slave_id dentro' ($ADDR_IDENTIDAD -contains $VARIABLES['41006 rs485_slave_id (byte bajo)'].addr) $true
+Check 'identidad: pan id bajo dentro' ($ADDR_IDENTIDAD -contains $VARIABLES['41070 zigbee_pan_id_bajo [u32]'].addr) $true
+Check 'identidad: pan id alto dentro' ($ADDR_IDENTIDAD -contains $VARIABLES['41072 zigbee_pan_id_alto [u32]'].addr) $true
+Check 'identidad: cifrado dentro' ($ADDR_IDENTIDAD -contains $VARIABLES['41074 zigbee_encryption [hex]'].addr) $true
+Check 'identidad: clave dentro' ($ADDR_IDENTIDAD -contains $VARIABLES['41075 zigbee_user_key [u32]'].addr) $true
+# lo que NO es identidad y debe seguir clonandose
+Check 'identidad: east_pitch se clona' ($ADDR_IDENTIDAD -contains $VARIABLES['41106 east_pitch [m]'].addr) $false
+Check 'identidad: latitud se clona' ($ADDR_IDENTIDAD -contains $VARIABLES['41012 latitud [deg]'].addr) $false
+Check 'identidad: timeout NCU se clona' ($ADDR_IDENTIDAD -contains $VARIABLES['40022 timeout_com_NCU [min]'].addr) $false
+# el codigo del boton no es invocable sin ventana: se comprueba en el texto
+Check 'identidad: fuera del preset guardado' ($src.Contains('$vars  = @($vars | Where-Object { $ADDR_IDENTIDAD -notcontains $_.addr })')) $true
+Check 'identidad: fuera del backup como preset' ($src.Contains('if ($ADDR_IDENTIDAD -contains $def.addr) { $nIdent++; continue }')) $true
+Check 'identidad: fuera del preset de referencia' ($src.Contains('if ($ADDR_IDENTIDAD -contains $def.addr) { $nIdentRef++; continue }')) $true
+Check 'identidad: escritura en bloque bloqueada' ($src.Contains('No se puede escribir IDENTIDAD DE RED en $nTcus TCUs a la vez')) $true
 
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }

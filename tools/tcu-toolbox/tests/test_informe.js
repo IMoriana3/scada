@@ -15,16 +15,19 @@ const { chromium } = require('playwright');
   await p.waitForTimeout(300);
   chk('sin errores de JS', errores.length, 0);
 
-  const visibles = async () => p.locator('table.filtrable tbody tr:visible').count();
+  // el informe lleva dos tablas (diagnostico y lectura): los filtros se
+  // prueban sobre la de diagnostico, asi que todo va colgado de ella
+  const tDiag = p.locator('table.filtrable').first();
+  const visibles = async () => tDiag.locator('tbody tr:visible').count();
   chk('filas iniciales', await visibles(), 40);
 
   // columna Salud = indice 2
-  const botSalud = p.locator('tr.filtros td').nth(2).locator('button.fmb');
+  const botSalud = tDiag.locator('tr.filtros td').nth(2).locator('button.fmb');
   chk('boton multi presente', await botSalud.count(), 1);
   chk('rotulo inicial', (await botSalud.textContent()).trim(), '(todas)');
 
   await botSalud.click();
-  const panel = p.locator('tr.filtros td').nth(2).locator('div.fmp');
+  const panel = tDiag.locator('tr.filtros td').nth(2).locator('div.fmp');
   chk('panel abierto', await panel.isVisible(), true);
 
   // marcar ALARMA y OFFLINE a la vez
@@ -36,22 +39,22 @@ const { chromium } = require('playwright');
   const dos = await visibles();
   chk('dos opciones suman', dos > soloAlarma, true);
   chk('rotulo con 2', (await botSalud.textContent()).trim(), '2 opciones');
-  const saludes = await p.locator('table.filtrable tbody tr:visible td:nth-child(3)').allTextContents();
+  const saludes = await tDiag.locator('tbody tr:visible td:nth-child(3)').allTextContents();
   chk('solo ALARMA/OFFLINE', saludes.every(s => s === 'ALARMA' || s === 'OFFLINE'), true);
 
   // combinar con otro filtro multi: Modo
-  await p.locator('tr.filtros td').nth(3).locator('button.fmb').click();
+  await tDiag.locator('tr.filtros td').nth(3).locator('button.fmb').click();
   chk('el panel anterior se cierra', await panel.isVisible(), false);
-  const panModo = p.locator('tr.filtros td').nth(3).locator('div.fmp');
+  const panModo = tDiag.locator('tr.filtros td').nth(3).locator('div.fmp');
   await panModo.locator('label', { hasText: 'AUTO' }).locator('input').check();
   await p.waitForTimeout(120);
   const cruzado = await visibles();
   chk('cruce de dos columnas reduce', cruzado < dos && cruzado > 0, true);
-  const modos = await p.locator('table.filtrable tbody tr:visible td:nth-child(4)').allTextContents();
+  const modos = await tDiag.locator('tbody tr:visible td:nth-child(4)').allTextContents();
   chk('modo solo AUTO', modos.every(m => m === 'AUTO'), true);
 
   // "ninguna" vuelve a dejarlo todo
-  await p.locator('tr.filtros td').nth(2).locator('button.fmb').click();
+  await tDiag.locator('tr.filtros td').nth(2).locator('button.fmb').click();
   await panel.locator('a', { hasText: 'ninguna' }).click();
   await p.waitForTimeout(120);
   chk('ninguna = sin filtrar esa columna', (await visibles()) > cruzado, true);
@@ -63,13 +66,24 @@ const { chromium } = require('playwright');
   chk('todas marcadas = 4 opciones', (await botSalud.textContent()).trim(), '4 opciones');
 
   // la caja de texto sigue funcionando (columna Tilt, indice 4)
-  const cajaTilt = p.locator('tr.filtros td').nth(4).locator('input');
+  const cajaTilt = tDiag.locator('tr.filtros td').nth(4).locator('input');
   chk('caja de texto donde hay muchos valores', await cajaTilt.count(), 1);
 
   // ordenar sigue funcionando
-  await p.locator('table.filtrable thead tr:first-child th').nth(1).click();
+  await tDiag.locator('thead tr:first-child th').nth(1).click();
   await p.waitForTimeout(120);
-  chk('sigue ordenando', (await p.locator('table.filtrable thead tr:first-child th').nth(1).textContent()).includes('▲'), true);
+  chk('sigue ordenando', (await tDiag.locator('thead tr:first-child th').nth(1).textContent()).includes('▲'), true);
+
+  // valores imposibles de la lectura masiva (el east_pitch en radianes)
+  const imp = p.locator('div.res', { hasText: 'Valores imposibles' });
+  chk('bloque de valores imposibles', await imp.count(), 1);
+  const txtImp = await imp.textContent();
+  chk('cuenta las tres celdas malas', txtImp.includes('Valores imposibles (3)'), true);
+  chk('nombra la TCU 4', txtImp.includes('NCU9 TCU 4'), true);
+  chk('nombra la TCU 9', txtImp.includes('NCU9 TCU 9'), true);
+  chk('explica que son radianes', txtImp.includes('-45'), true);
+  chk('las TCUs buenas no salen', txtImp.includes('TCU 7'), false);
+  chk('la tabla de lectura sigue estando', await p.locator('table.filtrable').count(), 2);
 
   console.log(fallos === 0 ? '\nTODAS OK' : `\n${fallos} FALLOS`);
   await b.close();

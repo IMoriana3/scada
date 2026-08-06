@@ -1,6 +1,6 @@
 # Pruebas de la TCU Toolbox
 
-325 comprobaciones de la lógica no-GUI de `TCU_Toolbox.ps1` contra un simulador
+366 comprobaciones de la lógica no-GUI de `TCU_Toolbox.ps1` contra un simulador
 Modbus TCP, sin tocar una planta.
 
 ```bash
@@ -23,7 +23,8 @@ npm i playwright && node test_informe.js
 
 Cubre el filtro **multiopción** (marcar ALARMA y OFFLINE a la vez), el cruce de
 filtros de dos columnas, "todas"/"ninguna", que abrir un panel cierre el
-anterior, la caja de texto de las columnas con muchos valores y la ordenación.
+anterior, la caja de texto de las columnas con muchos valores, la ordenación y
+el bloque de **valores imposibles** de la sección de lectura.
 Con `CHROMIUM_PATH` se le puede pasar un Chromium ya instalado.
 
 ## Auditoría de maqueta
