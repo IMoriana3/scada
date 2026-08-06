@@ -60,6 +60,24 @@ cuántos valores salieron de la lectura sin tocar la planta.
 **Y la pestaña *Flota* pasa a llamarse *Auditoría*** — que es lo que se hace ahí.
 El inventario sigue dentro, y Ctrl+K lo encuentra por su nombre.
 
+**Barra de avance (v9.3)** — las operaciones largas no decían por dónde iban.
+Ahora, abajo, una barra con **cuántas van, el porcentaje y lo que queda**
+(`1240/3770 33% ~4 min`), en *Leer variable*, *Escribir*, *CSV por TCU*,
+*Diagnóstico*, *Inventario* y *Auditoría*. La estimación no aparece hasta tener
+ritmo suficiente para no mentir, y la barra comparte sitio con el aviso del log,
+así que la ventana no crece. Se apaga sola aunque la operación falle o se cancele.
+
+**El reloj de la NCU solo se menciona si está mal (v9.3)** — salía **siempre** en
+la columna de alarmas (`reloj NCU: 2026-08-06 12:04:37 UTC`) al lado de las
+alarmas de verdad, y parecía un problema cuando no lo era. Ahora solo aparece si
+se desvía más de 2 minutos de la hora del PC, y entonces dice cuánto:
+`RELOJ NCU DESVIADO 10 min`. Importa porque la caja negra de las HSU y el
+registrador del SAT se fechan con ese reloj.
+
+**Y el menú de ordenar dice lo que hace (v9.3)** — ofrecía «A-Z» hasta en
+columnas de números. Ahora mira lo que hay en la columna: «de menor a mayor» si
+son números, «A-Z» si son texto.
+
 ## Pestaña Cierre (v9.2)
 
 Una TCU **actualizada no está terminada**: le faltan los parámetros (la

@@ -30,10 +30,11 @@ $i9 = $src.IndexOf('function Sospechas-Lectura'); $f9 = $src.IndexOf('$btnLeer.A
 $i10 = $src.IndexOf('function Aband-Cronologia'); $f10 = $src.IndexOf('#  Usuarios, roles y registro')
 $i11 = $src.IndexOf('$ROLES = @('); $f11 = $fin   # hasta el arranque de la interfaz
 $i12 = $src.IndexOf('function Lv-Pasa'); $f12 = $src.IndexOf('function Lv-Filtrable')
+$i16 = $src.IndexOf('function Prog-Texto'); $f16 = $src.IndexOf('$script:ProgTotal = 0;')
 $i15 = $src.IndexOf('function Aud-Indice'); $f15 = $src.IndexOf('#  Cierre post-actualizacion (interfaz)')
 $i13 = $src.IndexOf('function Esclavos-Barrido'); $f13 = $src.IndexOf('function Params-Hsu')
 $i14 = $src.IndexOf('function Buscar-Norm'); $f14 = $src.IndexOf('function Buscador-Abrir')
-$logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7) + "`n" + $src.Substring($i8, $f8 - $i8) + "`n" + $src.Substring($i9, $f9 - $i9) + "`n" + $src.Substring($i10, $f10 - $i10) + "`n" + $src.Substring($i11, $f11 - $i11) + "`n" + $src.Substring($i12, $f12 - $i12) + "`n" + $src.Substring($i13, $f13 - $i13) + "`n" + $src.Substring($i14, $f14 - $i14) + "`n" + $src.Substring($i15, $f15 - $i15)
+$logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7) + "`n" + $src.Substring($i8, $f8 - $i8) + "`n" + $src.Substring($i9, $f9 - $i9) + "`n" + $src.Substring($i10, $f10 - $i10) + "`n" + $src.Substring($i11, $f11 - $i11) + "`n" + $src.Substring($i12, $f12 - $i12) + "`n" + $src.Substring($i13, $f13 - $i13) + "`n" + $src.Substring($i14, $f14 - $i14) + "`n" + $src.Substring($i15, $f15 - $i15) + "`n" + $src.Substring($i16, $f16 - $i16)
 # los bloques anadidos tambien usan $PSScriptRoot (usuarios.json, registro/)
 $logica = $logica.Replace('$PSScriptRoot', '$PSScriptRootFake')
 Invoke-Expression $logica
@@ -1057,6 +1058,9 @@ Check 'filtro: dos columnas, una falla' (Lv-Pasa @('9','34','55') @{'0'=@('9'); 
 Check 'filtro: columna que no existe' (Lv-Pasa @('9') @{'5'=@('x')}) $false
 Check 'filtro: celda vacia' (Lv-Pasa @('9','') @{'1'=@('')}) $true
 Check 'orden: numero se ordena como numero' (Lv-Clave '10') 10
+# el rotulo del menu tiene que decir "de menor a mayor" en columnas numericas
+Check 'orden: rotulo numerico' ($src.Contains('de menor a mayor')) $true
+Check 'orden: y alfabetico si no lo es' ($src.Contains("A-Z")) $true
 Check 'orden: coma decimal' (Lv-Clave '-0,7854') -0.7854
 Check 'orden: texto no es numero' ([double]::IsNaN((Lv-Clave 'ALARMA'))) $true
 
@@ -1289,6 +1293,32 @@ Check 'indice: lectura vacia' ((Aud-Indice @()).Count) 0
 # con el indice, auditar "-10" contra la 34 es conforme y contra la 35 no
 Check 'indice: la 34 cuadra con el preset' (Aud-Igual '-10' $idx['9|34|41069 safe_pos_sign_threshold']) $true
 Check 'indice: la 35 no' (Aud-Igual '-10' $idx['9|35|41069 safe_pos_sign_threshold']) $false
+
+Write-Host ''
+Write-Host '== el reloj de la NCU solo se menciona si esta mal =='
+# Salia SIEMPRE en la columna de alarmas y parecia un problema.
+Check 'reloj: en hora no dice nada' (@(Reloj-Nota @{fecha='2026-08-06 12:04:37 UTC'; desvio=3}).Count) 0
+Check 'reloj: justo en el limite tampoco' (@(Reloj-Nota @{fecha='x'; desvio=$RELOJ_TOL_S}).Count) 0
+Check 'reloj: pasado el limite avisa' (@(Reloj-Nota @{fecha='x'; desvio=600}).Count) 1
+Check 'reloj: dice cuanto en minutos' ((@(Reloj-Nota @{fecha='x'; desvio=600})[0]).Contains('10 min')) $true
+Check 'reloj: en horas si es mucho' ((@(Reloj-Nota @{fecha='x'; desvio=7200})[0]).Contains('2 h')) $true
+Check 'reloj: en dias si es muchisimo' ((@(Reloj-Nota @{fecha='x'; desvio=259200})[0]).Contains('3 dias')) $true
+Check 'reloj: lleva la marca que trae la NCU' ((@(Reloj-Nota @{fecha='2020-01-01 00:00:00 UTC'; desvio=999999})[0]).Contains('2020-01-01')) $true
+Check 'reloj: sin fecha no dice nada' (@(Reloj-Nota @{fecha=''; desvio=999}).Count) 0
+Check 'reloj: sin desvio medido tampoco' (@(Reloj-Nota @{fecha='x'; desvio=$null}).Count) 0
+Check 'reloj: NCU muda no revienta' (@(Reloj-Nota $null).Count) 0
+
+Write-Host ''
+Write-Host '== barra de avance =='
+Check 'avance: porcentaje' (Prog-Texto 50 200 0) '50/200  25%'
+Check 'avance: al empezar no estima' (Prog-Texto 1 100 5) '1/100  1%'
+Check 'avance: con ritmo estima' (Prog-Texto 10 100 20) '10/100  10%  ~3 min'
+Check 'avance: en minutos si es largo' (Prog-Texto 100 1000 100) '100/1000  10%  ~15 min'
+Check 'avance: en horas si es larguisimo' (Prog-Texto 10 1000 60) '10/1000  1%  ~1,7 h'
+Check 'avance: al acabar no queda nada' (Prog-Texto 200 200 100) '200/200  100%'
+Check 'avance: total 0 no revienta' (Prog-Texto 5 0 10) ''
+Check 'avance: no pasa del 100' (Prog-Texto 210 200 10) '210/200  100%'
+Check 'avance: sin tiempo medido, solo cuenta' (Prog-Texto 50 200 0) '50/200  25%'
 
 Write-Host ''
 Write-Host '== cierre post-actualizacion =='
