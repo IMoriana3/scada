@@ -1203,7 +1203,7 @@ $invFw = @(
   [pscustomobject]@{NCU='2'; TCU=4; FW=''; Nota='GatewayTargetNoResponse (0x0B)'}
 )
 $gwFw = @{ '1' = @(@{puerto=503; ini=1; fin=40}); '2' = @(@{puerto=503; ini=1; fin=40}) }
-$pf = Plan-Firmware $invFw 'v1.6.0' $gwFw
+$pf = Plan-Firmware $invFw 'v1.6.0' $gwFw @()
 Check 'fw: tres pendientes' $pf.pendientes 3
 Check 'fw: una al dia' $pf.al_dia 1
 Check 'fw: una sin respuesta' (@($pf.sin_respuesta).Count) 1
@@ -1218,8 +1218,31 @@ Check 'fw: el detalle viene ordenado' ((@($pf.detalle | ForEach-Object { $_.TCU 
 Check 'fw: dos tramos' (@($pf.tramos).Count) 2
 Check 'fw: el primero agrupa 2-3' (@($pf.tramos)[0].Hasta) 3
 # toda la flota al dia: sin detalle y sin tramos
-$pfOk = Plan-Firmware @([pscustomobject]@{NCU='1'; TCU=1; FW='v1.6.0'; Nota='OK'}) 'v1.6.0' $gwFw
+$pfOk = Plan-Firmware @([pscustomobject]@{NCU='1'; TCU=1; FW='v1.6.0'; Nota='OK'}) 'v1.6.0' $gwFw @()
 Check 'fw: nada pendiente, sin detalle' (@($pfOk.detalle).Count) 0
+
+# --- SoC: con bateria baja el bootloader no instala, hay que verlo ANTES ---
+Write-Host ''
+Write-Host '== bateria de las pendientes de firmware =='
+$diagFw = @(
+  [pscustomobject]@{NCU='1'; TCU=2; SoC='88'}
+  [pscustomobject]@{NCU='1'; TCU=3; SoC='31'}
+  [pscustomobject]@{NCU='1'; TCU=7; SoC='62 %'}
+)
+$pfS = Plan-Firmware $invFw 'v1.6.0' $gwFw $diagFw
+Check 'soc: se cruza con el diagnostico' (@($pfS.detalle | Where-Object { $_.TCU -eq 2 })[0].SoC) '88'
+Check 'soc: admite el simbolo de porcentaje' (@($pfS.detalle | Where-Object { $_.TCU -eq 7 })[0].SoC) '62'
+Check 'soc: 88 no es bajo' (@($pfS.detalle | Where-Object { $_.TCU -eq 2 })[0].SoC_bajo) $false
+Check 'soc: 31 si es bajo' (@($pfS.detalle | Where-Object { $_.TCU -eq 3 })[0].SoC_bajo) $true
+Check 'soc: cuenta las de bateria baja' $pfS.con_soc_bajo 1
+Check 'soc: ninguna sin SoC' $pfS.sin_soc 0
+# sin diagnostico no se inventa una bateria
+Check 'soc: sin diagnostico queda vacio' (@($pf.detalle)[0].SoC) ''
+Check 'soc: y no las da por buenas' (@($pf.detalle)[0].SoC_bajo) $false
+Check 'soc: cuenta las que no se saben' $pf.sin_soc 3
+Check 'soc: ninguna marcada como baja' $pf.con_soc_bajo 0
+# el umbral esta a la vista y es el mismo que se enseña en el aviso
+Check 'soc: umbral definido' ($SOC_MIN_OTA -gt 0) $true
 
 Write-Host ''
 Write-Host '== via NCU sin respuesta no inventa OFFLINEs =='

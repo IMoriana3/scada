@@ -37,6 +37,22 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
 
+**El plan de firmware mira la batería (v8.3)** — con el SoC bajo **no se puede
+actualizar**: el updater manda el firmware, la TCU lo recibe, y el bootloader se
+niega a instalarlo porque no llega a sus umbrales (`42005 soc_min_bootloader` y
+`42006 vbat_min_bootloader`). El resultado es que gastas la ventana y no te
+enteras hasta que verificas.
+
+Ahora el plan cruza las pendientes con el **último diagnóstico de la sesión** —sin
+leer nada más— y enseña el SoC de cada una: `pendiente: tiene v1.4.3, objetivo
+v1.6.0, SoC 31 % - BATERIA BAJA`. Las que están por debajo del 50 % salen en rojo,
+cada carril dice cuántas de las suyas no van a instalar, y el resumen lo repite en
+una línea. Si no hay diagnóstico en la sesión, lo dice en vez de dar por buenas
+las baterías que no ha visto.
+
+El 50 % es un aviso conservador: el umbral de verdad es el de cada TCU, que está
+en su `42005`.
+
 **Las cabeceras se ven pulsables (v8.2)** — el filtro por columna está desde la
 v7.4, pero nadie lo encontraba: nada decía que la cabecera se pulsara. Ahora
 todas llevan una **▾**, y un **▾\*** cuando esa columna está filtrando. Una prueba
