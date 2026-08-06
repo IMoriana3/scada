@@ -70,6 +70,31 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**Cuatro correcciones de campo (v11.2)**
+
+- **La barra de avance se quedaba en 0** durante todo el barrido en paralelo.
+  `EndInvoke` en orden bloqueaba hasta el final; ahora las NCUs se recogen según
+  van acabando y cada una avisa, así que la barra sube de NCU en NCU.
+- **De noche la auditoría de baterías marcaba media planta.** Con el sol puesto
+  todos los paneles están a 0 V, y salían seis `PANEL SIN TENSIÓN` de TCUs
+  sanas. El bit 7 del MSR dice si es de día; sin él —o si no se sabe— no se
+  miran ni el panel ni la corriente de entrada ni el `NO CARGA`.
+- **El resumen de baterías mezclaba unidades**: *«6 de 705 TCUs»* seguido de un
+  reparto que sumaba 10. Son TCUs y avisos; una TCU puede tener tres cosas a la
+  vez. Ahora lo dice: *«6 TCUs con algo que mirar, 10 avisos en total»*.
+- **`Escribir…` de la auditoría ponía un rango** de la primera TCU a la última,
+  y con TCUs sueltas eso escribe también sobre las buenas de en medio. Ahora el
+  rango solo se usa si son un **tramo seguido de una NCU**; si hay huecos, o si
+  son de varias NCUs, deja hecho un **CSV por TCU** en `correcciones/` con las
+  TCUs exactas y te manda cargarlo.
+
+**Las HSUs que faltan también salen en la tabla (v11.2)** — no aparecer no es
+información. Si la topología dice que una NCU lleva una estación y la caché no
+la trae, sale su fila en gris: *«la NCU no la tiene en su caché: nunca ha
+comunicado con ella»*, o *«la NCU no contesta en el puerto 502»* si es eso. No
+entran en el desplegable —no se puede operar con lo que no responde— ni cuentan
+como encontradas.
+
 **Panel y corriente de entrada (v11.1)** — el bloque compat de la NCU ya traía
 cuatro registros que no se leían: **tensión de panel** (offset 5), **corriente de
 entrada** (12, con signo) y las dos de **motor** (8 y 9). Salen gratis, en la
