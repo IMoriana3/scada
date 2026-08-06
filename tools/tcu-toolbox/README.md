@@ -70,6 +70,17 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**Corregido en v10.7: el número del hueco no es un índice de la NCU.** La caché
+numera los huecos con la numeración de **la planta entera** — en Ayora la NCU 15
+tiene sus dos estaciones en los huecos **8 y 9**, y la NCU 16 la suya en el
+**10**—, así que usar ese número como índice de la lista de esclavos se salía
+del rango y las dos de la NCU 15 acababan con el mismo. Ahora va por **orden de
+aparición** dentro de la NCU: la primera que sale, el primer esclavo.
+
+Y el aviso de las que faltan sube al **rótulo de la pestaña**, en rojo: *«8 HSUs
+encontradas»* a secas no deja ver que faltan dos, y la consola se pierde de
+vista.
+
 **Cada HSU con su esclavo (v10.6)** — una NCU puede llevar **más de una**
 estación, y cada una tiene su número de esclavo Modbus. En Ayora son todas la
 **230** menos la segunda de la **NCU 15**, que es la **231**. La topología lo

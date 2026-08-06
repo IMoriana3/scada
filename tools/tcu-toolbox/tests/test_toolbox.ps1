@@ -1129,17 +1129,26 @@ Write-Host ''
 Write-Host '== el esclavo de cada HSU =='
 # Todas las de Ayora son la 230, menos la SEGUNDA de la NCU15, que es la 231.
 # La cache de la NCU numera los huecos HSU1, HSU2... y la lista va en ese orden.
+# Va por ORDEN DE APARICION en la NCU, no por el numero del hueco: en Ayora la
+# NCU15 tiene sus dos estaciones en los huecos 8 y 9 (la numeracion del hueco es
+# de la planta entera), asi que usar el hueco como indice se salia de la lista y
+# las dos acababan con el mismo esclavo.
 $n15 = @{ncu='15'; hsu=230; hsuLista=@(230, 231)}
-Check 'esclavo: la primera de la NCU15' (Hsu-EsclavoDe $n15 'HSU1') 230
-Check 'esclavo: la segunda' (Hsu-EsclavoDe $n15 'HSU2') 231
-Check 'esclavo: la etiqueta larga tambien' (Hsu-EsclavoDe $n15 'NCU15 - HSU2') 231
+Check 'esclavo: la primera de la NCU15' (Hsu-EsclavoDe $n15 0) 230
+Check 'esclavo: la segunda' (Hsu-EsclavoDe $n15 1) 231
 $n2 = @{ncu='2'; hsu=230; hsuLista=@(230)}
-Check 'esclavo: una sola' (Hsu-EsclavoDe $n2 'HSU1') 230
-# la unica estacion de una NCU puede estar en el hueco 3: mejor el primero que nada
-Check 'esclavo: hueco fuera de la lista' (Hsu-EsclavoDe $n2 'HSU3') 230
+Check 'esclavo: una sola' (Hsu-EsclavoDe $n2 0) 230
+# mas HSUs de las que trae la lista: mejor el primero que nada
+Check 'esclavo: fuera de la lista' (Hsu-EsclavoDe $n2 3) 230
 # sin lista se usa el valor suelto de siempre (hsu_esclavo)
-Check 'esclavo: sin lista, el de siempre' (Hsu-EsclavoDe @{hsu=185; hsuLista=@()} 'HSU1') 185
-Check 'esclavo: sin nada, nada' ($null -eq (Hsu-EsclavoDe @{hsu=$null; hsuLista=@()} 'HSU1')) $true
+Check 'esclavo: sin lista, el de siempre' (Hsu-EsclavoDe @{hsu=185; hsuLista=@()} 0) 185
+Check 'esclavo: sin nada, nada' ($null -eq (Hsu-EsclavoDe @{hsu=$null; hsuLista=@()} 0)) $true
+# y el barrido tiene que pasarle el contador, no la etiqueta del hueco
+$iBus = $src.IndexOf('$btnHBuscar.Add_Click'); $fBus = $src.IndexOf('# Barrido de esclavos')
+$bus = $src.Substring($iBus, $fBus - $iBus)
+Check 'esclavo: el barrido lleva contador' ($bus.Contains('Hsu-EsclavoDe $n $iEnNcu')) $true
+Check 'esclavo: y lo incrementa' ($bus.Contains('$iEnNcu++')) $true
+Check 'esclavo: uno por NCU' ($bus.Contains('$iEnNcu = 0')) $true
 
 Write-Host ''
 Write-Host '== cuadre de HSUs contra la topologia =='
@@ -1150,6 +1159,7 @@ $ncusT = @(@{ncu='2'; hsus=1}, @{ncu='15'; hsus=2}, @{ncu='16'; hsus=1}, @{ncu='
 $todas = @(@{ncu='2'}, @{ncu='15'}, @{ncu='15'}, @{ncu='16'})
 $cOk = Hsu-Cuadre $ncusT $todas
 Check 'hsu: con todas no se queja' (@($cOk.faltan).Count + @($cOk.sobran).Count) 0
+Check 'hsu: dice cuantas esperaba' ($cOk.esperadas) 4
 Check 'hsu: y lo dice' ($cOk.texto.Contains('Las 4 HSUs')) $true
 # la de la NCU15 que no contesta: es el caso real
 $cFalta = Hsu-Cuadre $ncusT @(@{ncu='2'}, @{ncu='15'}, @{ncu='16'})
@@ -1157,6 +1167,9 @@ Check 'hsu: detecta la que falta' (@($cFalta.faltan).Count) 1
 Check 'hsu: y dice cual' ($cFalta.faltan[0]) 'NCU15 (1 de 2)'
 Check 'hsu: con el total esperado' ($cFalta.texto.Contains('espera 4')) $true
 Check 'hsu: y que puede pasar' ($cFalta.texto.Contains('no comunican')) $true
+# y el rotulo de la pestana lo dice, que la consola se pierde de vista
+Check 'hsu: el rotulo avisa de las que faltan' ($src.Contains('FALTAN: solo $($script:HsusPlanta.Count) de las')) $true
+Check 'hsu: y lo pinta en rojo' ($src.Contains('$lblHSel.ForeColor')) $true
 # al reves: la topologia se ha quedado corta
 $cSobra = Hsu-Cuadre $ncusT (@($todas) + @(@{ncu='2'}))
 Check 'hsu: tambien avisa si sobran' (@($cSobra.sobran).Count) 1

@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '10.6'
+$VERSION_TOOLBOX = '10.7'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -5966,18 +5966,19 @@ $btnBackupNcu.Add_Click({ Lanzar {
 # lo que convierte "he encontrado 9" en "falta la de NCU15", que es la
 # diferencia entre enterarse y no enterarse. Pura: se prueba sin planta.
 # $ncus: @(@{ncu; hsus}); $halladas: @(@{ncu}). Devuelve @{texto; faltan; sobran}
-# El esclavo Modbus de UNA HSU concreta. La cache de la NCU numera los huecos
-# (HSU1, HSU2...) y la topologia trae la lista de esclavos en ese mismo orden:
-# la NCU15 de Ayora lleva dos, 230 y 231. Si el hueco se sale de la lista -la
-# unica estacion de una NCU puede estar en el hueco 3- se usa el primero, que
-# es mejor que no proponer nada. Pura.
-function Hsu-EsclavoDe($ncu, [string]$etiqueta) {
+# El esclavo Modbus de UNA HSU concreta. La topologia trae la lista de esclavos
+# de esa NCU (la NCU15 de Ayora lleva dos, 230 y 231) y aqui se coge el que
+# toca por ORDEN DE APARICION en esa NCU: la primera que sale, el primero.
+#
+# Ojo con el numero del hueco: NO es un indice dentro de la NCU. El hueco de la
+# cache va con la numeracion de la planta entera -en Ayora la NCU15 tiene sus
+# dos estaciones en los huecos 8 y 9, y la NCU16 la suya en el 10-, asi que
+# usarlo como indice se salia de la lista y las dos de la NCU15 acababan con el
+# mismo esclavo. Pura.
+function Hsu-EsclavoDe($ncu, [int]$indice) {
     $lst = @($ncu.hsuLista | Where-Object { "$_" -match '^\d+$' })
     if ($lst.Count -eq 0) { return $ncu.hsu }
-    if ("$etiqueta" -match 'HSU(\d+)') {
-        $i = [int]$Matches[1] - 1
-        if ($i -ge 0 -and $i -lt $lst.Count) { return [int]$lst[$i] }
-    }
+    if ($indice -ge 0 -and $indice -lt $lst.Count) { return [int]$lst[$indice] }
     return [int]$lst[0]
 }
 
@@ -5995,7 +5996,7 @@ function Hsu-Cuadre($ncus, $halladas) {
         if (-not $porNcu.ContainsKey($k)) { $porNcu[$k] = @{esperadas=0; halladas=0} }
         $porNcu[$k].halladas++
     }
-    if ($esperadas -eq 0) { return @{texto=''; faltan=@(); sobran=@()} }
+    if ($esperadas -eq 0) { return @{texto=''; faltan=@(); sobran=@(); esperadas=0} }
     $faltan = @(); $sobran = @()
     foreach ($k in @($porNcu.Keys | Sort-Object { [int]("0" + "$_") })) {
         $d = $porNcu[$k].halladas - $porNcu[$k].esperadas
@@ -6007,7 +6008,7 @@ function Hsu-Cuadre($ncus, $halladas) {
     if ($faltan.Count -gt 0) { $t = "FALTAN HSUs: la topologia espera $esperadas y no salen todas en " + ($faltan -join ', ') + ". O no estan dadas de alta en esa NCU, o no comunican." }
     elseif ($sobran.Count -gt 0) { $t = "Hay mas HSUs de las que dice la topologia en " + ($sobran -join ', ') + ". Actualiza la columna RSU del Excel maestro." }
     else { $t = "Las $esperadas HSUs que dice la topologia estan todas." }
-    return @{texto=$t; faltan=$faltan; sobran=$sobran}
+    return @{texto=$t; faltan=$faltan; sobran=$sobran; esperadas=$esperadas}
 }
 
 function Aud-Indice($lectura) {
@@ -7608,9 +7609,11 @@ $btnHBuscar.Add_Click({ Lanzar {
         catch { Con "AVISO: NCU$($n.ncu) ($($n.ip)): sin respuesta en ${PUERTO_NCU}: $_" ([System.Drawing.Color]::Orange) }
         Modbus-Cerrar
         if ($filas.Count -eq 0) { Con "$(if ($n.ncu) { "NCU$($n.ncu)" } else { $n.ip }): sin HSUs en el bloque compacto." ([System.Drawing.Color]::Gainsboro); continue }
+        $iEnNcu = 0
         foreach ($f in $filas) {
             $eti = ($(if ($n.ncu) { "NCU$($n.ncu) - " } else { '' }) + $f.TCU)
-            $script:HsusPlanta += ,@{etiqueta=$eti; ncu="$($n.ncu)"; ip=$n.ip; hsu=(Hsu-EsclavoDe $n "$($f.TCU)"); gws=$n.gws; salud=$f.Salud; texto=$f.Alarmas}
+            $script:HsusPlanta += ,@{etiqueta=$eti; ncu="$($n.ncu)"; ip=$n.ip; hsu=(Hsu-EsclavoDe $n $iEnNcu); gws=$n.gws; salud=$f.Salud; texto=$f.Alarmas}
+            $iEnNcu++
             $item = New-Object System.Windows.Forms.ListViewItem($eti)
             [void]$item.SubItems.Add("$($f.Salud)"); [void]$item.SubItems.Add("$($f.Alarmas)")
             switch ($f.Salud) {
@@ -7627,9 +7630,15 @@ $btnHBuscar.Add_Click({ Lanzar {
     [void]$cbHsuSel.Items.Add("(todas: $($script:HsusPlanta.Count) HSUs)")
     foreach ($h in $script:HsusPlanta) { [void]$cbHsuSel.Items.Add("$($h.etiqueta)  [$($h.ip)]") }
     $cbHsuSel.SelectedIndex = 0
-    $lblHSel.Text = "$($script:HsusPlanta.Count) HSUs encontradas. Elige una para fijar su IP" + $(if (@($script:HsusPlanta | Where-Object { $_.hsu }).Count) { ' y esclavo' } else { '' }) + ' (las operaciones directas van por su GW).'
-    Con "HSUs encontradas: $($script:HsusPlanta.Count). Al elegir una en el desplegable se fija su IP (y esclavo si la topologia lo trae) para las operaciones directas." ([System.Drawing.Color]::SteelBlue)
+    # Si la topologia dice cuantas deberia haber, eso va PRIMERO y en el rotulo:
+    # "8 HSUs encontradas" a secas no deja ver que faltan dos.
     $cuadre = Hsu-Cuadre $ncus $script:HsusPlanta
+    $faltan = @($cuadre.faltan)
+    $lblHSel.Text = $(if ($faltan.Count -gt 0) { "FALTAN: solo $($script:HsusPlanta.Count) de las $($cuadre.esperadas) que dice la topologia ($($faltan -join ', ')). " }
+                      else { "$($script:HsusPlanta.Count) HSUs encontradas. " }) +
+        'Elige una para fijar su IP' + $(if (@($script:HsusPlanta | Where-Object { $_.hsu }).Count) { ' y esclavo' } else { '' }) + '.'
+    $lblHSel.ForeColor = $(if ($faltan.Count -gt 0) { [System.Drawing.Color]::Firebrick } else { [System.Drawing.Color]::Gray })
+    Con "HSUs encontradas: $($script:HsusPlanta.Count). Al elegir una en el desplegable se fija su IP (y esclavo si la topologia lo trae) para las operaciones directas." ([System.Drawing.Color]::SteelBlue)
     if ($cuadre.texto) {
         Con $cuadre.texto $(if (@($cuadre.faltan).Count -gt 0) { [System.Drawing.Color]::Salmon }
                             elseif (@($cuadre.sobran).Count -gt 0) { [System.Drawing.Color]::Orange }
