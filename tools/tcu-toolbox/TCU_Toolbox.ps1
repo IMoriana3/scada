@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '7.5'
+$VERSION_TOOLBOX = '7.6'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -408,10 +408,23 @@ $RANGOS = @{
   '41104 east_grade_azimuth [deg]'  = @{min=-180;   max=180}
   '41042 nighttime_tilt [deg]'      = @{min=-90;    max=90}
 }
-# los siete rangos de max_tilt/min_tilt comparten limites
+# Los siete rangos de max_tilt/min_tilt comparten limites, y son -90..90 en los
+# DOS: el limite "este" no tiene por que ser negativo. En Ayora la configuracion
+# buena lleva min_tilt_east = +30, o sea que el seguidor trabaja entre +30 y
+# +55. Poner aqui -90..0 daba por imposible una planta entera.
 foreach ($r in 1..7) {
-  $RANGOS["4$(1109 + 2 * $r) max_tilt_west_r$r [deg]"] = @{min=0;   max=90}
-  $RANGOS["4$(1123 + 2 * $r) min_tilt_east_r$r [deg]"] = @{min=-90; max=0}
+  $RANGOS["4$(1109 + 2 * $r) max_tilt_west_r$r [deg]"] = @{min=-90; max=90}
+  $RANGOS["4$(1123 + 2 * $r) min_tilt_east_r$r [deg]"] = @{min=-90; max=90}
+}
+
+# Pares (max_tilt_west_rN, min_tilt_east_rN): el limite este siempre tiene que
+# quedar POR DEBAJO del oeste. Esto no es un rango, es una relacion entre dos
+# variables, y es lo que caza el corrimiento de registros que se vio en Ayora:
+# una TCU con min_tilt = 55 pasa cualquier rango, pero tener el mismo valor en
+# los dos limites no deja sitio para moverse.
+$PARES_TILT = @()
+foreach ($r in 1..7) {
+  $PARES_TILT += ,@{max="4$(1109 + 2 * $r) max_tilt_west_r$r [deg]"; min="4$(1123 + 2 * $r) min_tilt_east_r$r [deg]"; rango=$r}
 }
 
 # Un valor en un registro de metros que resulta ser un angulo redondo en
@@ -3810,10 +3823,23 @@ $btnCargarBackup.Add_Click({
 function Sospechas-Lectura($filas) {
     $r = New-Object System.Collections.ArrayList
     foreach ($f in @($filas)) {
+        $hay = @{}
         foreach ($pr in $f.PSObject.Properties) {
             if (@('NCU','TCU','Estado') -contains $pr.Name) { continue }
+            $hay[$pr.Name] = "$($pr.Value)"
             $motivo = Rango-Sospechoso $pr.Name "$($pr.Value)"
             if ($motivo) { [void]$r.Add([pscustomobject]@{NCU="$($f.NCU)"; TCU=$f.TCU; Variable=$pr.Name; Valor="$($pr.Value)"; Motivo=$motivo}) }
+        }
+        # el limite este por encima (o igual) que el oeste: el seguidor no
+        # tendria recorrido, asi que uno de los dos esta mal escrito
+        foreach ($par in $PARES_TILT) {
+            if (-not ($hay.ContainsKey($par.max) -and $hay.ContainsKey($par.min))) { continue }
+            $vMax = 0.0; $vMin = 0.0
+            if (-not [double]::TryParse($hay[$par.max].Replace(',', '.'), [Globalization.NumberStyles]::Float, $INV, [ref]$vMax)) { continue }
+            if (-not [double]::TryParse($hay[$par.min].Replace(',', '.'), [Globalization.NumberStyles]::Float, $INV, [ref]$vMin)) { continue }
+            if ($vMin -lt $vMax) { continue }
+            [void]$r.Add([pscustomobject]@{NCU="$($f.NCU)"; TCU=$f.TCU; Variable=$par.min; Valor=$hay[$par.min]
+                Motivo=("el limite este no puede ser mayor o igual que el oeste ({0}): el seguidor se queda sin recorrido" -f $hay[$par.max])})
         }
     }
     return $r.ToArray()
@@ -3845,6 +3871,11 @@ function Correccion-DeLectura($filas) {
     $avisos = New-Object System.Collections.ArrayList
     $todas = @($filas)
     if ($todas.Count -eq 0) { return @{filas=@(); avisos=@()} }
+    # Se parte de lo que ya ha marcado Sospechas-Lectura, para no repetir aqui
+    # las reglas: asi la comprobacion de pares (limite este por encima del
+    # oeste) tambien entra en la correccion.
+    $marcadas = @{}
+    foreach ($sp in @(Sospechas-Lectura $todas)) { $marcadas["$($sp.NCU)|$($sp.TCU)|$($sp.Variable)"] = $true }
     $cols = @($todas[0].PSObject.Properties.Name | Where-Object { @('NCU','TCU','Estado') -notcontains $_ })
     foreach ($col in $cols) {
         # solo se puede corregir lo que se puede escribir
@@ -3854,7 +3885,7 @@ function Correccion-DeLectura($filas) {
         foreach ($f in $todas) {
             $v = "$($f.$col)".Trim()
             if ($v -eq '' -or $v -eq '-') { continue }
-            if (Rango-Sospechoso $col $v) { $malas += ,$f; continue }
+            if ($marcadas.ContainsKey("$($f.NCU)|$($f.TCU)|$col")) { $malas += ,$f; continue }
             $cuenta[$v] = 1 + [int]$cuenta[$v]
         }
         if ($malas.Count -eq 0) { continue }
