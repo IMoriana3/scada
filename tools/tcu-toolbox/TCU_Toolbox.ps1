@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '6.4'
+$VERSION_TOOLBOX = '6.5'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -5235,19 +5235,48 @@ $btnLog.Add_Click({
 })
 
 # ------------------------- informe HTML de la sesion -------------------------
+# Nombre legible de cada bloque, para el dialogo y para el nombre del fichero
+$script:NombreBloque = @{diag='Diagnostico'; lectura='Lectura de variables'; pem='PEM'
+                         aud='Auditoria'; inv='Inventario'; esc='Escritura'}
+
 $btnInforme.Add_Click({
     try {
         $dir = Join-Path $PSScriptRoot 'informes'
         if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+        $datos = @{diag = $script:UltimoDiag; pem = $script:UltimoPem; aud = $script:UltimaAud
+                   inv = $script:UltimoInv; esc = $script:UltimaEscritura; lectura = $script:UltimaLectura}
+        $conDatos = @($datos.Keys | Where-Object { @($datos[$_]).Count -gt 0 })
+        $ultimo = ''; $nUlt = -1
+        foreach ($k in $conDatos) {
+            $o = [int]$script:OrdenDe[$k]
+            if ($o -gt $nUlt) { $nUlt = $o; $ultimo = $k }
+        }
+        # Con varias operaciones en la sesion hay que preguntar: un informe que
+        # mezcla un TEST COMM con una verificacion de FW no vale para archivar.
+        $soloUltimo = $false
+        if ($conDatos.Count -gt 1 -and $ultimo) {
+            $etUlt = "$($script:NombreBloque[$ultimo]) ($($script:HoraDe[$ultimo]))"
+            $lista = ($conDatos | Sort-Object { - [int]$script:OrdenDe[$_] } | ForEach-Object { "  - $($script:NombreBloque[$_]) ($($script:HoraDe[$_]))" }) -join "`r`n"
+            $r = [System.Windows.Forms.MessageBox]::Show(
+                ("En esta sesion hay {0} operaciones:`r`n{1}`r`n`r`nSI  -> informe SOLO de lo ultimo: {2}`r`nNO  -> informe de TODA la sesion`r`nCANCELAR -> no generar nada" -f $conDatos.Count, $lista, $etUlt),
+                'Que incluyo en el informe?', 'YesNoCancel', 'Question')
+            if ($r -eq 'Cancel') { return }
+            $soloUltimo = ($r -eq 'Yes')
+        }
         $m = @{
             planta = (Nombre-Planta); ip = $txtIp.Text.Trim()
             fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm'); usuario = "$env:USERNAME"
             version = $VERSION_TOOLBOX; mapa = $VERSION_MAPA
-            diag = $script:UltimoDiag; pem = $script:UltimoPem
-            aud = $script:UltimaAud; inv = $script:UltimoInv; esc = $script:UltimaEscritura; orden = $script:OrdenDe
-            lectura = $script:UltimaLectura; horas = $script:HoraDe
+            orden = $script:OrdenDe; horas = $script:HoraDe
         }
-        $fich = Join-Path $dir ('informe_' + ($m.planta -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.html')
+        foreach ($k in @($datos.Keys)) {
+            $m[$k] = $(if ($soloUltimo -and $k -ne $ultimo) { @() } else { $datos[$k] })
+        }
+        # el nombre del fichero dice de que es: asi no se lian en la carpeta
+        $que = 'sesion'
+        if (($soloUltimo -or $conDatos.Count -eq 1) -and $ultimo) { $que = "$($script:NombreBloque[$ultimo])" }
+        $que = $que -replace '[^\w\-]', '_'
+        $fich = Join-Path $dir ('informe_' + $que + '_' + ($m.planta -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.html')
         Set-Content -Path $fich -Value (Informe-Html $m) -Encoding UTF8
         Con "Informe HTML generado: $fich" ([System.Drawing.Color]::SteelBlue)
         Start-Process $fich
