@@ -1745,7 +1745,25 @@ Check 'auditoria: fila cuando no hay desviaciones' ($src.Contains('Sin desviacio
 Check 'auditoria: y se anade a la tabla' ($src.Contains('$lvA.Items.Add($vacio)')) $true
 Check 'auditoria: distingue cancelado de conforme' ($src.Contains('cancelado antes de leer nada')) $true
 # la fila informativa no puede colarse en las exportaciones
-Check 'auditoria: no ensucia el CSV' ($src.Contains('$script:UltimaAud += [pscustomobject]@{NCU=$etNcu; TCU=[int]$tcu; Variable=$vacio')) $false
+# "0 con desviaciones. 5 filas listadas" parecia una contradiccion: lo primero
+# son TCUs y lo segundo variables, y esas 5 filas eran de "sin respuesta".
+$fSin = @(1..5 | ForEach-Object { [pscustomobject]@{NCU='1'; TCU=7; Variable="v$_"; Nota='sin respuesta'} })
+$rSin = Aud-Resumen $fSin 62 0 1
+Check 'resumen: dice que las filas no son desviaciones' ($rSin.Contains('5 filas (5 sin respuesta)')) $true
+Check 'resumen: y que las TCUs son TCUs' ($rSin.Contains('0 TCUs con desviaciones')) $true
+$fDes = @(1..5 | ForEach-Object { [pscustomobject]@{NCU='2'; TCU=24; Variable="v$_"; Nota='DESVIACION'} })
+Check 'resumen: cinco desviaciones de una TCU' ((Aud-Resumen $fDes 68 1 0).Contains('5 filas (5 desviaciones)')) $true
+Check 'resumen: una sola fila en singular' ((Aud-Resumen @($fDes[0]) 1 1 0).Contains('1 fila (1 desviacion)')) $true
+Check 'resumen: singular de TCU' ((Aud-Resumen $fDes 68 1 0).Contains('1 TCU con desviaciones')) $true
+$fMix = @($fDes) + @($fSin)
+Check 'resumen: mezcla las dos clases' ((Aud-Resumen $fMix 60 1 1).Contains('10 filas (5 desviaciones y 5 sin respuesta)')) $true
+
+Check 'resumen: la nota con motivo tambien cuenta' ((Aud-Resumen @([pscustomobject]@{Nota='DESVIACION - fuera de rango'}) 1 1 0).Contains('1 desviacion')) $true
+Check 'resumen: sin filas no habla de la tabla' ((Aud-Resumen @() 70 0 0).Contains('En la tabla')) $false
+# y la linea de descolocacion tiene que decir que NO esta en la tabla
+Check 'resumen: la descolocacion se explica' ($src.Contains('NO estan en la tabla ni cuentan como desviacion')) $true
+
+Check 'auditoria: no ensucia el CSV'($src.Contains('$script:UltimaAud += [pscustomobject]@{NCU=$etNcu; TCU=[int]$tcu; Variable=$vacio')) $false
 
 Write-Host ''
 Write-Host '== botones que existen y estan enganchados =='

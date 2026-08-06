@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '10.2'
+$VERSION_TOOLBOX = '10.3'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -5974,6 +5974,27 @@ function Aud-Igual([string]$esperado, [string]$leido) {
     return $false
 }
 
+# El resumen mezclaba dos unidades sin decirlo: "1 con desviaciones" son TCUs y
+# "5 filas listadas" son variables, y ademas entre esas filas puede no haber
+# ninguna desviacion (las de "sin respuesta" tambien se listan). Leido seguido
+# parece que se contradice: "0 con desviaciones. 5 filas listadas."
+# Aqui se dice de que son las filas. Pura: se prueba sin planta.
+function Aud-Resumen($filas, [int]$tcusOk, [int]$tcusDesv, [int]$tcusErr) {
+    $todas = @($filas)
+    $nDesv = @($todas | Where-Object { "$($_.Nota)" -like 'DESVIACION*' }).Count
+    $nSin  = @($todas | Where-Object { "$($_.Nota)" -eq 'sin respuesta' }).Count
+    $eq = { param($n) $(if ($n -eq 1) { 'TCU' } else { 'TCUs' }) }
+    $t = "Auditoria: $tcusOk $(& $eq $tcusOk) conformes | $tcusDesv $(& $eq $tcusDesv) con desviaciones | $tcusErr $(& $eq $tcusErr) sin respuesta."
+    if ($todas.Count -eq 0) { return $t }
+    $partes = @()
+    if ($nDesv -gt 0) { $partes += "$nDesv $(if ($nDesv -eq 1) { 'desviacion' } else { 'desviaciones' })" }
+    if ($nSin -gt 0) { $partes += "$nSin sin respuesta" }
+    $otras = $todas.Count - $nDesv - $nSin
+    if ($otras -gt 0) { $partes += "$otras mas" }
+    $nf = $todas.Count
+    return "$t En la tabla: $nf $(if ($nf -eq 1) { 'fila' } else { 'filas' }) ($($partes -join ' y ')), una por variable."
+}
+
 # ---------------------------------------------------------------------------
 #  Cierre post-actualizacion (interfaz)
 # ---------------------------------------------------------------------------
@@ -6268,9 +6289,9 @@ $btnAud.Add_Click({ Lanzar {
     Modbus-Cerrar
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Cierre-Guardar (Nombre-Planta); Cierre-Pintar
-    Con "Auditoria: $nTcusOk TCUs conformes | $nDesv con desviaciones | $nErr sin respuesta. $($script:UltimaAud.Count) filas listadas." ([System.Drawing.Color]::SteelBlue)
+    Con (Aud-Resumen $script:UltimaAud $nTcusOk $nDesv $nErr) ([System.Drawing.Color]::SteelBlue)
     if ($nCache -gt 0) { Con "  $nCache valores salieron de la ultima lectura, sin volver a preguntar a la planta." ([System.Drawing.Color]::Gainsboro) }
-    if ($nFalsas -gt 0) { Con "  $nFalsas comparaciones fallaron y al releer daban el valor bueno: eran respuestas descolocadas de la NCU, no desviaciones." ([System.Drawing.Color]::Orange) }
+    if ($nFalsas -gt 0) { Con "  $nFalsas comparaciones fallaron y al releer daban el valor bueno: eran respuestas descolocadas de la NCU, no desviaciones. NO estan en la tabla ni cuentan como desviacion: la TCU que sale arriba en esas lineas quedo conforme." ([System.Drawing.Color]::Orange) }
     if ($script:UltimaAud.Count -eq 0) {
         Con 'Toda la flota coincide con el preset de referencia.' ([System.Drawing.Color]::LightGreen)
         # La tabla solo lista desviaciones, asi que sin ninguna se queda vacia y

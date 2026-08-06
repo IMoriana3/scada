@@ -51,6 +51,21 @@ además es un termómetro del enlace. La comparación normaliza lo que no es
 diferencia real: mayúsculas del hexadecimal (`0x0A00` = `0x0a00`) y coma o punto
 decimal (`6,5` = `6.5`).
 
+**El resumen de la auditoría mezclaba unidades (v10.3)** — decía
+`0 con desviaciones. 5 filas listadas.` y parecía contradecirse. No lo era: lo
+primero son **TCUs** y lo segundo **variables**, y esas cinco filas eran de
+*sin respuesta*, no desviaciones. Ahora dice de qué son:
+
+```
+Auditoria: 62 TCUs conformes | 0 TCUs con desviaciones | 1 TCU sin respuesta.
+En la tabla: 5 filas (5 sin respuesta), una por variable.
+```
+
+Y la línea de **descolocación** —la comparación que falla pero al releer da el
+valor del preset— dice ahora explícitamente que **no está en la tabla ni cuenta
+como desviación**, porque salía justo encima de las desviaciones de otra TCU y
+se leía como si se estuviera desdiciendo de ellas.
+
 **Auditar sin volver a leer (v9.1)** — la auditoría hacía **siempre** su propia
 pasada, así que venir de un barrido y auditar era recorrer la planta dos veces
 para los mismos datos. Con la casilla **Usar la última lectura**, lo que ya se
