@@ -37,6 +37,11 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
 
+**Botón Limpiar en la consola (v7.8)** — vaciar la consola estaba solo en el menú
+del botón derecho, que no se ve, así que en la práctica no existía. Ahora hay un
+botón al lado de *Guardar log*. **No toca el log de fichero**: ahí sigue todo, que
+es lo que vale para reconstruir una jornada, y al limpiar lo recuerda con la ruta.
+
 **El límite de recorrido no es una avería (v7.7)** — el TEST DE MOTOR daba
 `DUDOSO: movimiento asimétrico` en las TCUs que estaban pegadas a su límite. Es
 lo esperable: un seguidor a 0,1° del tope este no puede moverse más al este, así

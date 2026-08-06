@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '7.7'
+$VERSION_TOOLBOX = '7.8'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2970,6 +2970,13 @@ $btnLog.Location = New-Object System.Drawing.Point(825, 741)
 $btnLog.Size = New-Object System.Drawing.Size(110, 28)
 $form.Controls.Add($btnLog)
 
+# Limpiar la consola estaba solo en el menu del boton derecho, que no se ve.
+$btnLimpiar = New-Object System.Windows.Forms.Button
+$btnLimpiar.Text = 'Limpiar'
+$btnLimpiar.Location = New-Object System.Drawing.Point(476, 741)
+$btnLimpiar.Size = New-Object System.Drawing.Size(100, 28)
+$form.Controls.Add($btnLimpiar)
+
 $btnUsuarios = New-Object System.Windows.Forms.Button
 $btnUsuarios.Text = 'Usuarios...'
 $btnUsuarios.Location = New-Object System.Drawing.Point(586, 741)
@@ -2984,7 +2991,7 @@ $form.Controls.Add($btnInforme)
 
 $lblLog = New-Object System.Windows.Forms.Label
 $lblLog.Location = New-Object System.Drawing.Point(10, 746)
-$lblLog.Size = New-Object System.Drawing.Size(566, 20)
+$lblLog.Size = New-Object System.Drawing.Size(456, 20)
 $lblLog.ForeColor = [System.Drawing.Color]::Gray
 $form.Controls.Add($lblLog)
 
@@ -3149,7 +3156,7 @@ $miCopiarTodo.Add_Click({ if ($rtb.TextLength -gt 0) { try { [System.Windows.For
 $miGuardarLog = $menuCon.Items.Add('Guardar log...')
 $miGuardarLog.Add_Click({ $btnLog.PerformClick() })
 $miLimpiarCon = $menuCon.Items.Add('Limpiar consola')
-$miLimpiarCon.Add_Click({ $rtb.Clear() })
+$miLimpiarCon.Add_Click({ Limpiar-Consola })
 $rtb.ContextMenuStrip = $menuCon
 
 # ---------------------------------------------------------------------------
@@ -3195,6 +3202,13 @@ try {
     $script:LogFile = Join-Path $logDir ('tcu_toolbox_' + (Get-Date -Format 'yyyyMMdd') + '.log')
     $lblLog.Text = "Log automatico: $script:LogFile"
 } catch { $lblLog.Text = 'Log automatico no disponible (carpeta logs no escribible)' }
+
+# Vaciar la consola no toca el log de fichero: ahi queda todo, que es lo que
+# vale para reconstruir una jornada.
+function Limpiar-Consola {
+    $rtb.Clear()
+    Con "Consola limpiada. El log completo sigue en $(if ($script:LogFile) { $script:LogFile } else { '(sin log de fichero)' })." ([System.Drawing.Color]::Gainsboro)
+}
 
 function Con([string]$t, $color) {
     # Si el usuario tiene texto seleccionado no se le quita ni se le mueve la
@@ -6661,6 +6675,8 @@ $btnHCaja.Add_Click({ Lanzar {
 } })
 
 # ------------------------- log manual -------------------------
+$btnLimpiar.Add_Click({ Limpiar-Consola })
+
 $btnLog.Add_Click({
     $dlg = New-Object System.Windows.Forms.SaveFileDialog
     $dlg.Filter = 'Texto (*.txt)|*.txt'

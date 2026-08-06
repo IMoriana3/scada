@@ -1142,5 +1142,15 @@ Check 'motor: sentido invertido' $vInv.estado 'FALLA'
 Check 'motor: nombra la polaridad' ($vInv.detalle.Contains('INVERTIDO')) $true
 
 Write-Host ''
+Write-Host '== botones que existen y estan enganchados =='
+# la familia de fallos "ese boton estaba y ha desaparecido" / "existe pero no
+# hace nada": se comprueba en el texto, porque sin ventana no son invocables
+foreach ($b in @('btnLimpiar', 'btnUsuarios', 'btnHEsclavo', 'btnInforme', 'btnLog')) {
+    Check "boton ${b}: creado" ($src.Contains("`$$b = New-Object System.Windows.Forms.Button")) $true
+    Check "boton ${b}: con handler" ($src.Contains("`$$b.Add_Click(")) $true
+}
+Check 'limpiar: no borra el log de fichero' ($src.Contains('$rtb.Clear()') -and -not $src.Contains('Remove-Item $script:LogFile')) $true
+
+Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }
 else { Write-Host "$fallos PRUEBAS FALLIDAS"; exit 1 }
