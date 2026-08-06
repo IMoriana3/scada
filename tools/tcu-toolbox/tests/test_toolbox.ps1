@@ -1142,6 +1142,44 @@ Check 'motor: sentido invertido' $vInv.estado 'FALLA'
 Check 'motor: nombra la polaridad' ($vInv.detalle.Contains('INVERTIDO')) $true
 
 Write-Host ''
+Write-Host '== plan de firmware: que TCUs faltan y en que version estan =='
+$invFw = @(
+  [pscustomobject]@{NCU='1'; TCU=1; FW='v1.6.0 (map 1)'; Nota='OK'}
+  [pscustomobject]@{NCU='1'; TCU=2; FW='v1.4.3 (map 1)'; Nota='OK'}
+  [pscustomobject]@{NCU='1'; TCU=3; FW='v1.4.3 (map 1)'; Nota='OK'}
+  [pscustomobject]@{NCU='1'; TCU=7; FW='v1.5.1 (map 1)'; Nota='OK'}
+  [pscustomobject]@{NCU='2'; TCU=4; FW=''; Nota='GatewayTargetNoResponse (0x0B)'}
+)
+$gwFw = @{ '1' = @(@{puerto=503; ini=1; fin=40}); '2' = @(@{puerto=503; ini=1; fin=40}) }
+$pf = Plan-Firmware $invFw 'v1.6.0' $gwFw
+Check 'fw: tres pendientes' $pf.pendientes 3
+Check 'fw: una al dia' $pf.al_dia 1
+Check 'fw: una sin respuesta' (@($pf.sin_respuesta).Count) 1
+Check 'fw: hay detalle por TCU' (@($pf.detalle).Count) 3
+Check 'fw: el detalle dice que version tiene' (@($pf.detalle | Where-Object { $_.TCU -eq 2 })[0].FW) 'v1.4.3 (map 1)'
+Check 'fw: y a cual va' (@($pf.detalle | Where-Object { $_.TCU -eq 2 })[0].Objetivo) 'v1.6.0'
+Check 'fw: lleva el gateway' (@($pf.detalle | Where-Object { $_.TCU -eq 7 })[0].Puerto) '503'
+Check 'fw: la que ya esta al dia no sale' (@($pf.detalle | Where-Object { $_.TCU -eq 1 }).Count) 0
+Check 'fw: la muda tampoco' (@($pf.detalle | Where-Object { $_.TCU -eq 4 }).Count) 0
+Check 'fw: el detalle viene ordenado' ((@($pf.detalle | ForEach-Object { $_.TCU }) -join ',')) '2,3,7'
+# los tramos siguen siendo los del updater: 2-3 juntos y 7 aparte
+Check 'fw: dos tramos' (@($pf.tramos).Count) 2
+Check 'fw: el primero agrupa 2-3' (@($pf.tramos)[0].Hasta) 3
+# toda la flota al dia: sin detalle y sin tramos
+$pfOk = Plan-Firmware @([pscustomobject]@{NCU='1'; TCU=1; FW='v1.6.0'; Nota='OK'}) 'v1.6.0' $gwFw
+Check 'fw: nada pendiente, sin detalle' (@($pfOk.detalle).Count) 0
+
+Write-Host ''
+Write-Host '== via NCU sin respuesta no inventa OFFLINEs =='
+Check 'diag: se salta las TCUs si la NCU no contesta' ($src.Contains('no se sabe nada de sus $(@($tr.tcus).Count) TCUs')) $true
+Check 'diag: y dice que desmarcar' ($src.Contains("Desmarca 'via NCU' para preguntarles una a una por el gateway")) $true
+# "no contesta" y "rechaza" son diagnosticos distintos y hay que decir cual es
+Check 'conexion: distingue el rechazo' ($src.Contains('conexion RECHAZADA')) $true
+Check 'conexion: y el silencio' ($src.Contains('no contesta en 5 s')) $true
+try { Modbus-Conectar '127.0.0.1' 15099 2000; Check 'conexion: puerto cerrado avisa' 'sin excepcion' 'rechazada' }
+catch { Check 'conexion: puerto cerrado avisa' ("$_".Contains('RECHAZADA') -or "$_".Contains('no contesta')) $true }
+
+Write-Host ''
 Write-Host '== los usuarios se guardan de verdad =='
 # El fallo de la v7.4: el alta creaba el usuario, no lo guardaba, y al reabrir
 # lo volvia a pedir. Aqui se hace el viaje entero: crear, guardar, releer del

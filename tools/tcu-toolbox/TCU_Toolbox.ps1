@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '8.0'
+$VERSION_TOOLBOX = '8.1'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -992,7 +992,7 @@ function Seguimiento-Filas {
 function Plan-Firmware([array]$inv, [string]$objetivo, [hashtable]$gwsPorNcu) {
     $obj = "$objetivo".Trim()
     if (-not $obj) { throw 'indica la version de firmware objetivo (p. ej. v1.6.0)' }
-    $pend = @{}; $mudas = @(); $alDia = 0
+    $pend = @{}; $mudas = @(); $alDia = 0; $detalle = @()
     foreach ($f in $inv) {
         $tcu = 0
         if (-not [int]::TryParse("$($f.TCU)", [ref]$tcu)) { continue }
@@ -1007,6 +1007,9 @@ function Plan-Firmware([array]$inv, [string]$objetivo, [hashtable]$gwsPorNcu) {
         $k = "$ncu|$puerto"
         if (-not $pend.ContainsKey($k)) { $pend[$k] = @() }
         $pend[$k] += $tcu
+        # el tramo sirve para pegarlo en el updater, pero para saber QUE equipos
+        # faltan y en que version estan hace falta la lista TCU a TCU
+        $detalle += [pscustomobject]@{NCU=$ncu; TCU=$tcu; Puerto=$puerto; FW=$fw; Objetivo=$obj}
     }
     $filas = @()
     foreach ($k in @($pend.Keys | Sort-Object { [int]("0" + ($_ -split '\|')[0]) }, { $_ })) {
@@ -1019,7 +1022,8 @@ function Plan-Firmware([array]$inv, [string]$objetivo, [hashtable]$gwsPorNcu) {
         }
     }
     $totalPend = 0; foreach ($k in $pend.Keys) { $totalPend += @($pend[$k]).Count }
-    return @{tramos=$filas; pendientes=$totalPend; al_dia=$alDia; sin_respuesta=$mudas}
+    $detalle = @($detalle | Sort-Object { [int]("0" + "$($_.NCU)") }, { [int]$_.TCU })
+    return @{tramos=$filas; pendientes=$totalPend; al_dia=$alDia; sin_respuesta=$mudas; detalle=$detalle}
 }
 
 # Tramos consecutivos de una lista ordenada de TCUs: @(1,2,3,5) -> (1-3),(5-5)
@@ -1223,8 +1227,20 @@ function Modbus-Conectar([string]$ip, [int]$puerto, [int]$timeoutMs) {
     Modbus-Cerrar
     $c = New-Object System.Net.Sockets.TcpClient
     $ar = $c.BeginConnect($ip, $puerto, $null, $null)
-    if (-not $ar.AsyncWaitHandle.WaitOne(5000)) { $c.Close(); throw "Sin conexion TCP a ${ip}:${puerto}" }
-    $c.EndConnect($ar)
+    # Distinguir "no contesta" de "rechaza" ahorra media hora de diagnostico: lo
+    # primero es un equipo apagado o un puerto filtrado; lo segundo es un equipo
+    # vivo que no tiene nada escuchando ahi (o que ya tiene la conexion cogida).
+    if (-not $ar.AsyncWaitHandle.WaitOne(5000)) {
+        $c.Close(); throw "Sin conexion TCP a ${ip}:${puerto}: no contesta en 5 s (equipo apagado, IP mal o puerto filtrado)"
+    }
+    try { $c.EndConnect($ar) }
+    catch [System.Net.Sockets.SocketException] {
+        $c.Close()
+        if ($_.Exception.SocketErrorCode -eq 'ConnectionRefused') {
+            throw "Sin conexion TCP a ${ip}:${puerto}: conexion RECHAZADA. El equipo esta vivo pero no tiene nada escuchando en ese puerto, o ya tiene la unica conexion cogida por otro programa (el updater)"
+        }
+        throw "Sin conexion TCP a ${ip}:${puerto}: $($_.Exception.Message)"
+    }
     $c.NoDelay = $true
     $script:Tcp = $c
     $script:Stream = $c.GetStream()
@@ -4474,6 +4490,14 @@ function Diag-Correr {
             $script:UltimoDiag += $dh
             if ($dh.Salud -ne 'OK') { Con ("{0}{1}  {2,-8} {3}" -f $(if ($dh.NCU) { "NCU$($dh.NCU) " } else { '' }), $dh.TCU, $dh.Salud, $dh.Alarmas) ([System.Drawing.Color]::Orange) }
         }
+        # Si la NCU no contesta en 502 no sabemos NADA de sus TCUs: pintarlas
+        # todas como OFFLINE es mentira y llena la tabla de ruido. Se dice una
+        # vez y se pasa a la siguiente NCU.
+        if ($null -eq $dm) {
+            $eti = $(if ($null -ne $tr.ncu) { "NCU$($tr.ncu)" } else { $tr.ip })
+            Con "$eti : no se ha podido leer el bloque compacto en ${PUERTO_NCU}, asi que no se sabe nada de sus $(@($tr.tcus).Count) TCUs. Desmarca 'via NCU' para preguntarles una a una por el gateway." ([System.Drawing.Color]::Salmon)
+            continue
+        }
         foreach ($tcu in $tr.tcus) {
             if (Chequear-Cancelado) { break }
             $d = $null
@@ -5632,6 +5656,7 @@ $btnPSeg.Add_Click({
 # La toolbox no actualiza firmware (eso lo hace el TCU Updater de Sunner):
 # planifica la campana desde el inventario y verifica el resultado.
 $script:PlanFw = @()
+$script:PlanFwDetalle = @()
 $btnFwPlan.Add_Click({ Lanzar {
     if (@($script:UltimoInv).Count -eq 0) {
         [void][System.Windows.Forms.MessageBox]::Show("Haz primero un INVENTARIO en la pestana Flota (puede ser de la planta completa).`r`nEl plan se calcula con esos datos, sin volver a leer nada.", 'Falta el inventario')
@@ -5648,6 +5673,7 @@ $btnFwPlan.Add_Click({ Lanzar {
     }
     $plan = Plan-Firmware $script:UltimoInv $txtFwObj.Text $gws
     $script:PlanFw = @($plan.tramos)
+    $script:PlanFwDetalle = @($plan.detalle)
     $lvFW.Items.Clear()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "PLAN DE FIRMWARE hacia $($txtFwObj.Text.Trim()): $($plan.pendientes) TCUs pendientes, $($plan.al_dia) ya al dia, $(@($plan.sin_respuesta).Count) sin respuesta en el inventario" ([System.Drawing.Color]::SteelBlue)
@@ -5666,6 +5692,22 @@ $btnFwPlan.Add_Click({ Lanzar {
         $item.ForeColor = [System.Drawing.Color]::DarkOrange
         $lvFW.Items.Add($item) | Out-Null
         Con ("  NCU{0,-3} {1,-15} GW {2}   TCUs {3}-{4}  ({5})" -f $t.NCU, $ips["$($t.NCU)"], $t.Puerto, $t.Desde, $t.Hasta, $t.TCUs) ([System.Drawing.Color]::Gainsboro)
+    }
+    # que equipos faltan y en que version estan: es la pregunta que se hace uno
+    # al abrir esta pestana, y el plan por tramos no la contestaba
+    $detalle = @($plan.detalle)
+    if ($detalle.Count -gt 0) {
+        Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
+        $porVer = @{}
+        foreach ($d in $detalle) { $porVer["$($d.FW)"] = 1 + [int]$porVer["$($d.FW)"] }
+        Con ("TCUs que NO estan en $($txtFwObj.Text.Trim()): " + (@($porVer.Keys | Sort-Object | ForEach-Object { "$($porVer[$_]) en $_" }) -join ' | ')) ([System.Drawing.Color]::Orange)
+        foreach ($d in $detalle) {
+            Con ("  NCU{0,-3} TCU {1,3}   {2}  ->  {3}" -f $d.NCU, $d.TCU, $d.FW, $d.Objetivo) ([System.Drawing.Color]::Orange)
+            $itemD = New-Object System.Windows.Forms.ListViewItem("$($d.NCU)")
+            foreach ($c in @($ips["$($d.NCU)"], $d.Puerto, $d.TCU, $d.TCU, 1, "pendiente: tiene $($d.FW), objetivo $($d.Objetivo)")) { [void]$itemD.SubItems.Add("$c") }
+            $itemD.ForeColor = [System.Drawing.Color]::Firebrick
+            $lvFW.Items.Add($itemD) | Out-Null
+        }
     }
     if ($plan.pendientes -gt 0) {
         $hSec = [math]::Round(($plan.pendientes * $minTcu) / 60.0, 1)
@@ -5806,6 +5848,13 @@ $btnFwCsv.Add_Click({
     if ($dlg.ShowDialog() -eq 'OK') {
         $script:PlanFw | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8 -Delimiter ';'
         Con "Plan exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
+        # el detalle por TCU va en su propio fichero: son dos cosas distintas,
+        # los tramos se pegan en el updater y la lista es para seguimiento
+        if (@($script:PlanFwDetalle).Count -gt 0) {
+            $fd = [System.IO.Path]::ChangeExtension($dlg.FileName, $null) + '_pendientes.csv'
+            $script:PlanFwDetalle | Export-Csv $fd -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+            Con "TCUs pendientes una a una: $fd  ($(@($script:PlanFwDetalle).Count) equipos)" ([System.Drawing.Color]::SteelBlue)
+        }
     }
 })
 

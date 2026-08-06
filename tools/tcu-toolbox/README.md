@@ -37,6 +37,26 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
 
+**Qué TCUs faltan por actualizar (v8.1)** — el plan de firmware agrupaba las
+pendientes en **tramos** (`NCU + gateway + desde-hasta`), que es lo que se pega en
+el updater, pero no decía qué equipos concretos faltaban ni en qué versión
+estaban. Ahora, además de los tramos, lista **una fila por TCU pendiente** con su
+versión actual (`pendiente: tiene v1.4.3, objetivo v1.6.0`) y en consola sale el
+reparto por versión (`42 en v1.4.3 | 3 en v1.5.1`). El CSV saca un segundo
+fichero `_pendientes.csv` con esa lista, que es la que sirve para el seguimiento.
+
+**«No contesta» no es lo mismo que «rechaza» (v8.1)** — un fallo de conexión TCP
+decía solo `Sin conexion TCP a 192.168.4.10:502`. Ahora distingue los dos casos,
+que llevan a sitios opuestos: **no contesta en 5 s** es equipo apagado, IP mal o
+puerto filtrado; **conexión rechazada** es un equipo vivo que no tiene nada
+escuchando en ese puerto, o que ya tiene la única conexión cogida por otro
+programa (el updater, típicamente).
+
+**Y `via NCU` deja de inventarse OFFLINEs (v8.1)** — si la NCU no contesta en el
+puerto 502, no sabemos nada de sus TCUs; pintarlas todas como OFFLINE es mentira
+y llena la tabla de ruido. Ahora se dice una vez, con el número de TCUs afectadas
+y qué hacer (desmarcar *via NCU* para preguntarles una a una por el gateway).
+
 **El alta de usuarios no guardaba nada (v8.0)** — fallo de la v7.4, y de los
 buenos: creabas el administrador, la ventana se cerraba y no pasaba nada; al
 volver a abrir, te lo pedía otra vez.
