@@ -1151,6 +1151,48 @@ Check 'esclavo: y lo incrementa' ($bus.Contains('$iEnNcu++')) $true
 Check 'esclavo: uno por NCU' ($bus.Contains('$iEnNcu = 0')) $true
 
 Write-Host ''
+Write-Host '== las HSUs que faltan tambien se pintan =='
+# No aparecer no es informacion: igual que con las TCUs, la que no comunica
+# tiene que salir en la tabla diciendolo.
+$fN = @{ncu='11'; hsus=1}
+$ff1 = @(Hsu-Faltantes $fN 0)
+Check 'faltan: una fila por la que no sale' ($ff1.Count) 1
+Check 'faltan: con su NCU' ($ff1[0].etiqueta) 'NCU11 - HSU?'
+Check 'faltan: y como OFFLINE' ($ff1[0].salud) 'OFFLINE'
+Check 'faltan: dice que nunca ha comunicado' ($ff1[0].texto.Contains('nunca ha comunicado')) $true
+Check 'faltan: y cuantas deberia haber' ($ff1[0].texto.Contains('lleva 1')) $true
+# si la NCU no contesta, el motivo es otro
+$ff2 = @(Hsu-Faltantes $fN 0 'la NCU no contesta en el puerto 502')
+Check 'faltan: distingue que la NCU no conteste' ($ff2[0].texto.Contains('no contesta en el puerto 502')) $true
+# la NCU15 lleva dos: si sale una, falta una
+Check 'faltan: dos esperadas y una hallada' ((@(Hsu-Faltantes @{ncu='15'; hsus=2} 1)).Count) 1
+Check 'faltan: dos esperadas y dos halladas' ((@(Hsu-Faltantes @{ncu='15'; hsus=2} 2)).Count) 0
+# sin dato de topologia no se inventa ninguna
+Check 'faltan: sin topologia, ninguna' ((@(Hsu-Faltantes @{ncu='4'; hsus=0} 0)).Count) 0
+Check 'faltan: y si hay mas de las dichas tampoco' ((@(Hsu-Faltantes @{ncu='4'; hsus=1} 3)).Count) 0
+# no entran en el desplegable ni en el cuadre: no se puede operar con ellas
+$iBus2 = $src.IndexOf('$btnHBuscar.Add_Click'); $fBus2 = $src.IndexOf('# Barrido de esclavos')
+$bus2 = $src.Substring($iBus2, $fBus2 - $iBus2)
+Check 'faltan: no van a HsusPlanta' ($bus2.Contains('$script:HsusPlanta += ,@{etiqueta=$ff')) $false
+Check 'faltan: pero si a la tabla' ($bus2.Contains('$lvH.Items.Add($itemF)')) $true
+
+Write-Host ''
+Write-Host '== la barra de avance en el barrido en paralelo =='
+# EndInvoke en orden bloquea hasta el final: la barra se quedaba en 0/754 todo
+# el barrido. Ahora se recogen segun acaban y cada una avisa.
+Check 'avance: Paralelo-Ejecutar admite aviso' ($src.Contains('[scriptblock]$alTerminar = $null)')) $true
+Check 'avance: recoge segun acaban' ($src.Contains('if (-not $e.ar.IsCompleted) { continue }')) $true
+Check 'avance: y llama al aviso' ($src.Contains('if ($alTerminar) { & $alTerminar $e.tarea }')) $true
+Check 'avance: el diagnostico lo usa' ($src.Contains('Prog-Paso @($t.tcus).Count; [System.Windows.Forms.Application]::DoEvents()')) $true
+# lo de verdad: que el callback se llame una vez por tarea
+$hechas = @{ n = 0; tcus = 0 }
+$fake = @(@{ncu='1'; tcus=@(1,2,3)}, @{ncu='2'; tcus=@(1,2)})
+$cb = { param($t) $hechas.n++; $hechas.tcus += @($t.tcus).Count }
+foreach ($t in $fake) { & $cb $t }
+Check 'avance: una llamada por NCU' ($hechas.n) 2
+Check 'avance: y suma sus TCUs' ($hechas.tcus) 5
+
+Write-Host ''
 Write-Host '== cuadre de HSUs contra la topologia =='
 # "he encontrado 9" no dice nada; "falta la de NCU15" si. La topologia sabe
 # cuantas deberia haber (columna RSU del Excel); Ayora tiene 10 y la NCU15
@@ -1444,8 +1486,8 @@ Check 'mediana: par' (Mediana @(1,3,5,7)) 4
 Check 'mediana: uno solo' (Mediana @(9)) 9
 Check 'mediana: vacia' (Mediana @()) $null
 Check 'mediana: aguanta que haya rotos' (Mediana @(26000,26100,25900,12000,26050)) 26000
-function BatFila($ncu,$tcu,$v,$i,$soc,$soh,$tb,$al='',$salud='OK') {
-  return [pscustomobject]@{NCU=$ncu; TCU=$tcu; Salud=$salud; Vbat_mV=$v; Ibat_mA=$i; SoC=$soc; SoH=$soh; Tbat_C=$tb; Alarmas=$al}
+function BatFila($ncu,$tcu,$v,$i,$soc,$soh,$tb,$al='',$salud='OK',$dia=1) {
+  return [pscustomobject]@{NCU=$ncu; TCU=$tcu; Salud=$salud; Vbat_mV=$v; Ibat_mA=$i; SoC=$soc; SoH=$soh; Tbat_C=$tb; Alarmas=$al; Dia=$dia}
 }
 # flota sana: 20 TCUs a 26 V, 90 %
 $flota = @()
@@ -1480,9 +1522,9 @@ Check 'bat: la fila de la NCU no entra' (@($rG | Where-Object { "$($_.TCU)" -eq 
 Check 'bat: diagnostico vacio no revienta' (@(Bat-Auditar @()).Count) 0
 # El bloque de la NCU trae tension de panel y corriente de entrada: con ellas se
 # separa "el panel no da" de "da pero no llega", que mandan a sitios distintos.
-function BatPanel($tcu, $vp, $ie, $soc, $ibat = 5) {
+function BatPanel($tcu, $vp, $ie, $soc, $ibat = 5, $dia = 1) {
     return [pscustomobject]@{NCU='9'; TCU=$tcu; Salud='OK'; Alarmas=''; SoC=$soc; SoH=95
-        Vbat_mV=24000; Ibat_mA=$ibat; Tbat_C='22,0'; Vpanel_mV=$vp; Ientrada_mA=$ie}
+        Vbat_mV=24000; Ibat_mA=$ibat; Tbat_C='22,0'; Vpanel_mV=$vp; Ientrada_mA=$ie; Dia=$dia}
 }
 $rP = @(Bat-Auditar (@($flota) + @(BatPanel 30 0 0 60)))
 Check 'bat: panel sin tension' (@($rP | Where-Object { $_.Tipo -eq 'PANEL SIN TENSION' }).Count) 1
@@ -1500,8 +1542,24 @@ $rL = @(Bat-Auditar (@($flota) + @(BatPanel 33 0 0 100)))
 Check 'bat: con la bateria llena el panel a 0 es normal' (@($rL | Where-Object { $_.TCU -eq 33 }).Count) 0
 # sin esos datos (modo directo) sigue el aviso generico de siempre
 $rG = @(Bat-Auditar (@($flota) + @([pscustomobject]@{NCU='9'; TCU=34; Salud='OK'; Alarmas=''; SoC=60; SoH=95
-    Vbat_mV=24000; Ibat_mA=5; Tbat_C='22,0'; Vpanel_mV=''; Ientrada_mA=''})))
+    Vbat_mV=24000; Ibat_mA=5; Tbat_C='22,0'; Vpanel_mV=''; Ientrada_mA=''; Dia=1})))
 Check 'bat: sin panel ni entrada, el aviso de antes' (@($rG | Where-Object { $_.Tipo -eq 'NO CARGA' }).Count) 1
+# DE NOCHE no se mira nada de eso: todos los paneles estan a 0 V y marcaba media
+# planta. Es lo que se vio en el primer barrido nocturno.
+$rNoche = @(Bat-Auditar (@($flota) + @(BatPanel 40 0 0 64 5 0)))
+Check 'bat: de noche el panel a 0 no dice nada' (@($rNoche | Where-Object { $_.TCU -eq 40 -and $_.Tipo -like '*PANEL*' }).Count) 0
+Check 'bat: ni el no carga' (@($rNoche | Where-Object { $_.TCU -eq 40 -and $_.Tipo -eq 'NO CARGA' }).Count) 0
+# de dia el mismo caso si avisa
+Check 'bat: de dia el mismo caso si' (@(Bat-Auditar (@($flota) + @(BatPanel 41 0 0 64 5 1)) | Where-Object { $_.Tipo -eq 'PANEL SIN TENSION' }).Count) 1
+# sin saber si es de dia, se calla: mejor eso que un aviso falso
+$rSin = @(Bat-Auditar (@($flota) + @([pscustomobject]@{NCU='9'; TCU=42; Salud='OK'; Alarmas=''; SoC=64; SoH=95
+    Vbat_mV=24000; Ibat_mA=5; Tbat_C='22,0'; Vpanel_mV=0; Ientrada_mA=0})))
+Check 'bat: sin saber si es de dia, calla' (@($rSin | Where-Object { $_.TCU -eq 42 -and ($_.Tipo -like '*PANEL*' -or $_.Tipo -eq 'NO CARGA') }).Count) 0
+# el bit 7 del MSR es el que lo dice, en los dos caminos
+Check 'bat: el dia sale del bit 7 del MSR' ($src.Contains('Dia = (($msr -shr 7) -band 1)')) $true
+Check 'bat: y tambien en el modo directo' ($src.Contains('Dia = (($r1[0] -shr 7) -band 1)')) $true
+# y el resumen no mezcla TCUs con avisos
+Check 'bat: el resumen dice cuantos avisos' ($src.Contains('TCUs con algo que mirar, $nAv')) $true
 # y los cuatro registros salen del bloque compat, no de direcciones inventadas
 $iC2 = $src.IndexOf('function Ncu-DiagCompat'); $fC2 = $src.IndexOf('function Ncu-HsuCompat')
 $com2 = $src.Substring($iC2, $fC2 - $iC2)
@@ -1927,8 +1985,27 @@ Check 'escribir: ordenadas por NCU y TCU' (@($mix | ForEach-Object { "$($_.ncu)/
 Check 'escribir: hay boton' ($src.Contains("btnAudEscr.Text = 'Escribir...'")) $true
 Check 'escribir: con handler' ($src.Contains('$btnAudEscr.Add_Click')) $true
 Check 'escribir: se habilita al auditar' ($src.Contains('$btnAudEscr.Enabled = (@(Aud-ConDesviacion')) $true
-Check 'escribir: avisa si el rango pilla buenas' ($src.Contains('A las otras se les reescribe el mismo preset')) $true
-Check 'escribir: y si son de varias NCUs' ($src.Contains('El rango vale para UNA')) $true
+# Un rango va de la primera a la ultima: con TCUs sueltas escribiria sobre las
+# buenas de en medio. Solo se usa si son un tramo seguido de UNA NCU.
+Check 'escribir: seguidas si son consecutivas' (Aud-Consecutivas @(@{ncu='12'; tcu=39}, @{ncu='12'; tcu=40}, @{ncu='12'; tcu=41})) $true
+Check 'escribir: una sola tambien' (Aud-Consecutivas @(@{ncu='12'; tcu=39})) $true
+Check 'escribir: con hueco no' (Aud-Consecutivas @(@{ncu='12'; tcu=39}, @{ncu='12'; tcu=41})) $false
+Check 'escribir: de dos NCUs no' (Aud-Consecutivas @(@{ncu='12'; tcu=39}, @{ncu='13'; tcu=40})) $false
+Check 'escribir: sin nada no' (Aud-Consecutivas @()) $false
+# y el CSV lleva una linea por TCU y variable, con su NCU
+$pr = @(@{nombre='41111 max_tilt_west_r1 [deg]'; texto='55'}, @{nombre='41068 safe_pos_options [hex]'; texto='0x0A00'})
+$csv = @(Aud-CsvCorreccion @(@{ncu='14'; tcu=22}, @{ncu='12'; tcu=39}) $pr)
+Check 'escribir: cabecera con NCU' ($csv[0]) 'NCU;TCU;variable;valor'
+Check 'escribir: dos TCUs por dos variables' ($csv.Count) 5
+Check 'escribir: la primera linea' ($csv[1]) '14;22;41111 max_tilt_west_r1 [deg];55'
+Check 'escribir: y el hexadecimal tal cual' ($csv[2]) '14;22;41068 safe_pos_options [hex];0x0A00'
+# lo que genera tiene que poder volver a leerse
+$vuelta = Parse-CsvPorTcu $csv
+Check 'escribir: el CSV que hace se puede cargar' (@($vuelta.jobs).Count) 4
+Check 'escribir: sin errores' (@($vuelta.errores).Count) 0
+Check 'escribir: y conserva la NCU' (@($vuelta.jobs)[0].ncu) '14'
+Check 'escribir: no pone rango si hay huecos' ($src.Contains('NO se pone rango')) $true
+Check 'escribir: y deja el CSV hecho' ($src.Contains("Pulsa 'CSV por TCU...' y cargalo")) $true
 
 Check 'auditoria: no ensucia el CSV'($src.Contains('$script:UltimaAud += [pscustomobject]@{NCU=$etNcu; TCU=[int]$tcu; Variable=$vacio')) $false
 
