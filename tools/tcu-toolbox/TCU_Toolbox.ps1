@@ -25,12 +25,13 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '9.2'
+$VERSION_TOOLBOX = '9.3'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
 $PUERTO_NCU = 502
 $UNIT_NCU   = 1
+$RELOJ_TOL_S = 120
 
 # ---------------------------------------------------------------------------
 #  Plantas: SOLO las de los ficheros cargados (plantas/ + plantas.json/csv +
@@ -1236,6 +1237,16 @@ $NCU_HSU_AL1 = @{
   0='fallo sensor viento'; 1='fallo sensor nieve'; 6='ALARMA NIEVE'; 7='ALARMA INUNDACION'
   9='ALARMA VIENTO'; 15='fallo com. HSU'
 }
+# Nota del reloj de una NCU: vacia si va en hora, y con el desvio si no. Pura.
+function Reloj-Nota($ns) {
+    if (-not $ns -or "$($ns.fecha)" -eq '') { return @() }
+    if ($null -eq $ns.desvio) { return @() }
+    if ($ns.desvio -le $RELOJ_TOL_S) { return @() }
+    $d = [double]$ns.desvio
+    $txt = $(if ($d -lt 3600) { "{0:0} min" -f ($d / 60) } elseif ($d -lt 172800) { "{0:0.#} h" -f ($d / 3600) } else { "{0:0} dias" -f ($d / 86400) })
+    return @("RELOJ NCU DESVIADO $txt (marca $($ns.fecha))")
+}
+
 function Ncu-HsuCompat {
     $wclk = FC03-Leer $UNIT_NCU (Dir-Trama 30104) 2
     $reloj = ([long]$wclk[1] -shl 16) -bor [long]$wclk[0]
@@ -1284,12 +1295,16 @@ function Ncu-Salud {
     $salud = 'OK'
     if (($principal -band 0x30) -or ($din -band 0x2000)) { $salud = 'ALARMA' }       # GW1/GW2 caidos o seta
     elseif (($din -band 0x3) -or ($principal -band 0x1)) { $salud = 'AVISO' }        # UPS/bateria
-    $fecha = ''
+    $fecha = ''; $desvio = $null
     try {
         $epoch = ([long]$w[5] -shl 16) -bor [long]$w[4]
-        if ($epoch -gt 1000000000) { $fecha = [DateTimeOffset]::FromUnixTimeSeconds($epoch).UtcDateTime.ToString('yyyy-MM-dd HH:mm:ss') + ' UTC' }
+        if ($epoch -gt 1000000000) {
+            $utc = [DateTimeOffset]::FromUnixTimeSeconds($epoch).UtcDateTime
+            $fecha = $utc.ToString('yyyy-MM-dd HH:mm:ss') + ' UTC'
+            $desvio = [Math]::Abs(((Get-Date).ToUniversalTime() - $utc).TotalSeconds)
+        }
     } catch {}
-    return @{salud=$salud; alarmas=$alarmas; fecha=$fecha; din=$din; principal=$principal}
+    return @{salud=$salud; alarmas=$alarmas; fecha=$fecha; desvio=$desvio; din=$din; principal=$principal}
 }
 
 # Direccion: se envia el numero del PDF tal cual (asi funciona modbus-utils).
@@ -3199,6 +3214,22 @@ $btnInforme.Location = New-Object System.Drawing.Point(700, 741)
 $btnInforme.Size = New-Object System.Drawing.Size(118, 28)
 $form.Controls.Add($btnInforme)
 
+# Barra de avance: comparte sitio con el aviso del log, que solo estorba
+# mientras hay una operacion en curso. Se muestra al empezar y se esconde al
+# acabar, asi no crece la ventana.
+$pbProg = New-Object System.Windows.Forms.ProgressBar
+$pbProg.Location = New-Object System.Drawing.Point(10, 745)
+$pbProg.Size = New-Object System.Drawing.Size(190, 18)
+$pbProg.Minimum = 0; $pbProg.Maximum = 1000
+$pbProg.Visible = $false
+$form.Controls.Add($pbProg)
+
+$lblProg = New-Object System.Windows.Forms.Label
+$lblProg.Location = New-Object System.Drawing.Point(208, 746)
+$lblProg.Size = New-Object System.Drawing.Size(148, 20)
+$lblProg.Visible = $false
+$form.Controls.Add($lblProg)
+
 $lblLog = New-Object System.Windows.Forms.Label
 $lblLog.Location = New-Object System.Drawing.Point(10, 746)
 $lblLog.Size = New-Object System.Drawing.Size(346, 20)
@@ -3289,9 +3320,14 @@ function Lv-Menu($lv, [int]$col) {
     $e = Lv-Estado $lv
     $m = New-Object System.Windows.Forms.ContextMenuStrip
     $nombre = $(if ($col -lt @($e.cab).Count) { $e.cab[$col] } else { "columna $col" })
-    $mAsc = $m.Items.Add("Ordenar por '$nombre' A-Z")
+    # "A-Z" en una columna de numeros no dice nada: se mira lo que hay dentro
+    $vals = @(@($e.orig) | ForEach-Object { if ($col -lt $_.SubItems.Count) { Lv-Clave $_.SubItems[$col].Text } else { [double]::NaN } })
+    $esNum = (@($vals).Count -gt 0) -and (@($vals | Where-Object { [double]::IsNaN($_) }).Count -eq 0)
+    $rotAsc = $(if ($esNum) { "Ordenar por '$nombre' de menor a mayor" } else { "Ordenar por '$nombre' A-Z" })
+    $rotDes = $(if ($esNum) { "Ordenar por '$nombre' de mayor a menor" } else { "Ordenar por '$nombre' Z-A" })
+    $mAsc = $m.Items.Add($rotAsc)
     $mAsc.Add_Click({ Lv-Ordenar $lv $col $true }.GetNewClosure())
-    $mDes = $m.Items.Add("Ordenar por '$nombre' Z-A")
+    $mDes = $m.Items.Add($rotDes)
     $mDes.Add_Click({ Lv-Ordenar $lv $col $false }.GetNewClosure())
     [void]$m.Items.Add('-')
     # valores distintos de la columna, sobre la lista COMPLETA
@@ -3476,6 +3512,48 @@ function Set-UIOcupada([bool]$ocupada) {
 
 # Envuelve una operacion larga: guarda contra reentrada (DoEvents), habilita
 # CANCELAR, y cierra la conexion Modbus pase lo que pase.
+# Texto del avance. Se separa para poder probarlo: el calculo de lo que queda
+# es lo unico que puede mentir. Pura.
+function Prog-Texto([int]$hechos, [int]$total, [double]$segundos) {
+    if ($total -le 0) { return '' }
+    $pc = [Math]::Min(100, [Math]::Round(100.0 * $hechos / $total))
+    $t = "$hechos/$total  $pc%"
+    if ($hechos -lt 3 -or $segundos -le 0) { return $t }     # aun no hay ritmo fiable
+    $restan = ($segundos / $hechos) * ($total - $hechos)
+    if ($restan -lt 1) { return $t }
+    $q = $(if ($restan -lt 90) { "{0:0} s" -f $restan }
+           elseif ($restan -lt 5400) { "{0:0} min" -f ($restan / 60) }
+           else { (("{0:0.#}" -f ($restan / 3600)) -replace '\.', ',') + ' h' })
+    return "$t  ~$q"
+}
+
+$script:ProgTotal = 0; $script:ProgHechos = 0; $script:ProgIni = $null; $script:ProgUltimo = -1
+function Prog-Iniciar([int]$total) {
+    $script:ProgTotal = $total; $script:ProgHechos = 0; $script:ProgUltimo = -1
+    $script:ProgIni = Get-Date
+    if ($total -le 0) { return }
+    $pbProg.Value = 0; $pbProg.Visible = $true; $lblProg.Visible = $true
+    $lblProg.Text = "0/$total"
+    $lblLog.Visible = $false
+}
+function Prog-Paso([int]$n = 1) {
+    if ($script:ProgTotal -le 0) { return }
+    $script:ProgHechos += $n
+    # repintar en cada lectura cuesta mas que la propia lectura: solo cuando
+    # cambia la decima de porcentaje
+    $mil = [int](1000.0 * [Math]::Min(1.0, $script:ProgHechos / [double]$script:ProgTotal))
+    if ($mil -eq $script:ProgUltimo) { return }
+    $script:ProgUltimo = $mil
+    $pbProg.Value = $mil
+    $seg = 0.0
+    if ($script:ProgIni) { $seg = ((Get-Date) - $script:ProgIni).TotalSeconds }
+    $lblProg.Text = Prog-Texto $script:ProgHechos $script:ProgTotal $seg
+}
+function Prog-Fin {
+    $script:ProgTotal = 0
+    $pbProg.Visible = $false; $lblProg.Visible = $false; $lblLog.Visible = $true
+}
+
 function Lanzar([scriptblock]$accion) {
     if ($script:Ocupado) { Con 'Hay una operacion en curso (usa CANCELAR para abortarla).' ([System.Drawing.Color]::Orange); return }
     $script:Ocupado = $true; $script:Cancelar = $false; $script:NcuLog = ''
@@ -3484,6 +3562,7 @@ function Lanzar([scriptblock]$accion) {
     catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon) }
     finally {
         Modbus-Cerrar
+        Prog-Fin
         $script:Ocupado = $false
         Set-UIOcupada $false
     }
@@ -3832,6 +3911,7 @@ function Escribir-EnTcus($tcus) {
     $ok = 0
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Escribiendo $($vars.Count) variables en $nTcus TCUs  ($donde)" ([System.Drawing.Color]::SteelBlue)
+    Prog-Iniciar ($nTcus * @($vars).Count)
     foreach ($tr in $trabajos) {
         $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
     if ($script:Cancelar) { break }
@@ -3896,6 +3976,7 @@ function Escribir-EnTcus($tcus) {
                     }
                 }
             }
+            Prog-Paso @($vars).Count
             if ($script:Cancelar -and -not $hecho) { break }
             if (-not $hecho) {
                 [void]$script:Fallidas.Add(@{ncu=$(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' }); tcu=[int]$tcu})
@@ -4196,6 +4277,8 @@ $btnLeer.Add_Click({ Lanzar {
     } else {
         Con "Leyendo $($defs.Count) variable(s) en $(Eti-Rango $tcus)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     }
+    $nLeerTot = 0; foreach ($tr in $trabajos) { $nLeerTot += @($tr.tcus).Count }
+    Prog-Iniciar ($nLeerTot * @($defs).Count)
     $valores = @{}
     foreach ($d in $defs) { $valores[$d.nombre] = @{} }
     foreach ($tr in $trabajos) {
@@ -4288,6 +4371,7 @@ $btnLeer.Add_Click({ Lanzar {
             if ($errores -gt 0) { $item.ForeColor = [System.Drawing.Color]::Firebrick }
             $lvL.Items.Add($item) | Out-Null
             $script:UltimaLectura += [pscustomobject]$fila
+            Prog-Paso @($defs).Count
             [System.Windows.Forms.Application]::DoEvents()
         }
     }
@@ -4944,6 +5028,8 @@ function Diag-Correr {
     }
     $nOk = 0; $nAviso = 0; $nAlarma = 0; $nOff = 0
     $nHOk = 0; $nHMal = 0        # las HSUs van aparte de la cuenta de TCUs
+    $nDiagTot = 0; foreach ($tr in $trabajos) { $nDiagTot += @($tr.tcus).Count }
+    Prog-Iniciar $nDiagTot
     # Planta completa por el bloque compacto: cada NCU es una conexion propia y
     # no compiten, asi que van a la vez. Es la diferencia entre una hora y unos
     # minutos. Si algo va mal, se desmarca 'en paralelo' y vuelve al modo serie.
@@ -5007,7 +5093,9 @@ function Diag-Correr {
         $dn = [pscustomobject]@{
             NCU="$($tr.ncu)"; TCU='NCU'; Salud=$(if ($ns) { $ns.salud } else { 'AVISO' }); Modo='-'
             Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''
-            Alarmas=$(if ($ns) { ((@($ns.alarmas) + $(if ($ns.fecha) { @("reloj NCU: $($ns.fecha)") } else { @() })) -join '; ') } else { "NCU sin respuesta en ${PUERTO_NCU}: $nsErr" })
+            # El reloj salia SIEMPRE en la columna de alarmas y parecia un
+            # problema. Solo se menciona si de verdad esta desviado.
+            Alarmas=$(if ($ns) { ((@($ns.alarmas) + $(Reloj-Nota $ns)) -join '; ') } else { "NCU sin respuesta en ${PUERTO_NCU}: $nsErr" })
             main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
         }
         $itemN = New-Object System.Windows.Forms.ListViewItem("$($tr.ncu)")
@@ -5081,6 +5169,7 @@ function Diag-Correr {
             $lvG.Items.Add($item) | Out-Null
             $script:UltimoDiag += $d
             if ("$($d.TCU)" -match '^\d+$') { Cierre-MarcarSiEsta $etiquetaNcu ([int]$d.TCU) 'modo' $(if ("$($d.Modo)" -eq 'AUTO') { 'OK' } else { "$($d.Modo)" }) }
+            Prog-Paso
             if ($d.Salud -ne 'OK') {
                 Con ("{0}TCU {1,3}  {2,-8} {3}" -f $(if ($etiquetaNcu) { "NCU$etiquetaNcu " } else { '' }), $d.TCU, $d.Salud, $d.Alarmas) ([System.Drawing.Color]::Orange)
             }
@@ -5471,6 +5560,7 @@ $btnCsvTcu.Add_Click({ Lanzar {
     }
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "CSV por TCU: $nEsc escrituras en $nTcusTot TCUs de $donde" ([System.Drawing.Color]::SteelBlue)
+    Prog-Iniciar $nEsc
     $ok = 0; $ko = 0
     foreach ($gr in $grupos) {
     if ($script:Cancelar) { break }
@@ -5536,6 +5626,7 @@ $btnCsvTcu.Add_Click({ Lanzar {
                     if (-not $hecho) { $todoOk = $false; break }
                 }
             }
+            Prog-Paso @($porTcu[[int]$tcu]).Count
             if ($todoOk) { $ok++; Con ((Eti-Tcu $tcu) + ("  OK   {0}" -f ($cambios -join ' | '))) ([System.Drawing.Color]::LightGreen)
                 Auditar 'CSV_POR_TCU' $script:NcuLog $tcu ($cambios -join ' | ') }
             else { $ko++; Con ((Eti-Tcu $tcu) + ("  FALLO  {0}" -f $fallo)) ([System.Drawing.Color]::Salmon)
@@ -5764,6 +5855,8 @@ $btnAud.Add_Click({ Lanzar {
         Con "Auditoria de $(Eti-Rango $tcus) contra '$($script:PresetRefNombre)' ($($script:PresetRef.Count) variables)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     }
     $nOk = 0; $nTcusOk = 0; $nDesv = 0; $nErr = 0; $nFalsas = 0; $nCache = 0
+    $nAudTot = 0; foreach ($tr in $trabajos) { $nAudTot += @($tr.tcus).Count }
+    Prog-Iniciar ($nAudTot * @($script:PresetRef).Count)
     # Lo ya leido en esta sesion no se vuelve a pedir: antes, venir de un
     # barrido y auditar era recorrer la planta dos veces para lo mismo.
     $idxLec = @{}
@@ -5849,6 +5942,7 @@ $btnAud.Add_Click({ Lanzar {
             if ($errTcu -gt 0) { $nErr++ }
             elseif ($desvTcu -gt 0) { $nDesv++; Con ("{0}TCU {1,3}  {2} desviaciones" -f $(if ($etNcu) { "NCU$etNcu " } else { '' }), $tcu, $desvTcu) ([System.Drawing.Color]::Orange) }
             else { $nTcusOk++ }
+            Prog-Paso @($script:PresetRef).Count
             # alimenta la tarea "Configuracion TCU" del seguimiento PEM
             $script:SegAud["$etNcu|$tcu"] = @{ncu=$etNcu; tcu=[int]$tcu
                 estado=$(if ($errTcu -gt 0) { '' } elseif ($desvTcu -gt 0) { 'NOK' } else { 'OK' })
@@ -5929,6 +6023,8 @@ $btnInvF.Add_Click({ Lanzar {
     } else {
         Con "Inventario de $(Eti-Rango $tcus)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     }
+    $nInvTot = 0; foreach ($tr in $trabajos) { $nInvTot += @($tr.tcus).Count }
+    Prog-Iniciar $nInvTot
     $ok = 0; $ko = 0
     foreach ($tr in $trabajos) {
         $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
@@ -5976,6 +6072,7 @@ $btnInvF.Add_Click({ Lanzar {
                 $script:UltimoInv += [pscustomobject]@{NCU=$etNcu; TCU=[int]$tcu; Serie=''; MAC=''; FW=''; FW_fabrica=''; HW=''; Fecha_fab=''; Nota=$err}
             }
             $lvV.Items.Add($item) | Out-Null
+            Prog-Paso
             [System.Windows.Forms.Application]::DoEvents()
         }
     }

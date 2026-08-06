@@ -36,11 +36,18 @@ foreach ($l in ($src -split "`r?`n")) {
 # como todos reutilizan la variable $d, el parser los mezclaria en un solo
 # contenedor y cantaria solapes que no existen. Fuera: la auditoria es de la
 # ventana principal, que es la unica que crece.
+# Controles que nacen ocultos (la barra de avance comparte sitio con el aviso
+# del log a proposito): no pueden solaparse con nada porque no estan a la vez.
+foreach ($l in ($src -split "`r?`n")) {
+    if ($l -match '^\s*\$(\w+)\.Visible\s*=\s*\$false') { if ($ctrl.ContainsKey($matches[1])) { $ctrl[$matches[1]].oculto = $true } }
+}
+
 $porPadre = @{}
 foreach ($k in $ctrl.Keys) {
     $p = $ctrl[$k].padre
     if (-not $p) { continue }
     if ($p -ne 'form' -and $ctrl.ContainsKey($p) -and $ctrl[$p].tipo -eq 'Form') { continue }
+    if ($ctrl[$k].oculto) { continue }
     if (-not $porPadre.ContainsKey($p)) { $porPadre[$p] = @() }
     $porPadre[$p] += ,@{nombre=$k; g=$ctrl[$k]}
 }
