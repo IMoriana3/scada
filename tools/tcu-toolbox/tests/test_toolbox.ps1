@@ -700,6 +700,77 @@ foreach ($fn in $conComa) {
 }
 Check 'ninguna lista con coma se consume con @()' ($malUsadas -join ',') ''
 
+# ---------- ensayos SAT (Anexo 4) ----------
+# D.1.1 precision: solo cuentan las muestras con el objetivo ya estable
+$fp = @(
+  # objetivo cambiando: las dos primeras no cuentan (aun va de camino)
+  [pscustomobject]@{ncu='1'; tcu=1; obj=10.0; desv=6.0}
+  [pscustomobject]@{ncu='1'; tcu=1; obj=12.0; desv=4.0}
+  [pscustomobject]@{ncu='1'; tcu=1; obj=12.0; desv=2.0}
+  [pscustomobject]@{ncu='1'; tcu=1; obj=12.0; desv=0.4}
+  [pscustomobject]@{ncu='1'; tcu=1; obj=12.0; desv=0.3}
+)
+$pr = @(Sat-Precision $fp 1.0 2)
+Check 'D.1.1 una TCU' $pr.Count 1
+Check 'D.1.1 muestras validas' $pr[0].Validas 2          # solo las dos ultimas
+Check 'D.1.1 dentro de tolerancia' $pr[0].Dentro 2
+Check 'D.1.1 cumple' $pr[0].Cumple 'SI'
+# una sola muestra fuera de 1 grado tumba el ensayo de esa TCU
+$fp2 = @(
+  [pscustomobject]@{ncu='1'; tcu=2; obj=12.0; desv=0.2}
+  [pscustomobject]@{ncu='1'; tcu=2; obj=12.0; desv=0.2}
+  [pscustomobject]@{ncu='1'; tcu=2; obj=12.0; desv=0.3}
+  [pscustomobject]@{ncu='1'; tcu=2; obj=12.0; desv=1.8}
+)
+$pr2 = @(Sat-Precision $fp2 1.0 2)
+Check 'D.1.1 una fuera = NO cumple' $pr2[0].Cumple 'NO'
+Check 'D.1.1 peor desviacion' $pr2[0].Peor_deg 1.8
+
+# D.3.4.1 disponibilidad de operacion: 99% por TCU y dia
+$fo = @()
+for ($i = 0; $i -lt 100; $i++) {
+  $fo += [pscustomobject]@{dia='2026-08-06'; ncu='1'; tcu=1; al_motor=0; al_bat=0; al_com=0}
+}
+$do1 = @(Sat-DispOperacion $fo 99.0)
+Check 'D.3.4.1 sin alarmas = 100' $do1[0].Disponibilidad_pct 100
+Check 'D.3.4.1 cumple' $do1[0].Cumple 'SI'
+$fo[3].al_motor = 1; $fo[7].al_bat = 1
+$do2 = @(Sat-DispOperacion $fo 99.0)
+Check 'D.3.4.1 dos alarmas de 100' $do2[0].Disponibilidad_pct 98
+Check 'D.3.4.1 no cumple' $do2[0].Cumple 'NO'
+# las meteorologicas no entran: no hay columna para ellas, se ignoran por diseno
+
+# D.4 comunicaciones: un fallo suelto no cuenta; repetido en 2 min, cuentan todos
+$intentos = @{'2026-08-06' = 1000}
+$sueltos = @(
+  [pscustomobject]@{dia='2026-08-06'; ncu='1'; equipo='TCU7'; ts=1000}
+  [pscustomobject]@{dia='2026-08-06'; ncu='1'; equipo='TCU7'; ts=5000}   # muy lejos
+)
+$dc1 = @(Sat-DispComms $sueltos $intentos 98.5 120)
+Check 'D.4 fallos sueltos no cuentan' $dc1[0].Fallos_computados 0
+Check 'D.4 disponibilidad 100 con sueltos' $dc1[0].Disponibilidad_pct 100
+$rafaga = @(
+  [pscustomobject]@{dia='2026-08-06'; ncu='1'; equipo='TCU9'; ts=1000}
+  [pscustomobject]@{dia='2026-08-06'; ncu='1'; equipo='TCU9'; ts=1015}   # 15 s despues
+  [pscustomobject]@{dia='2026-08-06'; ncu='1'; equipo='TCU9'; ts=1030}
+)
+$dc2 = @(Sat-DispComms $rafaga $intentos 98.5 120)
+Check 'D.4 rafaga: cuentan todos' $dc2[0].Fallos_computados 3
+Check 'D.4 fallos brutos' $dc2[0].Fallos_brutos 3
+Check 'D.4 disponibilidad con rafaga' $dc2[0].Disponibilidad_pct 99.7
+Check 'D.4 cumple 98.5' $dc2[0].Cumple 'SI'
+# justo en el limite de la ventana de 2 minutos
+$limite = @(
+  [pscustomobject]@{dia='2026-08-06'; ncu='1'; equipo='TCU5'; ts=1000}
+  [pscustomobject]@{dia='2026-08-06'; ncu='1'; equipo='TCU5'; ts=1120}   # exactamente 120 s
+)
+Check 'D.4 a 120 s si cuenta' (@(Sat-DispComms $limite $intentos 98.5 120))[0].Fallos_computados 2
+$fuera = @(
+  [pscustomobject]@{dia='2026-08-06'; ncu='1'; equipo='TCU5'; ts=1000}
+  [pscustomobject]@{dia='2026-08-06'; ncu='1'; equipo='TCU5'; ts=1121}   # 121 s: fuera
+)
+Check 'D.4 a 121 s no cuenta' (@(Sat-DispComms $fuera $intentos 98.5 120))[0].Fallos_computados 0
+
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }
 else { Write-Host "$fallos PRUEBAS FALLIDAS"; exit 1 }
