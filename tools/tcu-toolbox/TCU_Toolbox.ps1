@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '7.2'
+$VERSION_TOOLBOX = '7.3'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -632,10 +632,17 @@ function Informe-Html([hashtable]$m) {
     [void]$sb.AppendLine('.fm{position:relative;display:block}.fmb{width:100%;box-sizing:border-box;font:inherit;font-size:11px;padding:2px 4px;border:1px solid #bbb;border-radius:3px;background:#fff;cursor:pointer;text-align:left;overflow:hidden;white-space:nowrap}.fmb.act{border-color:#06c;color:#06c;font-weight:700}')
     [void]$sb.AppendLine('.fmp{position:absolute;z-index:30;top:100%;left:0;min-width:100%;max-height:250px;overflow:auto;background:#fff;border:1px solid #bbb;border-radius:3px;box-shadow:0 6px 18px rgba(20,30,45,.2);padding:5px 7px;display:none;white-space:nowrap;text-align:left}')
     [void]$sb.AppendLine('.fmp label{display:block;font-weight:400;font-size:12px;padding:1px 0;cursor:pointer}.fmp .fmt{border-bottom:1px solid #e6ebf0;margin-bottom:4px;padding-bottom:4px}.fmp .fmt a{color:#06c;cursor:pointer;text-decoration:underline;margin-right:10px;font-size:11px}')
+    [void]$sb.AppendLine('#avisojs{background:#fff4d6;border:1px solid #e0b64a;border-radius:4px;padding:9px 12px;margin:12px 0;font-size:13px;color:#6b4b00}#avisojs b{color:#8a5a00}')
     [void]$sb.AppendLine('.indice{background:#eef4fb;border:1px solid #cfe0f2;border-radius:4px;padding:7px 10px;margin:14px 0;font-size:13px}.indice a{color:#06c;text-decoration:none;font-weight:700}.indice a:hover{text-decoration:underline}')
     [void]$sb.AppendLine('</style></head><body>')
     [void]$sb.AppendLine('<h1>Informe de puesta en marcha &mdash; ' + (Html-Esc $m.planta) + '</h1>')
     [void]$sb.AppendLine('<p class="meta">Fecha: ' + (Html-Esc $m.fecha) + ' &middot; IP/conexion: ' + (Html-Esc $m.ip) + ' &middot; Tecnico: ' + (Html-Esc $m.usuario) + '<br>TCU Toolbox v' + (Html-Esc $m.version) + ' &middot; Mapa: ' + (Html-Esc $m.mapa) + '</p>')
+    # Los filtros los monta el JavaScript al abrir la pagina. En el PC de planta
+    # el navegador bloquea por defecto los scripts de los ficheros locales, y
+    # entonces las tablas salen sin la fila de filtros y parece que el informe
+    # esta roto. Este aviso se queda visible en ese caso, y el propio JS lo
+    # borra nada mas arrancar, asi que solo lo ve quien tiene el problema.
+    [void]$sb.AppendLine('<div id="avisojs"><b>Los filtros de las tablas no estan activos.</b> Los monta JavaScript al abrir la pagina, y tu navegador lo tiene bloqueado. Si abajo sale la barra <i>&laquo;Internet Explorer ha restringido la ejecucion de scripts&raquo;</i>, pulsa <b>Permitir contenido bloqueado</b>. Si no, abre este fichero con Chrome o con Edge. El informe se lee igual sin filtros: solo pierdes poder filtrar y ordenar.</div>')
     $clase = { param($s) switch -Wildcard ("$s") { 'OK*'{'ok'} 'PASA*'{'ok'} 'ALARMA*'{'alarma'} 'FALLA*'{'alarma'} 'FALLO*'{'alarma'} 'AVISO*'{'aviso'} 'DUDOSO*'{'aviso'} 'PENDIENTE*'{'aviso'} 'OFFLINE*'{'off'} 'SALTADO*'{'off'} default{''} } }
     $tabla = {
         param($titulo, $filas, $cols, $colEstado, $clave)
@@ -734,6 +741,9 @@ function Informe-Html([hashtable]$m) {
 (function(){
   // Sin librerias y a la antigua (bucles for, attachEvent): estos informes se
   // abren a veces en el IE del PC de planta.
+  // Si esto se ejecuta, los filtros van a montarse: fuera el aviso.
+  var av = document.getElementById("avisojs");
+  if (av && av.parentNode) { av.parentNode.removeChild(av); }
   var paneles = [];
   function cerrarPaneles() { for (var i = 0; i < paneles.length; i++) { paneles[i].style.display = "none"; } }
   if (document.addEventListener) { document.addEventListener("click", cerrarPaneles, false); }
@@ -3752,7 +3762,7 @@ $btnLeer.Add_Click({ Lanzar {
             try {
                 $dirC = Join-Path $PSScriptRoot 'correcciones'
                 if (-not (Test-Path $dirC)) { New-Item -ItemType Directory -Path $dirC | Out-Null }
-                $fC = Join-Path $dirC ('correccion_' + ((Nombre-Planta) -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv')
+                $fC = Join-Path $dirC ('correccion_' + ((Nombre-Planta) -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.csv')
                 $lin = @('NCU;TCU;variable;valor')
                 foreach ($f in $corr.filas) { $lin += "$($f.NCU);$($f.TCU);$($f.Variable);$($f.Valor)" }
                 Set-Content -Path $fC -Value $lin -Encoding UTF8
