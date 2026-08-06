@@ -74,6 +74,13 @@ const { chromium } = require('playwright');
   await p.waitForTimeout(120);
   chk('sigue ordenando', (await tDiag.locator('thead tr:first-child th').nth(1).textContent()).includes('▲'), true);
 
+  // el aviso de "sin JavaScript no hay filtros" tiene que haberse borrado solo
+  chk('aviso de JS bloqueado retirado', await p.locator('#avisojs').count(), 0);
+  // ...pero tiene que estar en el HTML, que es lo que ve quien no ejecuta JS
+  const crudo = require('fs').readFileSync(require('path').join(__dirname, 'informe_muestra.html'), 'utf8');
+  chk('el aviso esta en el fichero', crudo.includes('id="avisojs"'), true);
+  chk('el aviso dice que hacer', crudo.includes('Permitir contenido bloqueado'), true);
+
   // valores imposibles de la lectura masiva (el east_pitch en radianes)
   const imp = p.locator('div.res', { hasText: 'Valores imposibles' });
   chk('bloque de valores imposibles', await imp.count(), 1);
