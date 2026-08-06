@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '9.3'
+$VERSION_TOOLBOX = '9.4'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1204,7 +1204,9 @@ function Ncu-DiagCompat([int[]]$tcus) {
                 if ($dif -gt 5) { $notas += ("dif {0:0.0} deg" -f $dif) }
                 if ((($fl -shr 15) -band 1) -eq 0) { $notas += 'system OK = 0' }
                 if ((($fl -shr 11) -band 1) -eq 1) { $notas += 'alarma motor enclavada' }
-                if ($edad -gt 90) { $notas += "datos de hace $edad s" }
+                # la edad va en su columna; aqui solo si es tanta que el dato
+                # ya no vale para decidir nada
+                if ($edad -gt 90) { $notas += "dato viejo" }
                 $salud = 'OK'
                 if ($lastc[$tcu] -eq 0 -or ($edad -ge 0 -and $edad -gt 300)) {
                     $salud = 'OFFLINE'
@@ -1216,6 +1218,11 @@ function Ncu-DiagCompat([int[]]$tcus) {
                     TCU = $tcu; Salud = $salud
                     Modo = @('OFF','MANUAL','AUTO','?')[(($msr -shr 8) -band 0x3)]
                     Tilt = [math]::Round($tilt, 1); Objetivo = [math]::Round($targ, 1); Dif = [math]::Round($dif, 1)
+                    # Cuantos segundos hace que la NCU hablo con esta TCU. En
+                    # modo via NCU no se lee al seguidor: se lee lo ultimo que
+                    # la NCU le oyo, y cada uno tiene su propio retardo. Sin
+                    # esto no hay forma de saber de cuando es lo que se ve.
+                    Edad_s = $(if ($edad -ge 0) { $edad } else { '' })
                     SoC = ($w[$b+13] -band 0xFF); SoH = ($w[$b+21] -band 0xFF)
                     Vbat_mV = $w[$b+16]; Ibat_mA = $ibat
                     Tbat_C = [math]::Round(($w[$b+20] / 10.0) - 273.15, 1); Tpcb_C = [math]::Round(($w[$b+19] / 10.0) - 273.15, 1)
@@ -2519,7 +2526,8 @@ $lvG.View = 'Details'; $lvG.FullRowSelect = $true; $lvG.GridLines = $true
 [void]$lvG.Columns.Add('Objetivo', 58)
 [void]$lvG.Columns.Add('Dif', 46)
 [void]$lvG.Columns.Add('SoC', 46)
-[void]$lvG.Columns.Add('Alarmas / notas', 450)
+[void]$lvG.Columns.Add('Edad s', 60)
+[void]$lvG.Columns.Add('Alarmas / notas', 390)
 $tabG.Controls.Add($lvG)
 
 # ============================ TAB AUDITORIA ============================
@@ -5052,7 +5060,7 @@ function Diag-Correr {
                 foreach ($dh in @($o.hsus)) {
                     $dh.NCU = $eti
                     $itemH = New-Object System.Windows.Forms.ListViewItem($eti)
-                    foreach ($c in @($dh.TCU, $dh.Salud, $dh.Modo, $dh.Tilt, $dh.Objetivo, $dh.Dif, $dh.SoC, $dh.Alarmas)) { [void]$itemH.SubItems.Add("$c") }
+                    foreach ($c in @($dh.TCU, $dh.Salud, $dh.Modo, $dh.Tilt, $dh.Objetivo, $dh.Dif, $dh.SoC, $dh.Edad_s, $dh.Alarmas)) { [void]$itemH.SubItems.Add("$c") }
                     if ("$($dh.Salud)" -eq 'OK') { $itemH.ForeColor = [System.Drawing.Color]::DarkGreen; $nHOk++ }
                     else { $itemH.ForeColor = [System.Drawing.Color]::DarkOrange; $nHMal++ }
                     $lvG.Items.Add($itemH) | Out-Null
@@ -5061,7 +5069,7 @@ function Diag-Correr {
                 foreach ($d in @($o.filas)) {
                     $d | Add-Member -NotePropertyName NCU -NotePropertyValue $eti -Force
                     $item = New-Object System.Windows.Forms.ListViewItem($eti)
-                    foreach ($c in @($d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
+                    foreach ($c in @($d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
                     switch ("$($d.Salud)") {
                         'OK'      { $item.ForeColor = [System.Drawing.Color]::DarkGreen;  $nOk++ }
                         'AVISO'   { $item.ForeColor = [System.Drawing.Color]::DarkOrange; $nAviso++ }
@@ -5099,7 +5107,7 @@ function Diag-Correr {
             main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
         }
         $itemN = New-Object System.Windows.Forms.ListViewItem("$($tr.ncu)")
-        foreach ($c in @($dn.TCU, $dn.Salud, $dn.Modo, $dn.Tilt, $dn.Objetivo, $dn.Dif, $dn.SoC, $dn.Alarmas)) { [void]$itemN.SubItems.Add("$c") }
+        foreach ($c in @($dn.TCU, $dn.Salud, $dn.Modo, $dn.Tilt, $dn.Objetivo, $dn.Dif, $dn.SoC, '', $dn.Alarmas)) { [void]$itemN.SubItems.Add("$c") }
         switch ($dn.Salud) {
             'OK'     { $itemN.ForeColor = [System.Drawing.Color]::DarkGreen }
             'AVISO'  { $itemN.ForeColor = [System.Drawing.Color]::DarkOrange }
@@ -5123,7 +5131,7 @@ function Diag-Correr {
         foreach ($dh in $hsus) {
             $dh.NCU = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
             $itemH = New-Object System.Windows.Forms.ListViewItem($dh.NCU)
-            foreach ($c in @($dh.TCU, $dh.Salud, $dh.Modo, $dh.Tilt, $dh.Objetivo, $dh.Dif, $dh.SoC, $dh.Alarmas)) { [void]$itemH.SubItems.Add("$c") }
+            foreach ($c in @($dh.TCU, $dh.Salud, $dh.Modo, $dh.Tilt, $dh.Objetivo, $dh.Dif, $dh.SoC, $dh.Edad_s, $dh.Alarmas)) { [void]$itemH.SubItems.Add("$c") }
             switch ($dh.Salud) {
                 # Las HSUs se cuentan aparte: pedir una TCU y ver "OK: 1 Aviso: 1"
                 # porque la meteo de esa NCU va en la misma tabla despista.
@@ -5159,7 +5167,7 @@ function Diag-Correr {
             if ($null -ne $tr.ncu) { $etiquetaNcu = "$($tr.ncu)" }
             $d | Add-Member -NotePropertyName NCU -NotePropertyValue $etiquetaNcu -Force
             $item = New-Object System.Windows.Forms.ListViewItem($etiquetaNcu)
-            foreach ($c in @($d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
+            foreach ($c in @($d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
             switch ($d.Salud) {
                 'OK'      { $item.ForeColor = [System.Drawing.Color]::DarkGreen;  $nOk++ }
                 'AVISO'   { $item.ForeColor = [System.Drawing.Color]::DarkOrange; $nAviso++ }
@@ -5208,7 +5216,7 @@ function Diag-Correr {
         if ($null -ne $tr.ncu) { $etiquetaNcu = "$($tr.ncu)" }
         $d | Add-Member -NotePropertyName NCU -NotePropertyValue $etiquetaNcu -Force
         $item = New-Object System.Windows.Forms.ListViewItem($etiquetaNcu)
-        foreach ($c in @($d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Alarmas)) {
+        foreach ($c in @($d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) {
             [void]$item.SubItems.Add("$c")
         }
         switch ($d.Salud) {
@@ -5265,7 +5273,7 @@ function Diag-Refrescar {
         if ($fNcu -ne 'NCU - todas' -and ("NCU$($d.NCU)") -ne $fNcu) { continue }
         if ($sal.Count -gt 0 -and $sal -notcontains "$($d.Salud)") { continue }
         $item = New-Object System.Windows.Forms.ListViewItem("$($d.NCU)")
-        foreach ($c in @($d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
+        foreach ($c in @($d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
         switch ("$($d.Salud)") {
             'OK'      { $item.ForeColor = [System.Drawing.Color]::DarkGreen }
             'AVISO'   { $item.ForeColor = [System.Drawing.Color]::DarkOrange }
