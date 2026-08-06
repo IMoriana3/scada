@@ -1,6 +1,6 @@
 # Pruebas de la TCU Toolbox
 
-316 comprobaciones de la lógica no-GUI de `TCU_Toolbox.ps1` contra un simulador
+325 comprobaciones de la lógica no-GUI de `TCU_Toolbox.ps1` contra un simulador
 Modbus TCP, sin tocar una planta.
 
 ```bash
