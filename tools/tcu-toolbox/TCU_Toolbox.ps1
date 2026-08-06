@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '10.0'
+$VERSION_TOOLBOX = '10.1'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2919,36 +2919,46 @@ $lblCInfo.ForeColor = [System.Drawing.Color]::Gray
 $btnCPrep = New-Object System.Windows.Forms.Button
 $btnCPrep.Text = 'PREPARAR ESCRITURA'
 $btnCPrep.Location = New-Object System.Drawing.Point(10, 40)
-$btnCPrep.Size = New-Object System.Drawing.Size(170, 28)
+$btnCPrep.Size = New-Object System.Drawing.Size(150, 28)
 $btnCPrep.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
 $btnCPrep.ForeColor = [System.Drawing.Color]::White
 $tabC.Controls.Add($btnCPrep)
 
 $btnCModo = New-Object System.Windows.Forms.Button
 $btnCModo.Text = 'PREPARAR MODO AUTO'
-$btnCModo.Location = New-Object System.Drawing.Point(188, 40)
-$btnCModo.Size = New-Object System.Drawing.Size(170, 28)
+$btnCModo.Location = New-Object System.Drawing.Point(166, 40)
+$btnCModo.Size = New-Object System.Drawing.Size(150, 28)
 $tabC.Controls.Add($btnCModo)
+
+# La lista se llena sola al VERIFICAR, pero el firmware se instala con el
+# updater del fabricante, fuera de esta herramienta: si ese dia no se pasa por
+# la pestana Firmware, lo actualizado no entra en ningun sitio. Con esto se
+# apunta a mano, que es lo que hace falta para no olvidarse.
+$btnCAdd = New-Object System.Windows.Forms.Button
+$btnCAdd.Text = 'Anadir TCUs...'
+$btnCAdd.Location = New-Object System.Drawing.Point(322, 40)
+$btnCAdd.Size = New-Object System.Drawing.Size(112, 28)
+$tabC.Controls.Add($btnCAdd)
 
 $btnCRef = New-Object System.Windows.Forms.Button
 $btnCRef.Text = 'Refrescar'
-$btnCRef.Location = New-Object System.Drawing.Point(366, 40)
-$btnCRef.Size = New-Object System.Drawing.Size(96, 28)
+$btnCRef.Location = New-Object System.Drawing.Point(440, 40)
+$btnCRef.Size = New-Object System.Drawing.Size(76, 28)
 $tabC.Controls.Add($btnCRef)
 
 $btnCQuitar = New-Object System.Windows.Forms.Button
 $btnCQuitar.Text = 'Quitar de la lista'
-$btnCQuitar.Location = New-Object System.Drawing.Point(470, 40)
-$btnCQuitar.Size = New-Object System.Drawing.Size(130, 28)
+$btnCQuitar.Location = New-Object System.Drawing.Point(522, 40)
+$btnCQuitar.Size = New-Object System.Drawing.Size(116, 28)
 $tabC.Controls.Add($btnCQuitar)
 
 $btnCCsv = New-Object System.Windows.Forms.Button
 $btnCCsv.Text = 'CSV'
-$btnCCsv.Location = New-Object System.Drawing.Point(608, 40)
-$btnCCsv.Size = New-Object System.Drawing.Size(70, 28)
+$btnCCsv.Location = New-Object System.Drawing.Point(644, 40)
+$btnCCsv.Size = New-Object System.Drawing.Size(60, 28)
 $tabC.Controls.Add($btnCCsv)
 
-$lblCRes = LG $tabC '' 690 218 46
+$lblCRes = LG $tabC '' 712 196 46
 $lblCRes.ForeColor = [System.Drawing.Color]::Gray
 
 $lvC = New-Object System.Windows.Forms.ListView
@@ -5975,6 +5985,49 @@ function Cierre-Avisar {
 }
 
 $btnCRef.Add_Click({ Cierre-Pintar; Cierre-Avisar })
+
+$btnCAdd.Add_Click({
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text = 'Anadir TCUs a la lista de cierre'
+    $d.Size = New-Object System.Drawing.Size(440, 230)
+    $d.FormBorderStyle = 'FixedDialog'; $d.MaximizeBox = $false; $d.MinimizeBox = $false
+    $d.StartPosition = 'CenterScreen'
+    [void](LG $d 'NCU' 15 60 20);  $tN = TG $d '' 90 18 60
+    [void](LG $d 'TCUs' 15 60 50); $tT = TG $d '' 90 48 290
+    $lblA = LG $d 'Una o varias: 26  |  26,39  |  11-14,20' 90 290 74
+    $lblA.ForeColor = [System.Drawing.Color]::Gray
+    [void](LG $d 'Firmware' 15 70 104); $tF = TG $d "$($txtFwObj.Text)" 90 102 290
+    $lblB = LG $d 'Solo para verlo en la lista: no se comprueba nada.' 90 290 128
+    $lblB.ForeColor = [System.Drawing.Color]::Gray
+    $bOk = New-Object System.Windows.Forms.Button
+    $bOk.Text = 'Anadir'; $bOk.Location = New-Object System.Drawing.Point(200, 152); $bOk.Size = New-Object System.Drawing.Size(85, 28)
+    $bCa = New-Object System.Windows.Forms.Button
+    $bCa.Text = 'Cancelar'; $bCa.Location = New-Object System.Drawing.Point(295, 152); $bCa.Size = New-Object System.Drawing.Size(85, 28)
+    $bCa.DialogResult = 'Cancel'
+    $d.Controls.Add($bOk); $d.Controls.Add($bCa); $d.AcceptButton = $bOk; $d.CancelButton = $bCa
+    # la salida va en una hashtable capturada: con GetNewClosure un $script: de
+    # dentro no es el de fuera (la trampa de la v8.0)
+    $sal = @{ ncu = ''; tcus = @(); fw = '' }
+    $bOk.Add_Click({
+        $ncu = $tN.Text.Trim()
+        if ($ncu -eq '') { [void][System.Windows.Forms.MessageBox]::Show('Pon la NCU: la lista de cierre es por NCU y TCU.','Aviso'); return }
+        $lista = $null
+        try { $lista = Parse-ListaNums $tT.Text } catch { [void][System.Windows.Forms.MessageBox]::Show("$_",'Aviso'); return }
+        if ($null -eq $lista -or @($lista).Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('Pon al menos una TCU (26, o 26,39, o 11-14).','Aviso'); return }
+        $sal.ncu = $ncu; $sal.tcus = @($lista); $sal.fw = $tF.Text.Trim()
+        $d.DialogResult = 'OK'; $d.Close()
+    }.GetNewClosure())
+    if ($d.ShowDialog() -ne 'OK') { return }
+    $nuevas = 0; $ya = 0
+    foreach ($t in @($sal.tcus)) {
+        if ($script:Cierre.ContainsKey("$($sal.ncu)|$t")) { $ya++ } else { $nuevas++ }
+        Cierre-Marcar $sal.ncu ([int]$t) '' '' $sal.fw
+    }
+    Cierre-Guardar (Nombre-Planta); Cierre-Pintar
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Cierre: $nuevas TCUs anadidas a mano de NCU$($sal.ncu)$(if ($ya -gt 0) { " ($ya ya estaban)" })." ([System.Drawing.Color]::SteelBlue)
+    Con '  Les faltan parametros, NVM y modo AUTO. Se van marcando solas al auditar, guardar en NVM y diagnosticar.' ([System.Drawing.Color]::Gainsboro)
+})
 
 $btnCQuitar.Add_Click({
     if ($lvC.SelectedItems.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('Marca en la tabla las TCUs que quieras quitar.','Aviso'); return }

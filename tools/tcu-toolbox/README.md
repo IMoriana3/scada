@@ -174,6 +174,14 @@ te lleva, no dispara. Así no hay lógica de escritura duplicada en dos pestaña
 La lista **sobrevive a cerrar el programa** (`cierre/<planta>.json`) y es una por
 planta, que es lo que hace falta cuando la campaña dura días.
 
+**Añadir a mano (v10.1)** — el firmware se instala con el **updater del
+fabricante**, fuera de esta herramienta. Si ese día no se pasa por *Firmware* a
+pulsar `VERIFICAR`, lo actualizado no entra en ninguna lista y se pierde igual
+que antes. **Añadir TCUs…** las apunta a mano: NCU y una lista de TCUs (`26`,
+`26,39`, `11-14,20` — el mismo formato que el filtro de NCUs del diagnóstico).
+Entran con lo mismo que les faltaba a las otras (parámetros, NVM, modo AUTO) y
+se van marcando solas igual.
+
 **Corregido en v9.8:** el alta nunca llegaba a ejecutarse. `VERIFICAR TRAS
 ACTUALIZAR` marcaba la TCU en verde en su tabla, pero no la metía en la lista de
 cierre, así que la pestaña salía siempre vacía y no avisaba de nada. Las pruebas
