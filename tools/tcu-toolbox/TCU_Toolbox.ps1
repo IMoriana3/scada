@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '9.5'
+$VERSION_TOOLBOX = '9.6'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -630,6 +630,13 @@ function Viento-Seguro([string]$ipNcu, [int]$to, [int]$puerto = 0) {
     } catch { Modbus-Cerrar; return $null }
 }
 
+# El modo (bits 9:8) y el estado de comisionado (bits 4:3) viven en el MISMO
+# registro 30001, asi que leer uno y no ensenar el otro era tirar informacion.
+# Antes de aplicar un modo a un rango hace falta saber en cual estan. Pura.
+$MODOS_TCU = @('OFF','MANUAL','AUTO','?')
+function Modo-De([int]$mainStatus) { return $MODOS_TCU[(($mainStatus -shr 8) -band 0x3)] }
+function Comis-De([int]$mainStatus) { return (($mainStatus -shr 3) -band 0x3) }
+
 $ESTADOS_COMIS = @{3='Factory'; 2='TCU configurado'; 1='Motor verificado'; 0='COMISIONADO'}
 
 function Html-Esc([string]$s) {
@@ -1216,7 +1223,7 @@ function Ncu-DiagCompat([int[]]$tcus) {
                 elseif ($alarmas.Count -gt 0 -or $notas.Count -gt 0) { $salud = 'AVISO' }
                 $res[$tcu] = [pscustomobject]@{
                     TCU = $tcu; Salud = $salud
-                    Modo = @('OFF','MANUAL','AUTO','?')[(($msr -shr 8) -band 0x3)]
+                    Modo = Modo-De $msr
                     Tilt = [math]::Round($tilt, 1); Objetivo = [math]::Round($targ, 1); Dif = [math]::Round($dif, 1)
                     # Cuantos segundos hace que la NCU hablo con esta TCU. En
                     # modo via NCU no se lee al seguidor: se lee lo ultimo que
@@ -2747,7 +2754,7 @@ $tabP.Controls.Add($btnPUnstow)
 
 [void](LG $tabP 'Comisionado:' 10 82 82)
 $btnPComis = New-Object System.Windows.Forms.Button
-$btnPComis.Text = 'LEER ESTADO'
+$btnPComis.Text = 'ESTADO Y MODO'
 $btnPComis.Location = New-Object System.Drawing.Point(94, 76)
 $btnPComis.Size = New-Object System.Drawing.Size(108, 24)
 $tabP.Controls.Add($btnPComis)
@@ -6402,16 +6409,19 @@ $btnPComis.Add_Click({ Lanzar {
                 if ($null -eq $d) { Pem-Fila $tcu 'FALLA' 'sin datos via NCU' "$($tr.ncu)"; continue }
                 if ($d.Salud -eq 'OFFLINE') { Pem-Fila $tcu 'SALTADO' "OFFLINE: $($d.Alarmas)" "$($tr.ncu)"; continue }
                 $v = [Convert]::ToInt32($d.main_status, 16)
-                $e = ($v -shr 3) -band 0x3
+                $e = Comis-De $v
                 $nom = $ESTADOS_COMIS[[int]$e]
+                $md = Modo-De $v
                 if (-not $cuenta.ContainsKey($nom)) { $cuenta[$nom] = 0 }
                 $cuenta[$nom]++
-                Pem-Fila $tcu $(if ($e -eq 0) { 'OK' } else { 'PENDIENTE' }) "$e - $nom" "$($tr.ncu)"
+                if (-not $cuenta.ContainsKey("modo $md")) { $cuenta["modo $md"] = 0 }
+                $cuenta["modo $md"]++
+                Pem-Fila $tcu $(if ($e -eq 0) { 'OK' } else { 'PENDIENTE' }) "$e - $nom  |  modo $md" "$($tr.ncu)"
             }
         }
     } else {
         $tcus = Rango-Tcus $txtPIni.Text $txtPFin.Text 'Comisionado'
-        Con "Estado de comisionado (30001 bits 4:3) en $(Eti-Rango $tcus)" ([System.Drawing.Color]::SteelBlue)
+        Con "Estado de comisionado (30001 bits 4:3) y modo (bits 9:8) en $(Eti-Rango $tcus)" ([System.Drawing.Color]::SteelBlue)
         $segs = @(Plan-Segmentos $tcus $cx)
         foreach ($seg in $segs) {
             if ($script:Cancelar) { break }
@@ -6421,11 +6431,14 @@ $btnPComis.Add_Click({ Lanzar {
                 if (Chequear-Cancelado) { break }
                 try {
                     $v = (FC03-Leer $tcu (Dir-Trama 30001) 1)[0]
-                    $e = ($v -shr 3) -band 0x3
+                    $e = Comis-De $v
                     $nom = $ESTADOS_COMIS[[int]$e]
+                    $md = Modo-De $v
                     if (-not $cuenta.ContainsKey($nom)) { $cuenta[$nom] = 0 }
                     $cuenta[$nom]++
-                    Pem-Fila $tcu $(if ($e -eq 0) { 'OK' } else { 'PENDIENTE' }) "$e - $nom"
+                    if (-not $cuenta.ContainsKey("modo $md")) { $cuenta["modo $md"] = 0 }
+                    $cuenta["modo $md"]++
+                    Pem-Fila $tcu $(if ($e -eq 0) { 'OK' } else { 'PENDIENTE' }) "$e - $nom  |  modo $md"
                 } catch { Pem-Fila $tcu 'FALLA' "$_"; if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar } }
             }
         }

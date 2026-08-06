@@ -1295,6 +1295,26 @@ Check 'indice: la 34 cuadra con el preset' (Aud-Igual '-10' $idx['9|34|41069 saf
 Check 'indice: la 35 no' (Aud-Igual '-10' $idx['9|35|41069 safe_pos_sign_threshold']) $false
 
 Write-Host ''
+Write-Host '== modo y comisionado salen del mismo registro =='
+# Los dos viven en 30001: leer uno y no ensenar el otro era tirar informacion,
+# y antes de aplicar un modo a un rango hace falta saber en cual estan.
+Check 'modo: bits 9:8 = 0 es OFF' (Modo-De 0x0000) 'OFF'
+Check 'modo: 1 es MANUAL' (Modo-De 0x0100) 'MANUAL'
+Check 'modo: 2 es AUTO' (Modo-De 0x0200) 'AUTO'
+Check 'modo: 3 no deberia darse' (Modo-De 0x0300) '?'
+Check 'modo: ignora los demas bits' (Modo-De 0xFDFF) 'MANUAL'
+Check 'comis: bits 4:3 = 0 es comisionado' (Comis-De 0x0000) 0
+Check 'comis: 3 es factory' (Comis-De 0x0018) 3
+Check 'comis: ignora el modo' (Comis-De 0x0200) 0
+# los dos a la vez, que es el caso real
+$reg = 0x0210    # modo AUTO (2) + comisionado 2 (TCU configurado)
+Check 'los dos del mismo registro: modo' (Modo-De $reg) 'AUTO'
+Check 'los dos del mismo registro: comisionado' (Comis-De $reg) 2
+# el diagnostico usa el MISMO helper, para que no haya dos verdades
+Check 'diagnostico usa el helper' ($src.Contains('Modo = Modo-De $msr')) $true
+Check 'el boton lo dice' ($src.Contains("btnPComis.Text = 'ESTADO Y MODO'")) $true
+
+Write-Host ''
 Write-Host '== la auditoria prepara la lectura, no la duplica =='
 # Misma idea que en Cierre: las pestanas se pasan el trabajo, no se copian la
 # logica. Leer en 'Leer variable' da ademas la segunda lectura de anomalos, el
