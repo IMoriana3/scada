@@ -1520,6 +1520,37 @@ Check 'bat: las OFFLINE no entran' (@($rF | Where-Object { $_.TCU -eq 27 }).Coun
 $rG = @(Bat-Auditar (@($flota) + @([pscustomobject]@{NCU='9'; TCU='NCU'; Salud='ALARMA'; Vbat_mV=0; Ibat_mA=0; SoC=0; SoH=0; Tbat_C=0; Alarmas=''})))
 Check 'bat: la fila de la NCU no entra' (@($rG | Where-Object { "$($_.TCU)" -eq 'NCU' }).Count) 0
 Check 'bat: diagnostico vacio no revienta' (@(Bat-Auditar @()).Count) 0
+# La tabla de baterias: una fila por TCU con lo que ya trae el diagnostico
+$diagB = @(
+    [pscustomobject]@{NCU='9'; TCU=1; Salud='OK'; SoC=90; SoH=95; Vbat_mV=26000; Ibat_mA=500
+                      Vpanel_mV=18000; Ientrada_mA=700; Tbat_C='22,0'; Tpcb_C='25,0'; Dia=1; Alarmas=''}
+    [pscustomobject]@{NCU='9'; TCU=2; Salud='OFFLINE'; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''
+                      Vpanel_mV=''; Ientrada_mA=''; Tbat_C=''; Tpcb_C=''; Dia=''; Alarmas='sin datos'}
+    [pscustomobject]@{NCU='9'; TCU='NCU'; Salud='OK'; Alarmas='NCU responde'}
+)
+$tb = @(Bat-Tabla $diagB @([pscustomobject]@{NCU='9'; TCU=1; Tipo='CARGA BAJA'}))
+Check 'tabla: una fila por TCU, sin la de la NCU' ($tb.Count) 2
+Check 'tabla: lleva el panel' ($tb[0].Vpanel_mV) '18000'
+Check 'tabla: y la corriente de entrada' ($tb[0].Ientrada_mA) '700'
+Check 'tabla: el dia en claro' ($tb[0].Dia) 'si'
+Check 'tabla: el estado sale de la auditoria' ($tb[0].Estado) 'CARGA BAJA'
+Check 'tabla: la muda dice sin datos' ($tb[1].Estado) 'sin datos'
+Check 'tabla: sin hallazgos, OK' ((Bat-Tabla $diagB)[0].Estado) 'OK'
+Check 'tabla: varios hallazgos en la misma TCU' ((Bat-Tabla $diagB @(
+    [pscustomobject]@{NCU='9'; TCU=1; Tipo='CARGA BAJA'}
+    [pscustomobject]@{NCU='9'; TCU=1; Tipo='NO CARGA'}))[0].Estado) 'CARGA BAJA; NO CARGA'
+Check 'tabla: diagnostico vacio' ((@(Bat-Tabla @())).Count) 0
+# la pestana existe y no vuelve a leer nada
+Check 'tabla: hay pestana' ($src.Contains("tabB.Text = 'Baterias'")) $true
+Check 'tabla: con su tabla' ($src.Contains('$lvB = New-Object System.Windows.Forms.ListView')) $true
+Check 'tabla: y sus botones' (($src.Contains('$btnBVer.Add_Click')) -and ($src.Contains('$btnBCsv.Add_Click'))) $true
+Check 'tabla: filtrable como las demas' ($src.Contains('$lvC, $lvB)) { Lv-Filtrable')) $true
+Check 'tabla: sale del ultimo diagnostico' ($src.Contains('Bat-Tabla $script:UltimoDiag $script:UltimaBat')) $true
+# y el modo directo ya trae panel y corriente de panel, que estan en el mapa
+Check 'directo: lee desde el 30091' ($src.Contains('$r2 = FC03-Leer $tcu (Dir-Trama 30091) 8')) $true
+Check 'directo: panel del 30092' ($src.Contains('Vpanel_mV = $r2[1]; Ientrada_mA = $r2[2]')) $true
+Check 'directo: la bateria se corre al 3' ($src.Contains('Vbat_mV = $r2[3]; Ibat_mA = $ibat')) $true
+Check 'directo: y el SoC al 5' ($src.Contains('SoC = ($r2[5] -band 0xFF)')) $true
 # El bloque de la NCU trae tension de panel y corriente de entrada: con ellas se
 # separa "el panel no da" de "da pero no llega", que mandan a sitios distintos.
 function BatPanel($tcu, $vp, $ie, $soc, $ibat = 5, $dia = 1) {
@@ -1566,7 +1597,8 @@ $com2 = $src.Substring($iC2, $fC2 - $iC2)
 Check 'bat: panel del offset 5' ($com2.Contains('Vpanel_mV = $w[$b+5]')) $true
 Check 'bat: entrada del offset 12 con signo' ($com2.Contains('$ient = $w[$b+12]; if ($ient -gt 32767)')) $true
 Check 'bat: motor de los offsets 8 y 9' ($com2.Contains('Imotor_mA = $w[$b+8]; ImotorPico_mA = $w[$b+9]')) $true
-Check 'bat: en directo se dejan vacios' ($src.Contains("Vpanel_mV = ''; Ientrada_mA = ''; Imotor_mA = ''; ImotorPico_mA = ''")) $true
+# las de motor si se quedan vacias en directo: no estan en el mapa de la TCU
+Check 'bat: en directo las de motor van vacias' ($src.Contains("Imotor_mA = ''; ImotorPico_mA = ''")) $true
 Check 'bat: y van al CSV del registrador' ($src.Contains("'Vpanel_mV','Ientrada_mA','Imotor_mA','ImotorPico_mA'")) $true
 
 Write-Host ''

@@ -70,6 +70,25 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**Pestaña Baterías (v11.3)** — las variables de batería estaban repartidas por
+columnas del diagnóstico y por el CSV, sin un sitio donde verlas juntas. Ahora
+tienen el suyo, igual que el inventario tiene el de FW, serie y MAC:
+
+| NCU | TCU | SoC % | SoH % | Vbat mV | Ibat mA | Vpanel mV | Ient mA | Tbat C | Tpcb C | Día | Estado |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+
+**No lee nada**: son las mismas medidas del último diagnóstico, puestas en
+tabla. Con sus filtros por columna, su CSV y su JSON. La columna **Estado** sale
+de la auditoría, para que no haya dos criterios distintos diciendo si una
+batería está bien.
+
+**Y el modo directo ya trae el panel (v11.3)** — dije que el mapa de la TCU no
+documentaba esos registros y era falso: están en `30092 tension_panel` y
+`30093 corriente_panel`. El diagnóstico directo lee ahora `30091..30098` de un
+tirón —bus, panel (V e I), batería (V e I), SoC/SoH y las dos temperaturas— en
+la misma petición que antes leía cinco. Las de motor sí se quedan vacías: esas
+no están en el mapa de la TCU.
+
 **Cuatro correcciones de campo (v11.2)**
 
 - **La barra de avance se quedaba en 0** durante todo el barrido en paralelo.
