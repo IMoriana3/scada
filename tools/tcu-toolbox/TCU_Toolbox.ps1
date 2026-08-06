@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '9.8'
+$VERSION_TOOLBOX = '9.9'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2856,12 +2856,16 @@ $lvFW.Location = New-Object System.Drawing.Point(10, 104)
 $lvFW.Size = New-Object System.Drawing.Size(898, 256)
 $lvFW.View = 'Details'; $lvFW.FullRowSelect = $true; $lvFW.GridLines = $true
 [void]$lvFW.Columns.Add('NCU', 50)
+# La tabla lleva dos cosas a la vez: los CARRILES que se pegan en el updater y
+# las TCUs pendientes una a una. Cuando un carril tiene una sola TCU las dos
+# filas salen identicas columna a columna, y parecia la misma TCU repetida.
+[void]$lvFW.Columns.Add('Fila', 88)
 [void]$lvFW.Columns.Add('IP', 110)
 [void]$lvFW.Columns.Add('Gateway', 70)
 [void]$lvFW.Columns.Add('Desde', 60)
 [void]$lvFW.Columns.Add('Hasta', 60)
 [void]$lvFW.Columns.Add('TCUs', 55)
-[void]$lvFW.Columns.Add('Estado / nota', 470)
+[void]$lvFW.Columns.Add('Estado / nota', 400)
 $tabFW.Controls.Add($lvFW)
 
 # ============================ TAB CIERRE ============================
@@ -3359,10 +3363,17 @@ function Lv-Menu($lv, [int]$col) {
     $esNum = (@($vals).Count -gt 0) -and (@($vals | Where-Object { [double]::IsNaN($_) }).Count -eq 0)
     $rotAsc = $(if ($esNum) { "Ordenar por '$nombre' de menor a mayor" } else { "Ordenar por '$nombre' A-Z" })
     $rotDes = $(if ($esNum) { "Ordenar por '$nombre' de mayor a menor" } else { "Ordenar por '$nombre' Z-A" })
+    # Un menu de Windows se cierra al primer clic, asi que con las casillas de
+    # los valores solo se podia marcar o desmarcar UNA por apertura: para dejar
+    # un valor de cinco habia que abrirlo cuatro veces, y desde fuera parece que
+    # no deja quitar las casillas. Se cancela el cierre por clic SIEMPRE y lo
+    # cierran a mano las opciones que si terminan (ordenar, quitar, copiar); asi
+    # no depende del orden en que WinForms dispare Click y Closing.
+    $m.Add_Closing({ param($s2, $e2) if ($e2.CloseReason -eq 'ItemClicked') { $e2.Cancel = $true } })
     $mAsc = $m.Items.Add($rotAsc)
-    $mAsc.Add_Click({ Lv-Ordenar $lv $col $true }.GetNewClosure())
+    $mAsc.Add_Click({ Lv-Ordenar $lv $col $true; $m.Close() }.GetNewClosure())
     $mDes = $m.Items.Add($rotDes)
-    $mDes.Add_Click({ Lv-Ordenar $lv $col $false }.GetNewClosure())
+    $mDes.Add_Click({ Lv-Ordenar $lv $col $false; $m.Close() }.GetNewClosure())
     [void]$m.Items.Add('-')
     # valores distintos de la columna, sobre la lista COMPLETA
     $cuenta = @{}
@@ -3376,20 +3387,12 @@ function Lv-Menu($lv, [int]$col) {
         $mAviso.Enabled = $false
     } else {
         $activos = $(if ($e.filtros.ContainsKey("$col")) { @($e.filtros["$col"]) } else { $null })
-        foreach ($k in $claves) {
-            $it = New-Object System.Windows.Forms.ToolStripMenuItem
-            $it.Text = $(if ($k -eq '') { '(vacio)' } else { $k }) + "   ($($cuenta[$k]))"
-            $it.CheckOnClick = $true
-            $it.Checked = ($null -eq $activos) -or (@($activos) -contains $k)
-            $it.Tag = $k
-            $m.Items.Add($it) | Out-Null
-        }
-        $m.Add_Closed({
-            param($s2, $e2)
-            if ($e2.CloseReason -ne 'AppFocusChange' -and $e2.CloseReason -ne 'AppClicked' -and $e2.CloseReason -ne 'ItemClicked') { return }
+        # El filtro se aplica al vuelo: la tabla de debajo se va actualizando
+        # segun se marca y se desmarca, con el menu abierto.
+        $aplicar = {
             $marcados = @()
             $total = 0
-            foreach ($x in $s2.Items) {
+            foreach ($x in $m.Items) {
                 if ($x -is [System.Windows.Forms.ToolStripMenuItem] -and $x.CheckOnClick) {
                     $total++
                     if ($x.Checked) { $marcados += "$($x.Tag)" }
@@ -3400,17 +3403,41 @@ function Lv-Menu($lv, [int]$col) {
             if ($marcados.Count -eq 0 -or $marcados.Count -eq $total) { [void]$est.filtros.Remove("$col") }
             else { $est.filtros["$col"] = $marcados }
             Lv-Aplicar $lv
+        }.GetNewClosure()
+        # marcar y desmarcar de golpe, que es lo que se quiere con muchos valores
+        $mSolo = $m.Items.Add('Desmarcar todos')
+        $mSolo.Add_Click({
+            foreach ($x in $m.Items) { if ($x -is [System.Windows.Forms.ToolStripMenuItem] -and $x.CheckOnClick) { $x.Checked = $false } }
+            & $aplicar
         }.GetNewClosure())
+        $mTodos = $m.Items.Add('Marcar todos')
+        $mTodos.Add_Click({
+            foreach ($x in $m.Items) { if ($x -is [System.Windows.Forms.ToolStripMenuItem] -and $x.CheckOnClick) { $x.Checked = $true } }
+            & $aplicar
+        }.GetNewClosure())
+        [void]$m.Items.Add('-')
+        foreach ($k in $claves) {
+            $it = New-Object System.Windows.Forms.ToolStripMenuItem
+            $it.Text = $(if ($k -eq '') { '(vacio)' } else { $k }) + "   ($($cuenta[$k]))"
+            $it.CheckOnClick = $true
+            $it.Checked = ($null -eq $activos) -or (@($activos) -contains $k)
+            $it.Tag = $k
+            $it.Add_Click({ & $aplicar }.GetNewClosure())
+            $m.Items.Add($it) | Out-Null
+        }
     }
     [void]$m.Items.Add('-')
     $mQuitar = $m.Items.Add('Quitar todos los filtros')
-    $mQuitar.Add_Click({ $est = Lv-Estado $lv; $est.filtros = @{}; Lv-Aplicar $lv }.GetNewClosure())
+    $mQuitar.Add_Click({ $est = Lv-Estado $lv; $est.filtros = @{}; Lv-Aplicar $lv; $m.Close() }.GetNewClosure())
     $mCopiar = $m.Items.Add('Copiar lo que se ve (TSV)')
     $mCopiar.Add_Click({
         $lin = @((@($lv.Columns | ForEach-Object { $_.Text -replace '\u25BE\*?$', '' })) -join [char]9)
         foreach ($it in $lv.Items) { $lin += (@($it.SubItems | ForEach-Object { $_.Text }) -join [char]9) }
         try { [System.Windows.Forms.Clipboard]::SetText($lin -join "`r`n") } catch {}
+        $m.Close()
     }.GetNewClosure())
+    $mCerrar = $m.Items.Add('Cerrar')
+    $mCerrar.Add_Click({ $m.Close() }.GetNewClosure())
     return $m
 }
 
@@ -6675,7 +6702,7 @@ $btnFwPlan.Add_Click({ Lanzar {
         $h = [math]::Round(($carga[$k] * $minTcu) / 60.0, 1)
         $colaB = $(if ([int]$bajasCarril[$k] -gt 0) { "  -  $($bajasCarril[$k]) con bateria baja" } else { '' })
         $item = New-Object System.Windows.Forms.ListViewItem("$($t.NCU)")
-        foreach ($c in @($ips["$($t.NCU)"], $t.Puerto, $t.Desde, $t.Hasta, $t.TCUs, "carril NCU$($t.NCU)/GW$($t.Puerto): $($carga[$k]) TCUs ~ $h h$colaB")) { [void]$item.SubItems.Add("$c") }
+        foreach ($c in @('CARRIL', $ips["$($t.NCU)"], $t.Puerto, $t.Desde, $t.Hasta, $t.TCUs, "carril NCU$($t.NCU)/GW$($t.Puerto): $($carga[$k]) TCUs ~ $h h$colaB")) { [void]$item.SubItems.Add("$c") }
         $item.ForeColor = [System.Drawing.Color]::DarkOrange
         $lvFW.Items.Add($item) | Out-Null
         Con ("  NCU{0,-3} {1,-15} GW {2}   TCUs {3}-{4}  ({5})" -f $t.NCU, $ips["$($t.NCU)"], $t.Puerto, $t.Desde, $t.Hasta, $t.TCUs) ([System.Drawing.Color]::Gainsboro)
@@ -6693,7 +6720,7 @@ $btnFwPlan.Add_Click({ Lanzar {
             $aviso = $(if ($d.SoC_bajo) { " - BATERIA BAJA: por debajo del $SOC_MIN_OTA % el bootloader puede no instalarlo" } else { '' })
             Con ("  NCU{0,-3} TCU {1,3}   {2}  ->  {3}{4}{5}" -f $d.NCU, $d.TCU, $d.FW, $d.Objetivo, $eSoc, $aviso) $(if ($d.SoC_bajo) { [System.Drawing.Color]::Salmon } else { [System.Drawing.Color]::Orange })
             $itemD = New-Object System.Windows.Forms.ListViewItem("$($d.NCU)")
-            foreach ($c in @($ips["$($d.NCU)"], $d.Puerto, $d.TCU, $d.TCU, 1, "pendiente: tiene $($d.FW), objetivo $($d.Objetivo)$eSoc$aviso")) { [void]$itemD.SubItems.Add("$c") }
+            foreach ($c in @('TCU', $ips["$($d.NCU)"], $d.Puerto, $d.TCU, $d.TCU, 1, "pendiente: tiene $($d.FW), objetivo $($d.Objetivo)$eSoc$aviso")) { [void]$itemD.SubItems.Add("$c") }
             $itemD.ForeColor = $(if ($d.SoC_bajo) { [System.Drawing.Color]::Firebrick } else { [System.Drawing.Color]::DarkOrange })
             $lvFW.Items.Add($itemD) | Out-Null
         }
@@ -6713,7 +6740,7 @@ $btnFwPlan.Add_Click({ Lanzar {
     }
     foreach ($m in @($plan.sin_respuesta)) {
         $item = New-Object System.Windows.Forms.ListViewItem("$($m.ncu)")
-        foreach ($c in @($ips["$($m.ncu)"], '-', $m.tcu, $m.tcu, 1, "sin respuesta en el inventario: $($m.nota)")) { [void]$item.SubItems.Add("$c") }
+        foreach ($c in @('SIN RESPUESTA', $ips["$($m.ncu)"], '-', $m.tcu, $m.tcu, 1, "sin respuesta en el inventario: $($m.nota)")) { [void]$item.SubItems.Add("$c") }
         $item.ForeColor = [System.Drawing.Color]::Gray
         $lvFW.Items.Add($item) | Out-Null
     }
@@ -6733,14 +6760,17 @@ function Fw-Marcar([string]$ncu, [int]$tcu, [string]$nota, $color) {
     foreach ($lista in $listas) {
         foreach ($it in $lista) {
             if ("$($it.Text)" -ne "$ncu") { continue }
-            if ($it.SubItems.Count -lt 7) { continue }
+            if ($it.SubItems.Count -lt 8) { continue }
+            # solo las filas de TCU: la del carril habla de todo el tramo, y con
+            # un carril de una sola TCU se le borraba el reparto de horas
+            if ("$($it.SubItems[1].Text)" -ne 'TCU') { continue }
             $de = 0; $a = 0
-            if (-not [int]::TryParse("$($it.SubItems[3].Text)", [ref]$de)) { continue }
-            if (-not [int]::TryParse("$($it.SubItems[4].Text)", [ref]$a)) { continue }
+            if (-not [int]::TryParse("$($it.SubItems[4].Text)", [ref]$de)) { continue }
+            if (-not [int]::TryParse("$($it.SubItems[5].Text)", [ref]$a)) { continue }
             # solo las filas que son exactamente esa TCU: en un tramo de varias
             # no se puede decir cual de ellas se ha actualizado
             if ($de -ne $tcu -or $a -ne $tcu) { continue }
-            $it.SubItems[6].Text = $nota
+            $it.SubItems[7].Text = $nota
             $it.ForeColor = $color
         }
     }
