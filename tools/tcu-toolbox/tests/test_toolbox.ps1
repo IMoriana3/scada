@@ -1422,6 +1422,15 @@ Write-Host '== cierre post-actualizacion =='
 $script:Cierre = @{}
 Cierre-Marcar '9' 34 '' '' 'v1.6.0 (map 1)'
 Check 'cierre: entra al verificar' ($script:Cierre.Count) 1
+# La lista estuvo vacia siempre porque el alta no tenia quien la llamara: las
+# pruebas ejercitaban la funcion, no el camino. Estas miran el codigo de
+# VERIFICAR TRAS ACTUALIZAR, que es el unico sitio que da de alta.
+$iVer = $src.IndexOf('$btnFwVerif.Add_Click'); $fVer = $src.IndexOf('# Preparar una TCU concreta antes')
+$verif = $src.Substring($iVer, $fVer - $iVer)
+Check 'cierre: verificar da de alta' ($verif.Contains('Cierre-Marcar')) $true
+Check 'cierre: y solo en la rama de ACTUALIZADA' ($verif.IndexOf('Cierre-Marcar') -gt $verif.IndexOf('ACTUALIZADA ->')) $true
+Check 'cierre: verificar guarda la lista' ($verif.Contains('Cierre-Guardar')) $true
+Check 'cierre: verificar repinta la pestana' ($verif.Contains('Cierre-Pintar')) $true
 Check 'cierre: guarda el FW' ($script:Cierre['9|34'].fw) 'v1.6.0 (map 1)'
 Check 'cierre: recien actualizada no esta cerrada' (Cierre-Estado $script:Cierre['9|34']) 'falta parametros, NVM, modo AUTO'
 Cierre-Marcar '9' 34 'params' 'OK'

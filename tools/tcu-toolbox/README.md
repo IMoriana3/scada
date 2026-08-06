@@ -163,6 +163,13 @@ te lleva, no dispara. Así no hay lógica de escritura duplicada en dos pestaña
 La lista **sobrevive a cerrar el programa** (`cierre/<planta>.json`) y es una por
 planta, que es lo que hace falta cuando la campaña dura días.
 
+**Corregido en v9.8:** el alta nunca llegaba a ejecutarse. `VERIFICAR TRAS
+ACTUALIZAR` marcaba la TCU en verde en su tabla, pero no la metía en la lista de
+cierre, así que la pestaña salía siempre vacía y no avisaba de nada. Las pruebas
+no lo cogieron porque ejercitaban la **función** de alta, no el **camino** que
+tenía que llamarla. Ahora hay comprobaciones estáticas de que `VERIFICAR` llama
+al alta, y solo en la rama de «ACTUALIZADA».
+
 ## v9.0 — seis cosas de golpe
 
 **Buscador de acciones (Ctrl+K, o el botón *Buscar*)** — hay 80 acciones en 10

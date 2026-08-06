@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '9.7'
+$VERSION_TOOLBOX = '9.8'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -6786,6 +6786,10 @@ $btnFwVerif.Add_Click({ Lanzar {
                     $ok++
                     Con ("  NCU{0,-3} TCU {1,3}  ACTUALIZADA -> {2}" -f $t.NCU, $tcu, $fw) ([System.Drawing.Color]::LightGreen)
                     Fw-Marcar "$($t.NCU)" ([int]$tcu) "ACTUALIZADA: ya en $fw" ([System.Drawing.Color]::DarkGreen)
+                    # y a la lista de cierre: es el momento en que se sabe que
+                    # esta en el firmware nuevo, y con el firmware nuevo llega
+                    # todo lo que hay que hacerle despues (parametros, NVM, AUTO)
+                    Cierre-Marcar "$($t.NCU)" ([int]$tcu) '' '' "$fw"
                 } else {
                     $ko++
                     Con ("  NCU{0,-3} TCU {1,3}  sigue en {2}" -f $t.NCU, $tcu, $fw) ([System.Drawing.Color]::Orange)
@@ -6802,6 +6806,7 @@ $btnFwVerif.Add_Click({ Lanzar {
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Verificacion: $ok TCUs ya en $obj, $ko siguen pendientes, $err sin respuesta$(if ($saltados -gt 0) { ", $saltados SIN COMPROBAR (de otras NCUs)" })." ([System.Drawing.Color]::SteelBlue)
     if ($saltados -gt 0) { Con "Las $saltados sin comprobar siguen igual que estaban: no cuentan como buenas. Cambia a (Planta completa) y vuelve a verificar." ([System.Drawing.Color]::Orange) }
+    if ($ok -gt 0) { Cierre-Guardar (Nombre-Planta); Cierre-Pintar; Cierre-Avisar }
     Con 'Lanza un INVENTARIO nuevo para dejar constancia (y subirlo al Historico).' ([System.Drawing.Color]::Gainsboro)
 } })
 
