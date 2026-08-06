@@ -93,10 +93,23 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
     if i_hsu is None:
         print(f"aviso: la hoja '{hoja}' no tiene columna HSU; "
               "las entradas saldran sin hsu_esclavo (la toolbox usara 185 y BUSCAR ESCLAVO)")
+    # CUANTAS estaciones lleva cada NCU si lo dicen las columnas 'RSU' (una por
+    # gateway). Ahi va un numero de orden dentro de la planta (1, 2, 3...), NO
+    # el esclavo Modbus: volcarlo en hsu_esclavo mandaria a la toolbox a hablar
+    # con el esclavo 5, que es un TCU. Solo se cuenta, para poder decir cuantas
+    # deberia encontrar BUSCAR HSUs.
+    i_rsu1 = col_opcional("RSU")
+    i_rsu2 = None
+    if i_rsu1 is not None and "IP GW 2" in head:
+        try:
+            i_rsu2 = head.index("RSU", head.index("IP GW 2"))
+        except ValueError:
+            i_rsu2 = None
 
     plantas = {}
     actual = None
     ncu_auto = 0
+    ultima_entrada = None      # las entradas de la ultima NCU con IP, para las filas de continuacion
     for fila in filas[2:]:
         def v(i):
             return str(fila[i]).strip() if (i < len(fila) and fila[i] is not None) else ""
@@ -115,8 +128,21 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
         # descarta por tener menos de dos) y otro con el resto. Ayora se
         # quedaba con 15 de 16 NCUs.
         proy = actual[1]
+
+        def rsus_fila():
+            """Cuantas RSU/HSU declara esta fila, entre los dos gateways."""
+            return sum(1 for i in (i_rsu1, i_rsu2)
+                       if i is not None and re.match(r"^\d+$", re.sub(r"\.0$", "", v(i))))
+
         ip = v(i_ip)
         if not re.match(r"^\d+\.\d+\.\d+\.\d+$", ip):
+            # Una NCU con DOS estaciones ocupa dos filas: la segunda solo lleva
+            # el numero de RSU, sin NCU ni IP, y cuelga de la NCU de arriba.
+            # Ayora es asi: la NCU15 tiene la 8 y la 9. Saltandola entera se
+            # perdia una de las diez.
+            if ultima_entrada is not None and rsus_fila():
+                for e in ultima_entrada:
+                    e["hsus"] = e.get("hsus", 0) + rsus_fila()
             continue
         ncu_auto += 1
         ntxt = re.sub(r"\.0$", "", v(i_ncu))
@@ -126,6 +152,8 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
         if not gws:
             continue
         hsu = re.sub(r"\.0$", "", v(i_hsu)) if i_hsu is not None else ""
+        nRsu = rsus_fila()
+        ultima_entrada = []
         for gidx, (puerto, (ini, fin)) in enumerate(gws, start=1):
             sufijo = f" GW{gidx}" if len(gws) > 1 else ""
             entrada = {
@@ -140,7 +168,10 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
             # avisa de cambiar el puerto si no responde por ese.
             if re.match(r"^\d+$", hsu):
                 entrada["hsu_esclavo"] = int(hsu)
+            if nRsu:
+                entrada["hsus"] = nRsu
             plantas[actual].append(entrada)
+            ultima_entrada.append(entrada)
 
     ficheros = []
     for (num, proy), entradas in sorted(plantas.items()):

@@ -32,7 +32,7 @@ $i10 = $src.IndexOf('function Aband-Cronologia'); $f10 = $src.IndexOf('#  Usuari
 $i11 = $src.IndexOf('$ROLES = @('); $f11 = $fin   # hasta el arranque de la interfaz
 $i12 = $src.IndexOf('function Lv-Pasa'); $f12 = $src.IndexOf('function Lv-Filtrable')
 $i16 = $src.IndexOf('function Prog-Texto'); $f16 = $src.IndexOf('$script:ProgTotal = 0;')
-$i15 = $src.IndexOf('function Aud-Indice'); $f15 = $src.IndexOf('#  Cierre post-actualizacion (interfaz)')
+$i15 = $src.IndexOf('function Hsu-Cuadre'); $f15 = $src.IndexOf('#  Cierre post-actualizacion (interfaz)')
 $i13 = $src.IndexOf('function Esclavos-Barrido'); $f13 = $src.IndexOf('function Params-Hsu')
 $i14 = $src.IndexOf('function Buscar-Norm'); $f14 = $src.IndexOf('function Buscador-Abrir')
 $logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7) + "`n" + $src.Substring($i8, $f8 - $i8) + "`n" + $src.Substring($i9, $f9 - $i9) + "`n" + $src.Substring($i10, $f10 - $i10) + "`n" + $src.Substring($i11, $f11 - $i11) + "`n" + $src.Substring($i12, $f12 - $i12) + "`n" + $src.Substring($i13, $f13 - $i13) + "`n" + $src.Substring($i14, $f14 - $i14) + "`n" + $src.Substring($i15, $f15 - $i15) + "`n" + $src.Substring($i16, $f16 - $i16)
@@ -1124,6 +1124,32 @@ Check 'menu: la casilla aplica al vuelo' ($menu.Contains('$it.Add_Click({ & $apl
 Check 'menu: ya no se aplica al cerrar' ($menu.Contains('Add_Closed')) $false
 Check 'menu: marcar todos' ($menu.Contains("Items.Add('Marcar todos')")) $true
 Check 'menu: desmarcar todos' ($menu.Contains("Items.Add('Desmarcar todos')")) $true
+
+Write-Host ''
+Write-Host '== cuadre de HSUs contra la topologia =='
+# "he encontrado 9" no dice nada; "falta la de NCU15" si. La topologia sabe
+# cuantas deberia haber (columna RSU del Excel); Ayora tiene 10 y la NCU15
+# lleva DOS, en una fila de continuacion del Excel sin NCU ni IP.
+$ncusT = @(@{ncu='2'; hsus=1}, @{ncu='15'; hsus=2}, @{ncu='16'; hsus=1}, @{ncu='7'; hsus=0})
+$todas = @(@{ncu='2'}, @{ncu='15'}, @{ncu='15'}, @{ncu='16'})
+$cOk = Hsu-Cuadre $ncusT $todas
+Check 'hsu: con todas no se queja' (@($cOk.faltan).Count + @($cOk.sobran).Count) 0
+Check 'hsu: y lo dice' ($cOk.texto.Contains('Las 4 HSUs')) $true
+# la de la NCU15 que no contesta: es el caso real
+$cFalta = Hsu-Cuadre $ncusT @(@{ncu='2'}, @{ncu='15'}, @{ncu='16'})
+Check 'hsu: detecta la que falta' (@($cFalta.faltan).Count) 1
+Check 'hsu: y dice cual' ($cFalta.faltan[0]) 'NCU15 (1 de 2)'
+Check 'hsu: con el total esperado' ($cFalta.texto.Contains('espera 4')) $true
+Check 'hsu: y que puede pasar' ($cFalta.texto.Contains('no comunican')) $true
+# al reves: la topologia se ha quedado corta
+$cSobra = Hsu-Cuadre $ncusT (@($todas) + @(@{ncu='2'}))
+Check 'hsu: tambien avisa si sobran' (@($cSobra.sobran).Count) 1
+Check 'hsu: y manda actualizar el Excel' ($cSobra.texto.Contains('columna RSU')) $true
+# sin topologia no se inventa nada: no puede decir si falta o no
+Check 'hsu: sin dato de topologia calla' ((Hsu-Cuadre @(@{ncu='1'; hsus=0}) @(@{ncu='1'})).texto) ''
+Check 'hsu: ni con la lista vacia' ((Hsu-Cuadre @() @()).texto) ''
+# una NCU que no estaba en la topologia y aparece con HSU: sobra, no revienta
+Check 'hsu: NCU desconocida no rompe' (@((Hsu-Cuadre $ncusT (@($todas) + @(@{ncu='99'}))).sobran).Count) 1
 
 Write-Host ''
 Write-Host '== barrido de esclavos =='
