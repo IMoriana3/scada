@@ -98,6 +98,11 @@ def cargar_topologia(ruta):
 
 def hoja_ncu(wb, n, d, con_ejemplo):
     ws = wb.create_sheet(f'NCU{n}')
+    # La columna se llama GW, asi que lleva GW1/GW2, no el puerto: en campo se
+    # habla de gateways, no de numeros de puerto TCP. El orden sale de los
+    # propios puertos de la NCU (el menor es GW1), sin dar por hecho 503/504.
+    puertos = sorted({p for p, _, _ in d['gws']})
+    gw_de = {p: i + 1 for i, p in enumerate(puertos)}
     tcus = []
     for puerto, ini, fin in d['gws']:
         tcus += [(t, puerto) for t in range(ini, fin + 1)]
@@ -105,8 +110,10 @@ def hoja_ncu(wb, n, d, con_ejemplo):
     ult = max(FONDO_FILAS, FILA_TCU1 - 1 + len(tcus))
 
     f(ws, 'A1', f"Seguimiento PEM - NCU{n}  ({d['ip']})", size=13, bold=True)
+    equiv = ', '.join(f'GW{i} = puerto {p}' for p, i in sorted(gw_de.items(), key=lambda x: x[1]))
     f(ws, 'A2', 'Rellenar solo celdas amarillas (desplegable OK / NOK / N.A.). '
-                'HSUs: escribe el nombre en la columna Equipo; las filas sin nombre no cuentan.',
+                'HSUs: escribe el nombre en la columna Equipo; las filas sin nombre no cuentan.  '
+                f'({equiv})',
       color='808080')
 
     for col, tit in zip('ABCD', ['Equipo', 'Tarea', 'Estado', 'Observaciones']):
@@ -130,7 +137,7 @@ def hoja_ncu(wb, n, d, con_ejemplo):
     for k, (tcu, puerto) in enumerate(tcus):
         fila = FILA_TCU1 + k
         f(ws, f'A{fila}', tcu, center=True)
-        f(ws, f'B{fila}', puerto, center=True)
+        f(ws, f'B{fila}', f'GW{gw_de[puerto]}', center=True)
         for col in 'CDE':
             f(ws, f'{col}{fila}', None, fill=AMARILLO, border=True, center=True)
         f(ws, f'F{fila}', f'=(COUNTIF(C{fila}:E{fila},"OK")+COUNTIF(C{fila}:E{fila},"N.A."))/3',
