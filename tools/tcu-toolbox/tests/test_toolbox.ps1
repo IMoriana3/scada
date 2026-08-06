@@ -1056,6 +1056,32 @@ Check 'tipo: 1 es TCU' ((Tipo-Producto 0x0011).nombre) 'TCU'
 Check 'tipo: 2 es HSU' ((Tipo-Producto 0x0012).nombre) 'HSU'
 Check 'tipo: HW del nibble alto' ((Tipo-Producto 0x0062).hw) 6
 
+# --------------------------------------------------------------------------
+#  Rotulos: una sola TCU no es "todas", y la NCU sale del nombre de la entrada
+# --------------------------------------------------------------------------
+Write-Host ''
+Write-Host '== rotulo de rango =='
+Check 'rango: una sola TCU' (Eti-Rango @(16)) 'TCU 16'
+Check 'rango: varias TCUs' (Eti-Rango @(16,17,18)) 'TCUs 16-18'
+Check 'rango: dos TCUs' (Eti-Rango @(1,63)) 'TCUs 1-63'
+Check 'rango: ninguna' (Eti-Rango @()) 'sin TCUs'
+
+Write-Host ''
+Write-Host '== NCU a partir del nombre de la entrada =='
+Check 'ncu: entrada con NCU al final' (Ncu-DeNombre 'Ayora NCU3') '3'
+Check 'ncu: con espacio' (Ncu-DeNombre 'Ayora NCU 15') '15'
+Check 'ncu: en minusculas' (Ncu-DeNombre 'ayora ncu7') '7'
+Check 'ncu: entrada (auto)' (Ncu-DeNombre 'Ayora NCU2 (auto)') '2'
+Check 'ncu: planta completa no tiene numero' (Ncu-DeNombre 'Ayora (Planta completa)') ''
+Check 'ncu: nombre sin NCU' (Ncu-DeNombre 'El Burgo') ''
+Check 'ncu: vacio' (Ncu-DeNombre '') ''
+# lo que de verdad importa: que Trabajos-Planta lo propague
+$cxUnaNcu = @{ip='192.168.4.30'; puerto=503; gws=$null; multi=$null; etiqueta='503'; to=8000; reint=1; nombre='Ayora NCU3'}
+$trab = Trabajos-Planta $cxUnaNcu @(16)
+Check 'ncu: el trabajo la lleva' $trab.ncu 3
+$cxSinNombre = @{ip='192.168.4.30'; puerto=503; gws=$null; multi=$null; etiqueta='503'; to=8000; reint=1; nombre='IP suelta'}
+Check 'ncu: sin nombre reconocible, vacia' ((Trabajos-Planta $cxSinNombre @(16)).ncu) $null
+
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }
 else { Write-Host "$fallos PRUEBAS FALLIDAS"; exit 1 }

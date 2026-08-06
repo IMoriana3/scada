@@ -37,6 +37,20 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
 
+**Rótulos que dicen la verdad (v7.5)** — tres cosas que despistaban al trabajar
+contra una sola NCU o una sola TCU:
+
+- La **columna NCU** salía vacía, y la consola tampoco decía de qué NCU era cada
+  TCU, porque el número solo se conocía recorriendo la planta. Ahora se saca del
+  nombre de la entrada de conexión: *Ayora NCU3* → NCU 3.
+- Pedir una TCU y leer «**todas coinciden = 55**» cuando solo hay una. Con un
+  único equipo el resumen dice `41111 max_tilt_west_r1 [deg] = 55` y ya está, y
+  los rótulos de rango ponen `TCU 16` en vez de `TCUs 16-16`.
+- El recuento del diagnóstico **sumaba las HSUs con las TCUs**: pedías un
+  seguidor y salía `OK: 2` porque la meteo de esa NCU va en la misma tabla (a
+  propósito: es lo que decide si la NCU abandera entera). Ahora van separados,
+  `TCUs -> OK: 1 ... | HSUs: 1 (1 OK)`.
+
 ## Usuarios y roles (v7.4)
 
 El arranque pide **usuario y contraseña**, siempre. El primer arranque no tiene

@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '7.4'
+$VERSION_TOOLBOX = '7.5'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -674,7 +674,9 @@ function Informe-Html([hashtable]$m) {
             $cuenta = @{}
             foreach ($f in $filasL) { $v = "$($f.$c)"; if ($v -ne '') { $cuenta[$v] = 1 + [int]$cuenta[$v] } }
             $claves = @($cuenta.Keys | Sort-Object { - [int]$cuenta[$_] }, { "$_" })
-            if ($claves.Count -eq 1) {
+            if ($claves.Count -eq 1 -and $filasL.Count -le 1) {
+                $disc += '<span class="ok2">' + (Html-Esc $c) + ' = ' + (Html-Esc $claves[0]) + '</span>'
+            } elseif ($claves.Count -eq 1) {
                 $disc += '<span class="ok2">' + (Html-Esc $c) + ': todas coinciden = ' + (Html-Esc $claves[0]) + '</span>'
             } elseif ($claves.Count -gt 1) {
                 $det = ($claves | ForEach-Object { (Html-Esc $_) + ' en ' + $cuenta[$_] + ' TCUs' }) -join ' &middot; '
@@ -3261,7 +3263,7 @@ function Params-Conexion {
         $p = $null
         if ($cbPlanta.SelectedItem) { $p = $PLANTAS[$cbPlanta.SelectedItem] }
         if (-not ($p -and $p.ncus)) { throw "IP 'NA' solo vale con una entrada (Planta completa) seleccionada" }
-        return @{ip='NA'; puerto=$null; gws=$null; multi=$p.ncus; etiqueta='PLANTA'; to=$to; reint=$reint}
+        return @{ip='NA'; puerto=$null; gws=$null; multi=$p.ncus; etiqueta='PLANTA'; to=$to; reint=$reint; nombre="$($cbPlanta.SelectedItem)"}
     }
     $pt = $txtPort.Text.Trim()
     if ($pt -eq 'auto') {
@@ -3270,10 +3272,10 @@ function Params-Conexion {
         if (-not ($p -and $p.gws) -or ($p.ip -ne $ip)) {
             throw "puerto 'auto' requiere una entrada (auto) seleccionada y su IP sin modificar"
         }
-        return @{ip=$ip; puerto=$null; gws=$p.gws; etiqueta='auto'; to=$to; reint=$reint}
+        return @{ip=$ip; puerto=$null; gws=$p.gws; etiqueta='auto'; to=$to; reint=$reint; nombre="$($cbPlanta.SelectedItem)"}
     }
     $puerto = Val-Int $pt 'Puerto' 1 65535
-    return @{ip=$ip; puerto=$puerto; gws=$null; etiqueta="$puerto"; to=$to; reint=$reint}
+    return @{ip=$ip; puerto=$puerto; gws=$null; etiqueta="$puerto"; to=$to; reint=$reint; nombre="$($cbPlanta.SelectedItem)"}
 }
 
 # Etiqueta de una TCU para la consola. En Planta completa los numeros de TCU
@@ -3316,8 +3318,30 @@ function Plan-Segmentos([int[]]$tcus, [hashtable]$cx) {
 # completa)" devuelve uno por NCU (rangos automaticos de sus gateways,
 # opcionalmente filtrados con '1,3-5'); en modo normal, uno solo con los
 # $tcus que pase el llamante. Cada trabajo: @{ncu; ip; tcus; cx}.
+# Numero de NCU escondido en el nombre de una entrada de conexion ("Ayora NCU3"
+# -> 3). Trabajando contra una sola NCU no hay recorrido del que sacarlo, pero
+# el nombre lo lleva: sin esto la columna NCU salia vacia y la consola tampoco
+# decia de que NCU era cada TCU. Pura: se prueba sin ventana.
+function Ncu-DeNombre([string]$nombre) {
+    $m = [regex]::Match("$nombre", '(?i)\bNCU\s*(\d+)')
+    if ($m.Success) { return $m.Groups[1].Value }
+    return ''
+}
+
+# "TCU 16" cuando es una sola y "TCUs 16-20" cuando son varias: poner el rango
+# repetido, o hablar de "todas", cuando solo hay un equipo despista. Pura.
+function Eti-Rango($tcus) {
+    $t = @($tcus)
+    if ($t.Count -eq 0) { return 'sin TCUs' }
+    if ($t.Count -eq 1) { return "TCU $($t[0])" }
+    return "TCUs $($t[0])-$($t[-1])"
+}
+
 function Trabajos-Planta([hashtable]$cx, [int[]]$tcus, [string]$filtro = '') {
-    if (-not $cx.multi) { return @{ncu=$null; ip=$cx.ip; tcus=$tcus; cx=$cx} }
+    if (-not $cx.multi) {
+        $n = Ncu-DeNombre $cx.nombre
+        return @{ncu=$(if ($n -ne '') { [int]$n } else { $null }); ip=$cx.ip; tcus=$tcus; cx=$cx}
+    }
     $lista = @()
     $nums = Parse-ListaNums $filtro
     foreach ($n in $cx.multi) {
@@ -3876,7 +3900,7 @@ $btnLeer.Add_Click({ Lanzar {
         $totTcus = 0; foreach ($tr in $trabajos) { $totTcus += @($tr.tcus).Count }
         Con "Leyendo $($defs.Count) variable(s) en PLANTA completa: $($trabajos.Count) NCUs, $totTcus TCUs (rangos automaticos)" ([System.Drawing.Color]::SteelBlue)
     } else {
-        Con "Leyendo $($defs.Count) variable(s) en TCUs $($tcus[0])-$($tcus[-1])  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
+        Con "Leyendo $($defs.Count) variable(s) en $(Eti-Rango $tcus)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     }
     $valores = @{}
     foreach ($d in $defs) { $valores[$d.nombre] = @{} }
@@ -3975,9 +3999,12 @@ $btnLeer.Add_Click({ Lanzar {
     }
     }
     Modbus-Cerrar
+    $nLeidas = @($script:UltimaLectura).Count
     foreach ($d in $defs) {
         $v = $valores[$d.nombre]
-        if ($v.Count -eq 1) {
+        if ($v.Count -eq 1 -and $nLeidas -le 1) {
+            Con ("  {0} = {1}" -f $d.nombre, @($v.Keys)[0]) ([System.Drawing.Color]::LightGreen)
+        } elseif ($v.Count -eq 1) {
             Con ("  {0}: todas coinciden = {1}" -f $d.nombre, @($v.Keys)[0]) ([System.Drawing.Color]::LightGreen)
         } elseif ($v.Count -gt 1) {
             Con ("  ATENCION {0}: {1} valores distintos:" -f $d.nombre, $v.Count) ([System.Drawing.Color]::Orange)
@@ -4305,9 +4332,10 @@ function Diag-Correr {
     } else {
         $tcus = Rango-Tcus $txtGIni.Text $txtGFin.Text 'Diagnostico'
         $trabajos = @(Trabajos-Planta $cx $tcus)
-        Con "Diagnostico de TCUs $($tcus[0])-$($tcus[-1])  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
+        Con "Diagnostico de $(Eti-Rango $tcus)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     }
     $nOk = 0; $nAviso = 0; $nAlarma = 0; $nOff = 0
+    $nHOk = 0; $nHMal = 0        # las HSUs van aparte de la cuenta de TCUs
     foreach ($tr in $trabajos) {
         $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
     if ($script:Cancelar) { break }
@@ -4353,10 +4381,12 @@ function Diag-Correr {
             $itemH = New-Object System.Windows.Forms.ListViewItem($dh.NCU)
             foreach ($c in @($dh.TCU, $dh.Salud, $dh.Modo, $dh.Tilt, $dh.Objetivo, $dh.Dif, $dh.SoC, $dh.Alarmas)) { [void]$itemH.SubItems.Add("$c") }
             switch ($dh.Salud) {
-                'OK'      { $itemH.ForeColor = [System.Drawing.Color]::DarkGreen;  $nOk++ }
-                'AVISO'   { $itemH.ForeColor = [System.Drawing.Color]::DarkOrange; $nAviso++ }
-                'ALARMA'  { $itemH.ForeColor = [System.Drawing.Color]::Firebrick;  $nAlarma++ }
-                'OFFLINE' { $itemH.ForeColor = [System.Drawing.Color]::Gray;       $nOff++ }
+                # Las HSUs se cuentan aparte: pedir una TCU y ver "OK: 1 Aviso: 1"
+                # porque la meteo de esa NCU va en la misma tabla despista.
+                'OK'      { $itemH.ForeColor = [System.Drawing.Color]::DarkGreen;  $nHOk++ }
+                'AVISO'   { $itemH.ForeColor = [System.Drawing.Color]::DarkOrange; $nHMal++ }
+                'ALARMA'  { $itemH.ForeColor = [System.Drawing.Color]::Firebrick;  $nHMal++ }
+                'OFFLINE' { $itemH.ForeColor = [System.Drawing.Color]::Gray;       $nHMal++ }
             }
             $lvG.Items.Add($itemH) | Out-Null
             $script:UltimoDiag += $dh
@@ -4443,7 +4473,8 @@ function Diag-Correr {
     }
     }
     Modbus-Cerrar
-    $lblGResumen.Text = "OK: $nOk  Aviso: $nAviso  Alarma: $nAlarma  Off: $nOff"
+    $lblGResumen.Text = "TCUs -> OK: $nOk  Aviso: $nAviso  Alarma: $nAlarma  Off: $nOff" +
+        $(if (($nHOk + $nHMal) -gt 0) { "   |   HSUs: $($nHOk + $nHMal) ($nHOk OK)" } else { '' })
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Diagnostico: OK $nOk | AVISO $nAviso | ALARMA $nAlarma | OFFLINE $nOff" ([System.Drawing.Color]::SteelBlue)
     Marcar-Bloque 'diag'
@@ -4846,7 +4877,7 @@ $btnBackupNcu.Add_Click({ Lanzar {
     $dir = $dlg.SelectedPath
     $ts = Get-Date -Format 'yyyyMMdd_HHmm'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Backup NCU: TCUs $($tcus[0])-$($tcus[-1]) -> $dir  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
+    Con "Backup NCU: $(Eti-Rango $tcus) -> $dir  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     $ok = 0; $ko = 0
     $segs = @(Plan-Segmentos $tcus $cx)
     foreach ($seg in $segs) {
@@ -4938,7 +4969,7 @@ $btnAud.Add_Click({ Lanzar {
         $totTcus = 0; foreach ($tr in $trabajos) { $totTcus += @($tr.tcus).Count }
         Con "Auditoria de Planta completa: $($trabajos.Count) NCUs, $totTcus TCUs contra '$($script:PresetRefNombre)' ($($script:PresetRef.Count) variables)" ([System.Drawing.Color]::SteelBlue)
     } else {
-        Con "Auditoria de TCUs $($tcus[0])-$($tcus[-1]) contra '$($script:PresetRefNombre)' ($($script:PresetRef.Count) variables)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
+        Con "Auditoria de $(Eti-Rango $tcus) contra '$($script:PresetRefNombre)' ($($script:PresetRef.Count) variables)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     }
     $nOk = 0; $nDesv = 0; $nErr = 0
     foreach ($tr in $trabajos) {
@@ -5056,7 +5087,7 @@ $btnInvF.Add_Click({ Lanzar {
         $totTcus = 0; foreach ($tr in $trabajos) { $totTcus += @($tr.tcus).Count }
         Con "Inventario de Planta completa: $($trabajos.Count) NCUs, $totTcus TCUs (rangos por NCU automaticos)" ([System.Drawing.Color]::SteelBlue)
     } else {
-        Con "Inventario de TCUs $($tcus[0])-$($tcus[-1])  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
+        Con "Inventario de $(Eti-Rango $tcus)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     }
     $ok = 0; $ko = 0
     foreach ($tr in $trabajos) {
@@ -5214,7 +5245,7 @@ $btnPMotor.Add_Click({ Lanzar {
     if (-not (Guardia-Viento $cx)) { return }
     $lvP.Items.Clear(); $script:UltimoPem = @(); $lblPResumen.Text = ''
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "TEST DE MOTOR: TCUs $($tcus[0])-$($tcus[-1]), pulso ${pulso}s, umbral $umbral deg" ([System.Drawing.Color]::SteelBlue)
+    Con "TEST DE MOTOR: $(Eti-Rango $tcus), pulso ${pulso}s, umbral $umbral deg" ([System.Drawing.Color]::SteelBlue)
     $nPasa = 0; $nFalla = 0; $nSalta = 0
     $segs = @(Plan-Segmentos $tcus $cx)
     foreach ($seg in $segs) {
@@ -5290,7 +5321,7 @@ $btnPModo.Add_Click({ Lanzar {
     if ($r -ne 'Yes') { return }
     $lvP.Items.Clear(); $script:UltimoPem = @()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Cambio de modo a $($cbPModo.SelectedItem) en TCUs $($tcus[0])-$($tcus[-1])" ([System.Drawing.Color]::SteelBlue)
+    Con "Cambio de modo a $($cbPModo.SelectedItem) en $(Eti-Rango $tcus)" ([System.Drawing.Color]::SteelBlue)
     $segs = @(Plan-Segmentos $tcus $cx)
     foreach ($seg in $segs) {
         if ($script:Cancelar) { break }
@@ -5316,7 +5347,7 @@ $btnPClear.Add_Click({ Lanzar {
     if ($r -ne 'Yes') { return }
     $lvP.Items.Clear(); $script:UltimoPem = @()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Clear de alarmas enclavadas en TCUs $($tcus[0])-$($tcus[-1])" ([System.Drawing.Color]::SteelBlue)
+    Con "Clear de alarmas enclavadas en $(Eti-Rango $tcus)" ([System.Drawing.Color]::SteelBlue)
     $segs = @(Plan-Segmentos $tcus $cx)
     foreach ($seg in $segs) {
         if ($script:Cancelar) { break }
@@ -5346,7 +5377,7 @@ function Stow-Aplicar([int]$n) {
     if ($r -ne 'Yes') { return }
     $lvP.Items.Clear(); $script:UltimoPem = @()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "$txtAccion en TCUs $($tcus[0])-$($tcus[-1])" ([System.Drawing.Color]::SteelBlue)
+    Con "$txtAccion en $(Eti-Rango $tcus)" ([System.Drawing.Color]::SteelBlue)
     $segs = @(Plan-Segmentos $tcus $cx)
     foreach ($seg in $segs) {
         if ($script:Cancelar) { break }
@@ -5408,7 +5439,7 @@ $btnPComis.Add_Click({ Lanzar {
         }
     } else {
         $tcus = Rango-Tcus $txtPIni.Text $txtPFin.Text 'Comisionado'
-        Con "Estado de comisionado (30001 bits 4:3) en TCUs $($tcus[0])-$($tcus[-1])" ([System.Drawing.Color]::SteelBlue)
+        Con "Estado de comisionado (30001 bits 4:3) en $(Eti-Rango $tcus)" ([System.Drawing.Color]::SteelBlue)
         $segs = @(Plan-Segmentos $tcus $cx)
         foreach ($seg in $segs) {
             if ($script:Cancelar) { break }
@@ -5447,7 +5478,7 @@ $btnPComisSet.Add_Click({ Lanzar {
     if ($r -ne 'Yes') { return }
     $lvP.Items.Clear(); $script:UltimoPem = @()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Fijando comisionado=$obj ($($ESTADOS_COMIS[$obj])) en TCUs $($tcus[0])-$($tcus[-1])" ([System.Drawing.Color]::SteelBlue)
+    Con "Fijando comisionado=$obj ($($ESTADOS_COMIS[$obj])) en $(Eti-Rango $tcus)" ([System.Drawing.Color]::SteelBlue)
     $segs = @(Plan-Segmentos $tcus $cx)
     foreach ($seg in $segs) {
         if ($script:Cancelar) { break }
