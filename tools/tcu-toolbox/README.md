@@ -275,6 +275,14 @@ versión actual (`pendiente: tiene v1.4.3, objetivo v1.6.0`) y en consola sale e
 reparto por versión (`42 en v1.4.3 | 3 en v1.5.1`). El CSV saca un segundo
 fichero `_pendientes.csv` con esa lista, que es la que sirve para el seguimiento.
 
+**Corregido en v9.9:** esas dos clases de fila convivían en la misma tabla sin
+decir cuál era cuál, y cuando un carril tiene **una sola TCU** salían idénticas
+columna a columna (misma NCU, mismo gateway, mismo desde-hasta, mismo 1) —
+parecía la misma TCU repetida. Ahora una columna **Fila** dice qué es cada una
+(`CARRIL`, `TCU`, `SIN RESPUESTA`), y sirve además de filtro para quedarse solo
+con las pendientes. `VERIFICAR TRAS ACTUALIZAR` tampoco repinta ya la fila del
+carril: con un carril de una TCU le borraba su reparto de horas.
+
 **«No contesta» no es lo mismo que «rechaza» (v8.1)** — un fallo de conexión TCP
 decía solo `Sin conexion TCP a 192.168.4.10:502`. Ahora distingue los dos casos,
 que llevan a sitios opuestos: **no contesta en 5 s** es equipo apagado, IP mal o
@@ -402,6 +410,15 @@ numérico cuando la columna son números, así que la TCU 10 ya no va delante de
 `*`. Funciona en las diez tablas de la herramienta y sin mover un píxel del
 diseño: en estas pestañas no sobra sitio para una fila de filtros como la del
 informe HTML.
+
+**Corregido en v9.9:** un menú de Windows se cierra al primer clic, así que solo
+se podía marcar o desmarcar **una** casilla por apertura — para dejar un valor de
+cinco había que abrir el menú cuatro veces, y desde fuera parece que no deja
+quitar las casillas. Ahora el menú **se queda abierto** mientras se marca y se
+desmarca, el filtro se aplica al vuelo (la tabla se actualiza debajo) y hay
+**Marcar todos** / **Desmarcar todos** para no ir una a una. Lo cierran las
+opciones que terminan —ordenar, quitar filtros, copiar—, un clic fuera, `Esc` o
+la entrada **Cerrar**.
 
 **BUSCAR ESCLAVO (v7.4)** — la caché de la NCU dice **cuántas** HSUs hay y cómo
 están, pero no su número de esclavo Modbus, que es lo que hace falta para

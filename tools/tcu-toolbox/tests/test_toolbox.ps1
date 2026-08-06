@@ -1067,6 +1067,20 @@ Check 'orden: rotulo numerico' ($src.Contains('de menor a mayor')) $true
 Check 'orden: y alfabetico si no lo es' ($src.Contains("A-Z")) $true
 Check 'orden: coma decimal' (Lv-Clave '-0,7854') -0.7854
 Check 'orden: texto no es numero' ([double]::IsNaN((Lv-Clave 'ALARMA'))) $true
+# El menu se cerraba al primer clic, asi que solo se podia tocar UNA casilla
+# por apertura. Se cancela el cierre por clic y lo cierran a mano las opciones
+# que terminan; el orden en que WinForms dispara Click y Closing no importa.
+$iMen = $src.IndexOf('function Lv-Menu'); $fMen = $src.IndexOf('function Lv-Filtrable')
+$menu = $src.Substring($iMen, $fMen - $iMen)
+Check 'menu: cancela el cierre al pulsar' ($menu.Contains("CloseReason -eq 'ItemClicked') { `$e2.Cancel = `$true }")) $true
+Check 'menu: ordenar cierra a mano' ($menu.Contains('Lv-Ordenar $lv $col $true; $m.Close()')) $true
+Check 'menu: quitar filtros cierra a mano' ($menu.Contains('Lv-Aplicar $lv; $m.Close()')) $true
+Check 'menu: y hay una salida explicita' ($menu.Contains("Items.Add('Cerrar')")) $true
+# cada casilla aplica el filtro al vuelo, sin esperar a que se cierre el menu
+Check 'menu: la casilla aplica al vuelo' ($menu.Contains('$it.Add_Click({ & $aplicar }')) $true
+Check 'menu: ya no se aplica al cerrar' ($menu.Contains('Add_Closed')) $false
+Check 'menu: marcar todos' ($menu.Contains("Items.Add('Marcar todos')")) $true
+Check 'menu: desmarcar todos' ($menu.Contains("Items.Add('Desmarcar todos')")) $true
 
 Write-Host ''
 Write-Host '== barrido de esclavos =='
@@ -1597,6 +1611,16 @@ Check 'verif: tambien las que no responden' ($src.Contains('sin respuesta al ver
 Check 'verif: marca tambien lo filtrado' ($src.Contains('$lvFW.Tag.orig')) $true
 # y solo a la TCU exacta, no a un tramo que la contenga
 Check 'verif: no marca tramos de varias' ($src.Contains('if ($de -ne $tcu -or $a -ne $tcu) { continue }')) $true
+# La tabla del plan lleva CARRILES y TCUs sueltas. Con un carril de una sola
+# TCU las dos filas salian identicas columna a columna y parecian repetidas:
+# la columna Fila dice que es cada una, y ademas hace de filtro.
+Check 'plan: columna que separa las filas' ($src.Contains("lvFW.Columns.Add('Fila'")) $true
+Check 'plan: fila de carril etiquetada' ($src.Contains("@('CARRIL', `$ips[`"`$(`$t.NCU)`"]")) $true
+Check 'plan: fila de TCU etiquetada' ($src.Contains("@('TCU', `$ips[`"`$(`$d.NCU)`"]")) $true
+Check 'plan: y las que no responden' ($src.Contains("@('SIN RESPUESTA', `$ips[`"`$(`$m.ncu)`"]")) $true
+# verificar solo puede repintar filas de TCU: la del carril habla del tramo
+Check 'verif: no toca la fila del carril' ($src.Contains("if (`"`$(`$it.SubItems[1].Text)`" -ne 'TCU') { continue }")) $true
+Check 'verif: nota en la columna nueva' ($src.Contains('$it.SubItems[7].Text = $nota')) $true
 
 Write-Host ''
 Write-Host '== via NCU sin respuesta no inventa OFFLINEs =='
