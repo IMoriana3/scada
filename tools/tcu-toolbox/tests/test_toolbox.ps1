@@ -1478,6 +1478,18 @@ Check 'cierre: verificar da de alta' ($verif.Contains('Cierre-Marcar')) $true
 Check 'cierre: y solo en la rama de ACTUALIZADA' ($verif.IndexOf('Cierre-Marcar') -gt $verif.IndexOf('ACTUALIZADA ->')) $true
 Check 'cierre: verificar guarda la lista' ($verif.Contains('Cierre-Guardar')) $true
 Check 'cierre: verificar repinta la pestana' ($verif.Contains('Cierre-Pintar')) $true
+# El firmware se instala con el updater del fabricante, fuera de aqui: si ese
+# dia no se pasa por Firmware, lo actualizado no entra en ningun sitio. De ahi
+# el alta a mano, que usa el mismo parser que el filtro de NCUs.
+Check 'cierre: se pueden anadir a mano' ($src.Contains("btnCAdd.Text = 'Anadir TCUs...'")) $true
+Check 'cierre: con handler' ($src.Contains('$btnCAdd.Add_Click')) $true
+Check 'cierre: el alta a mano guarda' ($src.Contains('Cierre-Guardar (Nombre-Planta); Cierre-Pintar')) $true
+Check 'alta: una sola TCU' ((Parse-ListaNums '26') -join ',') '26'
+Check 'alta: varias sueltas' ((Parse-ListaNums '26,39') -join ',') '26,39'
+Check 'alta: un rango' ((Parse-ListaNums '11-14') -join ',') '11,12,13,14'
+Check 'alta: mezcla' ((Parse-ListaNums '11-13,20') -join ',') '11,12,13,20'
+Check 'alta: repetidas una vez' ((Parse-ListaNums '26,26') -join ',') '26'
+Check 'alta: vacio no da lista' ($null -eq (Parse-ListaNums '   ')) $true
 Check 'cierre: guarda el FW' ($script:Cierre['9|34'].fw) 'v1.6.0 (map 1)'
 Check 'cierre: recien actualizada no esta cerrada' (Cierre-Estado $script:Cierre['9|34']) 'falta parametros, NVM, modo AUTO'
 Cierre-Marcar '9' 34 'params' 'OK'
