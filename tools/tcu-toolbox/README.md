@@ -37,6 +37,21 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
 
+**VERIFICAR TRAS ACTUALIZAR dice cuál, y no se calla lo que no mira (v8.4)** —
+tenía dos problemas, y el segundo era el grave:
+
+- Decía «1 TCUs ya en v1.6.0» sin decir **cuál**, y la tabla se quedaba igual.
+  Ahora cada TCU verificada se nombra en consola y **su fila cambia en la tabla**:
+  verde `ACTUALIZADA: ya en v1.6.0`, roja `SIGUE PENDIENTE: en v1.4.3`, gris si no
+  respondió. La marca llega también a las filas escondidas por un filtro de
+  columna, y solo a la TCU exacta: en un tramo de varias no se puede saber cuál se
+  actualizó.
+- Con una entrada de **una sola NCU**, los tramos de las demás **se saltaban en
+  silencio** y el resumen decía «0 siguen pendientes» como si estuvieran bien,
+  cuando ni se habían mirado. Ahora avisa antes de empezar de cuántos tramos y de
+  qué NCUs se va a dejar fuera, los cuenta como *sin comprobar* —no como buenos— y
+  dice que hay que pasar a *(Planta completa)* para verlas todas.
+
 **El plan de firmware mira la batería (v8.3)** — con el SoC bajo **no se puede
 actualizar**: el updater manda el firmware, la TCU lo recibe, y el bootloader se
 niega a instalarlo porque no llega a sus umbrales (`42005 soc_min_bootloader` y
