@@ -898,6 +898,99 @@ Check 'identidad: fuera del backup como preset' ($src.Contains('if ($ADDR_IDENTI
 Check 'identidad: fuera del preset de referencia' ($src.Contains('if ($ADDR_IDENTIDAD -contains $def.addr) { $nIdentRef++; continue }')) $true
 Check 'identidad: escritura en bloque bloqueada' ($src.Contains('No se puede escribir IDENTIDAD DE RED en $nTcus TCUs a la vez')) $true
 
+# --------------------------------------------------------------------------
+#  Segunda lectura de valores anomalos, CSV con NCU y CSV de correccion
+# --------------------------------------------------------------------------
+Write-Host ''
+Write-Host '== a que valores merece la pena una segunda lectura =='
+$repMuchos = @{'6'=300; '9'=2}
+Check 'confirmar: valor imposible siempre' (Merece-Confirmar '41106 east_pitch [m]' '-0,7854' $repMuchos) $true
+Check 'confirmar: valor mayoritario no' (Merece-Confirmar '41106 east_pitch [m]' '6' $repMuchos) $false
+Check 'confirmar: minoritario ya visto no' (Merece-Confirmar '41106 east_pitch [m]' '9' $repMuchos) $false
+Check 'confirmar: valor nunca visto si' (Merece-Confirmar '41106 east_pitch [m]' '7' $repMuchos) $true
+Check 'confirmar: vacio no' (Merece-Confirmar '41106 east_pitch [m]' '' $repMuchos) $false
+# con pocas TCUs leidas todavia no hay mayoria de la que fiarse
+$repPocos = @{'6'=3}
+Check 'confirmar: sin muestras suficientes no' (Merece-Confirmar '41106 east_pitch [m]' '7' $repPocos) $false
+Check 'confirmar: imposible aunque haya pocas' (Merece-Confirmar '41106 east_pitch [m]' '-0,7854' $repPocos) $true
+Check 'confirmar: sin reparto solo el rango' (Merece-Confirmar '41069 safe_pos_sign_threshold' '2560' $null) $false
+
+Write-Host ''
+Write-Host '== CSV de correccion a partir de una lectura =='
+$filasCorr = @()
+foreach ($t in 1..20) {
+  $filasCorr += [pscustomobject]@{NCU='9'; TCU=$t
+    '41111 max_tilt_west_r1 [deg]'='55'
+    '41125 min_tilt_east_r1 [deg]'=$(if ($t -eq 4) { '55' } else { '-45' })
+    '41106 east_pitch [m]'=$(if ($t -eq 4 -or $t -eq 9) { '-0,7854' } else { '6' })
+    Estado='OK' }
+}
+$cc = Correccion-DeLectura $filasCorr
+Check 'correccion: tres escrituras' (@($cc.filas).Count) 3
+Check 'correccion: east_pitch a la mayoria' (@($cc.filas | Where-Object { $_.Variable -like '*east_pitch*' })[0].Valor) '6'
+Check 'correccion: min_tilt a la mayoria' (@($cc.filas | Where-Object { $_.Variable -like '*min_tilt*' })[0].Valor) '-45'
+Check 'correccion: lleva la NCU' (@($cc.filas)[0].NCU) '9'
+Check 'correccion: solo las TCUs malas' (@(@($cc.filas | ForEach-Object { $_.TCU }) | Sort-Object -Unique) -join ',') '4,9'
+Check 'correccion: hay avisos explicando' (@($cc.avisos).Count -gt 0) $true
+# si NADIE tiene un valor plausible no se inventa una correccion
+$todasMal = @(1..10 | ForEach-Object { [pscustomobject]@{NCU='9'; TCU=$_; '41106 east_pitch [m]'='-0,7854'; Estado='OK'} })
+$cm = Correccion-DeLectura $todasMal
+Check 'correccion: sin valor bueno no propone' (@($cm.filas).Count) 0
+Check 'correccion: y lo dice' ((@($cm.avisos) -join ' ').Contains('ninguna TCU')) $true
+# empate: tampoco se inventa nada
+$empate = @()
+foreach ($t in 1..4) { $empate += [pscustomobject]@{NCU='9'; TCU=$t; '41106 east_pitch [m]'=$(if ($t -le 2) { '6' } else { '9' }); Estado='OK'} }
+$empate += [pscustomobject]@{NCU='9'; TCU=5; '41106 east_pitch [m]'='-0,7854'; Estado='OK'}
+$ce = Correccion-DeLectura $empate
+Check 'correccion: empate no propone' (@($ce.filas).Count) 0
+Check 'correccion: y avisa del empate' ((@($ce.avisos) -join ' ').Contains('empate')) $true
+Check 'correccion: lectura vacia no revienta' (@((Correccion-DeLectura @()).filas).Count) 0
+
+Write-Host ''
+Write-Host '== CSV por TCU con columna NCU =='
+$csvNcu = @('NCU;TCU;variable;valor', '9;34;41106 east_pitch [m];6', '10;19;41106 east_pitch [m];6', '9;34;41125 min_tilt_east_r1 [deg];-45')
+$pn = Parse-CsvPorTcu $csvNcu
+Check 'csv NCU: tres filas' (@($pn.jobs).Count) 3
+Check 'csv NCU: sin errores' (@($pn.errores).Count) 0
+Check 'csv NCU: primera es de la 9' (@($pn.jobs)[0].ncu) '9'
+Check 'csv NCU: segunda es de la 10' (@($pn.jobs)[1].ncu) '10'
+Check 'csv NCU: la TCU se lee bien' (@($pn.jobs)[1].tcu) 19
+# el formato de siempre sigue valiendo
+$csvViejo = @('TCU;variable;valor', '34;41106 east_pitch [m];6')
+$pv = Parse-CsvPorTcu $csvViejo
+Check 'csv sin NCU: sigue valiendo' (@($pv.jobs).Count) 1
+Check 'csv sin NCU: ncu vacia' (@($pv.jobs)[0].ncu) ''
+Check 'csv sin NCU: valor con coma decimal' ((Parse-CsvPorTcu @('TCU;variable;valor','34;41106 east_pitch [m];6,5')).jobs[0].texto) '6,5'
+Check 'csv NCU: valor con coma decimal' ((Parse-CsvPorTcu @('NCU;TCU;variable;valor','9;34;41106 east_pitch [m];6,5')).jobs[0].texto) '6,5'
+Check 'csv NCU: fila corta da error' (@((Parse-CsvPorTcu @('NCU;TCU;variable;valor','9;34;6')).errores).Count) 1
+
+Write-Host ''
+Write-Host '== reparto del CSV entre las NCUs de la planta =='
+$cxPlanta = @{ip='NA'; puerto=$null; gws=$null; etiqueta='PLANTA'; to=8000; reint=3
+  multi=@(@{ncu=9; ip='192.168.4.109'; gws=@(@{puerto=503; ini=1; fin=40})}
+          @{ncu=10; ip='192.168.4.110'; gws=@(@{puerto=503; ini=1; fin=40})})}
+$g1 = Grupos-CsvPorNcu @($pn.jobs) $cxPlanta
+Check 'grupos: dos NCUs' (@($g1.grupos).Count) 2
+Check 'grupos: la 9 lleva dos filas' (@(@($g1.grupos | Where-Object { $_.ncu -eq 9 })[0].jobs).Count) 2
+Check 'grupos: coge la IP de la NCU' (@($g1.grupos | Where-Object { $_.ncu -eq 10 })[0].cx.ip) '192.168.4.110'
+Check 'grupos: sin avisos' (@($g1.avisos).Count) 0
+# una NCU que no esta en la planta no se escribe a ciegas
+$fuera = @(@{ncu='77'; tcu=1; nombre='41106 east_pitch [m]'; texto='6'; esc=@{}})
+$g2 = Grupos-CsvPorNcu $fuera $cxPlanta
+Check 'grupos: NCU desconocida fuera' (@($g2.grupos).Count) 0
+Check 'grupos: y lo avisa' ((@($g2.avisos) -join ' ').Contains('no esta en la planta')) $true
+# CSV con NCU pero conexion a una sola NCU: no se sabe si coinciden
+$cxUna = @{ip='192.168.4.109'; puerto=503; gws=$null; etiqueta='503'; to=8000; reint=3}
+$g3 = Grupos-CsvPorNcu @($pn.jobs) $cxUna
+Check 'grupos: NCU en el CSV exige planta completa' (@($g3.grupos).Count) 0
+# CSV sin NCU y conexion de planta completa: ambiguo, se rechaza
+$g4 = Grupos-CsvPorNcu @($pv.jobs) $cxPlanta
+Check 'grupos: sin NCU y planta completa se rechaza' (@($g4.grupos).Count) 0
+# CSV sin NCU y una sola NCU: el caso de siempre
+$g5 = Grupos-CsvPorNcu @($pv.jobs) $cxUna
+Check 'grupos: sin NCU y una NCU vale' (@($g5.grupos).Count) 1
+Check 'grupos: usa la conexion de la ventana' (@($g5.grupos)[0].cx.etiqueta) '503'
+
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }
 else { Write-Host "$fallos PRUEBAS FALLIDAS"; exit 1 }
