@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '9.6'
+$VERSION_TOOLBOX = '9.7'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -727,7 +727,7 @@ function Informe-Html([hashtable]$m) {
         [void]$sb.AppendLine('<h2 id="s-' + $clave + '">' + (Html-Esc $titulo) + $hh + ' <span class="meta">(' + @($filas).Count + ' filas)</span></h2>')
         $grupos = @($filas) | Group-Object $colEstado | ForEach-Object { "$($_.Count) $($_.Name)" }
         [void]$sb.AppendLine('<div class="res">' + (Html-Esc ($grupos -join ' | ')) + ' <span class="vis"></span></div>')
-        [void]$sb.AppendLine('<table class="filtrable"><thead><tr>' + (($cols | ForEach-Object { '<th title="clic para ordenar">' + (Html-Esc $_) + '<span class="fl"></span></th>' }) -join '') + '</tr></thead><tbody>')
+        [void]$sb.AppendLine('<table id="t-' + $clave + '" class="filtrable"><thead><tr>' + (($cols | ForEach-Object { '<th title="clic para ordenar">' + (Html-Esc $_) + '<span class="fl"></span></th>' }) -join '') + '</tr></thead><tbody>')
         foreach ($f in @($filas)) {
             $cl = & $clase $f.$colEstado
             [void]$sb.AppendLine('<tr' + $(if ($cl) { ' class="' + $cl + '"' } else { '' }) + '>' + (($cols | ForEach-Object { '<td>' + (Html-Esc "$($f.$_)") + '</td>' }) -join '') + '</tr>')
@@ -767,7 +767,7 @@ function Informe-Html([hashtable]$m) {
                 '<span class="ko2">' + (Html-Esc $(if ($_.NCU) { "NCU$($_.NCU) TCU $($_.TCU)" } else { "TCU $($_.TCU)" })) + ': ' + (Html-Esc $_.Variable) + ' = ' + (Html-Esc $_.Valor) + ' &rarr; ' + (Html-Esc $_.Motivo) + '</span>' })
             [void]$sb.AppendLine('<div class="res"><b>Valores imposibles (' + $sosp.Count + ')</b><br>' + ($lin -join '<br>') + '</div>')
         }
-        [void]$sb.AppendLine('<table class="filtrable"><thead><tr>' + (($colsL | ForEach-Object { '<th title="clic para ordenar">' + (Html-Esc $_) + '<span class="fl"></span></th>' }) -join '') + '</tr></thead><tbody>')
+        [void]$sb.AppendLine('<table id="t-lectura" class="filtrable"><thead><tr>' + (($colsL | ForEach-Object { '<th title="clic para ordenar">' + (Html-Esc $_) + '<span class="fl"></span></th>' }) -join '') + '</tr></thead><tbody>')
         foreach ($f in $filasL) {
             $cl = $(if ("$($f.Estado)" -and "$($f.Estado)" -ne 'OK') { ' class="alarma"' } else { '' })
             [void]$sb.AppendLine('<tr' + $cl + '>' + (($colsL | ForEach-Object { '<td>' + (Html-Esc "$($f.$_)") + '</td>' }) -join '') + '</tr>')
@@ -791,6 +791,8 @@ function Informe-Html([hashtable]$m) {
     }
     $secciones = @(
         @{clave='lectura'; titulo='Lectura de variables'; filas=$m.lectura; pinta=$tablaLectura}
+        @{clave='bat'; titulo='Auditoria de baterias'; filas=$m.bat
+          cols=@('NCU','TCU','Tipo','Detalle','Gravedad'); estado='Gravedad'}
         @{clave='diag'; titulo='Diagnostico de flota'; filas=$m.diag
           cols=@('NCU','TCU','Salud','Modo','Tilt','Objetivo','Dif','SoC','Alarmas'); estado='Salud'}
         @{clave='pem'; titulo='Puesta en marcha (PEM)'; filas=$m.pem
@@ -2478,6 +2480,13 @@ $btnGComm = New-Object System.Windows.Forms.Button
 $btnGComm.Text = 'TEST COMM (rapido)'
 $btnGComm.Location = New-Object System.Drawing.Point(668, 51)
 $btnGComm.Size = New-Object System.Drawing.Size(150, 28)
+$btnGBat = New-Object System.Windows.Forms.Button
+$btnGBat.Text = 'BATERIAS'
+$btnGBat.Location = New-Object System.Drawing.Point(826, 51)
+$btnGBat.Size = New-Object System.Drawing.Size(82, 28)
+$btnGBat.Enabled = $false
+$tabG.Controls.Add($btnGBat)
+
 $btnGComm.BackColor = [System.Drawing.Color]::FromArgb(0,120,60)
 $btnGComm.ForeColor = [System.Drawing.Color]::White
 $tabG.Controls.Add($btnGComm)
@@ -3445,6 +3454,7 @@ $script:ReconfCambios = 0;  $script:ReconfSinAcuerdo = 0
 $script:UltimaEscritura = @()
 $script:UltimoVolcado = @()
 $script:UltimoDiag = @()
+$script:UltimaBat = @()
 $script:UltimaIdent = @()
 $script:UltimaAud = @()
 $script:UltimoInv = @()
@@ -3504,7 +3514,7 @@ function Con([string]$t, $color) {
 
 $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $btnDiag, $btnSync, $btnIdent,
                     $btnPresetSave, $btnPresetLoad, $btnCargarBackup, $btnLCsv, $btnDCsv, $btnBackupJson,
-                    $btnComparar, $btnGCsv, $btnGJson, $btnGWa, $btnICsv,
+                    $btnComparar, $btnGCsv, $btnGJson, $btnGWa, $btnGBat, $btnICsv,
                     $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnInvF, $btnInvFCsv,
                     $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm, $btnHEsclavo,
                     $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComis, $btnPComisSet, $btnPCsv,
@@ -3522,6 +3532,7 @@ function Set-UIOcupada([bool]$ocupada) {
         $btnComparar.Enabled   = ($script:UltimoVolcado.Count -gt 0)
         $btnGCsv.Enabled       = ($script:UltimoDiag.Count -gt 0)
         $btnGWa.Enabled        = ($script:UltimoDiag.Count -gt 0)
+        $btnGBat.Enabled       = ($script:UltimoDiag.Count -gt 0)
         $btnGJson.Enabled      = ($script:UltimoDiag.Count -gt 0)
         $btnICsv.Enabled       = ($script:UltimaIdent.Count -gt 0)
         $btnAudCsv.Enabled     = ($script:UltimaAud.Count -gt 0)
@@ -4189,6 +4200,80 @@ $btnCargarBackup.Add_Click({
 # ------------------------- logica LEER VARIABLE -------------------------
 # Recorre las filas de una lectura masiva y devuelve las celdas cuyo valor no
 # tiene sentido fisico. Pura: se prueba sin planta ni ventana.
+# ---------------------------------------------------------------------------
+#  Auditoria de baterias
+# ---------------------------------------------------------------------------
+# El diagnostico ya lee de cada TCU la tension, la corriente, el SoH y las
+# temperaturas: estaban en el CSV pero no se juzgaban. Esto los juzga, sin leer
+# nada mas. Sistema de 24 V.
+#
+# Dos criterios, y el segundo es el que mas encuentra: el rango fisico dice si
+# un valor es imposible, pero con 754 medidas a la vez la MEDIANA DE LA FLOTA
+# dice si un valor es raro. Una TCU a 21 V con las demas a 26 V es la anomala
+# aunque 21 V no sea imposible.
+$BAT = @{
+  vbat_min     = 15000   # por debajo: no hay bateria util conectada
+  vbat_bajo    = 22000   # 24 V descargado de verdad
+  vbat_alto    = 30000   # por encima: cargador o medida mal
+  soc_bajo     = 40      # %
+  soh_bajo     = 60      # %
+  i_cero       = 50      # mA: por debajo, ni carga ni descarga
+  soc_sin_carga= 80      # si esta por debajo y no entra corriente, algo pasa
+  tbat_alta    = 55      # C
+  tbat_baja    = -20     # C
+  desvio_vbat  = 3000    # mV respecto a la mediana de la flota
+  desvio_soc   = 30      # puntos respecto a la mediana
+}
+
+function Mediana($valores) {
+    $v = @($valores | Where-Object { $null -ne $_ } | Sort-Object)
+    if ($v.Count -eq 0) { return $null }
+    if ($v.Count % 2 -eq 1) { return $v[[int](($v.Count - 1) / 2)] }
+    return (($v[$v.Count / 2 - 1] + $v[$v.Count / 2]) / 2.0)
+}
+
+# Devuelve una fila por problema encontrado. Pura: se prueba sin planta.
+function Bat-Auditar($diag, $cfg = $null) {
+    if ($null -eq $cfg) { $cfg = $BAT }
+    $filas = @($diag | Where-Object { "$($_.TCU)" -match '^\d+$' -and "$($_.Salud)" -ne 'OFFLINE' })
+    $r = New-Object System.Collections.ArrayList
+    if ($filas.Count -eq 0) { return $r.ToArray() }
+    # referencia de la flota: la mediana aguanta que haya unas cuantas mal
+    $medV = Mediana @($filas | ForEach-Object { $x = 0; if ([int]::TryParse("$($_.Vbat_mV)", [ref]$x) -and $x -gt $cfg.vbat_min) { $x } })
+    $medS = Mediana @($filas | ForEach-Object { $x = 0; if ([int]::TryParse("$($_.SoC)", [ref]$x)) { $x } })
+    foreach ($f in $filas) {
+        $eti = "$($f.NCU)|$($f.TCU)"
+        $v = 0; $tieneV = [int]::TryParse("$($f.Vbat_mV)", [ref]$v)
+        $i = 0; $tieneI = [int]::TryParse("$($f.Ibat_mA)", [ref]$i)
+        $soc = 0; $tieneSoc = [int]::TryParse("$($f.SoC)", [ref]$soc)
+        $soh = 0; $tieneSoh = [int]::TryParse("$($f.SoH)", [ref]$soh)
+        $tb = 0.0; $tieneTb = [double]::TryParse(("$($f.Tbat_C)" -replace ',', '.'), [Globalization.NumberStyles]::Float, $INV, [ref]$tb)
+        $add = { param($tipo, $det, $grav) [void]$r.Add([pscustomobject]@{NCU="$($f.NCU)"; TCU=$f.TCU; Tipo=$tipo; Detalle=$det; Gravedad=$grav}) }
+        $sinBat = $false
+        if ("$($f.Alarmas)" -like '*bateria desconectada*') { & $add 'SIN BATERIA' 'la TCU declara bateria desconectada' 'ALARMA'; $sinBat = $true }
+        elseif ($tieneV -and $v -lt $cfg.vbat_min) { & $add 'SIN BATERIA' "tension $v mV: no hay bateria util" 'ALARMA'; $sinBat = $true }
+        if ($sinBat) { continue }          # lo demas ya no dice nada
+        if ($tieneV -and $v -gt $cfg.vbat_alto) { & $add 'SOBRETENSION' "tension $v mV" 'ALARMA' }
+        elseif ($tieneV -and $v -lt $cfg.vbat_bajo) { & $add 'TENSION BAJA' "tension $v mV" 'AVISO' }
+        if ($tieneSoh -and $soh -gt 0 -and $soh -lt $cfg.soh_bajo) { & $add 'SALUD BAJA' "SoH $soh %: la bateria ya no aguanta" 'AVISO' }
+        if ($tieneSoc -and $soc -lt $cfg.soc_bajo) { & $add 'CARGA BAJA' "SoC $soc %" 'AVISO' }
+        # ni carga ni descarga con la bateria a medias: panel, fusible o cargador
+        if ($tieneI -and $tieneSoc -and [Math]::Abs($i) -lt $cfg.i_cero -and $soc -lt $cfg.soc_sin_carga) {
+            & $add 'NO CARGA' "corriente $i mA con SoC $soc %" 'AVISO'
+        }
+        if ($tieneTb -and $tb -gt $cfg.tbat_alta) { & $add 'TEMPERATURA' ("bateria a {0:0.#} C" -f $tb) 'AVISO' }
+        elseif ($tieneTb -and $tb -lt $cfg.tbat_baja) { & $add 'TEMPERATURA' ("bateria a {0:0.#} C" -f $tb) 'AVISO' }
+        # y lo que se sale de la flota aunque este dentro de rango
+        if ($null -ne $medV -and $tieneV -and $v -gt $cfg.vbat_min -and ($medV - $v) -gt $cfg.desvio_vbat) {
+            & $add 'FUERA DE LA FLOTA' ("tension $v mV con la flota en {0:0} mV" -f $medV) 'AVISO'
+        }
+        if ($null -ne $medS -and $tieneSoc -and ($medS - $soc) -gt $cfg.desvio_soc) {
+            & $add 'FUERA DE LA FLOTA' ("SoC $soc % con la flota en {0:0} %" -f $medS) 'AVISO'
+        }
+    }
+    return $r.ToArray()
+}
+
 function Sospechas-Lectura($filas) {
     $r = New-Object System.Collections.ArrayList
     foreach ($f in @($filas)) {
@@ -5383,6 +5468,31 @@ $btnGComm.Add_Click({ Lanzar {
 } })
 
 $cbGVerNcu.Add_SelectedIndexChanged({ if (-not $script:Ocupado) { Diag-Refrescar } })
+
+# Trabaja sobre el ultimo diagnostico: la tension, la corriente, el SoH y las
+# temperaturas ya se leyeron ahi. Cero lecturas nuevas.
+$btnGBat.Add_Click({
+    if (@($script:UltimoDiag).Count -eq 0) {
+        [void][System.Windows.Forms.MessageBox]::Show('Haz primero un DIAGNOSTICAR: la auditoria de baterias se hace con esos datos, sin volver a leer.','Falta el diagnostico'); return
+    }
+    $script:UltimaBat = @(Bat-Auditar $script:UltimoDiag)
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    $vistos = @($script:UltimoDiag | Where-Object { "$($_.TCU)" -match '^\d+$' -and "$($_.Salud)" -ne 'OFFLINE' }).Count
+    if ($script:UltimaBat.Count -eq 0) {
+        Con "BATERIAS: $vistos TCUs revisadas, ninguna con problema de bateria." ([System.Drawing.Color]::LightGreen)
+        Marcar-Bloque 'bat'
+        return
+    }
+    $porTipo = @{}
+    foreach ($b in $script:UltimaBat) { $porTipo["$($b.Tipo)"] = 1 + [int]$porTipo["$($b.Tipo)"] }
+    $afectadas = @(@($script:UltimaBat | ForEach-Object { "$($_.NCU)|$($_.TCU)" }) | Sort-Object -Unique).Count
+    Con "BATERIAS: $afectadas de $vistos TCUs con algo que mirar. $((@($porTipo.Keys | Sort-Object | ForEach-Object { "$($porTipo[$_]) $_" }) -join ' | '))" ([System.Drawing.Color]::Orange)
+    foreach ($b in @($script:UltimaBat | Sort-Object @{Expression={$(if ($_.Gravedad -eq 'ALARMA') { 0 } else { 1 })}}, @{Expression={[int]("0" + "$($_.NCU)")}}, @{Expression={[int]$_.TCU}})) {
+        Con ("  NCU{0,-3} TCU {1,3}  {2,-18} {3}" -f $b.NCU, $b.TCU, $b.Tipo, $b.Detalle) $(if ($b.Gravedad -eq 'ALARMA') { [System.Drawing.Color]::Salmon } else { [System.Drawing.Color]::Orange })
+    }
+    Con "Las de FUERA DE LA FLOTA no estan fuera de rango: se salen de lo que tienen las demas, que con 754 medidas es la mejor referencia que hay." ([System.Drawing.Color]::Gainsboro)
+    Marcar-Bloque 'bat'
+})
 
 $btnGWa.Add_Click({
     $fNcu = "$($cbGVerNcu.SelectedItem)"
@@ -7760,7 +7870,7 @@ $btnInforme.Add_Click({
         if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
         $datos = @{diag = $script:UltimoDiag; pem = $script:UltimoPem; aud = $script:UltimaAud
                    inv = $script:UltimoInv; esc = $script:UltimaEscritura; lectura = $script:UltimaLectura
-                   cierre = @(Cierre-Pendientes)}
+                   cierre = @(Cierre-Pendientes); bat = $script:UltimaBat}
         $conDatos = @($datos.Keys | Where-Object { @($datos[$_]).Count -gt 0 })
         $ultimo = ''; $nUlt = -1
         foreach ($k in $conDatos) {

@@ -60,6 +60,28 @@ cuántos valores salieron de la lectura sin tocar la planta.
 **Y la pestaña *Flota* pasa a llamarse *Auditoría*** — que es lo que se hace ahí.
 El inventario sigue dentro, y Ctrl+K lo encuentra por su nombre.
 
+**Auditoría de baterías (v9.7)** — botón **BATERÍAS** en *Diagnóstico*. No lee
+nada: la tensión, la corriente, el SoC, el SoH y las temperaturas ya vienen del
+diagnóstico, así que la auditoría es instantánea y se puede repetir sobre el
+mismo barrido. Saca una fila por problema, con su gravedad:
+
+| Tipo | Qué significa |
+|---|---|
+| `SIN BATERÍA` (ALARMA) | la TCU declara batería desconectada, o la tensión está por debajo de 15 V: no hay batería útil. Es la que deja el bootloader esperando y el firmware a medio instalar |
+| `SOBRETENSIÓN` (ALARMA) | por encima de 30 V en un sistema de 24 V: cargador o medida mal |
+| `TENSIÓN BAJA` (AVISO) | por debajo de 22 V: descargada de verdad |
+| `SALUD BAJA` (AVISO) | SoH por debajo del 60 %: la batería ya no aguanta |
+| `CARGA BAJA` (AVISO) | SoC por debajo del 40 % — por debajo del mínimo del bootloader no se puede actualizar |
+| `NO CARGA` (AVISO) | corriente casi nula con la batería a medias: panel, fusible o cargador |
+| `TEMPERATURA` (AVISO) | por encima de 55 °C o por debajo de −20 °C |
+| `FUERA DE LA FLOTA` (AVISO) | está *dentro* de rango pero se sale de lo que tienen las demás (más de 3 V o 30 puntos de SoC por debajo de la mediana) |
+
+La última es la que encuentra lo que ningún umbral fijo ve: con 754 medidas del
+mismo día y el mismo sol, la mediana de la flota es mejor referencia que
+cualquier número puesto a mano, y aguanta que haya unas cuantas TCUs mal sin
+moverse. Las OFFLINE y la fila de la propia NCU no entran, porque no tienen
+medida que valga. El resultado sale también en el informe HTML, con sus filtros.
+
 **El modo también se lee (v9.6)** — en PEM se podía **aplicar** un modo pero no
 **ver** en cuál estaban, que es justo lo que hace falta antes de aplicarlo a un
 rango. Y no costaba nada: el modo (bits 9:8) y el estado de comisionado (bits
