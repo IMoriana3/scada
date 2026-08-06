@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '7.9'
+$VERSION_TOOLBOX = '8.0'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1786,7 +1786,7 @@ $ROL_DESC = @{
 $script:Usuario = $null
 $FICH_USUARIOS = Join-Path $PSScriptRoot 'usuarios.json'
 
-# PBKDF2 con sal por usuario: la contrasena nunca se guarda, ni en claro ni en
+# PBKDF2 con sal por usuario: la contraseña nunca se guarda, ni en claro ni en
 # un hash pelado que se rompa con una tabla.
 function Pwd-Hash([string]$pass, [string]$salB64, [int]$iter) {
     $sal = [Convert]::FromBase64String($salB64)
@@ -1804,7 +1804,7 @@ function Usuario-Nuevo([string]$usuario, [string]$nombre, [string]$rol, [string]
     $iter = 100000
     return [ordered]@{usuario=$usuario; nombre=$nombre; rol=$rol; sal=$sal; iteraciones=$iter; hash=(Pwd-Hash $pass $sal $iter)}
 }
-# Comprueba usuario+contrasena contra la lista. Pura: se prueba sin ventana.
+# Comprueba usuario+contraseña contra la lista. Pura: se prueba sin ventana.
 function Usuario-Validar($usuarios, [string]$usuario, [string]$pass) {
     foreach ($u in @($usuarios)) {
         if ("$($u.usuario)".ToLower() -ne "$usuario".ToLower()) { continue }
@@ -7173,7 +7173,7 @@ function Dialogo-Usuario([string]$titulo, [string]$rolFijo) {
     $d.StartPosition = 'CenterScreen'
     [void](LG $d 'Usuario' 15 80 20);    $tU = TG $d '' 110 18 270
     [void](LG $d 'Nombre' 15 80 50);     $tN = TG $d '' 110 48 270
-    [void](LG $d 'Contrasena' 15 90 80); $tP = TG $d '' 110 78 270; $tP.UseSystemPasswordChar = $true
+    [void](LG $d 'Contraseña' 15 90 80); $tP = TG $d '' 110 78 270; $tP.UseSystemPasswordChar = $true
     [void](LG $d 'Repetir' 15 80 110);   $tP2 = TG $d '' 110 108 270; $tP2.UseSystemPasswordChar = $true
     [void](LG $d 'Rol' 15 80 140)
     $cbR = New-Object System.Windows.Forms.ComboBox
@@ -7192,17 +7192,22 @@ function Dialogo-Usuario([string]$titulo, [string]$rolFijo) {
     $bCa.Text = 'Cancelar'; $bCa.Location = New-Object System.Drawing.Point(295, 200); $bCa.Size = New-Object System.Drawing.Size(85, 28)
     $bCa.DialogResult = 'Cancel'
     $d.Controls.Add($bOk); $d.Controls.Add($bCa); $d.AcceptButton = $bOk; $d.CancelButton = $bCa
-    $script:UsrNuevo = $null
+    # OJO: .GetNewClosure() mete el bloque en un modulo propio, asi que un
+    # "$script:loquesea = ..." de dentro NO es el mismo que se lee aqui fuera.
+    # Ese fue el fallo de la v7.4: el alta devolvia $null, el arranque hacia
+    # return sin decir nada y no se guardaba ningun usuario. La salida va en una
+    # hashtable capturada: es un objeto, y mutarlo funciona en cualquier ambito.
+    $sal = @{ usuario = $null }
     $bOk.Add_Click({
         $u = $tU.Text.Trim()
-        if ($u -eq '') { [void][System.Windows.Forms.MessageBox]::Show('El usuario no puede estar vacio.','Aviso'); return }
-        if ($tP.Text.Length -lt 4) { [void][System.Windows.Forms.MessageBox]::Show('La contrasena necesita al menos 4 caracteres.','Aviso'); return }
-        if ($tP.Text -ne $tP2.Text) { [void][System.Windows.Forms.MessageBox]::Show('Las dos contrasenas no coinciden.','Aviso'); return }
-        $script:UsrNuevo = Usuario-Nuevo $u $(if ($tN.Text.Trim()) { $tN.Text.Trim() } else { $u }) "$($cbR.SelectedItem)" $tP.Text
+        if ($u -eq '') { [void][System.Windows.Forms.MessageBox]::Show('El usuario no puede estar vacío.','Aviso'); return }
+        if ($tP.Text.Length -lt 4) { [void][System.Windows.Forms.MessageBox]::Show('La contraseña necesita al menos 4 caracteres.','Aviso'); return }
+        if ($tP.Text -ne $tP2.Text) { [void][System.Windows.Forms.MessageBox]::Show('Las dos contraseñas no coinciden.','Aviso'); return }
+        $sal.usuario = Usuario-Nuevo $u $(if ($tN.Text.Trim()) { $tN.Text.Trim() } else { $u }) "$($cbR.SelectedItem)" $tP.Text
         $d.DialogResult = 'OK'; $d.Close()
     }.GetNewClosure())
     [void]$d.ShowDialog()
-    return $script:UsrNuevo
+    return $sal.usuario
 }
 
 function Dialogo-Login($usuarios) {
@@ -7212,7 +7217,7 @@ function Dialogo-Login($usuarios) {
     $d.FormBorderStyle = 'FixedDialog'; $d.MaximizeBox = $false; $d.MinimizeBox = $false
     $d.StartPosition = 'CenterScreen'
     [void](LG $d 'Usuario' 15 80 25);    $tU = TG $d "$env:USERNAME" 105 23 255
-    [void](LG $d 'Contrasena' 15 90 58); $tP = TG $d '' 105 56 255; $tP.UseSystemPasswordChar = $true
+    [void](LG $d 'Contraseña' 15 90 58); $tP = TG $d '' 105 56 255; $tP.UseSystemPasswordChar = $true
     $lblE = LG $d '' 15 350 90; $lblE.ForeColor = [System.Drawing.Color]::Firebrick
     $bOk = New-Object System.Windows.Forms.Button
     $bOk.Text = 'Entrar'; $bOk.Location = New-Object System.Drawing.Point(190, 125); $bOk.Size = New-Object System.Drawing.Size(85, 28)
@@ -7221,16 +7226,16 @@ function Dialogo-Login($usuarios) {
     $bCa.Text = 'Salir'; $bCa.Location = New-Object System.Drawing.Point(285, 125); $bCa.Size = New-Object System.Drawing.Size(85, 28)
     $bCa.DialogResult = 'Cancel'
     $d.Controls.Add($bOk); $d.Controls.Add($bCa); $d.AcceptButton = $bOk; $d.CancelButton = $bCa
-    $script:UsrLogin = $null
+    $sal = @{ usuario = $null }
     $bOk.Add_Click({
         $u = Usuario-Validar $usuarios $tU.Text.Trim() $tP.Text
-        if ($null -eq $u) { $lblE.Text = 'Usuario o contrasena incorrectos.'; $tP.Text = ''; $tP.Focus(); return }
-        $script:UsrLogin = $u
+        if ($null -eq $u) { $lblE.Text = 'Usuario o contraseña incorrectos.'; $tP.Text = ''; $tP.Focus(); return }
+        $sal.usuario = $u
         $d.DialogResult = 'OK'; $d.Close()
     }.GetNewClosure())
     $d.Add_Shown({ if ($tU.Text) { $tP.Focus() } else { $tU.Focus() } }.GetNewClosure())
     [void]$d.ShowDialog()
-    return $script:UsrLogin
+    return $sal.usuario
 }
 
 # Botones que cada rol NO puede usar. Todo lo que escriba en un equipo es de
@@ -7248,10 +7253,13 @@ function Aplicar-Rol {
     $form.Text = "TCU Toolbox v$VERSION_TOOLBOX - Sunner  (mapa $VERSION_MAPA)   -   $($script:Usuario.nombre) [$($script:Usuario.rol)]"
 }
 
-# Gestion de usuarios: cualquiera puede cambiarse su propia contrasena; dar de
+# Gestion de usuarios: cualquiera puede cambiarse su propia contraseña; dar de
 # alta, borrar y cambiar roles es de administrador.
 $btnUsuarios.Add_Click({
-    $lista = @(Usuarios-Cargar)
+    # El estado va en una hashtable por lo mismo que en Dialogo-Usuario: cada
+    # .GetNewClosure() vive en su propio modulo, asi que si $lista fuera una
+    # variable suelta, el boton de baja no veria lo que dio de alta el de arriba.
+    $st = @{ lista = @(Usuarios-Cargar) }
     $d = New-Object System.Windows.Forms.Form
     $d.Text = 'Usuarios'; $d.Size = New-Object System.Drawing.Size(560, 380)
     $d.FormBorderStyle = 'FixedDialog'; $d.MaximizeBox = $false; $d.MinimizeBox = $false
@@ -7264,7 +7272,7 @@ $btnUsuarios.Add_Click({
     $d.Controls.Add($lv)
     $pintar = {
         $lv.Items.Clear()
-        foreach ($u in $lista) {
+        foreach ($u in $st.lista) {
             $it = New-Object System.Windows.Forms.ListViewItem("$($u.usuario)")
             [void]$it.SubItems.Add("$($u.nombre)"); [void]$it.SubItems.Add("$($u.rol)")
             if ("$($u.usuario)" -eq "$($script:Usuario.usuario)") { $it.Font = New-Object System.Drawing.Font($lv.Font, [System.Drawing.FontStyle]::Bold) }
@@ -7279,7 +7287,7 @@ $btnUsuarios.Add_Click({
     $bBaja.Text = 'Baja'; $bBaja.Location = New-Object System.Drawing.Point(130, 262); $bBaja.Size = New-Object System.Drawing.Size(110, 28)
     $bBaja.Enabled = (Puede 'admin')
     $bPass = New-Object System.Windows.Forms.Button
-    $bPass.Text = 'Cambiar mi contrasena...'; $bPass.Location = New-Object System.Drawing.Point(248, 262); $bPass.Size = New-Object System.Drawing.Size(180, 28)
+    $bPass.Text = 'Cambiar mi contraseña...'; $bPass.Location = New-Object System.Drawing.Point(248, 262); $bPass.Size = New-Object System.Drawing.Size(180, 28)
     $bCerrar = New-Object System.Windows.Forms.Button
     $bCerrar.Text = 'Cerrar'; $bCerrar.Location = New-Object System.Drawing.Point(436, 262); $bCerrar.Size = New-Object System.Drawing.Size(96, 28)
     $bCerrar.DialogResult = 'OK'
@@ -7292,11 +7300,11 @@ $btnUsuarios.Add_Click({
     $bAlta.Add_Click({
         $n = Dialogo-Usuario 'Alta de usuario' ''
         if (-not $n) { return }
-        if (@($lista | Where-Object { "$($_.usuario)".ToLower() -eq "$($n.usuario)".ToLower() }).Count -gt 0) {
+        if (@($st.lista | Where-Object { "$($_.usuario)".ToLower() -eq "$($n.usuario)".ToLower() }).Count -gt 0) {
             [void][System.Windows.Forms.MessageBox]::Show('Ya existe un usuario con ese nombre.','Aviso'); return
         }
-        $lista = @($lista) + $n
-        try { Usuarios-Guardar $lista } catch { [void][System.Windows.Forms.MessageBox]::Show("No se pudo guardar: $_",'Error'); return }
+        $st.lista = @($st.lista) + $n
+        try { Usuarios-Guardar $st.lista } catch { [void][System.Windows.Forms.MessageBox]::Show("No se pudo guardar: $_",'Error'); return }
         Auditar 'USUARIO_ALTA' '' '' "$($n.usuario) con rol $($n.rol)"
         Con "Usuario dado de alta: $($n.usuario) (rol $($n.rol))" ([System.Drawing.Color]::LightGreen)
         & $pintar
@@ -7305,25 +7313,25 @@ $btnUsuarios.Add_Click({
         if ($lv.SelectedItems.Count -eq 0) { return }
         $u = $lv.SelectedItems[0].Text
         if ($u -eq "$($script:Usuario.usuario)") { [void][System.Windows.Forms.MessageBox]::Show('No puedes borrarte a ti mismo.','Aviso'); return }
-        $admins = @($lista | Where-Object { "$($_.rol)" -eq 'admin' -and "$($_.usuario)" -ne $u })
+        $admins = @($st.lista | Where-Object { "$($_.rol)" -eq 'admin' -and "$($_.usuario)" -ne $u })
         if ($admins.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('Tiene que quedar al menos un administrador.','Aviso'); return }
         if ([System.Windows.Forms.MessageBox]::Show("Dar de baja a '$u'?",'Baja','YesNo','Warning') -ne 'Yes') { return }
-        $lista = @($lista | Where-Object { "$($_.usuario)" -ne $u })
-        try { Usuarios-Guardar $lista } catch { [void][System.Windows.Forms.MessageBox]::Show("No se pudo guardar: $_",'Error'); return }
+        $st.lista = @($st.lista | Where-Object { "$($_.usuario)" -ne $u })
+        try { Usuarios-Guardar $st.lista } catch { [void][System.Windows.Forms.MessageBox]::Show("No se pudo guardar: $_",'Error'); return }
         Auditar 'USUARIO_BAJA' '' '' $u
         Con "Usuario dado de baja: $u" ([System.Drawing.Color]::Orange)
         & $pintar
     }.GetNewClosure())
     $bPass.Add_Click({
-        $n = Dialogo-Usuario 'Cambiar mi contrasena' "$($script:Usuario.rol)"
+        $n = Dialogo-Usuario 'Cambiar mi contraseña' "$($script:Usuario.rol)"
         if (-not $n) { return }
         if ("$($n.usuario)".ToLower() -ne "$($script:Usuario.usuario)".ToLower()) {
             [void][System.Windows.Forms.MessageBox]::Show("Escribe tu propio usuario ($($script:Usuario.usuario)).",'Aviso'); return
         }
-        $lista = @(@($lista | Where-Object { "$($_.usuario)".ToLower() -ne "$($n.usuario)".ToLower() }) + $n)
-        try { Usuarios-Guardar $lista } catch { [void][System.Windows.Forms.MessageBox]::Show("No se pudo guardar: $_",'Error'); return }
+        $st.lista = @(@($st.lista | Where-Object { "$($_.usuario)".ToLower() -ne "$($n.usuario)".ToLower() }) + $n)
+        try { Usuarios-Guardar $st.lista } catch { [void][System.Windows.Forms.MessageBox]::Show("No se pudo guardar: $_",'Error'); return }
         Auditar 'USUARIO_PASS' '' '' "$($n.usuario)"
-        Con "Contrasena cambiada para $($n.usuario)." ([System.Drawing.Color]::LightGreen)
+        Con "Contraseña cambiada para $($n.usuario)." ([System.Drawing.Color]::LightGreen)
         & $pintar
     }.GetNewClosure())
     [void]$d.ShowDialog($form)
@@ -7332,13 +7340,28 @@ $btnUsuarios.Add_Click({
 $usuarios = @(Usuarios-Cargar)
 if ($usuarios.Count -eq 0) {
     [void][System.Windows.Forms.MessageBox]::Show(
-        "Primer arranque: no hay usuarios dados de alta.`r`n`r`nVas a crear el ADMINISTRADOR. Guarda bien la contrasena: si se pierde, hay que borrar usuarios.json a mano.",
+        "Primer arranque: no hay usuarios dados de alta.`r`n`r`nVas a crear el ADMINISTRADOR. Guarda bien la contraseña: si se pierde, hay que borrar usuarios.json a mano.",
         'TCU Toolbox', 'OK', 'Information')
     $nuevo = Dialogo-Usuario 'Crear administrador' 'admin'
     if (-not $nuevo) { return }
     $usuarios = @($nuevo)
     try { Usuarios-Guardar $usuarios }
     catch { [void][System.Windows.Forms.MessageBox]::Show("No se pudo guardar usuarios.json: $_",'Error'); return }
+    # Comprobar que de verdad ha quedado escrito y se vuelve a leer: si la
+    # carpeta no es escribible (Archivos de programa, unidad de red de solo
+    # lectura), sin esto el usuario se crea, no se guarda y al reabrir vuelve a
+    # pedirlo sin explicar nada.
+    $rel = @(Usuarios-Cargar)
+    if (@($rel).Count -eq 0) {
+        [void][System.Windows.Forms.MessageBox]::Show(
+            "El usuario no se ha podido guardar en:`r`n$FICH_USUARIOS`r`n`r`nLa carpeta no deja escribir. Mueve la herramienta a una carpeta tuya (Escritorio o Documentos) y vuelve a abrirla.",
+            'No se puede guardar', 'OK', 'Error')
+        return
+    }
+    $usuarios = $rel
+    [void][System.Windows.Forms.MessageBox]::Show(
+        "Administrador '$($nuevo.usuario)' creado y guardado.`r`n`r`nAhora entra con ese usuario y su contraseña.",
+        'Usuario creado', 'OK', 'Information')
 }
 $script:Usuario = Dialogo-Login $usuarios
 if (-not $script:Usuario) { return }
