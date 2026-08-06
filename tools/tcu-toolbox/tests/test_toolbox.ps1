@@ -18,7 +18,7 @@ Copy-Item (Join-Path $raizTb 'plantas/elburgo.json') (Join-Path $PSScriptRootFak
 # anadir las funciones definidas en la seccion de handlers
 # desde el bloque de paralelo hasta identificacion: ahi viven el historial, la
 # simulacion de escritura, el parte de WhatsApp, el veredicto de motor y Ident-Leer
-$i1 = $src.IndexOf('$script:LogicaCache = $null'); $f1 = $src.IndexOf('$btnIdent.Add_Click'); $f1 = $src.IndexOf('$btnIdent.Add_Click')
+$i1 = $src.IndexOf('$script:Cierre = @{}'); $f1 = $src.IndexOf('$btnIdent.Add_Click')
 $i2 = $src.IndexOf('function Diag-LeerTcu'); $f2 = $src.IndexOf('$btnDiag.Add_Click')
 $i3 = $src.IndexOf('function Params-Conexion'); $f3 = $src.IndexOf('function Rango-Tcus')
 $i4 = $src.IndexOf('function Nombres-Legibles'); $f4 = $src.IndexOf('function Refrescar-FiltroLeer')
@@ -30,7 +30,7 @@ $i9 = $src.IndexOf('function Sospechas-Lectura'); $f9 = $src.IndexOf('$btnLeer.A
 $i10 = $src.IndexOf('function Aband-Cronologia'); $f10 = $src.IndexOf('#  Usuarios, roles y registro')
 $i11 = $src.IndexOf('$ROLES = @('); $f11 = $fin   # hasta el arranque de la interfaz
 $i12 = $src.IndexOf('function Lv-Pasa'); $f12 = $src.IndexOf('function Lv-Filtrable')
-$i15 = $src.IndexOf('function Aud-Indice'); $f15 = $src.IndexOf('$btnPresetRef.Add_Click')
+$i15 = $src.IndexOf('function Aud-Indice'); $f15 = $src.IndexOf('#  Cierre post-actualizacion (interfaz)')
 $i13 = $src.IndexOf('function Esclavos-Barrido'); $f13 = $src.IndexOf('function Params-Hsu')
 $i14 = $src.IndexOf('function Buscar-Norm'); $f14 = $src.IndexOf('function Buscador-Abrir')
 $logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7) + "`n" + $src.Substring($i8, $f8 - $i8) + "`n" + $src.Substring($i9, $f9 - $i9) + "`n" + $src.Substring($i10, $f10 - $i10) + "`n" + $src.Substring($i11, $f11 - $i11) + "`n" + $src.Substring($i12, $f12 - $i12) + "`n" + $src.Substring($i13, $f13 - $i13) + "`n" + $src.Substring($i14, $f14 - $i14) + "`n" + $src.Substring($i15, $f15 - $i15)
@@ -1289,6 +1289,45 @@ Check 'indice: lectura vacia' ((Aud-Indice @()).Count) 0
 # con el indice, auditar "-10" contra la 34 es conforme y contra la 35 no
 Check 'indice: la 34 cuadra con el preset' (Aud-Igual '-10' $idx['9|34|41069 safe_pos_sign_threshold']) $true
 Check 'indice: la 35 no' (Aud-Igual '-10' $idx['9|35|41069 safe_pos_sign_threshold']) $false
+
+Write-Host ''
+Write-Host '== cierre post-actualizacion =='
+$script:Cierre = @{}
+Cierre-Marcar '9' 34 '' '' 'v1.6.0 (map 1)'
+Check 'cierre: entra al verificar' ($script:Cierre.Count) 1
+Check 'cierre: guarda el FW' ($script:Cierre['9|34'].fw) 'v1.6.0 (map 1)'
+Check 'cierre: recien actualizada no esta cerrada' (Cierre-Estado $script:Cierre['9|34']) 'falta parametros, NVM, modo AUTO'
+Cierre-Marcar '9' 34 'params' 'OK'
+Check 'cierre: con parametros, faltan dos' (Cierre-Estado $script:Cierre['9|34']) 'falta NVM, modo AUTO'
+Cierre-Marcar '9' 34 'nvm' 'OK'
+Cierre-Marcar '9' 34 'modo' 'OK'
+Check 'cierre: con las tres, cerrada' (Cierre-Estado $script:Cierre['9|34']) 'CERRADA'
+Check 'cierre: ya no esta pendiente' (@(Cierre-Pendientes).Count) 0
+# parametros NOK no es lo mismo que sin comprobar: sigue sin cerrar
+Cierre-Marcar '9' 34 'params' 'NOK'
+Check 'cierre: parametros NOK no cierra' (Cierre-Estado $script:Cierre['9|34']) 'falta parametros'
+# lo importante: auditar o diagnosticar la planta NO puede meter 754 TCUs
+Cierre-MarcarSiEsta '10' 19 'modo' 'OK'
+Check 'cierre: no da de alta a quien no esta' ($script:Cierre.Count) 1
+Cierre-MarcarSiEsta '9' 34 'modo' 'MANUAL'
+Check 'cierre: pero si actualiza a la que esta' ($script:Cierre['9|34'].modo) 'MANUAL'
+Check 'cierre: y vuelve a faltar el modo' ((Cierre-Estado $script:Cierre['9|34']).Contains('modo AUTO')) $true
+# varias TCUs
+Cierre-Marcar '9' 35 '' '' 'v1.6.0'
+Cierre-Marcar '11' 58 '' '' 'v1.6.0'
+Check 'cierre: tres en la lista' ($script:Cierre.Count) 3
+Check 'cierre: tres pendientes' (@(Cierre-Pendientes).Count) 3
+# la lista sobrevive a cerrar el programa
+Cierre-Guardar 'PruebaCierre'
+$script:Cierre = @{}
+Check 'cierre: vaciada' ($script:Cierre.Count) 0
+Cierre-Cargar 'PruebaCierre'
+Check 'cierre: se relee del disco' ($script:Cierre.Count) 3
+Check 'cierre: con su estado' ($script:Cierre['9|34'].params) 'NOK'
+Check 'cierre: y su FW' ($script:Cierre['11|58'].fw) 'v1.6.0'
+Remove-Item (Cierre-Fichero 'PruebaCierre') -Force -ErrorAction SilentlyContinue
+$script:Cierre = @{}
+Check 'cierre: planta sin fichero empieza vacia' (@(Cierre-Pendientes).Count) 0
 
 Write-Host ''
 Write-Host '== buscador de acciones =='
