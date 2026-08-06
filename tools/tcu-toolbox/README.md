@@ -37,6 +37,29 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
 
+**La auditoría no se cree la primera lectura (v9.1)** — salía esto: *«Esperado
+-10, Leído -10, DESVIACIÓN»*. Sin sentido, y con una explicación clara: la
+comparación se hace **a nivel de registro** y falló por una respuesta
+descolocada; el valor que se enseña viene de una **segunda** lectura, que ya dio
+el bueno. La auditoría era el único sitio que se había quedado sin la doble
+comprobación que *Leer variable* tiene desde la v7.2.
+
+Ahora, cuando la comparación cruda falla, se relee y se compara el valor
+decodificado: solo es desviación si **de verdad** difiere. Las que se caen por el
+camino se cuentan aparte —*«N eran respuestas descolocadas, no desviaciones»*— que
+además es un termómetro del enlace. La comparación normaliza lo que no es
+diferencia real: mayúsculas del hexadecimal (`0x0A00` = `0x0a00`) y coma o punto
+decimal (`6,5` = `6.5`).
+
+**Auditar sin volver a leer (v9.1)** — la auditoría hacía **siempre** su propia
+pasada, así que venir de un barrido y auditar era recorrer la planta dos veces
+para los mismos datos. Con la casilla **Usar la última lectura**, lo que ya se
+leyó en la sesión no se vuelve a pedir; lo que falte, se lee. Al terminar dice
+cuántos valores salieron de la lectura sin tocar la planta.
+
+**Y la pestaña *Flota* pasa a llamarse *Auditoría*** — que es lo que se hace ahí.
+El inventario sigue dentro, y Ctrl+K lo encuentra por su nombre.
+
 ## v9.0 — seis cosas de golpe
 
 **Buscador de acciones (Ctrl+K, o el botón *Buscar*)** — hay 80 acciones en 10

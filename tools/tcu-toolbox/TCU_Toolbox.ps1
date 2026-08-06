@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '9.0'
+$VERSION_TOOLBOX = '9.1'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2502,9 +2502,11 @@ $lvG.View = 'Details'; $lvG.FullRowSelect = $true; $lvG.GridLines = $true
 [void]$lvG.Columns.Add('Alarmas / notas', 450)
 $tabG.Controls.Add($lvG)
 
-# ============================ TAB FLOTA ============================
+# ============================ TAB AUDITORIA ============================
+# Se llamaba 'Flota', que no decia nada de lo que hay dentro. Sigue llevando
+# tambien el inventario, y el buscador (Ctrl+K) lo encuentra por su nombre.
 $tabF = New-Object System.Windows.Forms.TabPage
-$tabF.Text = 'Flota'
+$tabF.Text = 'Auditoria'
 $tabs.TabPages.Add($tabF)
 
 $gbAud = New-Object System.Windows.Forms.GroupBox
@@ -2524,7 +2526,17 @@ $btnPresetRef.Location = New-Object System.Drawing.Point(172, 19)
 $btnPresetRef.Size = New-Object System.Drawing.Size(140, 26)
 $gbAud.Controls.Add($btnPresetRef)
 
-$lblPresetRef = LG $gbAud '(sin preset de referencia)' 320 300
+# La auditoria hacia SIEMPRE su propia pasada, asi que despues de un barrido se
+# recorria la planta dos veces para los mismos datos. Con esto, lo que ya se ha
+# leido en esta sesion no se vuelve a pedir.
+$chkAudLec = New-Object System.Windows.Forms.CheckBox
+$chkAudLec.Text = 'Usar la ultima lectura'
+$chkAudLec.Checked = $true
+$chkAudLec.Location = New-Object System.Drawing.Point(320, 21)
+$chkAudLec.Size = New-Object System.Drawing.Size(160, 22)
+$gbAud.Controls.Add($chkAudLec)
+
+$lblPresetRef = LG $gbAud '(sin preset de referencia)' 488 145
 $lblPresetRef.ForeColor = [System.Drawing.Color]::Gray
 
 $btnAud = New-Object System.Windows.Forms.Button
@@ -5459,6 +5471,34 @@ $btnBackupNcu.Add_Click({ Lanzar {
     Con "Backup NCU terminado: $ok completos, $ko incompletos/fallidos. Carpeta: $dir" ([System.Drawing.Color]::SteelBlue)
 } })
 
+# Indice (ncu|tcu|variable) -> valor de la ultima lectura, para auditar sin
+# volver a preguntar a la planta. Pura: se prueba sin ventana.
+function Aud-Indice($lectura) {
+    $m = @{}
+    foreach ($f in @($lectura)) {
+        foreach ($pr in $f.PSObject.Properties) {
+            if (@('NCU','TCU','Estado') -contains $pr.Name) { continue }
+            $v = "$($pr.Value)".Trim()
+            if ($v -eq '' -or $v -eq '-') { continue }
+            $m["$($f.NCU)|$($f.TCU)|$($pr.Name)"] = $v
+        }
+    }
+    return $m
+}
+# Compara el valor del preset con el leido. Normaliza lo que no es diferencia
+# real: mayusculas del hexadecimal y coma/punto decimal. Pura.
+function Aud-Igual([string]$esperado, [string]$leido) {
+    $a = "$esperado".Trim(); $b = "$leido".Trim()
+    if ($a -eq $b) { return $true }
+    if ($a.StartsWith('0x') -or $b.StartsWith('0x')) { return ($a.ToLower() -eq $b.ToLower()) }
+    $x = 0.0; $y = 0.0
+    if ([double]::TryParse($a.Replace(',', '.'), [Globalization.NumberStyles]::Float, $INV, [ref]$x) -and
+        [double]::TryParse($b.Replace(',', '.'), [Globalization.NumberStyles]::Float, $INV, [ref]$y)) {
+        return ([Math]::Abs($x - $y) -lt 0.0000001)
+    }
+    return $false
+}
+
 # ------------------------- AUDITORIA GOLDEN PRESET -------------------------
 $btnPresetRef.Add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
@@ -5507,7 +5547,11 @@ $btnAud.Add_Click({ Lanzar {
     } else {
         Con "Auditoria de $(Eti-Rango $tcus) contra '$($script:PresetRefNombre)' ($($script:PresetRef.Count) variables)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     }
-    $nOk = 0; $nDesv = 0; $nErr = 0
+    $nOk = 0; $nTcusOk = 0; $nDesv = 0; $nErr = 0; $nFalsas = 0; $nCache = 0
+    # Lo ya leido en esta sesion no se vuelve a pedir: antes, venir de un
+    # barrido y auditar era recorrer la planta dos veces para lo mismo.
+    $idxLec = @{}
+    if ($chkAudLec.Checked) { $idxLec = Aud-Indice $script:UltimaLectura }
     foreach ($tr in $trabajos) {
         $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
     if ($script:Cancelar) { break }
@@ -5528,6 +5572,22 @@ $btnAud.Add_Click({ Lanzar {
             foreach ($refv in $script:PresetRef) {
                 if ($script:Cancelar) { break }
                 $cmp = $null
+                # 1) si esa TCU y esa variable ya se leyeron, se usa aquello
+                $kLec = "$etNcu|$tcu|$($refv.nombre)"
+                if ($idxLec.ContainsKey($kLec)) {
+                    $nCache++
+                    if (Aud-Igual $refv.texto $idxLec[$kLec]) { $nOk++; continue }
+                    $desvTcu++
+                    $leidoC = $idxLec[$kLec]
+                    $sospC = Rango-Sospechoso $refv.nombre $leidoC
+                    $notaC = $(if ($sospC) { "DESVIACION - $sospC" } else { 'DESVIACION' })
+                    $script:UltimaAud += [pscustomobject]@{NCU=$etNcu; TCU=[int]$tcu; Variable=$refv.nombre; Esperado=$refv.texto; Leido=$leidoC; Nota=$notaC}
+                    $itemC = New-Object System.Windows.Forms.ListViewItem($etNcu)
+                    [void]$itemC.SubItems.Add("$tcu"); [void]$itemC.SubItems.Add($refv.nombre); [void]$itemC.SubItems.Add($refv.texto); [void]$itemC.SubItems.Add($leidoC); [void]$itemC.SubItems.Add($notaC)
+                    $itemC.ForeColor = $(if ($sospC) { [System.Drawing.Color]::Firebrick } else { [System.Drawing.Color]::DarkOrange })
+                    $lvA.Items.Add($itemC) | Out-Null
+                    continue
+                }
                 if ($segOk) {
                     for ($i = 1; $i -le $tr.cx.reint -and $null -eq $cmp; $i++) {
                         try { $cmp = Comparar-Escritura $tcu $refv.esc }
@@ -5545,9 +5605,20 @@ $btnAud.Add_Click({ Lanzar {
                     $item.ForeColor = [System.Drawing.Color]::Gray
                     $lvA.Items.Add($item) | Out-Null
                 } elseif (-not $cmp.ok) {
-                    $desvTcu++
                     $leidoDec = ''
                     try { $leidoDec = Leer-Decodificado $tcu $VARIABLES[$refv.nombre] } catch { $leidoDec = "raw $($cmp.leidoRaw)" }
+                    # La comparacion cruda puede fallar por una respuesta
+                    # descolocada. Si al releer el valor coincide con el preset,
+                    # no habia desviacion: la mala era la primera lectura. Sin
+                    # esto salian filas absurdas de "esperado -10, leido -10,
+                    # DESVIACION", que es como se descubrio.
+                    if (Aud-Igual $refv.texto $leidoDec) {
+                        $nFalsas++
+                        Con ((Eti-Tcu $tcu) + "  $($refv.nombre): la primera lectura no cuadraba pero al releer da $leidoDec, que es el valor del preset: descolocacion, no desviacion") ([System.Drawing.Color]::Orange)
+                        $nOk++
+                        continue
+                    }
+                    $desvTcu++
                     # no solo distinto del preset: ademas puede ser imposible
                     $sosp = Rango-Sospechoso $refv.nombre $leidoDec
                     $nota = $(if ($sosp) { "DESVIACION - $sosp" } else { 'DESVIACION' })
@@ -5560,7 +5631,7 @@ $btnAud.Add_Click({ Lanzar {
             }
             if ($errTcu -gt 0) { $nErr++ }
             elseif ($desvTcu -gt 0) { $nDesv++; Con ("{0}TCU {1,3}  {2} desviaciones" -f $(if ($etNcu) { "NCU$etNcu " } else { '' }), $tcu, $desvTcu) ([System.Drawing.Color]::Orange) }
-            else { $nOk++ }
+            else { $nTcusOk++ }
             # alimenta la tarea "Configuracion TCU" del seguimiento PEM
             $script:SegAud["$etNcu|$tcu"] = @{ncu=$etNcu; tcu=[int]$tcu
                 estado=$(if ($errTcu -gt 0) { '' } elseif ($desvTcu -gt 0) { 'NOK' } else { 'OK' })
@@ -5571,19 +5642,21 @@ $btnAud.Add_Click({ Lanzar {
     }
     Modbus-Cerrar
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Auditoria: $nOk TCUs conformes | $nDesv con desviaciones | $nErr sin respuesta. $($script:UltimaAud.Count) filas listadas." ([System.Drawing.Color]::SteelBlue)
+    Con "Auditoria: $nTcusOk TCUs conformes | $nDesv con desviaciones | $nErr sin respuesta. $($script:UltimaAud.Count) filas listadas." ([System.Drawing.Color]::SteelBlue)
+    if ($nCache -gt 0) { Con "  $nCache valores salieron de la ultima lectura, sin volver a preguntar a la planta." ([System.Drawing.Color]::Gainsboro) }
+    if ($nFalsas -gt 0) { Con "  $nFalsas comparaciones fallaron y al releer daban el valor bueno: eran respuestas descolocadas de la NCU, no desviaciones." ([System.Drawing.Color]::Orange) }
     if ($script:UltimaAud.Count -eq 0) {
         Con 'Toda la flota coincide con el preset de referencia.' ([System.Drawing.Color]::LightGreen)
         # La tabla solo lista desviaciones, asi que sin ninguna se queda vacia y
         # parece que la auditoria no ha hecho nada. Se deja dicho ahi mismo.
         $vacio = New-Object System.Windows.Forms.ListViewItem('')
         [void]$vacio.SubItems.Add('')
-        [void]$vacio.SubItems.Add($(if ($nOk -gt 0) { "Sin desviaciones: $nOk TCUs conformes" } else { 'No se ha auditado ninguna TCU' }))
+        [void]$vacio.SubItems.Add($(if ($nTcusOk -gt 0) { "Sin desviaciones: $nTcusOk TCUs conformes" } else { 'No se ha auditado ninguna TCU' }))
         [void]$vacio.SubItems.Add('')
         [void]$vacio.SubItems.Add('')
-        [void]$vacio.SubItems.Add($(if ($nOk -gt 0) { "las $($script:PresetRef.Count) variables de '$($script:PresetRefNombre)' coinciden en todas" }
+        [void]$vacio.SubItems.Add($(if ($nTcusOk -gt 0) { "las $($script:PresetRef.Count) variables de '$($script:PresetRefNombre)' coinciden en todas" }
                                     elseif ($script:Cancelar) { 'cancelado antes de leer nada' } else { 'sin respuesta' }))
-        $vacio.ForeColor = $(if ($nOk -gt 0) { [System.Drawing.Color]::DarkGreen } else { [System.Drawing.Color]::Gray })
+        $vacio.ForeColor = $(if ($nTcusOk -gt 0) { [System.Drawing.Color]::DarkGreen } else { [System.Drawing.Color]::Gray })
         $lvA.Items.Add($vacio) | Out-Null
     }
     Marcar-Bloque 'aud'

@@ -30,9 +30,10 @@ $i9 = $src.IndexOf('function Sospechas-Lectura'); $f9 = $src.IndexOf('$btnLeer.A
 $i10 = $src.IndexOf('function Aband-Cronologia'); $f10 = $src.IndexOf('#  Usuarios, roles y registro')
 $i11 = $src.IndexOf('$ROLES = @('); $f11 = $fin   # hasta el arranque de la interfaz
 $i12 = $src.IndexOf('function Lv-Pasa'); $f12 = $src.IndexOf('function Lv-Filtrable')
+$i15 = $src.IndexOf('function Aud-Indice'); $f15 = $src.IndexOf('$btnPresetRef.Add_Click')
 $i13 = $src.IndexOf('function Esclavos-Barrido'); $f13 = $src.IndexOf('function Params-Hsu')
 $i14 = $src.IndexOf('function Buscar-Norm'); $f14 = $src.IndexOf('function Buscador-Abrir')
-$logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7) + "`n" + $src.Substring($i8, $f8 - $i8) + "`n" + $src.Substring($i9, $f9 - $i9) + "`n" + $src.Substring($i10, $f10 - $i10) + "`n" + $src.Substring($i11, $f11 - $i11) + "`n" + $src.Substring($i12, $f12 - $i12) + "`n" + $src.Substring($i13, $f13 - $i13) + "`n" + $src.Substring($i14, $f14 - $i14)
+$logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7) + "`n" + $src.Substring($i8, $f8 - $i8) + "`n" + $src.Substring($i9, $f9 - $i9) + "`n" + $src.Substring($i10, $f10 - $i10) + "`n" + $src.Substring($i11, $f11 - $i11) + "`n" + $src.Substring($i12, $f12 - $i12) + "`n" + $src.Substring($i13, $f13 - $i13) + "`n" + $src.Substring($i14, $f14 - $i14) + "`n" + $src.Substring($i15, $f15 - $i15)
 # los bloques anadidos tambien usan $PSScriptRoot (usuarios.json, registro/)
 $logica = $logica.Replace('$PSScriptRoot', '$PSScriptRootFake')
 Invoke-Expression $logica
@@ -1257,6 +1258,39 @@ Check 'soc: ninguna marcada como baja' $pf.con_soc_bajo 0
 Check 'soc: umbral definido' ($SOC_MIN_OTA -gt 0) $true
 
 Write-Host ''
+Write-Host '== la auditoria no se cree la primera lectura =='
+# El caso real: "esperado -10, leido -10, DESVIACION". La comparacion cruda
+# fallo por una respuesta descolocada y al releer daba el valor bueno.
+Check 'aud: igual es igual' (Aud-Igual '-10' '-10') $true
+Check 'aud: distinto es distinto' (Aud-Igual '-10' '0') $false
+Check 'aud: el hexadecimal no distingue mayusculas' (Aud-Igual '0x0A00' '0x0a00') $true
+Check 'aud: hexadecimales distintos' (Aud-Igual '0x0A00' '0x0000') $false
+Check 'aud: coma o punto decimal' (Aud-Igual '6,5' '6.5') $true
+Check 'aud: decimales distintos' (Aud-Igual '6,5' '6,6') $false
+Check 'aud: 30 y 30,0 son lo mismo' (Aud-Igual '30' '30,0') $true
+Check 'aud: negativos' (Aud-Igual '-45' '-45,000') $true
+Check 'aud: texto que no es numero' (Aud-Igual 'AUTO' 'AUTO') $true
+Check 'aud: vacio contra valor' (Aud-Igual '30' '') $false
+
+Write-Host ''
+Write-Host '== auditar sin volver a leer =='
+$lecAud = @(
+  [pscustomobject]@{NCU='9'; TCU=34; '41069 safe_pos_sign_threshold'='-10'; '41125 min_tilt_east_r1 [deg]'='30'; Estado='OK'}
+  [pscustomobject]@{NCU='9'; TCU=35; '41069 safe_pos_sign_threshold'='0';  '41125 min_tilt_east_r1 [deg]'='30'; Estado='OK'}
+  [pscustomobject]@{NCU='9'; TCU=36; '41069 safe_pos_sign_threshold'='';   '41125 min_tilt_east_r1 [deg]'='-';  Estado='no responde'}
+)
+$idx = Aud-Indice $lecAud
+Check 'indice: coge los valores' ($idx['9|34|41069 safe_pos_sign_threshold']) '-10'
+Check 'indice: y los de la otra TCU' ($idx['9|35|41069 safe_pos_sign_threshold']) '0'
+Check 'indice: las celdas vacias no entran' ($idx.ContainsKey('9|36|41069 safe_pos_sign_threshold')) $false
+Check 'indice: ni los guiones' ($idx.ContainsKey('9|36|41125 min_tilt_east_r1 [deg]')) $false
+Check 'indice: Estado no es una variable' ($idx.ContainsKey('9|34|Estado')) $false
+Check 'indice: lectura vacia' ((Aud-Indice @()).Count) 0
+# con el indice, auditar "-10" contra la 34 es conforme y contra la 35 no
+Check 'indice: la 34 cuadra con el preset' (Aud-Igual '-10' $idx['9|34|41069 safe_pos_sign_threshold']) $true
+Check 'indice: la 35 no' (Aud-Igual '-10' $idx['9|35|41069 safe_pos_sign_threshold']) $false
+
+Write-Host ''
 Write-Host '== buscador de acciones =='
 Check 'buscar: sin acentos' (Buscar-Norm 'Diagnóstico Rápido') 'diagnostico rapido'
 Check 'buscar: la ñ tambien' (Buscar-Norm 'Año') 'ano'
@@ -1446,7 +1480,7 @@ Write-Host ''
 Write-Host '== una tabla vacia tiene que decir por que =='
 # La auditoria solo lista desviaciones: sin ninguna, la tabla se queda vacia y
 # parece que no ha hecho nada. Tiene que dejar dicho ahi mismo que fue bien.
-Check 'auditoria: fila cuando no hay desviaciones' ($src.Contains('Sin desviaciones: $nOk TCUs conformes')) $true
+Check 'auditoria: fila cuando no hay desviaciones' ($src.Contains('Sin desviaciones: $nTcusOk TCUs conformes')) $true
 Check 'auditoria: y se anade a la tabla' ($src.Contains('$lvA.Items.Add($vacio)')) $true
 Check 'auditoria: distingue cancelado de conforme' ($src.Contains('cancelado antes de leer nada')) $true
 # la fila informativa no puede colarse en las exportaciones
