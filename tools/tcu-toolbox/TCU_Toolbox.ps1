@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '7.1'
+$VERSION_TOOLBOX = '7.2'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1509,23 +1509,54 @@ function Comparar-Escritura([byte]$tcu, [hashtable]$esc) {
 
 # Parsea un CSV de escritura por TCU: cabecera TCU;variable;valor (admite ,).
 # Devuelve @{jobs=@(@{tcu;nombre;texto;esc});errores=@('...')}.
+# Reparte las filas de un CSV entre las NCUs de la planta. Devuelve un grupo por
+# NCU con su conexion, y los avisos de las filas que se quedan fuera. Pura.
+function Grupos-CsvPorNcu($jobs, [hashtable]$cx) {
+    $avisos = @()
+    $conNcu = @($jobs | Where-Object { "$($_.ncu)" -ne '' }).Count
+    if ($conNcu -eq 0) {
+        if ($cx.multi) { return @{grupos=@(); avisos=@('el CSV no lleva columna NCU y la conexion es (Planta completa): no se sabe a que NCU va cada TCU')} }
+        return @{grupos=@(,@{ncu=$null; cx=$cx; jobs=@($jobs)}); avisos=@()}
+    }
+    if ($conNcu -ne @($jobs).Count) { return @{grupos=@(); avisos=@('el CSV mezcla filas con NCU y sin NCU')} }
+    if (-not $cx.multi) { return @{grupos=@(); avisos=@('el CSV lleva columna NCU: selecciona la entrada (Planta completa) para que cada fila vaya a su NCU')} }
+    $por = @{}
+    foreach ($j in $jobs) { $k = [int]$j.ncu; if (-not $por.ContainsKey($k)) { $por[$k] = @() }; $por[$k] += ,$j }
+    $grupos = @()
+    foreach ($k in @($por.Keys | Sort-Object)) {
+        $n = @($cx.multi | Where-Object { [int]$_.ncu -eq [int]$k })
+        if ($n.Count -eq 0) { $avisos += "la NCU $k no esta en la planta seleccionada: $(@($por[$k]).Count) filas saltadas"; continue }
+        $grupos += ,@{ncu=[int]$k; jobs=@($por[$k])
+            cx=@{ip=$n[0].ip; puerto=$null; gws=$n[0].gws; multi=$null; etiqueta='auto'; to=$cx.to; reint=$cx.reint}}
+    }
+    return @{grupos=$grupos; avisos=$avisos}
+}
+
 function Parse-CsvPorTcu([string[]]$lineas) {
     $jobs = @(); $errores = @()
     $datos = @($lineas | Where-Object { "$_".Trim() -ne '' })
     if ($datos.Count -lt 2) { return @{jobs=@(); errores=@('CSV vacio (cabecera TCU;variable;valor + filas)')} }
     $sep = ';'
     if (-not $datos[0].Contains(';')) { $sep = ',' }
+    # Cabecera NCU;TCU;variable;valor: en una planta con varias NCUs los numeros
+    # de TCU se repiten, asi que sin la NCU no se sabe a que equipo se escribe.
+    $conNcu = ($datos[0].Split($sep)[0].Trim().Trim('"').ToUpper() -eq 'NCU')
+    $nMin = $(if ($conNcu) { 4 } else { 3 })
+    $cabecera = $(if ($conNcu) { "NCU${sep}TCU${sep}variable${sep}valor" } else { "TCU${sep}variable${sep}valor" })
     for ($i = 1; $i -lt $datos.Count; $i++) {
         $c = $datos[$i].Split($sep)
-        if ($c.Count -lt 3) { $errores += "linea $($i+1): faltan columnas (TCU${sep}variable${sep}valor)"; continue }
+        if ($c.Count -lt $nMin) { $errores += "linea $($i+1): faltan columnas ($cabecera)"; continue }
         try {
-            $tcu = Val-Int $c[0] "linea $($i+1) TCU" 1 247
-            $nombre = Resolver-Variable $c[1]
+            $ncu = ''
+            $k = 0
+            if ($conNcu) { $ncu = "$(Val-Int $c[0] "linea $($i+1) NCU" 1 999)"; $k = 1 }
+            $tcu = Val-Int $c[$k] "linea $($i+1) TCU" 1 247
+            $nombre = Resolver-Variable $c[$k + 1]
             # el valor puede llevar el separador decimal: reunir el resto de columnas
-            $texto = (($c | Select-Object -Skip 2) -join $sep).Trim()
+            $texto = (($c | Select-Object -Skip ($k + 2)) -join $sep).Trim()
             if ($texto -eq '') { throw 'valor vacio' }
             $esc = Valor-A-Escritura $VARIABLES[$nombre] $texto
-            $jobs += @{tcu=$tcu; nombre=$nombre; texto=$texto; esc=$esc}
+            $jobs += @{ncu=$ncu; tcu=$tcu; nombre=$nombre; texto=$texto; esc=$esc}
         } catch { $errores += "linea $($i+1): $_" }
     }
     return @{jobs=$jobs; errores=$errores}
@@ -2868,6 +2899,9 @@ $rtb.ContextMenuStrip = $menuCon
 # ---------------------------------------------------------------------------
 $script:Fallidas = New-Object System.Collections.ArrayList
 $script:UltimaLectura = @()
+# recuento de la reconfirmacion de valores anomalos de la ultima lectura
+$script:ReconfIntentos = 0; $script:ReconfConfirmados = 0
+$script:ReconfCambios = 0;  $script:ReconfSinAcuerdo = 0
 $script:UltimaEscritura = @()
 $script:UltimoVolcado = @()
 $script:UltimoDiag = @()
@@ -3509,6 +3543,62 @@ function Sospechas-Lectura($filas) {
     return $r.ToArray()
 }
 
+# Un valor merece una segunda lectura si es imposible para su variable o si se
+# sale de lo que llevan TODAS las demas TCUs leidas hasta ahora. La razon es que
+# el guardarrail de respuestas descolocadas NO cubre dos lecturas de la misma
+# forma (dos FC03 de un registro seguidos): si la NCU sella el cuerpo de la
+# anterior con el ID de la peticion en curso, cuadra todo y se cuela. Confirmar
+# solo las anomalias cuesta unas pocas lecturas de mas por planta.
+# $reparto: tabla valor -> cuantas TCUs lo tienen, de las ya leidas.
+function Merece-Confirmar([string]$nombre, [string]$valor, $reparto, [int]$minMuestras = 8) {
+    if ("$valor" -eq '') { return $false }
+    if (Rango-Sospechoso $nombre $valor) { return $true }
+    if ($null -eq $reparto) { return $false }
+    $total = 0
+    foreach ($k in $reparto.Keys) { $total += [int]$reparto[$k] }
+    if ($total -lt $minMuestras) { return $false }        # aun no hay mayoria que valga
+    return (-not $reparto.ContainsKey("$valor"))          # valor nunca visto: sospechoso
+}
+
+# A partir de una lectura masiva, propone el valor correcto para cada celda
+# imposible: el valor MAYORITARIO entre los que si son plausibles para esa
+# variable. Devuelve las filas del CSV de correccion y los avisos de lo que no
+# ha podido proponer. Pura: se prueba sin planta ni ventana.
+function Correccion-DeLectura($filas) {
+    $r = New-Object System.Collections.ArrayList
+    $avisos = New-Object System.Collections.ArrayList
+    $todas = @($filas)
+    if ($todas.Count -eq 0) { return @{filas=@(); avisos=@()} }
+    $cols = @($todas[0].PSObject.Properties.Name | Where-Object { @('NCU','TCU','Estado') -notcontains $_ })
+    foreach ($col in $cols) {
+        # solo se puede corregir lo que se puede escribir
+        if (-not $VARIABLES.Contains($col)) { continue }
+        $cuenta = @{}
+        $malas = @()
+        foreach ($f in $todas) {
+            $v = "$($f.$col)".Trim()
+            if ($v -eq '' -or $v -eq '-') { continue }
+            if (Rango-Sospechoso $col $v) { $malas += ,$f; continue }
+            $cuenta[$v] = 1 + [int]$cuenta[$v]
+        }
+        if ($malas.Count -eq 0) { continue }
+        if ($cuenta.Keys.Count -eq 0) {
+            [void]$avisos.Add("$col : ninguna TCU tiene un valor plausible, no hay de donde sacar el correcto")
+            continue
+        }
+        $orden = @($cuenta.Keys | Sort-Object { - [int]$cuenta[$_] }, { "$_" })
+        $bueno = $orden[0]
+        $nBueno = [int]$cuenta[$bueno]
+        if ($orden.Count -gt 1 -and [int]$cuenta[$orden[1]] -eq $nBueno) {
+            [void]$avisos.Add("$col : empate entre '$bueno' y '$($orden[1])' ($nBueno TCUs cada uno), no se propone nada")
+            continue
+        }
+        foreach ($f in $malas) { [void]$r.Add([pscustomobject]@{NCU="$($f.NCU)"; TCU=$f.TCU; Variable=$col; Valor=$bueno}) }
+        [void]$avisos.Add("$col : $($malas.Count) TCUs a corregir con $bueno (el valor de las otras $nBueno)")
+    }
+    return @{filas=$r.ToArray(); avisos=$avisos.ToArray()}
+}
+
 function Def-DeLectura([string]$sel) {
     if ($sel -like 'ESTADO *') { return $ESTADO[$sel.Substring(7)] }
     return $VARIABLES[$sel]
@@ -3524,6 +3614,7 @@ $btnLeer.Add_Click({ Lanzar {
     $trabajos = @(Trabajos-Planta $cx $tcus)
     if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
     $lvL.Items.Clear(); $lvL.Columns.Clear(); $script:UltimaLectura = @()
+    $script:ReconfIntentos = 0; $script:ReconfConfirmados = 0; $script:ReconfCambios = 0; $script:ReconfSinAcuerdo = 0
     [void]$lvL.Columns.Add('NCU', 44)
     [void]$lvL.Columns.Add('TCU', 48)
     foreach ($d in $defs) { [void]$lvL.Columns.Add($d.nombre, [math]::Max(110, [math]::Min(220, [int](746 / $defs.Count)))) }
@@ -3577,6 +3668,32 @@ $btnLeer.Add_Click({ Lanzar {
                         }
                     }
                 }
+                # Segunda lectura de los valores anomalos, con el socket
+                # rehecho: una respuesta descolocada no puede repetirse en una
+                # conexion limpia, asi que si el valor se confirma es real.
+                if ($null -ne $val -and (Merece-Confirmar $d.nombre "$val" $valores[$d.nombre])) {
+                    $script:ReconfIntentos++
+                    $val2 = $null
+                    try { Modbus-Reconectar; $val2 = Leer-Decodificado $tcu $d.vdef } catch {}
+                    if ($null -ne $val2 -and "$val2" -ne "$val") {
+                        # las dos lecturas no coinciden: una de las dos venia
+                        # descolocada. Se desempata con una tercera.
+                        $val3 = $null
+                        try { Modbus-Reconectar; $val3 = Leer-Decodificado $tcu $d.vdef } catch {}
+                        $bueno = $(if ("$val3" -eq "$val") { "$val" } elseif ("$val3" -eq "$val2") { "$val2" } else { $null })
+                        if ($null -eq $bueno) {
+                            Con ((Eti-Tcu $tcu) + "  $($d.nombre): tres lecturas distintas ($val / $val2 / $val3), no me fio de ninguna") ([System.Drawing.Color]::Salmon)
+                            $script:ReconfSinAcuerdo++
+                            $val = $null; $sinRespuesta = $false; $err = "$($d.nombre): lecturas inconsistentes"
+                        } else {
+                            Con ((Eti-Tcu $tcu) + "  $($d.nombre): la primera lectura dio $val y era falsa; el valor es $bueno") ([System.Drawing.Color]::Orange)
+                            $script:ReconfCambios++
+                            $val = $bueno
+                        }
+                    } elseif ($null -ne $val2) {
+                        $script:ReconfConfirmados++
+                    }
+                }
                 if ($null -ne $val) {
                     $fila[$d.nombre] = $val
                     if (-not $valores[$d.nombre].ContainsKey($val)) { $valores[$d.nombre][$val] = 0 }
@@ -3615,6 +3732,10 @@ $btnLeer.Add_Click({ Lanzar {
             foreach ($k in $v.Keys) { Con ("     {0}  en {1} TCUs" -f $k, $v[$k]) ([System.Drawing.Color]::Orange) }
         }
     }
+    if ($script:ReconfIntentos -gt 0) {
+        Con ("Segunda lectura de valores anomalos: {0} comprobados, {1} confirmados, {2} eran falsos, {3} sin acuerdo." -f $script:ReconfIntentos, $script:ReconfConfirmados, $script:ReconfCambios, $script:ReconfSinAcuerdo) ([System.Drawing.Color]::SteelBlue)
+        if ($script:ReconfCambios -gt 0) { Con "  Los que salieron falsos eran respuestas descolocadas de la NCU que el guardarrail no ve (dos lecturas de la misma forma). Sin esta segunda lectura habrian salido como buenos." ([System.Drawing.Color]::Orange) }
+    }
     # Cordura: un valor puede coincidir en toda la planta y aun asi ser
     # imposible, asi que esto va aparte del reparto de valores.
     $sospechas = @(Sospechas-Lectura $script:UltimaLectura)
@@ -3622,6 +3743,23 @@ $btnLeer.Add_Click({ Lanzar {
         Con ('-' * 96) ([System.Drawing.Color]::Salmon)
         Con "VALORES IMPOSIBLES: $($sospechas.Count) TCUs con algun valor fuera del rango fisico de la variable." ([System.Drawing.Color]::Salmon)
         foreach ($sp in $sospechas) { Con ("  {0}{1,3}  {2} = {3}  -> {4}" -f $(if ($sp.NCU) { "NCU$($sp.NCU) TCU " } else { 'TCU ' }), $sp.TCU, $sp.Variable, $sp.Valor, $sp.Motivo) ([System.Drawing.Color]::Salmon) }
+        # CSV listo para aplicar la correccion, con el valor mayoritario de la
+        # planta. Se genera solo: escribirlo a mano TCU a TCU es lo que se hacia
+        # antes y es donde se cuelan los errores.
+        $corr = Correccion-DeLectura $script:UltimaLectura
+        foreach ($a in $corr.avisos) { Con "  $a" ([System.Drawing.Color]::Orange) }
+        if (@($corr.filas).Count -gt 0) {
+            try {
+                $dirC = Join-Path $PSScriptRoot 'correcciones'
+                if (-not (Test-Path $dirC)) { New-Item -ItemType Directory -Path $dirC | Out-Null }
+                $fC = Join-Path $dirC ('correccion_' + ((Nombre-Planta) -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv')
+                $lin = @('NCU;TCU;variable;valor')
+                foreach ($f in $corr.filas) { $lin += "$($f.NCU);$($f.TCU);$($f.Variable);$($f.Valor)" }
+                Set-Content -Path $fC -Value $lin -Encoding UTF8
+                Con "CSV de correccion generado: $fC  ($(@($corr.filas).Count) escrituras)" ([System.Drawing.Color]::SteelBlue)
+                Con "  Para aplicarlo: pestana Escribir, entrada (Planta completa), boton 'CSV por TCU...'. REVISALO ANTES: propone el valor mayoritario, y la mayoria no siempre es lo que quieres." ([System.Drawing.Color]::SteelBlue)
+            } catch { Con "No se pudo escribir el CSV de correccion: $_" ([System.Drawing.Color]::Orange) }
+        }
     }
     Marcar-Bloque 'lectura'
 } })
@@ -4342,22 +4480,41 @@ $btnCsvTcu.Add_Click({ Lanzar {
     $jobs = @($res.jobs)
     if ($jobs.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('El CSV no tiene filas validas.','Aviso'); return }
     $cx = Params-Conexion
-    $tcus = @($jobs | ForEach-Object { $_.tcu } | Sort-Object -Unique)
+    # Con columna NCU el CSV puede tocar TCUs de varias NCUs de una pasada, que
+    # es lo que hace falta para corregir equipos sueltos repartidos por la planta.
+    $rep = Grupos-CsvPorNcu $jobs $cx
+    foreach ($a in $rep.avisos) { Con "AVISO CSV: $a" ([System.Drawing.Color]::Orange) }
+    $grupos = @($rep.grupos)
+    if ($grupos.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show("No se puede aplicar el CSV:`r`n`r`n$($rep.avisos -join "`r`n")",'CSV por TCU','OK','Error'); return }
+    $nEsc = 0; $nTcusTot = 0
+    foreach ($g in $grupos) { $nEsc += @($g.jobs).Count; $nTcusTot += @(@($g.jobs) | ForEach-Object { $_.tcu } | Sort-Object -Unique).Count }
+    $donde = $(if ($grupos.Count -gt 1 -or $null -ne $grupos[0].ncu) { "$($grupos.Count) NCUs" } else { "$($cx.ip):$($cx.etiqueta)" })
     $r = [System.Windows.Forms.MessageBox]::Show(
-        "CSV: $($jobs.Count) escrituras en $($tcus.Count) TCUs de $($cx.ip):$($cx.etiqueta)" +
+        "CSV: $nEsc escrituras en $nTcusTot TCUs de $donde" +
         $(if ($res.errores.Count -gt 0) { "`r`n($($res.errores.Count) lineas con error se saltan - ver consola)" } else { '' }) +
+        $(if ($rep.avisos.Count -gt 0) { "`r`n($($rep.avisos.Count) avisos - ver consola)" } else { '' }) +
         "`r`n`r`nContinuar?", 'Confirmar CSV por TCU', 'YesNo', 'Warning')
     if ($r -ne 'Yes') { return }
-    $peligro = @($jobs | Where-Object { $ADDR_COMANDO -contains $VARIABLES[$_.nombre].addr })
+    $peligro = @($grupos | ForEach-Object { $_.jobs } | Where-Object { $ADDR_COMANDO -contains $VARIABLES[$_.nombre].addr })
     if ($peligro.Count -gt 0) {
         $r2 = [System.Windows.Forms.MessageBox]::Show(
             "ATENCION: el CSV toca $($peligro.Count) registros de COMANDO. Seguro?",
             'REGISTROS DE COMANDO', 'YesNo', 'Stop')
         if ($r2 -ne 'Yes') { return }
     }
-    if ($tcus.Count -gt 3 -and -not $chkRoll.Checked) {
+    if ($nTcusTot -gt 3 -and -not $chkRoll.Checked) {
         Con 'Sin copia de seguridad previa (casilla desmarcada): esta escritura no se podra deshacer.' ([System.Drawing.Color]::Orange)
     }
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "CSV por TCU: $nEsc escrituras en $nTcusTot TCUs de $donde" ([System.Drawing.Color]::SteelBlue)
+    $ok = 0; $ko = 0
+    foreach ($gr in $grupos) {
+    if ($script:Cancelar) { break }
+    $cx = $gr.cx
+    $jobs = @($gr.jobs)
+    $tcus = @($jobs | ForEach-Object { $_.tcu } | Sort-Object -Unique)
+    $script:NcuLog = $(if ($null -ne $gr.ncu) { "$($gr.ncu)" } else { '' })
+    if ($null -ne $gr.ncu) { Con ("--- NCU{0}  ({1})  {2} escrituras en {3} TCUs ---" -f $gr.ncu, $cx.ip, $jobs.Count, $tcus.Count) ([System.Drawing.Color]::SteelBlue) }
     if ($tcus.Count -gt 3 -and $chkRoll.Checked) {
         # rollback previo con los valores actuales (sin registros de comando)
         $paresRb = @()
@@ -4370,16 +4527,13 @@ $btnCsvTcu.Add_Click({ Lanzar {
             } catch {
                 $r3 = [System.Windows.Forms.MessageBox]::Show(
                     "No se pudo crear la copia de seguridad previa (rollback):`r`n$_`r`n`r`nEscribir AUN ASI, sin copia?", 'Rollback', 'YesNo', 'Warning')
-                if ($r3 -ne 'Yes') { return }
+                if ($r3 -ne 'Yes') { continue }
             }
-            if ($script:Cancelar) { return }
+            if ($script:Cancelar) { break }
         }
     }
     $porTcu = @{}
     foreach ($j in $jobs) { if (-not $porTcu.ContainsKey($j.tcu)) { $porTcu[$j.tcu] = @() }; $porTcu[$j.tcu] += ,$j }
-    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "CSV por TCU: $($jobs.Count) escrituras en $($tcus.Count) TCUs  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
-    $ok = 0; $ko = 0
     $segs = @(Plan-Segmentos $tcus $cx)
     foreach ($seg in $segs) {
         if ($script:Cancelar) { break }
@@ -4423,6 +4577,8 @@ $btnCsvTcu.Add_Click({ Lanzar {
         }
     }
     Modbus-Cerrar
+    }
+    $script:NcuLog = ''
     Con "CSV por TCU terminado: $ok OK, $ko con fallo. Recuerda GUARDAR EN NVM si procede." ([System.Drawing.Color]::SteelBlue)
 } })
 
