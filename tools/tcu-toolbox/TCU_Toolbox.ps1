@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '9.9'
+$VERSION_TOOLBOX = '10.0'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2208,29 +2208,38 @@ $txtLFin = TG $tabL '44' 131 22 45
 
 [void](LG $tabL 'Filtro' 200 42)
 $txtLFiltro = TG $tabL '' 244 22 170
-$lblLFiltro = LG $tabL '' 424 104
+$lblLFiltro = LG $tabL '' 424 86
 $lblLFiltro.ForeColor = [System.Drawing.Color]::Gray
+
+# El preset ya dice que variables importan: teclearlas otra vez aqui sobra. Con
+# esto se puede leer lo mismo que se audita (o que se escribe) sin pasar por la
+# pestana Auditoria, que era el unico sitio desde donde se podia traer.
+$btnLPreset = New-Object System.Windows.Forms.Button
+$btnLPreset.Text = 'Cargar preset...'
+$btnLPreset.Location = New-Object System.Drawing.Point(514, 18)
+$btnLPreset.Size = New-Object System.Drawing.Size(112, 28)
+$tabL.Controls.Add($btnLPreset)
 
 # Quitar la variable seleccionada. Existia con la lista de la v5.1 y se perdio
 # al pasar a tabla; sin cabeceras de fila no hay forma evidente de borrar una.
 $btnLQuitar = New-Object System.Windows.Forms.Button
 $btnLQuitar.Text = 'Quitar'
-$btnLQuitar.Location = New-Object System.Drawing.Point(534, 18)
-$btnLQuitar.Size = New-Object System.Drawing.Size(78, 28)
+$btnLQuitar.Location = New-Object System.Drawing.Point(632, 18)
+$btnLQuitar.Size = New-Object System.Drawing.Size(66, 28)
 $tabL.Controls.Add($btnLQuitar)
 
 $btnLeer = New-Object System.Windows.Forms.Button
 $btnLeer.Text = 'LEER'
-$btnLeer.Location = New-Object System.Drawing.Point(620, 18)
-$btnLeer.Size = New-Object System.Drawing.Size(140, 28)
+$btnLeer.Location = New-Object System.Drawing.Point(704, 18)
+$btnLeer.Size = New-Object System.Drawing.Size(100, 28)
 $btnLeer.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
 $btnLeer.ForeColor = [System.Drawing.Color]::White
 $tabL.Controls.Add($btnLeer)
 
 $btnLCsv = New-Object System.Windows.Forms.Button
 $btnLCsv.Text = 'Exportar CSV'
-$btnLCsv.Location = New-Object System.Drawing.Point(766, 18)
-$btnLCsv.Size = New-Object System.Drawing.Size(140, 28)
+$btnLCsv.Location = New-Object System.Drawing.Point(810, 18)
+$btnLCsv.Size = New-Object System.Drawing.Size(96, 28)
 $btnLCsv.Enabled = $false
 $tabL.Controls.Add($btnLCsv)
 
@@ -2268,6 +2277,35 @@ function Quitar-Filas($grid) {
     foreach ($i in @($borrar | Sort-Object -Unique -Descending)) { $grid.Rows.RemoveAt($i) }
 }
 $btnLQuitar.Add_Click({ Quitar-Filas $dgvL; Refrescar-FiltroLeer })
+
+$btnLPreset.Add_Click({
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    $dlg.Filter = 'Preset o backup (*.json)|*.json'
+    if ($dlg.ShowDialog() -ne 'OK') { return }
+    try { $obj = Get-Content $dlg.FileName -Raw | ConvertFrom-Json }
+    catch { [void][System.Windows.Forms.MessageBox]::Show("No se pudo leer: $_",'Error'); return }
+    $r = Preset-Nombres $obj
+    if (@($r.nombres).Count -eq 0) {
+        [void][System.Windows.Forms.MessageBox]::Show('El fichero no tiene ninguna variable de las del mapa.','Error'); return
+    }
+    # las que ya estuvieran puestas a mano se pierden: avisar antes de borrarlas
+    if ($dgvL.Rows.Count -gt 1) {
+        $rr = [System.Windows.Forms.MessageBox]::Show(
+            "La tabla tiene $($dgvL.Rows.Count - 1) variables puestas. Reemplazarlas por las $(@($r.nombres).Count) del preset?",
+            'Ya hay variables', 'YesNo', 'Question')
+        if ($rr -ne 'Yes') { return }
+    }
+    $dgvL.Rows.Clear()
+    foreach ($n in @($r.nombres)) {
+        if (-not $colLVar.Items.Contains($n)) { [void]$colLVar.Items.Add($n) }
+        [void]$dgvL.Rows.Add($n, (Info-Lectura $n))
+    }
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Preset cargado en la lectura: $(@($r.nombres).Count) variables de $([System.IO.Path]::GetFileName($dlg.FileName)). Pulsa LEER." ([System.Drawing.Color]::SteelBlue)
+    if (@($r.fuera).Count -gt 0) {
+        Con "  fuera $(@($r.fuera).Count) que no estan en el mapa v$($VERSION_MAPA): $((@($r.fuera) | Select-Object -First 6) -join ', ')" ([System.Drawing.Color]::Orange)
+    }
+})
 $dgvL.Add_KeyDown({ param($s, $e) if ($e.KeyCode -eq 'Delete') { Quitar-Filas $dgvL; Refrescar-FiltroLeer; $e.Handled = $true } })
 
 function Nombres-Legibles { return @(Nombres-Ordenados @($VARIABLES.Keys)) + @(Nombres-Ordenados @($ESTADO.Keys) | ForEach-Object { 'ESTADO ' + $_ }) }
@@ -3540,7 +3578,7 @@ function Con([string]$t, $color) {
 }
 
 $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $btnDiag, $btnSync, $btnIdent,
-                    $btnPresetSave, $btnPresetLoad, $btnCargarBackup, $btnLCsv, $btnDCsv, $btnBackupJson,
+                    $btnPresetSave, $btnPresetLoad, $btnLPreset, $btnCargarBackup, $btnLCsv, $btnDCsv, $btnBackupJson,
                     $btnComparar, $btnGCsv, $btnGJson, $btnGWa, $btnGBat, $btnICsv,
                     $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnInvF, $btnInvFCsv,
                     $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm, $btnHEsclavo,
@@ -4390,6 +4428,29 @@ function Correccion-DeLectura($filas) {
 function Def-DeLectura([string]$sel) {
     if ($sel -like 'ESTADO *') { return $ESTADO[$sel.Substring(7)] }
     return $VARIABLES[$sel]
+}
+
+# De un preset (o de un backup completo) saca los nombres de variable que se
+# pueden leer, sin valores: para la lectura solo importa QUE se lee. Se aceptan
+# los dos formatos que ya se guardan, la lista suelta y el backup_tcu.
+# Pura: se prueba sin ventana ni ficheros.
+function Preset-Nombres($obj) {
+    $pares = @()
+    if ($null -ne $obj -and $obj.PSObject.Properties['tipo'] -and "$($obj.tipo)" -eq 'backup_tcu') { $pares = @($obj.variables) }
+    else { $pares = @($obj) }
+    $nombres = New-Object System.Collections.ArrayList
+    $fuera = New-Object System.Collections.ArrayList
+    foreach ($e in $pares) {
+        if ($null -eq $e) { continue }
+        $n = "$($e.variable)"
+        if ($n -eq '') { continue }
+        if (-not $VARIABLES.Contains($n)) { if (-not $fuera.Contains($n)) { [void]$fuera.Add($n) }; continue }
+        # un preset con la misma variable dos veces no tiene que dar dos filas:
+        # se leeria dos veces lo mismo y la tabla saldria con columnas repetidas
+        if ($nombres.Contains($n)) { continue }
+        [void]$nombres.Add($n)
+    }
+    return @{nombres = $nombres.ToArray(); fuera = $fuera.ToArray()}
 }
 
 $btnLeer.Add_Click({ Lanzar {

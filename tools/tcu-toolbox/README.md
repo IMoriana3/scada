@@ -60,6 +60,17 @@ cuántos valores salieron de la lectura sin tocar la planta.
 **Y la pestaña *Flota* pasa a llamarse *Auditoría*** — que es lo que se hace ahí.
 El inventario sigue dentro, y Ctrl+K lo encuentra por su nombre.
 
+**Cargar preset en *Leer variable* (v10.0)** — el preset ya dice qué variables
+importan; teclearlas otra vez para leerlas sobraba. **Cargar preset…** las mete
+en la tabla de lectura, sin valores: para leer solo importa **qué** se lee.
+Acepta los dos formatos que ya se guardan —la lista suelta y el backup completo
+de una TCU—, avisa de las que no están en el mapa en vez de dejarlas como filas
+muertas, y no duplica una variable repetida en el preset. Si la tabla ya tenía
+variables puestas a mano, pregunta antes de reemplazarlas.
+
+Hasta ahora esto solo se podía hacer desde *Auditoría* → **Leer variables**, que
+sigue estando: aquel además trae el rango de la auditoría y te lleva de vuelta.
+
 **Auditoría de baterías (v9.7)** — botón **BATERÍAS** en *Diagnóstico*. No lee
 nada: la tensión, la corriente, el SoC, el SoH y las temperaturas ya vienen del
 diagnóstico, así que la auditoría es instantánea y se puede repetir sobre el

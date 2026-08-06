@@ -711,6 +711,39 @@ $defsL = @($nom | ForEach-Object { @{nombre=[string]$_; vdef=(Def-DeLectura $_)}
 Check 'cada variable resuelve su tipo' (@($defsL | Where-Object { $_.vdef }).Count) 3
 Check 'tipo de la primera' ($defsL[0].vdef.tipo) 'f32deg'
 
+Write-Host ''
+Write-Host '== cargar un preset en la lectura =='
+# el preset ya dice que variables importan: no hay que teclearlas otra vez
+$presetL = @(
+    [pscustomobject]@{variable='41111 max_tilt_west_r1 [deg]'; valor='55'}
+    [pscustomobject]@{variable='41106 east_pitch [m]';         valor='6'}
+)
+$rp = Preset-Nombres $presetL
+Check 'preset leer: saca los nombres' (@($rp.nombres).Count) 2
+Check 'preset leer: en el orden del fichero' ($rp.nombres[0]) '41111 max_tilt_west_r1 [deg]'
+Check 'preset leer: y ninguno fuera' (@($rp.fuera).Count) 0
+# el otro formato que se guarda: el backup completo de una TCU
+$bk = [pscustomobject]@{tipo='backup_tcu'; variables=$presetL}
+Check 'preset leer: tambien un backup' (@((Preset-Nombres $bk).nombres).Count) 2
+# lo que no esta en el mapa se dice, no se cuela como fila muerta
+$rf = Preset-Nombres @(
+    [pscustomobject]@{variable='41111 max_tilt_west_r1 [deg]'; valor='55'}
+    [pscustomobject]@{variable='99999 inventada'; valor='1'})
+Check 'preset leer: la que no existe se aparta' (@($rf.nombres).Count) 1
+Check 'preset leer: y se nombra' ($rf.fuera[0]) '99999 inventada'
+# repetida en el preset = una sola columna en la lectura
+$rr = Preset-Nombres @(
+    [pscustomobject]@{variable='41106 east_pitch [m]'; valor='6'}
+    [pscustomobject]@{variable='41106 east_pitch [m]'; valor='6'})
+Check 'preset leer: no duplica' (@($rr.nombres).Count) 1
+Check 'preset leer: preset vacio no revienta' (@((Preset-Nombres @()).nombres).Count) 0
+Check 'preset leer: nulo tampoco' (@((Preset-Nombres $null).nombres).Count) 0
+# y el boton existe, esta enganchado y se bloquea mientras hay una operacion
+Check 'preset leer: hay boton' ($src.Contains("btnLPreset.Text = 'Cargar preset...'")) $true
+Check 'preset leer: con handler' ($src.Contains('$btnLPreset.Add_Click')) $true
+Check 'preset leer: se bloquea si esta ocupada' ($src.Contains('$btnPresetLoad, $btnLPreset,')) $true
+Check 'preset leer: avisa antes de borrar lo puesto' ($src.Contains('Ya hay variables')) $true
+
 # Guarda estatica: ninguna funcion que devuelva ",\$algo" puede consumirse con
 # @(), porque no se despliega. Es lo que se me escapo dos veces.
 $conComa = @()
