@@ -117,6 +117,19 @@ filas en el Excel, y la segunda solo lleva el número de RSU, sin NCU ni IP. En
 Ayora es el caso de la **NCU 15** (RSU 8 y 9). El generador las suma a la NCU de
 arriba; antes se saltaba esa fila entera y se perdía una de las diez.
 
+**Y las TCUs que fallan por los dos lados (v10.9)** — una TCU puede tener
+desviaciones **y** variables sin respuesta a la vez. Contaba solo como *sin
+respuesta*, su línea de «N desviaciones» no se imprimía… pero sus filas
+`DESVIACION` sí estaban en la tabla. De ahí salía un resumen que no cuadraba
+consigo mismo: *«3 TCUs con desviaciones»* con **6** desviaciones listadas.
+
+Ahora su línea sale igual —`TCU 43  2 desviaciones (y 3 variables sin
+respuesta)`— y el resumen lo dice sin romper la suma:
+
+```
+8 TCUs sin respuesta (de esas, 2 con desviaciones ademas)
+```
+
 **El resumen de la auditoría mezclaba unidades (v10.3)** — decía
 `0 con desviaciones. 5 filas listadas.` y parecía contradecirse. No lo era: lo
 primero son **TCUs** y lo segundo **variables**, y esas cinco filas eran de
