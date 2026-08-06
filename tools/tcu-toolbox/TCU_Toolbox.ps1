@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '10.7'
+$VERSION_TOOLBOX = '10.8'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2616,9 +2616,9 @@ $txtAIni = TG $gbAud '1' 62 22 40
 $txtAFin = TG $gbAud '44' 120 22 40
 
 $btnPresetRef = New-Object System.Windows.Forms.Button
-$btnPresetRef.Text = 'Preset referencia...'
+$btnPresetRef.Text = 'Preset ref...'
 $btnPresetRef.Location = New-Object System.Drawing.Point(168, 19)
-$btnPresetRef.Size = New-Object System.Drawing.Size(130, 26)
+$btnPresetRef.Size = New-Object System.Drawing.Size(96, 26)
 $gbAud.Controls.Add($btnPresetRef)
 
 # La auditoria hacia SIEMPRE su propia pasada, asi que despues de un barrido se
@@ -2627,11 +2627,11 @@ $gbAud.Controls.Add($btnPresetRef)
 $chkAudLec = New-Object System.Windows.Forms.CheckBox
 $chkAudLec.Text = 'Usar la ultima lectura'
 $chkAudLec.Checked = $true
-$chkAudLec.Location = New-Object System.Drawing.Point(304, 21)
+$chkAudLec.Location = New-Object System.Drawing.Point(270, 21)
 $chkAudLec.Size = New-Object System.Drawing.Size(142, 22)
 $gbAud.Controls.Add($chkAudLec)
 
-$lblPresetRef = LG $gbAud '(sin preset)' 452 106
+$lblPresetRef = LG $gbAud '(sin preset)' 416 92
 
 # La auditoria puede leer por su cuenta, pero leer en 'Leer variable' da la
 # segunda lectura de valores anomalos, el resumen de discrepancias y el
@@ -2639,30 +2639,41 @@ $lblPresetRef = LG $gbAud '(sin preset)' 452 106
 # se audita contra esa lectura sin volver a tocar la planta.
 $btnAudLeer = New-Object System.Windows.Forms.Button
 $btnAudLeer.Text = 'Leer variables'
-$btnAudLeer.Location = New-Object System.Drawing.Point(564, 19)
-$btnAudLeer.Size = New-Object System.Drawing.Size(126, 26)
+$btnAudLeer.Location = New-Object System.Drawing.Point(512, 19)
+$btnAudLeer.Size = New-Object System.Drawing.Size(96, 26)
 $gbAud.Controls.Add($btnAudLeer)
 $lblPresetRef.ForeColor = [System.Drawing.Color]::Gray
 
+# Las TCUs con desviaciones son justo las que hay que reescribir, y hasta ahora
+# habia que apuntarlas a mano y teclear el rango en Escribir. Esto lo prepara:
+# el preset en la tabla y el rango de las que fallaron. La pestana no escribe,
+# como el resto: deja cargado y lleva alli.
+$btnAudEscr = New-Object System.Windows.Forms.Button
+$btnAudEscr.Text = 'Escribir...'
+$btnAudEscr.Location = New-Object System.Drawing.Point(612, 19)
+$btnAudEscr.Size = New-Object System.Drawing.Size(90, 26)
+$btnAudEscr.Enabled = $false
+$gbAud.Controls.Add($btnAudEscr)
+
 $btnAud = New-Object System.Windows.Forms.Button
 $btnAud.Text = 'AUDITAR'
-$btnAud.Location = New-Object System.Drawing.Point(696, 18)
-$btnAud.Size = New-Object System.Drawing.Size(86, 28)
+$btnAud.Location = New-Object System.Drawing.Point(706, 18)
+$btnAud.Size = New-Object System.Drawing.Size(82, 28)
 $btnAud.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
 $btnAud.ForeColor = [System.Drawing.Color]::White
 $gbAud.Controls.Add($btnAud)
 
 $btnAudCsv = New-Object System.Windows.Forms.Button
 $btnAudCsv.Text = 'CSV'
-$btnAudCsv.Location = New-Object System.Drawing.Point(788, 18)
-$btnAudCsv.Size = New-Object System.Drawing.Size(50, 28)
+$btnAudCsv.Location = New-Object System.Drawing.Point(792, 18)
+$btnAudCsv.Size = New-Object System.Drawing.Size(48, 28)
 $btnAudCsv.Enabled = $false
 $gbAud.Controls.Add($btnAudCsv)
 
 $btnAudJson = New-Object System.Windows.Forms.Button
 $btnAudJson.Text = 'JSON'
-$btnAudJson.Location = New-Object System.Drawing.Point(842, 18)
-$btnAudJson.Size = New-Object System.Drawing.Size(50, 28)
+$btnAudJson.Location = New-Object System.Drawing.Point(844, 18)
+$btnAudJson.Size = New-Object System.Drawing.Size(48, 28)
 $btnAudJson.Enabled = $false
 $gbAud.Controls.Add($btnAudJson)
 
@@ -3603,7 +3614,7 @@ function Con([string]$t, $color) {
 $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $btnDiag, $btnSync, $btnIdent,
                     $btnPresetSave, $btnPresetLoad, $btnLPreset, $btnCargarBackup, $btnLCsv, $btnDCsv, $btnBackupJson,
                     $btnComparar, $btnGCsv, $btnGJson, $btnGWa, $btnGBat, $btnICsv,
-                    $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnInvF, $btnInvFCsv,
+                    $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnAudEscr, $btnInvF, $btnInvFCsv,
                     $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm, $btnHEsclavo,
                     $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComis, $btnPComisSet, $btnPCsv,
                     $btnGBucle, $btnPSeg, $btnAudJson, $btnInvJson, $btnHBuscar, $btnGComm,
@@ -6058,6 +6069,18 @@ function Aud-Resumen($filas, [int]$tcusOk, [int]$tcusDesv, [int]$tcusErr) {
     return "$t En la tabla: $nf $(if ($nf -eq 1) { 'fila' } else { 'filas' }) ($($partes -join ' y ')), una por variable."
 }
 
+# Prepara la escritura de las TCUs que la auditoria ha dejado con desviaciones.
+# Pura la parte que importa: de que TCUs hablamos. Se prueba sin ventana.
+function Aud-ConDesviacion($filas) {
+    $r = @{}
+    foreach ($f in @($filas)) {
+        if ("$($f.Nota)" -notlike 'DESVIACION*') { continue }
+        if ("$($f.TCU)" -notmatch '^\d+$') { continue }
+        $r["$($f.NCU)|$([int]$f.TCU)"] = @{ncu="$($f.NCU)"; tcu=[int]$f.TCU}
+    }
+    return @($r.Values | Sort-Object { [int]("0" + "$($_.ncu)") }, { [int]$_.tcu })
+}
+
 # ---------------------------------------------------------------------------
 #  Cierre post-actualizacion (interfaz)
 # ---------------------------------------------------------------------------
@@ -6237,6 +6260,32 @@ $btnAudLeer.Add_Click({
     Con "  Pulsa LEER. Al terminar vuelve a Auditoria con 'Usar la ultima lectura' marcado: comparara contra esos datos sin volver a leer la planta." ([System.Drawing.Color]::Gainsboro)
 })
 
+$btnAudEscr.Add_Click({
+    $malas = @(Aud-ConDesviacion $script:UltimaAud)
+    if ($malas.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('La ultima auditoria no dejo ninguna TCU con desviaciones.','Auditoria'); return }
+    if (-not $script:PresetRef -or @($script:PresetRef).Count -eq 0) {
+        [void][System.Windows.Forms.MessageBox]::Show('Carga primero el preset de referencia: es el que dice que hay que escribir.','Falta el preset','OK','Information'); return
+    }
+    $pares = @($script:PresetRef | ForEach-Object { [pscustomobject]@{variable=$_.nombre; valor=$_.texto} })
+    $n = Cargar-FilasEnGrid $pares
+    $ncus = @(@($malas | ForEach-Object { "$($_.ncu)" }) | Sort-Object -Unique)
+    $tcus = @($malas | ForEach-Object { [int]$_.tcu } | Sort-Object -Unique)
+    $txtWIni.Text = "$($tcus[0])"; $txtWFin.Text = "$($tcus[-1])"
+    $tabs.SelectedTab = $tabW
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Preparado para escribir: $n variables de '$($script:PresetRefNombre)' y el rango TCU $($tcus[0])-$($tcus[-1])." ([System.Drawing.Color]::SteelBlue)
+    Con "  $($malas.Count) TCUs con desviaciones: $(@($malas | Select-Object -First 25 | ForEach-Object { "NCU$($_.ncu) TCU $($_.tcu)" }) -join ', ')$(if ($malas.Count -gt 25) { ' y mas' })" ([System.Drawing.Color]::Orange)
+    # el rango es de la primera a la ultima, asi que puede llevarse por delante
+    # TCUs que estaban bien: reescribirles el preset no las rompe, pero hay que
+    # decirlo, y con varias NCUs el rango no vale
+    $enRango = $tcus[-1] - $tcus[0] + 1
+    if ($enRango -gt $malas.Count) {
+        Con "  OJO: el rango $($tcus[0])-$($tcus[-1]) son $enRango TCUs y solo $($malas.Count) tienen desviaciones. A las otras se les reescribe el mismo preset (no las rompe). Para tocar solo las malas, usa 'CSV por TCU...'." ([System.Drawing.Color]::Orange)
+    }
+    if ($ncus.Count -gt 1) { Con "  OJO: son de $($ncus.Count) NCUs ($($ncus -join ', ')). El rango vale para UNA: escribe una cada vez, o usa 'CSV por TCU...' con columna NCU." ([System.Drawing.Color]::Salmon) }
+    Con "  Pulsa SIMULAR para ver que cambiaria, y luego ESCRIBIR. Al terminar, GUARDAR EN NVM." ([System.Drawing.Color]::Gainsboro)
+})
+
 $btnAud.Add_Click({ Lanzar {
     if (-not $script:PresetRef) { [void][System.Windows.Forms.MessageBox]::Show('Carga primero un preset de referencia (o un backup completo).','Aviso'); return }
     $cx = Params-Conexion
@@ -6355,6 +6404,7 @@ $btnAud.Add_Click({ Lanzar {
     Con (Aud-Resumen $script:UltimaAud $nTcusOk $nDesv $nErr) ([System.Drawing.Color]::SteelBlue)
     if ($nCache -gt 0) { Con "  $nCache valores salieron de la ultima lectura, sin volver a preguntar a la planta." ([System.Drawing.Color]::Gainsboro) }
     if ($nFalsas -gt 0) { Con "  $nFalsas comparaciones fallaron y al releer daban el valor bueno: eran respuestas descolocadas de la NCU, no desviaciones. NO estan en la tabla ni cuentan como desviacion: la TCU que sale arriba en esas lineas quedo conforme." ([System.Drawing.Color]::Orange) }
+    $btnAudEscr.Enabled = (@(Aud-ConDesviacion $script:UltimaAud).Count -gt 0)
     if ($script:UltimaAud.Count -eq 0) {
         Con 'Toda la flota coincide con el preset de referencia.' ([System.Drawing.Color]::LightGreen)
         # La tabla solo lista desviaciones, asi que sin ninguna se queda vacia y

@@ -1828,6 +1828,37 @@ Check 'resumen: sin filas no habla de la tabla' ((Aud-Resumen @() 70 0 0).Contai
 # y la linea de descolocacion tiene que decir que NO esta en la tabla
 Check 'resumen: la descolocacion se explica' ($src.Contains('NO estan en la tabla ni cuentan como desviacion')) $true
 
+Write-Host ''
+Write-Host '== de la auditoria a escribir =='
+# Las TCUs con desviaciones son las que hay que reescribir: hasta ahora habia
+# que apuntarlas a mano y teclear el rango en Escribir.
+$audF = @(
+    [pscustomobject]@{NCU='12'; TCU=39; Variable='a'; Nota='DESVIACION'}
+    [pscustomobject]@{NCU='12'; TCU=39; Variable='b'; Nota='DESVIACION'}   # misma TCU, dos variables
+    [pscustomobject]@{NCU='12'; TCU=41; Variable='a'; Nota='DESVIACION - fuera de rango'}
+    [pscustomobject]@{NCU='12'; TCU=44; Variable='a'; Nota='sin respuesta'}
+    [pscustomobject]@{NCU='';   TCU='';  Variable='';  Nota='Sin desviaciones: 40 TCUs conformes'}
+)
+$mal = @(Aud-ConDesviacion $audF)
+Check 'escribir: una fila por TCU, no por variable' ($mal.Count) 2
+Check 'escribir: la primera' ("$($mal[0].ncu)/$($mal[0].tcu)") '12/39'
+Check 'escribir: la de nota con motivo tambien entra' ("$($mal[1].ncu)/$($mal[1].tcu)") '12/41'
+Check 'escribir: las mudas no' (@($mal | Where-Object { $_.tcu -eq 44 }).Count) 0
+Check 'escribir: la fila de "sin desviaciones" tampoco' (@($mal | Where-Object { "$($_.tcu)" -eq '' }).Count) 0
+Check 'escribir: sin auditoria, nada' (@(Aud-ConDesviacion @()).Count) 0
+# ordenadas por NCU y TCU, que el rango sale de ahi
+$mix = @(Aud-ConDesviacion @(
+    [pscustomobject]@{NCU='2'; TCU=9; Nota='DESVIACION'}
+    [pscustomobject]@{NCU='12'; TCU=3; Nota='DESVIACION'}
+    [pscustomobject]@{NCU='2'; TCU=4; Nota='DESVIACION'}))
+Check 'escribir: ordenadas por NCU y TCU' (@($mix | ForEach-Object { "$($_.ncu)/$($_.tcu)" }) -join ' ') '2/4 2/9 12/3'
+# el boton existe, esta enganchado y avisa de lo que el rango se lleva por delante
+Check 'escribir: hay boton' ($src.Contains("btnAudEscr.Text = 'Escribir...'")) $true
+Check 'escribir: con handler' ($src.Contains('$btnAudEscr.Add_Click')) $true
+Check 'escribir: se habilita al auditar' ($src.Contains('$btnAudEscr.Enabled = (@(Aud-ConDesviacion')) $true
+Check 'escribir: avisa si el rango pilla buenas' ($src.Contains('A las otras se les reescribe el mismo preset')) $true
+Check 'escribir: y si son de varias NCUs' ($src.Contains('El rango vale para UNA')) $true
+
 Check 'auditoria: no ensucia el CSV'($src.Contains('$script:UltimaAud += [pscustomobject]@{NCU=$etNcu; TCU=[int]$tcu; Variable=$vacio')) $false
 
 Write-Host ''
