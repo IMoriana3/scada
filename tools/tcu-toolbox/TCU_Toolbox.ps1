@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '7.6'
+$VERSION_TOOLBOX = '7.7'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -4084,6 +4084,43 @@ $btnLCsv.Add_Click({
     }
 })
 
+# Veredicto de un pulso de motor a cada lado. La clave es la CORRIENTE: si no
+# hay movimiento pero tampoco corriente, el controlador ni siquiera activo el
+# motor, y eso pasa cuando el seguidor esta pegado a su limite de recorrido; no
+# es una averia. Si hay corriente y no se mueve, ahi si hay algo atascado.
+# Devuelve @{estado; detalle; limite}. Pura: se prueba sin planta.
+function Motor-Veredicto([double]$dW, [int]$iW, [double]$dE, [int]$iE, [double]$umbral, [double]$tilt0) {
+    $CERO_MA = 30
+    $det = ("desde {0:0.0} deg: dW {1:+0.0;-0.0} deg (I {2} mA), dE {3:+0.0;-0.0} deg (I {4} mA)" -f $tilt0, $dW, $iW, $dE, $iE)
+    # el umbral es inclusivo: la inclinacion se lee en decimas, asi que un
+    # movimiento de exactamente el umbral es un caso real y no puede caer en
+    # tierra de nadie entre "se movio" y "esta quieto"
+    $okW = $dW -ge $umbral                       # al oeste sube el angulo
+    $okE = $dE -le -$umbral                      # al este baja
+    $quietoW = [math]::Abs($dW) -lt $umbral
+    $quietoE = [math]::Abs($dE) -lt $umbral
+    $declinaW = $quietoW -and $iW -lt $CERO_MA   # el controlador no engancho el motor
+    $declinaE = $quietoE -and $iE -lt $CERO_MA
+    if ($okW -and $okE) { return @{estado='PASA'; detalle=$det; limite=$false} }
+    if ($dW -le -$umbral -and $dE -ge $umbral) {
+        return @{estado='FALLA'; detalle="sentido INVERTIDO (revisar polaridad / bit 11 de 41018) - $det"; limite=$false}
+    }
+    if ($quietoW -and $quietoE) {
+        $causa = $(if ($declinaW -and $declinaE) { 'sin corriente de motor: el controlador no lo activa en ningun sentido' } else { 'no se mueve aunque hay corriente' })
+        return @{estado='FALLA'; detalle="$causa - $det"; limite=$false}
+    }
+    # uno de los dos se movio bien y el otro no
+    if ($okW -and $declinaE) {
+        return @{estado='PASA'; detalle="solo al oeste: al este el controlador no activo el motor (0 mA), normal si esta en su limite - $det"; limite=$true}
+    }
+    if ($okE -and $declinaW) {
+        return @{estado='PASA'; detalle="solo al este: al oeste el controlador no activo el motor (0 mA), normal si esta en su limite - $det"; limite=$true}
+    }
+    if ($okW -and $quietoE) { return @{estado='FALLA'; detalle="no se mueve al este con corriente ($iE mA): revisar mecanica - $det"; limite=$false} }
+    if ($okE -and $quietoW) { return @{estado='FALLA'; detalle="no se mueve al oeste con corriente ($iW mA): revisar mecanica - $det"; limite=$false} }
+    return @{estado='DUDOSO'; detalle="movimiento asimetrico - $det"; limite=$false}
+}
+
 # ------------------------- IDENTIFICACION (bloque 30300+) -------------------------
 function Ident-Leer([byte]$tcu) {
     $w = FC03-Leer $tcu (Dir-Trama 30300) 30
@@ -5277,7 +5314,7 @@ $btnPMotor.Add_Click({ Lanzar {
     $lvP.Items.Clear(); $script:UltimoPem = @(); $lblPResumen.Text = ''
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "TEST DE MOTOR: $(Eti-Rango $tcus), pulso ${pulso}s, umbral $umbral deg" ([System.Drawing.Color]::SteelBlue)
-    $nPasa = 0; $nFalla = 0; $nSalta = 0
+    $nPasa = 0; $nFalla = 0; $nSalta = 0; $nLim = 0
     $segs = @(Plan-Segmentos $tcus $cx)
     foreach ($seg in $segs) {
         if ($script:Cancelar) { break }
@@ -5311,16 +5348,11 @@ $btnPMotor.Add_Click({ Lanzar {
                 Start-Sleep -Milliseconds 700
                 $tE = (FC03-Leer $tcu (Dir-Trama 30111) 1)[0]; if ($tE -gt 32767) { $tE -= 65536 }
                 $dW = ($tW - $t0) / 10.0; $dE = ($tE - $tW) / 10.0
-                $det = ("dW {0:+0.0;-0.0} deg (I {1} mA), dE {2:+0.0;-0.0} deg (I {3} mA)" -f $dW, $iW, $dE, $iE)
-                if ([math]::Abs($dW) -lt $umbral -and [math]::Abs($dE) -lt $umbral) {
-                    $causa = $(if ($iW -lt 30 -and $iE -lt 30) { 'sin corriente de motor' } else { 'no se mueve' })
-                    Pem-Fila $tcu 'FALLA' "$causa - $det"; $nFalla++
-                } elseif ($dW -lt -$umbral -and $dE -gt $umbral) {
-                    Pem-Fila $tcu 'FALLA' "sentido INVERTIDO (revisar polaridad / bit 11 de 41018) - $det"; $nFalla++
-                } elseif ($dW -gt $umbral -and $dE -lt -$umbral) {
-                    Pem-Fila $tcu 'PASA' $det; $nPasa++
-                } else {
-                    Pem-Fila $tcu 'DUDOSO' "movimiento asimetrico - $det"; $nFalla++
+                $v = Motor-Veredicto $dW $iW $dE $iE $umbral ($t0 / 10.0)
+                Pem-Fila $tcu $v.estado $v.detalle
+                switch ($v.estado) {
+                    'PASA' { $nPasa++; if ($v.limite) { $nLim++ } }
+                    default { $nFalla++ }
                 }
             } catch {
                 Pem-Fila $tcu 'FALLA' "error durante el test: $_"; $nFalla++
@@ -5332,8 +5364,10 @@ $btnPMotor.Add_Click({ Lanzar {
         }
     }
     Modbus-Cerrar
+    $colaLim = $(if ($nLim -gt 0) { " ($nLim solo en un sentido, pegadas al limite)" } else { '' })
     $lblPResumen.Text = "PASA $nPasa | FALLA $nFalla | saltados $nSalta"
-    Con "TEST DE MOTOR terminado: PASA $nPasa | FALLA $nFalla | SALTADOS $nSalta" ([System.Drawing.Color]::SteelBlue)
+    Con "TEST DE MOTOR terminado: PASA $nPasa$colaLim | FALLA $nFalla | SALTADOS $nSalta" ([System.Drawing.Color]::SteelBlue)
+    if ($nLim -gt 0) { Con "  Las que solo se movieron en un sentido estaban pegadas a su limite de recorrido: el controlador no llega a activar el motor y la corriente se queda en 0. Para probar los dos sentidos, llevalas antes a una posicion mas centrada." ([System.Drawing.Color]::Gainsboro) }
     # alimenta la tarea "Prueba movimiento" del seguimiento PEM
     foreach ($p in $script:UltimoPem) {
         if ($p.Resultado -eq 'SALTADO') { continue }

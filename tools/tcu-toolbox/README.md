@@ -37,6 +37,22 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
 
+**El límite de recorrido no es una avería (v7.7)** — el TEST DE MOTOR daba
+`DUDOSO: movimiento asimétrico` en las TCUs que estaban pegadas a su límite. Es
+lo esperable: un seguidor a 0,1° del tope este no puede moverse más al este, así
+que el pulso hacia ese lado no produce nada.
+
+La clave para distinguirlo estaba ya en el dato y no se usaba: **la corriente de
+motor**. Si no hay movimiento y **tampoco corriente**, el controlador ni siquiera
+activó el motor, que es justo lo que hace al llegar al límite. Si hay corriente y
+no se mueve, ahí sí hay algo atascado.
+
+Ahora una TCU que se mueve bien en un sentido y en el otro se queda a 0 mA
+**PASA**, con la nota de que solo se pudo probar un sentido, y el resumen dice
+cuántas fueron así. Un fallo mecánico de verdad —corriente sin movimiento— sigue
+siendo FALLA, y ahora lo dice con esas palabras en vez de «asimétrico». El
+detalle incluye además la inclinación de partida, que es lo que da contexto.
+
 **Los límites de inclinación no tienen signo fijo (v7.6)** — el rango de cordura
 de `min_tilt_east` estaba puesto como -90..0 dando por hecho que el límite este
 tenía que ser negativo. No es así: en Ayora la configuración buena lleva

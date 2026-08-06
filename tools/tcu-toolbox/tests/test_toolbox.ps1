@@ -16,7 +16,7 @@ $null = New-Item -ItemType Directory -Path (Join-Path $PSScriptRootFake 'plantas
 Get-ChildItem (Join-Path $PSScriptRootFake 'plantas') -File | Remove-Item -Force
 Copy-Item (Join-Path $raizTb 'plantas/elburgo.json') (Join-Path $PSScriptRootFake 'plantas') -Force
 # anadir las funciones definidas en la seccion de handlers
-$i1 = $src.IndexOf('function Ident-Leer'); $f1 = $src.IndexOf('$btnIdent.Add_Click')
+$i1 = $src.IndexOf('function Motor-Veredicto'); $f1 = $src.IndexOf('$btnIdent.Add_Click')
 $i2 = $src.IndexOf('function Diag-LeerTcu'); $f2 = $src.IndexOf('$btnDiag.Add_Click')
 $i3 = $src.IndexOf('function Params-Conexion'); $f3 = $src.IndexOf('function Rango-Tcus')
 $i4 = $src.IndexOf('function Nombres-Legibles'); $f4 = $src.IndexOf('function Refrescar-FiltroLeer')
@@ -1109,6 +1109,37 @@ $cp = Correccion-DeLectura $mezcla
 Check 'par: la correccion la recoge' (@($cp.filas).Count) 1
 Check 'par: y propone la mayoria' (@($cp.filas)[0].Valor) '30'
 Check 'par: sobre la TCU marcada' (@($cp.filas)[0].TCU) 3
+
+# --------------------------------------------------------------------------
+#  Test de motor: el limite de recorrido no es una averia
+# --------------------------------------------------------------------------
+Write-Host ''
+Write-Host '== veredicto del test de motor =='
+# los dos sentidos bien
+Check 'motor: los dos sentidos' (Motor-Veredicto 0.5 1810 -0.5 1750 0.5 -20.0).estado 'PASA'
+Check 'motor: los dos sentidos no es limite' (Motor-Veredicto 0.6 1810 -0.6 1750 0.5 -20.0).limite $false
+# el caso de Ayora: pegada al limite este, al este 0 mA
+$vLim = Motor-Veredicto 0.6 1810 0.1 0 0.5 -54.9
+Check 'motor: pegada al limite pasa' $vLim.estado 'PASA'
+Check 'motor: y se marca como limite' $vLim.limite $true
+Check 'motor: lo explica' ($vLim.detalle.Contains('limite')) $true
+Check 'motor: dice desde donde' ($vLim.detalle.Contains('-54,9') -or $vLim.detalle.Contains('-54.9')) $true
+# lo mismo al reves
+$vLimW = Motor-Veredicto 0.1 0 -0.6 1750 0.5 54.9
+Check 'motor: limite oeste tambien pasa' $vLimW.estado 'PASA'
+Check 'motor: limite oeste marcado' $vLimW.limite $true
+# atasco de verdad: hay corriente y no se mueve
+$vAtasco = Motor-Veredicto 0.6 1810 0.0 1900 0.5 0.0
+Check 'motor: corriente sin movimiento es fallo' $vAtasco.estado 'FALLA'
+Check 'motor: y lo dice' ($vAtasco.detalle.Contains('mecanica')) $true
+Check 'motor: el atasco no es limite' $vAtasco.limite $false
+# nada de nada
+Check 'motor: quieto y sin corriente' (Motor-Veredicto 0.0 0 0.0 0 0.5 0.0).estado 'FALLA'
+Check 'motor: quieto con corriente' ((Motor-Veredicto 0.0 1800 0.0 1900 0.5 0.0).detalle.Contains('hay corriente')) $true
+# polaridad al reves
+$vInv = Motor-Veredicto -0.6 1810 0.6 1750 0.5 0.0
+Check 'motor: sentido invertido' $vInv.estado 'FALLA'
+Check 'motor: nombra la polaridad' ($vInv.detalle.Contains('INVERTIDO')) $true
 
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }
