@@ -37,6 +37,29 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
 
+**Parte de averías para WhatsApp (v8.2)** — los técnicos de campo no leen un CSV
+en el móvil. El botón **COPIAR NO-OK** del diagnóstico deja en el portapapeles un
+listado en texto plano, agrupado por NCU y con solo lo que no está OK:
+
+```
+Ayora - 06/08/2026 04:15
+NO OK: 5 de 754 equipos revisados.
+
+*NCU 1* (3)
+- La NCU: AVISO - reloj NCU: 2026-08-06 04:10
+- TCU 14: ALARMA - eje bloqueado
+- TCU 22: AVISO - SoC bajo (L1)
+
+*NCU 3* (2)
+- TCU 9: OFFLINE
+- HSU2: ALARMA - ALARMA VIENTO
+```
+
+Respeta el filtro **Ver NCU** de al lado, así que con el mismo botón sacas el
+parte general o el de una NCU concreta para mandárselo a quien está en ella. Sin
+tablas, que en el móvil se descuadran. Además del portapapeles se vuelca en la
+consola, por si el portapapeles falla.
+
 **Qué TCUs faltan por actualizar (v8.1)** — el plan de firmware agrupaba las
 pendientes en **tramos** (`NCU + gateway + desde-hasta`), que es lo que se pega en
 el updater, pero no decía qué equipos concretos faltaban ni en qué versión

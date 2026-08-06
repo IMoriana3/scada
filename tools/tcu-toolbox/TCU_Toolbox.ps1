@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '8.1'
+$VERSION_TOOLBOX = '8.2'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2353,6 +2353,16 @@ $btnGComm.BackColor = [System.Drawing.Color]::FromArgb(0,120,60)
 $btnGComm.ForeColor = [System.Drawing.Color]::White
 $tabG.Controls.Add($btnGComm)
 
+# Listado para pegar en WhatsApp: los tecnicos de campo no leen un CSV en el
+# movil. Respeta el filtro de NCU de al lado, asi que sirve tanto para el parte
+# general como para mandarle a cada uno lo suyo.
+$btnGWa = New-Object System.Windows.Forms.Button
+$btnGWa.Text = 'COPIAR NO-OK'
+$btnGWa.Location = New-Object System.Drawing.Point(758, 84)
+$btnGWa.Size = New-Object System.Drawing.Size(150, 26)
+$btnGWa.Enabled = $false
+$tabG.Controls.Add($btnGWa)
+
 # filtros de vista sobre el resultado ya leido (no relanzan lecturas)
 [void](LG $tabG 'Ver' 10 30 89)
 $cbGVerNcu = New-Object System.Windows.Forms.ComboBox
@@ -2378,7 +2388,7 @@ foreach ($s in @('OK','AVISO','ALARMA','OFFLINE')) {
 $lblGVer = New-Object System.Windows.Forms.Label
 $lblGVer.Text = ''
 $lblGVer.Location = New-Object System.Drawing.Point(462, 89)
-$lblGVer.Size = New-Object System.Drawing.Size(446, 20)
+$lblGVer.Size = New-Object System.Drawing.Size(288, 20)
 $lblGVer.ForeColor = [System.Drawing.Color]::Gray
 $tabG.Controls.Add($lblGVer)
 
@@ -3245,7 +3255,7 @@ function Con([string]$t, $color) {
 
 $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $btnDiag, $btnSync, $btnIdent,
                     $btnPresetSave, $btnPresetLoad, $btnCargarBackup, $btnLCsv, $btnDCsv, $btnBackupJson,
-                    $btnComparar, $btnGCsv, $btnGJson, $btnICsv,
+                    $btnComparar, $btnGCsv, $btnGJson, $btnGWa, $btnICsv,
                     $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnInvF, $btnInvFCsv,
                     $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm, $btnHEsclavo,
                     $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComis, $btnPComisSet, $btnPCsv,
@@ -3262,6 +3272,7 @@ function Set-UIOcupada([bool]$ocupada) {
         $btnBackupJson.Enabled = ($script:UltimoVolcado.Count -gt 0)
         $btnComparar.Enabled   = ($script:UltimoVolcado.Count -gt 0)
         $btnGCsv.Enabled       = ($script:UltimoDiag.Count -gt 0)
+        $btnGWa.Enabled        = ($script:UltimoDiag.Count -gt 0)
         $btnGJson.Enabled      = ($script:UltimoDiag.Count -gt 0)
         $btnICsv.Enabled       = ($script:UltimaIdent.Count -gt 0)
         $btnAudCsv.Enabled     = ($script:UltimaAud.Count -gt 0)
@@ -4114,6 +4125,40 @@ $btnLCsv.Add_Click({
     }
 })
 
+# Parte de averias en texto plano, para pegarlo en WhatsApp. Nada de tablas:
+# en el movil se descuadran. Agrupa por NCU y solo saca lo que NO esta OK.
+# $ncuFiltro vacio = toda la planta. Pura: se prueba sin planta ni ventana.
+function Texto-NoOk($filas, [string]$planta, [string]$fecha, [string]$ncuFiltro) {
+    $todas = @($filas)
+    $malas = @($todas | Where-Object { $s = "$($_.Salud)".ToUpper(); $s -ne '' -and $s -ne 'OK' })
+    if ($ncuFiltro -ne '') {
+        $todas = @($todas | Where-Object { "$($_.NCU)" -eq $ncuFiltro })
+        $malas = @($malas | Where-Object { "$($_.NCU)" -eq $ncuFiltro })
+    }
+    $cab = "$planta"
+    if ($ncuFiltro -ne '') { $cab += " - NCU $ncuFiltro" }
+    if ($fecha) { $cab += " - $fecha" }
+    $lin = New-Object System.Collections.ArrayList
+    [void]$lin.Add($cab)
+    if ($malas.Count -eq 0) {
+        [void]$lin.Add("Todo OK: $($todas.Count) equipos revisados, ninguna incidencia.")
+        return ($lin -join "`r`n")
+    }
+    [void]$lin.Add("NO OK: $($malas.Count) de $($todas.Count) equipos revisados.")
+    $ncus = @(@($malas | ForEach-Object { "$($_.NCU)" }) | Sort-Object -Unique | Sort-Object { [int]("0" + $_) })
+    foreach ($n in $ncus) {
+        $delGrupo = @($malas | Where-Object { "$($_.NCU)" -eq $n })
+        [void]$lin.Add('')
+        [void]$lin.Add("*$(if ($n -ne '') { "NCU $n" } else { 'Sin NCU' })* ($($delGrupo.Count))")
+        foreach ($t in @($delGrupo | Sort-Object { [int]("0" + ("$($_.TCU)" -replace '\D', '')) })) {
+            $eti = $(if ("$($t.TCU)" -eq 'NCU') { 'La NCU' } elseif ("$($t.TCU)" -like 'HSU*') { "$($t.TCU)" } else { "TCU $($t.TCU)" })
+            $nota = "$($t.Alarmas)".Trim()
+            [void]$lin.Add("- $eti" + ": $("$($t.Salud)".ToUpper())" + $(if ($nota) { " - $nota" } else { '' }))
+        }
+    }
+    return ($lin -join "`r`n")
+}
+
 # Veredicto de un pulso de motor a cada lado. La clave es la CORRIENTE: si no
 # hay movimiento pero tampoco corriente, el controlador ni siquiera activo el
 # motor, y eso pasa cuando el seguidor esta pegado a su limite de recorrido; no
@@ -4708,6 +4753,20 @@ $btnGComm.Add_Click({ Lanzar {
 } })
 
 $cbGVerNcu.Add_SelectedIndexChanged({ if (-not $script:Ocupado) { Diag-Refrescar } })
+
+$btnGWa.Add_Click({
+    $fNcu = "$($cbGVerNcu.SelectedItem)"
+    $soloNcu = ''
+    if ($fNcu -ne 'NCU - todas') { $soloNcu = ($fNcu -replace '^NCU', '') }
+    $txt = Texto-NoOk $script:UltimoDiag (Nombre-Planta) (Get-Date -Format 'dd/MM/yyyy HH:mm') $soloNcu
+    $copiado = $false
+    try { [System.Windows.Forms.Clipboard]::SetText($txt); $copiado = $true } catch {}
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    foreach ($l in ($txt -split "`r`n")) { Con $l ([System.Drawing.Color]::Gainsboro) }
+    Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
+    if ($copiado) { Con 'Copiado al portapapeles: pegalo en WhatsApp con Ctrl+V.' ([System.Drawing.Color]::LightGreen) }
+    else { Con 'No se pudo usar el portapapeles: selecciona el texto de arriba y copialo con Ctrl+C.' ([System.Drawing.Color]::Orange) }
+})
 foreach ($k in @('OK','AVISO','ALARMA','OFFLINE')) {
     $script:ChksSalud[$k].Add_CheckedChanged({ if (-not $script:Ocupado) { Diag-Refrescar } })
 }
