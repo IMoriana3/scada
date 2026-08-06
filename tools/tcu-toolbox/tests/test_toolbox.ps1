@@ -1245,6 +1245,24 @@ Check 'soc: ninguna marcada como baja' $pf.con_soc_bajo 0
 Check 'soc: umbral definido' ($SOC_MIN_OTA -gt 0) $true
 
 Write-Host ''
+Write-Host '== verificar tras actualizar =='
+# Se saltaba en silencio los tramos de otras NCUs y el resumen decia
+# "0 pendientes" como si estuvieran bien, cuando ni se habian mirado.
+Check 'verif: avisa de los tramos que no toca' ($src.Contains('NO se van a verificar')) $true
+Check 'verif: los cuenta aparte' ($src.Contains('$saltados += [int]$t.TCUs')) $true
+Check 'verif: no los da por buenos' ($src.Contains('no cuentan como buenas')) $true
+Check 'verif: y sale en el rotulo' ($src.Contains('sin comprobar')) $true
+# ademas de decirlo, marca la fila en la tabla
+Check 'verif: dice cual se ha actualizado' ($src.Contains('ACTUALIZADA ->')) $true
+Check 'verif: la pinta en la tabla' ($src.Contains('ACTUALIZADA: ya en $fw')) $true
+Check 'verif: y la que sigue pendiente' ($src.Contains('SIGUE PENDIENTE: en $fw')) $true
+Check 'verif: tambien las que no responden' ($src.Contains('sin respuesta al verificar')) $true
+# la marca tiene que llegar a las filas escondidas por un filtro de columna
+Check 'verif: marca tambien lo filtrado' ($src.Contains('$lvFW.Tag.orig')) $true
+# y solo a la TCU exacta, no a un tramo que la contenga
+Check 'verif: no marca tramos de varias' ($src.Contains('if ($de -ne $tcu -or $a -ne $tcu) { continue }')) $true
+
+Write-Host ''
 Write-Host '== via NCU sin respuesta no inventa OFFLINEs =='
 Check 'diag: se salta las TCUs si la NCU no contesta' ($src.Contains('no se sabe nada de sus $(@($tr.tcus).Count) TCUs')) $true
 Check 'diag: y dice que desmarcar' ($src.Contains("Desmarca 'via NCU' para preguntarles una a una por el gateway")) $true

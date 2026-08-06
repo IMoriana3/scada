@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '8.3'
+$VERSION_TOOLBOX = '8.4'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -5827,6 +5827,28 @@ $btnFwPlan.Add_Click({ Lanzar {
     $btnFwVerif.Enabled = ($script:PlanFw.Count -gt 0)
 } })
 
+# Repinta en la tabla del plan la fila (o filas) de una TCU concreta. Hay que
+# tocar tambien las guardadas por el filtro de columnas: si el usuario tiene una
+# columna filtrada, las que no se ven viven solo ahi.
+function Fw-Marcar([string]$ncu, [int]$tcu, [string]$nota, $color) {
+    $listas = @(,@($lvFW.Items))
+    if ($lvFW.Tag -is [hashtable] -and @($lvFW.Tag.orig).Count -gt 0) { $listas += ,@($lvFW.Tag.orig) }
+    foreach ($lista in $listas) {
+        foreach ($it in $lista) {
+            if ("$($it.Text)" -ne "$ncu") { continue }
+            if ($it.SubItems.Count -lt 7) { continue }
+            $de = 0; $a = 0
+            if (-not [int]::TryParse("$($it.SubItems[3].Text)", [ref]$de)) { continue }
+            if (-not [int]::TryParse("$($it.SubItems[4].Text)", [ref]$a)) { continue }
+            # solo las filas que son exactamente esa TCU: en un tramo de varias
+            # no se puede decir cual de ellas se ha actualizado
+            if ($de -ne $tcu -or $a -ne $tcu) { continue }
+            $it.SubItems[6].Text = $nota
+            $it.ForeColor = $color
+        }
+    }
+}
+
 $btnFwVerif.Add_Click({ Lanzar {
     if ($script:PlanFw.Count -eq 0) { return }
     $cx = Params-Conexion
@@ -5836,11 +5858,19 @@ $btnFwVerif.Add_Click({ Lanzar {
     foreach ($tr in $trabajos) { $porNcu[$(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })] = $tr }
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Verificando firmware de las TCUs del plan (objetivo $obj)..." ([System.Drawing.Color]::SteelBlue)
-    $ok = 0; $ko = 0; $err = 0
+    # Con una entrada de una sola NCU, los tramos de las demas no se pueden
+    # comprobar. Antes se saltaban en silencio y el resumen decia "0 pendientes"
+    # como si estuvieran bien, cuando ni se habian mirado.
+    $fuera = @($script:PlanFw | Where-Object { -not $porNcu["$($_.NCU)"] })
+    if ($fuera.Count -gt 0) {
+        $ncusFuera = @(@($fuera | ForEach-Object { "$($_.NCU)" }) | Sort-Object -Unique)
+        Con "AVISO: $($fuera.Count) tramos de las NCUs $($ncusFuera -join ', ') NO se van a verificar: la conexion apunta solo a $(if ($cx.multi) { 'la planta' } else { "$($cx.ip)" }). Selecciona (Planta completa) para verificarlas todas." ([System.Drawing.Color]::Orange)
+    }
+    $ok = 0; $ko = 0; $err = 0; $saltados = 0
     foreach ($t in $script:PlanFw) {
         if ($script:Cancelar) { break }
         $tr = $porNcu["$($t.NCU)"]
-        if (-not $tr) { continue }
+        if (-not $tr) { $saltados += [int]$t.TCUs; continue }
         $tcus = @([int]$t.Desde..[int]$t.Hasta)
         foreach ($seg in @(Plan-Segmentos $tcus $tr.cx)) {
             try { Modbus-Conectar $tr.ip $seg.puerto $tr.cx.to } catch { $err += @($seg.tcus).Count; continue }
@@ -5850,18 +5880,32 @@ $btnFwVerif.Add_Click({ Lanzar {
                 try {
                     $campos = Ident-Leer $tcu
                     $fw = ($campos | Where-Object { $_.Campo -eq 'FW principal' }).Valor
-                } catch { $err++; continue }
-                if ("$fw" -like "*$obj*") { $ok++ }
-                else { $ko++; Con ("  NCU{0} TCU {1,3}  sigue en {2}" -f $t.NCU, $tcu, $fw) ([System.Drawing.Color]::Orange) }
+                } catch {
+                    $err++
+                    Fw-Marcar "$($t.NCU)" ([int]$tcu) "sin respuesta al verificar: $_" ([System.Drawing.Color]::Gray)
+                    continue
+                }
+                if ("$fw" -like "*$obj*") {
+                    $ok++
+                    Con ("  NCU{0,-3} TCU {1,3}  ACTUALIZADA -> {2}" -f $t.NCU, $tcu, $fw) ([System.Drawing.Color]::LightGreen)
+                    Fw-Marcar "$($t.NCU)" ([int]$tcu) "ACTUALIZADA: ya en $fw" ([System.Drawing.Color]::DarkGreen)
+                } else {
+                    $ko++
+                    Con ("  NCU{0,-3} TCU {1,3}  sigue en {2}" -f $t.NCU, $tcu, $fw) ([System.Drawing.Color]::Orange)
+                    Fw-Marcar "$($t.NCU)" ([int]$tcu) "SIGUE PENDIENTE: en $fw, objetivo $obj" ([System.Drawing.Color]::Firebrick)
+                }
             }
             Modbus-Cerrar
         }
         [System.Windows.Forms.Application]::DoEvents()
     }
     Modbus-Cerrar
-    $lblFw.Text = "Verificacion: $ok en $obj | $ko pendientes | $err sin respuesta"
+    $colaS = $(if ($saltados -gt 0) { " | $saltados sin comprobar" } else { '' })
+    $lblFw.Text = "Verificacion: $ok en $obj | $ko pendientes | $err sin respuesta$colaS"
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Verificacion: $ok TCUs ya en $obj, $ko siguen pendientes, $err sin respuesta. Lanza un INVENTARIO nuevo para dejar constancia (y subirlo al Historico)." ([System.Drawing.Color]::SteelBlue)
+    Con "Verificacion: $ok TCUs ya en $obj, $ko siguen pendientes, $err sin respuesta$(if ($saltados -gt 0) { ", $saltados SIN COMPROBAR (de otras NCUs)" })." ([System.Drawing.Color]::SteelBlue)
+    if ($saltados -gt 0) { Con "Las $saltados sin comprobar siguen igual que estaban: no cuentan como buenas. Cambia a (Planta completa) y vuelve a verificar." ([System.Drawing.Color]::Orange) }
+    Con 'Lanza un INVENTARIO nuevo para dejar constancia (y subirlo al Historico).' ([System.Drawing.Color]::Gainsboro)
 } })
 
 # Preparar una TCU concreta antes de actualizarla (o de capturar su OTA) en
