@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '8.4'
+$VERSION_TOOLBOX = '9.0'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -637,6 +637,48 @@ function Html-Esc([string]$s) {
 
 # Informe PEM autocontenido en HTML. $m: planta, ip, fecha, usuario, version,
 # mapa + listas opcionales diag/inv/aud/pem (objetos de la sesion).
+# Los recuadros de la portada, a partir de lo que haya en la sesion. Devuelve
+# una lista de @{titulo; valor; nota; clase}. Pura: se prueba sin ventana.
+function Portada-Bloques($m) {
+    $r = New-Object System.Collections.ArrayList
+    $diag = @($m.diag)
+    if ($diag.Count -gt 0) {
+        $tcus = @($diag | Where-Object { "$($_.TCU)" -ne 'NCU' -and "$($_.TCU)" -notlike 'HSU*' })
+        $ok = @($tcus | Where-Object { "$($_.Salud)" -eq 'OK' }).Count
+        $pc = $(if ($tcus.Count -gt 0) { [math]::Round(100.0 * $ok / $tcus.Count, 1) } else { 0 })
+        [void]$r.Add(@{titulo='Seguidores operativos'; valor="$pc %"; nota="$ok de $($tcus.Count) sin aviso ni alarma"
+                       clase=$(if ($pc -ge 98) { 'bien' } elseif ($pc -ge 90) { 'medio' } else { 'mal' })})
+        $mal = @($tcus | Where-Object { @('ALARMA','OFFLINE') -contains "$($_.Salud)" }).Count
+        if ($mal -gt 0) { [void]$r.Add(@{titulo='Con alarma o sin comunicacion'; valor="$mal"; nota='requieren visita'; clase='mal'}) }
+    }
+    # OJO: no llamar a nada "inv" aqui. PowerShell no distingue mayusculas, asi
+    # que $inv pisa $INV (la cultura invariante) y revienta el parseo de
+    # decimales de cualquier funcion que se llame desde este ambito.
+    $inventario = @($m.inv)
+    if ($inventario.Count -gt 0) {
+        $ver = @{}
+        foreach ($i in $inventario) { $v = "$($i.FW)".Trim(); if ($v -ne '') { $ver[$v] = 1 + [int]$ver[$v] } }
+        $orden = @($ver.Keys | Sort-Object { - [int]$ver[$_] })
+        if ($orden.Count -gt 0) {
+            $nota = $(if ($orden.Count -eq 1) { 'toda la flota igual' } else { (@($orden | ForEach-Object { "$($ver[$_]) en $_" }) -join ' | ') })
+            [void]$r.Add(@{titulo='Versiones de firmware'; valor="$($orden.Count)"; nota=$nota
+                           clase=$(if ($orden.Count -eq 1) { 'bien' } else { 'medio' })})
+        }
+    }
+    $aud = @($m.aud)
+    if ($aud.Count -gt 0) {
+        $tcusMal = @(@($aud | ForEach-Object { "$($_.NCU)/$($_.TCU)" }) | Sort-Object -Unique).Count
+        [void]$r.Add(@{titulo='Configuracion desviada'; valor="$tcusMal"; nota="$($aud.Count) desviaciones contra el preset"; clase='mal'})
+    }
+    $lec = @($m.lectura)
+    if ($lec.Count -gt 0) {
+        $imp = @(Sospechas-Lectura $lec).Count
+        [void]$r.Add(@{titulo='Valores imposibles'; valor="$imp"; nota=$(if ($imp -eq 0) { 'ninguno en la ultima lectura' } else { 'revisar: fuera del rango fisico' })
+                       clase=$(if ($imp -eq 0) { 'bien' } else { 'mal' })})
+    }
+    return $r.ToArray()
+}
+
 function Informe-Html([hashtable]$m) {
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.AppendLine('<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Informe PEM - ' + (Html-Esc $m.planta) + '</title><style>')
@@ -646,6 +688,13 @@ function Informe-Html([hashtable]$m) {
     [void]$sb.AppendLine('.fmp{position:absolute;z-index:30;top:100%;left:0;min-width:100%;max-height:250px;overflow:auto;background:#fff;border:1px solid #bbb;border-radius:3px;box-shadow:0 6px 18px rgba(20,30,45,.2);padding:5px 7px;display:none;white-space:nowrap;text-align:left}')
     [void]$sb.AppendLine('.fmp label{display:block;font-weight:400;font-size:12px;padding:1px 0;cursor:pointer}.fmp .fmt{border-bottom:1px solid #e6ebf0;margin-bottom:4px;padding-bottom:4px}.fmp .fmt a{color:#06c;cursor:pointer;text-decoration:underline;margin-right:10px;font-size:11px}')
     [void]$sb.AppendLine('#avisojs{background:#fff4d6;border:1px solid #e0b64a;border-radius:4px;padding:9px 12px;margin:12px 0;font-size:13px;color:#6b4b00}#avisojs b{color:#8a5a00}')
+    [void]$sb.AppendLine('.portada{margin:16px 0 20px}.portada h2{margin-bottom:10px}')
+    [void]$sb.AppendLine('.tiles{display:flex;flex-wrap:wrap;gap:12px}')
+    [void]$sb.AppendLine('.tile{flex:1 1 190px;min-width:170px;border:1px solid #cfd9e4;border-left-width:6px;border-radius:6px;padding:12px 14px;background:#fbfdff}')
+    [void]$sb.AppendLine('.tile .big{font-size:30px;font-weight:700;line-height:1.1}.tile .lab{font-size:13px;color:#33475b;margin-top:3px}.tile .sub{font-size:11.5px;color:#6b7c8f;margin-top:5px}')
+    [void]$sb.AppendLine('.tile.bien{border-left-color:#2e9e5b}.tile.bien .big{color:#2e9e5b}')
+    [void]$sb.AppendLine('.tile.medio{border-left-color:#d08600}.tile.medio .big{color:#d08600}')
+    [void]$sb.AppendLine('.tile.mal{border-left-color:#c0392b}.tile.mal .big{color:#c0392b}')
     [void]$sb.AppendLine('.indice{background:#eef4fb;border:1px solid #cfe0f2;border-radius:4px;padding:7px 10px;margin:14px 0;font-size:13px}.indice a{color:#06c;text-decoration:none;font-weight:700}.indice a:hover{text-decoration:underline}')
     [void]$sb.AppendLine('</style></head><body>')
     [void]$sb.AppendLine('<h1>Informe de puesta en marcha &mdash; ' + (Html-Esc $m.planta) + '</h1>')
@@ -716,6 +765,17 @@ function Informe-Html([hashtable]$m) {
     # Las secciones se pintan EMPEZANDO POR LA ULTIMA QUE SE EJECUTO. Si acabas
     # de hacer un inventario, el inventario va arriba aunque en la sesion
     # hubiera un diagnostico anterior: si no, el informe parece de otra cosa.
+    # Portada: lo que se manda al cliente. Se calcula con lo que haya en la
+    # sesion; lo que no se haya hecho no sale, en vez de salir en blanco.
+    $port = @(Portada-Bloques $m)
+    if ($port.Count -gt 0) {
+        [void]$sb.AppendLine('<div class="portada"><h2>Estado de la planta</h2><div class="tiles">')
+        foreach ($b in $port) {
+            [void]$sb.AppendLine('<div class="tile ' + $b.clase + '"><div class="big">' + (Html-Esc $b.valor) + '</div><div class="lab">' +
+                (Html-Esc $b.titulo) + '</div>' + $(if ($b.nota) { '<div class="sub">' + (Html-Esc $b.nota) + '</div>' } else { '' }) + '</div>')
+        }
+        [void]$sb.AppendLine('</div></div>')
+    }
     $secciones = @(
         @{clave='lectura'; titulo='Lectura de variables'; filas=$m.lectura; pinta=$tablaLectura}
         @{clave='diag'; titulo='Diagnostico de flota'; filas=$m.diag
@@ -994,7 +1054,7 @@ function Seguimiento-Filas {
 # aqui; esto es el aviso conservador para no gastar la ventana en balde.
 $SOC_MIN_OTA = 50
 
-function Plan-Firmware([array]$inv, [string]$objetivo, [hashtable]$gwsPorNcu, [array]$diag = @()) {
+function Plan-Firmware([array]$inventario, [string]$objetivo, [hashtable]$gwsPorNcu, [array]$diag = @()) {
     $obj = "$objetivo".Trim()
     if (-not $obj) { throw 'indica la version de firmware objetivo (p. ej. v1.6.0)' }
     # SoC del ultimo diagnostico, indexado por NCU|TCU. Sin diagnostico, vacio.
@@ -1005,7 +1065,7 @@ function Plan-Firmware([array]$inv, [string]$objetivo, [hashtable]$gwsPorNcu, [a
         $soc["$($d.NCU)|$($d.TCU)"] = $v
     }
     $pend = @{}; $mudas = @(); $alDia = 0; $detalle = @()
-    foreach ($f in $inv) {
+    foreach ($f in $inventario) {
         $tcu = 0
         if (-not [int]::TryParse("$($f.TCU)", [ref]$tcu)) { continue }
         $ncu = "$($f.NCU)"
@@ -2053,37 +2113,46 @@ $chkRoll.Location = New-Object System.Drawing.Point(10, 326)
 $chkRoll.Size = New-Object System.Drawing.Size(300, 22); $chkRoll.Checked = $true
 $tabW.Controls.Add($chkRoll)
 
+# Simular no toca nada: cruza lo que se va a escribir con la ultima lectura y
+# dice cuantas TCUs cambiarian de verdad. Es donde se ve, ANTES de escribir 342
+# seguidores, que media planta tiene otra configuracion a proposito.
+$btnSimular = New-Object System.Windows.Forms.Button
+$btnSimular.Text = 'SIMULAR'
+$btnSimular.Location = New-Object System.Drawing.Point(180, 292)
+$btnSimular.Size = New-Object System.Drawing.Size(96, 30)
+$tabW.Controls.Add($btnSimular)
+
 $btnEscribir = New-Object System.Windows.Forms.Button
 $btnEscribir.Text = 'ESCRIBIR'
-$btnEscribir.Location = New-Object System.Drawing.Point(180, 292)
-$btnEscribir.Size = New-Object System.Drawing.Size(120, 30)
+$btnEscribir.Location = New-Object System.Drawing.Point(284, 292)
+$btnEscribir.Size = New-Object System.Drawing.Size(110, 30)
 $btnEscribir.BackColor = [System.Drawing.Color]::FromArgb(0,120,60)
 $btnEscribir.ForeColor = [System.Drawing.Color]::White
 $tabW.Controls.Add($btnEscribir)
 
 $btnFallidas = New-Object System.Windows.Forms.Button
 $btnFallidas.Text = 'Reintentar fallidas'
-$btnFallidas.Location = New-Object System.Drawing.Point(310, 292)
-$btnFallidas.Size = New-Object System.Drawing.Size(130, 30)
+$btnFallidas.Location = New-Object System.Drawing.Point(402, 292)
+$btnFallidas.Size = New-Object System.Drawing.Size(126, 30)
 $btnFallidas.Enabled = $false
 $tabW.Controls.Add($btnFallidas)
 
 $btnCargarBackup = New-Object System.Windows.Forms.Button
 $btnCargarBackup.Text = 'Backup JSON como preset'
-$btnCargarBackup.Location = New-Object System.Drawing.Point(450, 292)
-$btnCargarBackup.Size = New-Object System.Drawing.Size(175, 30)
+$btnCargarBackup.Location = New-Object System.Drawing.Point(536, 292)
+$btnCargarBackup.Size = New-Object System.Drawing.Size(158, 30)
 $tabW.Controls.Add($btnCargarBackup)
 
 $btnCsvTcu = New-Object System.Windows.Forms.Button
 $btnCsvTcu.Text = 'CSV por TCU...'
-$btnCsvTcu.Location = New-Object System.Drawing.Point(632, 292)
-$btnCsvTcu.Size = New-Object System.Drawing.Size(118, 30)
+$btnCsvTcu.Location = New-Object System.Drawing.Point(700, 292)
+$btnCsvTcu.Size = New-Object System.Drawing.Size(106, 30)
 $tabW.Controls.Add($btnCsvTcu)
 
 $btnNvm = New-Object System.Windows.Forms.Button
 $btnNvm.Text = 'GUARDAR EN NVM'
-$btnNvm.Location = New-Object System.Drawing.Point(760, 292)
-$btnNvm.Size = New-Object System.Drawing.Size(148, 30)
+$btnNvm.Location = New-Object System.Drawing.Point(812, 292)
+$btnNvm.Size = New-Object System.Drawing.Size(96, 30)
 $btnNvm.BackColor = [System.Drawing.Color]::FromArgb(160,80,0)
 $btnNvm.ForeColor = [System.Drawing.Color]::White
 $tabW.Controls.Add($btnNvm)
@@ -2317,6 +2386,13 @@ $btnDiag.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
 $btnDiag.ForeColor = [System.Drawing.Color]::White
 $tabG.Controls.Add($btnDiag)
 
+$chkGPar = New-Object System.Windows.Forms.CheckBox
+$chkGPar.Text = 'en paralelo'
+$chkGPar.Checked = $true
+$chkGPar.Location = New-Object System.Drawing.Point(536, 53)
+$chkGPar.Size = New-Object System.Drawing.Size(104, 22)
+$tabG.Controls.Add($chkGPar)
+
 $chkGNcu = New-Object System.Windows.Forms.CheckBox
 $chkGNcu.Text = 'via NCU'
 $chkGNcu.Checked = $true
@@ -2360,7 +2436,7 @@ $tabG.Controls.Add($btnGBucle)
 $lblGBucle = New-Object System.Windows.Forms.Label
 $lblGBucle.Text = ''
 $lblGBucle.Location = New-Object System.Drawing.Point(328, 57)
-$lblGBucle.Size = New-Object System.Drawing.Size(330, 20)
+$lblGBucle.Size = New-Object System.Drawing.Size(200, 20)
 $lblGBucle.ForeColor = [System.Drawing.Color]::Gray
 $tabG.Controls.Add($lblGBucle)
 
@@ -2991,6 +3067,12 @@ $btnICsv.Size = New-Object System.Drawing.Size(118, 28)
 $btnICsv.Enabled = $false
 $gbIdent.Controls.Add($btnICsv)
 
+$btnHist = New-Object System.Windows.Forms.Button
+$btnHist.Text = 'HISTORIAL LOCAL...'
+$btnHist.Location = New-Object System.Drawing.Point(266, 18)
+$btnHist.Size = New-Object System.Drawing.Size(160, 28)
+$gbIdent.Controls.Add($btnHist)
+
 $lvI = New-Object System.Windows.Forms.ListView
 $lvI.Location = New-Object System.Drawing.Point(10, 52)
 $lvI.Size = New-Object System.Drawing.Size(878, 218)
@@ -3015,6 +3097,13 @@ $btnLog.Location = New-Object System.Drawing.Point(825, 741)
 $btnLog.Size = New-Object System.Drawing.Size(110, 28)
 $form.Controls.Add($btnLog)
 
+# Ctrl+K tampoco se ve, asi que el buscador tiene su boton.
+$btnBuscar = New-Object System.Windows.Forms.Button
+$btnBuscar.Text = 'Buscar  Ctrl+K'
+$btnBuscar.Location = New-Object System.Drawing.Point(366, 741)
+$btnBuscar.Size = New-Object System.Drawing.Size(104, 28)
+$form.Controls.Add($btnBuscar)
+
 # Limpiar la consola estaba solo en el menu del boton derecho, que no se ve.
 $btnLimpiar = New-Object System.Windows.Forms.Button
 $btnLimpiar.Text = 'Limpiar'
@@ -3036,7 +3125,7 @@ $form.Controls.Add($btnInforme)
 
 $lblLog = New-Object System.Windows.Forms.Label
 $lblLog.Location = New-Object System.Drawing.Point(10, 746)
-$lblLog.Size = New-Object System.Drawing.Size(456, 20)
+$lblLog.Size = New-Object System.Drawing.Size(346, 20)
 $lblLog.ForeColor = [System.Drawing.Color]::Gray
 $form.Controls.Add($lblLog)
 
@@ -3799,6 +3888,38 @@ $btnNvm.Add_Click({ Lanzar {
     Modbus-Cerrar
 } })
 
+$btnSimular.Add_Click({
+    $vars = @(Recoger-Variables)
+    if ($vars.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('La tabla esta vacia.','Aviso'); return }
+    if (@($script:UltimaLectura).Count -eq 0) {
+        [void][System.Windows.Forms.MessageBox]::Show(
+            "Simular cruza lo que vas a escribir con la ULTIMA LECTURA de esta sesion, y no hay ninguna.`r`n`r`nVe a 'Leer variable', pon estas mismas variables y lee el rango (o la planta completa). Luego vuelve aqui.",
+            'Falta una lectura', 'OK', 'Information')
+        return
+    }
+    $sim = @(Simular-Escritura $vars $script:UltimaLectura $null)
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "SIMULACION (no se escribe nada): $($vars.Count) variables contra la ultima lectura de $(@($script:UltimaLectura).Count) TCUs" ([System.Drawing.Color]::SteelBlue)
+    $totCambian = 0; $sinLeer = 0
+    foreach ($x in $sim) {
+        if ($x.Cambian -lt 0) {
+            $sinLeer++
+            Con ("  {0} = {1}   ->  no estaba en la ultima lectura, no se puede simular" -f $x.Variable, $x.Nuevo) ([System.Drawing.Color]::Orange)
+            continue
+        }
+        $totCambian += $x.Cambian
+        $col = $(if ($x.Cambian -eq 0) { [System.Drawing.Color]::LightGreen } else { [System.Drawing.Color]::Orange })
+        Con ("  {0} = {1}   ->  cambian {2}, ya lo tienen {3}{4}" -f $x.Variable, $x.Nuevo, $x.Cambian, $x.Iguales,
+             $(if ($x.SinDato -gt 0) { ", $($x.SinDato) sin leer" } else { '' })) $col
+        if ($x.Reparto) { Con ("      ahora mismo: {0}" -f $x.Reparto) ([System.Drawing.Color]::Gainsboro) }
+    }
+    Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
+    if ($sinLeer -gt 0) { Con "$sinLeer variables no estaban en la lectura: leelas antes si quieres simularlas." ([System.Drawing.Color]::Orange) }
+    if ($totCambian -eq 0) { Con 'Nada que cambiar: todas las TCUs leidas ya tienen esos valores.' ([System.Drawing.Color]::LightGreen) }
+    else { Con "En total cambiarian $totCambian valores. Mira el reparto de arriba: si una variable tiene DOS valores repartidos por la planta, puede ser a proposito." ([System.Drawing.Color]::Orange) }
+    Marcar-Bloque 'esc'
+})
+
 # ------------------------- presets y backups -------------------------
 $btnPresetSave.Add_Click({
     $vars = @(Recoger-Variables)
@@ -4112,6 +4233,9 @@ $btnLeer.Add_Click({ Lanzar {
     }
     # Cordura: un valor puede coincidir en toda la planta y aun asi ser
     # imposible, asi que esto va aparte del reparto de valores.
+    # queda constancia en el PC de planta: es lo que contesta "desde cuando"
+    $nH = Historial-Anotar (Nombre-Planta) $script:UltimaLectura @($defs | ForEach-Object { $_.nombre })
+    if ($nH -gt 0) { Con "Historial local: $nH valores anotados en $(Historial-Fichero (Nombre-Planta))" ([System.Drawing.Color]::Gainsboro) }
     $sospechas = @(Sospechas-Lectura $script:UltimaLectura)
     if ($sospechas.Count -gt 0) {
         Con ('-' * 96) ([System.Drawing.Color]::Salmon)
@@ -4147,6 +4271,182 @@ $btnLCsv.Add_Click({
         Con "CSV exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
     }
 })
+
+# ---------------------------------------------------------------------------
+#  Barridos de planta en paralelo
+# ---------------------------------------------------------------------------
+# Un barrido de 754 TCUs por el bloque compacto tarda cerca de una hora en
+# serie, y sin embargo cada NCU es una conexion TCP independiente: no compiten
+# entre si. Lanzandolas a la vez, esa hora son minutos.
+#
+# El truco es que la logica de este script (todo lo anterior a la ventana) es
+# autonoma: las pruebas ya la evaluan sueltas. Cada hilo se lleva una copia y
+# con ella su PROPIO estado de conexion ($script:Tcp, $Tid, $Sucio), que es
+# justo lo que hace falta: compartirlo seria volver a mezclar respuestas.
+$script:LogicaCache = $null
+# El parametro $ruta existe para las pruebas: ahi la logica se evalua suelta y
+# $PSCommandPath apunta al fichero de pruebas, no a la herramienta.
+function Logica-Propia([string]$ruta = '') {
+    if ($ruta -eq '' -and $script:LogicaCache) { return $script:LogicaCache }
+    $cachear = ($ruta -eq '')
+    if ($ruta -eq '') {
+        $ruta = $PSCommandPath
+        if (-not $ruta -or -not (Test-Path $ruta)) { $ruta = Join-Path $PSScriptRoot 'TCU_Toolbox.ps1' }
+    }
+    if (-not $ruta -or -not (Test-Path $ruta)) { throw 'no se puede localizar el propio script para repartirlo entre hilos' }
+    $src = Get-Content $ruta -Raw
+    $ini = $src.IndexOf('$VERSION_TOOLBOX')
+    $fin = $src.IndexOf('$form = New-Object System.Windows.Forms.Form')
+    if ($ini -lt 0 -or $fin -lt 0) { throw 'no se ha podido separar la logica de la ventana' }
+    # $PSScriptRoot no se puede asignar dentro del hilo: se cambia por una
+    # variable normal que si se puede pasar como argumento.
+    # El token se construye a trozos a proposito: esta funcion habla DE el, y si
+    # se escribe entero cualquiera que reescriba el fuente (las pruebas lo hacen)
+    # se lo lleva por delante y el reemplazo deja de encontrar nada.
+    $tokenRaiz = '$' + 'PSScriptRoot'
+    $texto = $src.Substring($ini, $fin - $ini).Replace($tokenRaiz, '$RaizTb')
+    if ($cachear) { $script:LogicaCache = $texto }
+    return $texto
+}
+
+# Reparte una lista de tareas entre hilos. Cada tarea recibe (logica, raiz,
+# argumento) y devuelve lo que devuelva $cuerpo. Los fallos de un hilo no
+# tumban el barrido: esa tarea devuelve $null y se sigue.
+function Paralelo-Ejecutar($tareas, [scriptblock]$cuerpo, [int]$hilos = 8, [string]$ruta = '') {
+    $lista = @($tareas)
+    if ($lista.Count -eq 0) { return @() }
+    $logica = Logica-Propia $ruta
+    $raiz = $(if ($ruta -ne '') { Split-Path $ruta -Parent } else { $PSScriptRoot })
+    $pool = [runspacefactory]::CreateRunspacePool(1, [Math]::Max(1, [Math]::Min($hilos, $lista.Count)))
+    $pool.Open()
+    $envio = @()
+    try {
+        foreach ($t in $lista) {
+            $ps = [powershell]::Create()
+            $ps.RunspacePool = $pool
+            [void]$ps.AddScript($cuerpo).AddArgument($logica).AddArgument($raiz).AddArgument($t)
+            $envio += ,@{ps=$ps; ar=$ps.BeginInvoke(); tarea=$t}
+        }
+        $res = @()
+        foreach ($e in $envio) {
+            $salida = $null
+            try { $salida = $e.ps.EndInvoke($e.ar) } catch { $salida = $null }
+            $res += ,@{tarea=$e.tarea; salida=@($salida)
+                       error=$(if ($e.ps.Streams.Error.Count -gt 0) { "$($e.ps.Streams.Error[0])" } else { '' })}
+            $e.ps.Dispose()
+        }
+        return $res
+    } finally { $pool.Close(); $pool.Dispose() }
+}
+
+# El cuerpo que corre cada hilo del diagnostico via NCU: abre el 502 de SU NCU,
+# lee el bloque compacto y devuelve las filas. No pinta nada: la ventana solo
+# se toca desde el hilo principal.
+$DIAG_HILO = {
+    param($logica, $RaizTb, $t)
+    Invoke-Expression $logica
+    $out = @{ncu=$t.ncu; ip=$t.ip; filas=@(); hsus=@(); error=''}
+    try {
+        Modbus-Conectar $t.ip $t.puerto $t.to
+        $dm = Ncu-DiagCompat $t.tcus
+        foreach ($u in $t.tcus) { if ($dm[[int]$u]) { $out.filas += ,$dm[[int]$u] } }
+        try { $out.hsus = @(Ncu-HsuCompat) } catch {}
+    } catch { $out.error = "$_" } finally { Modbus-Cerrar }
+    return $out
+}
+
+# ---------------------------------------------------------------------------
+#  Historial local de la planta
+# ---------------------------------------------------------------------------
+# Todo lo que hace la herramienta moria al cerrarla. Esto deja en el PC de
+# planta un fichero por planta y mes con una linea por valor leido, para poder
+# contestar "desde cuando la TCU 34 tiene esto" sin depender de nada online.
+# Formato: CSV plano, una linea por (fecha, ncu, tcu, variable, valor).
+function Historial-Fichero([string]$planta) {
+    $dir = Join-Path $PSScriptRoot 'historial'
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+    return Join-Path $dir (($planta -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMM') + '.csv')
+}
+function Historial-Anotar([string]$planta, $filas, [string[]]$columnas) {
+    if (@($filas).Count -eq 0) { return 0 }
+    try {
+        $f = Historial-Fichero $planta
+        if (-not (Test-Path $f)) { Set-Content -Path $f -Value 'fecha;ncu;tcu;variable;valor' -Encoding UTF8 }
+        $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        $lin = New-Object System.Collections.ArrayList
+        foreach ($fila in @($filas)) {
+            foreach ($c in $columnas) {
+                if ($null -eq $fila.PSObject.Properties[$c]) { continue }
+                $v = "$($fila.$c)".Trim()
+                if ($v -eq '' -or $v -eq '-') { continue }
+                [void]$lin.Add(("{0};{1};{2};{3};{4}" -f $ts, "$($fila.NCU)", "$($fila.TCU)", ($c -replace ';', ','), ($v -replace ';', ',')))
+            }
+        }
+        if ($lin.Count -eq 0) { return 0 }
+        Add-Content -Path $f -Value $lin -Encoding UTF8
+        return $lin.Count
+    } catch { return 0 }
+}
+# Cronologia de una variable en una TCU: solo los CAMBIOS, que es lo que se
+# pregunta. Pura: se prueba sin ficheros.
+function Historial-Cambios($lineas, [string]$ncu, [string]$tcu, [string]$variable) {
+    $r = New-Object System.Collections.ArrayList
+    $ultimo = $null
+    foreach ($l in @($lineas)) {
+        $c = "$l".Split(';')
+        if ($c.Count -lt 5) { continue }
+        if ($c[0] -eq 'fecha') { continue }
+        if ($ncu -ne '' -and $c[1] -ne $ncu) { continue }
+        if ($tcu -ne '' -and $c[2] -ne $tcu) { continue }
+        if ($variable -ne '' -and -not (Buscar-Casa $c[3] $variable)) { continue }
+        $k = $c[1] + '|' + $c[2] + '|' + $c[3]
+        if ($null -eq $ultimo) { $ultimo = @{} }
+        if ($ultimo.ContainsKey($k) -and $ultimo[$k] -eq $c[4]) { continue }
+        [void]$r.Add([pscustomobject]@{Fecha=$c[0]; NCU=$c[1]; TCU=$c[2]; Variable=$c[3]; Valor=$c[4]
+                                       Antes=$(if ($ultimo.ContainsKey($k)) { $ultimo[$k] } else { '' })})
+        $ultimo[$k] = $c[4]
+    }
+    return $r.ToArray()
+}
+
+# Que haria una escritura ANTES de hacerla, cruzando con la ultima lectura de
+# esas mismas variables. Devuelve el reparto por variable: cuantas cambian, en
+# cuantas ya esta el valor, y que valores distintos hay ahora mismo. Es lo que
+# saca a la luz que media planta tiene otra configuracion antes de escribirla
+# entera. Pura: se prueba sin planta ni ventana.
+# $vars: lista con .nombre y .texto (lo que se va a escribir).
+# $lectura: filas de la ultima lectura masiva (NCU, TCU, una columna por variable).
+function Simular-Escritura($vars, $lectura, $tcusDestino) {
+    $filas = @($lectura)
+    $r = New-Object System.Collections.ArrayList
+    foreach ($v in @($vars)) {
+        $nom = "$($v.nombre)"
+        $nuevo = "$($v.texto)".Trim()
+        $cuenta = @{}; $sinDato = 0; $vistas = 0
+        foreach ($f in $filas) {
+            if ($null -eq $f.PSObject.Properties[$nom]) { continue }
+            # si se ha pasado una lista de TCUs destino, solo cuentan esas
+            if ($null -ne $tcusDestino -and @($tcusDestino).Count -gt 0) {
+                if (@($tcusDestino) -notcontains [int]$f.TCU) { continue }
+            }
+            $vistas++
+            $actual = "$($f.$nom)".Trim()
+            if ($actual -eq '' -or $actual -eq '-') { $sinDato++; continue }
+            $cuenta[$actual] = 1 + [int]$cuenta[$actual]
+        }
+        if ($vistas -eq 0) { [void]$r.Add([pscustomobject]@{Variable=$nom; Nuevo=$nuevo; Cambian=-1; Iguales=0; SinDato=0; Reparto=''}); continue }
+        $iguales = [int]$cuenta[$nuevo]
+        $cambian = 0
+        $partes = @()
+        foreach ($k in @($cuenta.Keys | Sort-Object { - [int]$cuenta[$_] }, { "$_" })) {
+            if ($k -ne $nuevo) { $cambian += [int]$cuenta[$k] }
+            $partes += "$k en $($cuenta[$k])"
+        }
+        [void]$r.Add([pscustomobject]@{Variable=$nom; Nuevo=$nuevo; Cambian=$cambian; Iguales=$iguales
+                                       SinDato=$sinDato; Reparto=($partes -join ' | ')})
+    }
+    return $r.ToArray()
+}
 
 # Parte de averias en texto plano, para pegarlo en WhatsApp. Nada de tablas:
 # en el movil se descuadran. Agrupa por NCU y solo saca lo que NO esta OK.
@@ -4502,6 +4802,53 @@ function Diag-Correr {
     }
     $nOk = 0; $nAviso = 0; $nAlarma = 0; $nOff = 0
     $nHOk = 0; $nHMal = 0        # las HSUs van aparte de la cuenta de TCUs
+    # Planta completa por el bloque compacto: cada NCU es una conexion propia y
+    # no compiten, asi que van a la vez. Es la diferencia entre una hora y unos
+    # minutos. Si algo va mal, se desmarca 'en paralelo' y vuelve al modo serie.
+    $paraleloOk = $false
+    if ($chkGPar.Checked -and $chkGNcu.Checked -and @($trabajos).Count -gt 1) {
+        Con "Barrido en paralelo: $(@($trabajos).Count) NCUs a la vez (desmarca 'en paralelo' si prefieres una detras de otra)." ([System.Drawing.Color]::SteelBlue)
+        $tareas = @($trabajos | ForEach-Object { @{ncu=$_.ncu; ip=$_.ip; puerto=$PUERTO_NCU; to=$_.cx.to; tcus=@($_.tcus)} })
+        $res = $null
+        try { $res = @(Paralelo-Ejecutar $tareas $DIAG_HILO 8) } catch { Con "El barrido en paralelo no ha podido arrancar ($_): se hace en serie." ([System.Drawing.Color]::Orange) }
+        if ($null -ne $res) {
+            $paraleloOk = $true
+            foreach ($r in ($res | Sort-Object { [int]("0" + "$($_.tarea.ncu)") })) {
+                $o = @($r.salida)[0]
+                $eti = "$($r.tarea.ncu)"
+                if ($null -eq $o -or "$($o.error)" -ne '') {
+                    $msg = $(if ($o) { "$($o.error)" } else { "$($r.error)" })
+                    Con "NCU$eti ($($r.tarea.ip)): $msg - no se sabe nada de sus $(@($r.tarea.tcus).Count) TCUs" ([System.Drawing.Color]::Salmon)
+                    continue
+                }
+                foreach ($dh in @($o.hsus)) {
+                    $dh.NCU = $eti
+                    $itemH = New-Object System.Windows.Forms.ListViewItem($eti)
+                    foreach ($c in @($dh.TCU, $dh.Salud, $dh.Modo, $dh.Tilt, $dh.Objetivo, $dh.Dif, $dh.SoC, $dh.Alarmas)) { [void]$itemH.SubItems.Add("$c") }
+                    if ("$($dh.Salud)" -eq 'OK') { $itemH.ForeColor = [System.Drawing.Color]::DarkGreen; $nHOk++ }
+                    else { $itemH.ForeColor = [System.Drawing.Color]::DarkOrange; $nHMal++ }
+                    $lvG.Items.Add($itemH) | Out-Null
+                    $script:UltimoDiag += $dh
+                }
+                foreach ($d in @($o.filas)) {
+                    $d | Add-Member -NotePropertyName NCU -NotePropertyValue $eti -Force
+                    $item = New-Object System.Windows.Forms.ListViewItem($eti)
+                    foreach ($c in @($d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
+                    switch ("$($d.Salud)") {
+                        'OK'      { $item.ForeColor = [System.Drawing.Color]::DarkGreen;  $nOk++ }
+                        'AVISO'   { $item.ForeColor = [System.Drawing.Color]::DarkOrange; $nAviso++ }
+                        'ALARMA'  { $item.ForeColor = [System.Drawing.Color]::Firebrick;  $nAlarma++ }
+                        'OFFLINE' { $item.ForeColor = [System.Drawing.Color]::Gray;       $nOff++ }
+                    }
+                    $lvG.Items.Add($item) | Out-Null
+                    $script:UltimoDiag += $d
+                    if ("$($d.Salud)" -ne 'OK') { Con ("NCU{0} TCU {1,3}  {2,-8} {3}" -f $eti, $d.TCU, $d.Salud, $d.Alarmas) ([System.Drawing.Color]::Orange) }
+                }
+                [System.Windows.Forms.Application]::DoEvents()
+            }
+        }
+    }
+    if (-not $paraleloOk) {
     foreach ($tr in $trabajos) {
         $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
     if ($script:Cancelar) { break }
@@ -4643,6 +4990,7 @@ function Diag-Correr {
             Con ("{0}TCU {1,3}  {2,-8} {3}" -f $(if ($etiquetaNcu) { "NCU$etiquetaNcu " } else { '' }), $d.TCU, $d.Salud, $d.Alarmas) ([System.Drawing.Color]::Orange)
         }
         [System.Windows.Forms.Application]::DoEvents()
+    }
     }
     }
     }
@@ -6544,8 +6892,25 @@ $btnHEsclavo.Add_Click({ Lanzar {
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     $hsus = @($lvH.Items | Where-Object { $_.SubItems[1].Text -eq 'HSU' })
     if ($hsus.Count -gt 0) {
-        Con "Encontradas $($hsus.Count) HSUs. Pon su numero de esclavo en la casilla de arriba y ya puedes leer METEO, CONFIG y caja negra." ([System.Drawing.Color]::LightGreen)
-        Con "Anotalo en la topologia de la planta (campo 'hsu' de la NCU) y no habra que volver a barrer." ([System.Drawing.Color]::LightGreen)
+        Con "Encontradas $($hsus.Count) HSUs." ([System.Drawing.Color]::LightGreen)
+        # que la herramienta aprenda: si no, hay que apuntarlo a mano en el JSON
+        # y al siguiente barrido volvemos a empezar
+        $m = [regex]::Match("$($hsus[0].Text)", 'esclavo (\d+)\s+\(GW (\d+)\)')
+        if ($m.Success) {
+            $esc = [int]$m.Groups[1].Value; $gw = [int]$m.Groups[2].Value
+            $txtHSlave.Text = "$esc"
+            $txtPort.Text = "$gw"
+            Con "  esclavo $esc por el gateway ${gw}: ya puestos arriba, puedes leer METEO, CONFIG y caja negra." ([System.Drawing.Color]::LightGreen)
+            $r2 = [System.Windows.Forms.MessageBox]::Show(
+                "Guardar en la topologia de la planta que las HSU son el esclavo ${esc}?`r`n`r`nSe escribe en el JSON de la planta y no habra que volver a barrer.",
+                'Aprender el esclavo', 'YesNo', 'Question')
+            if ($r2 -eq 'Yes') {
+                try {
+                    $n = Topologia-Guardar-Hsu (Nombre-Planta) $esc
+                    Con "Topologia actualizada: $n entradas con hsu=$esc. Se aplica al reiniciar o al recargar la planta." ([System.Drawing.Color]::LightGreen)
+                } catch { Con "No se pudo guardar en la topologia: $_" ([System.Drawing.Color]::Orange) }
+            }
+        }
     } else {
         Con "Ningun equipo de tipo HSU en $hechas consultas. Si aparecieron TCUs, la conexion y el gateway son correctos y la HSU cuelga del OTRO gateway; si no aparecio nada, revisa IP y puerto." ([System.Drawing.Color]::Orange)
     }
@@ -6573,6 +6938,31 @@ function Hsu-Puerto($h) {
     if ($h -and $h.gws -and @($h.gws).Count -gt 0) { return [int](@($h.gws | Sort-Object { [int]$_.puerto })[0].puerto) }
     if ($h -and $h.puerto) { return [int]$h.puerto }
     return 503
+}
+
+# Escribe el numero de esclavo de las HSU en el JSON de la planta, para que la
+# herramienta no tenga que volver a descubrirlo. Solo toca el campo 'hsu' de las
+# entradas de esa planta; el resto del fichero se queda como esta.
+function Topologia-Guardar-Hsu([string]$planta, [int]$esclavo) {
+    $dir = Join-Path $PSScriptRoot 'plantas'
+    if (-not (Test-Path $dir)) { throw "no hay carpeta de plantas en $dir" }
+    $base = ("$planta" -split ' \(')[0].Trim()
+    $tocados = 0
+    foreach ($f in @(Get-ChildItem $dir -Filter '*.json')) {
+        $obj = $null
+        try { $obj = Get-Content $f.FullName -Raw | ConvertFrom-Json } catch { continue }
+        if (-not $obj.plantas) { continue }
+        $cambio = $false
+        foreach ($p in @($obj.plantas)) {
+            if (-not ("$($p.nombre)".Trim().StartsWith($base, [StringComparison]::OrdinalIgnoreCase))) { continue }
+            if ($p.PSObject.Properties['hsu']) { $p.hsu = $esclavo }
+            else { $p | Add-Member -NotePropertyName hsu -NotePropertyValue $esclavo -Force }
+            $cambio = $true; $tocados++
+        }
+        if ($cambio) { ConvertTo-Json $obj -Depth 8 | Set-Content $f.FullName -Encoding UTF8 }
+    }
+    if ($tocados -eq 0) { throw "no se ha encontrado ninguna entrada de '$base' en los JSON de plantas" }
+    return $tocados
 }
 
 # Numeros de esclavo a probar en un barrido, en el orden en que conviene
@@ -6879,7 +7269,39 @@ $btnHCaja.Add_Click({ Lanzar {
 } })
 
 # ------------------------- log manual -------------------------
+# Consulta del historial local: que ha cambiado y cuando, sin depender de nada
+# online. Se apoya en la misma tabla de identificacion para no anadir controles.
+$btnHist.Add_Click({
+    $dir = Join-Path $PSScriptRoot 'historial'
+    if (-not (Test-Path $dir)) { [void][System.Windows.Forms.MessageBox]::Show("Todavia no hay historial.`r`n`r`nSe va llenando solo con cada 'Leer variable': cada lectura deja constancia en $dir.",'Historial local'); return }
+    $fs = @(Get-ChildItem $dir -Filter '*.csv' -ErrorAction SilentlyContinue | Sort-Object Name)
+    if ($fs.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show("La carpeta $dir esta vacia.",'Historial local'); return }
+    $tcu = "$($txtITcu.Text)".Trim()
+    $lineas = @()
+    foreach ($f in $fs) { $lineas += @(Get-Content $f.FullName -ErrorAction SilentlyContinue) }
+    $cambios = @(Historial-Cambios $lineas '' $tcu '')
+    $lvI.Items.Clear(); $script:UltimaIdent = @()
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Historial local de $(@($fs).Count) fichero(s), $($lineas.Count) lineas: $($cambios.Count) cambios$(if ($tcu) { " en la TCU $tcu" } else { ' (todas las TCUs)' })" ([System.Drawing.Color]::SteelBlue)
+    if ($cambios.Count -eq 0) {
+        Con 'Sin cambios registrados: o es la primera lectura, o el valor no se ha movido.' ([System.Drawing.Color]::Gainsboro)
+        return
+    }
+    foreach ($c in $cambios) {
+        $txt = ("{0}  NCU{1} TCU {2}  {3}" -f $c.Fecha, $c.NCU, $c.TCU, $c.Variable)
+        $val = $(if ($c.Antes -ne '') { "$($c.Antes)  ->  $($c.Valor)" } else { "$($c.Valor)  (primera lectura)" })
+        $item = New-Object System.Windows.Forms.ListViewItem($txt)
+        [void]$item.SubItems.Add($val)
+        if ($c.Antes -ne '') { $item.ForeColor = [System.Drawing.Color]::DarkOrange }
+        $lvI.Items.Add($item) | Out-Null
+        $script:UltimaIdent += [pscustomobject]@{Campo=$txt; Valor=$val}
+        Con "  $txt : $val" $(if ($c.Antes -ne '') { [System.Drawing.Color]::Orange } else { [System.Drawing.Color]::Gainsboro })
+    }
+    $btnICsv.Enabled = $true
+})
+
 $btnLimpiar.Add_Click({ Limpiar-Consola })
+$btnBuscar.Add_Click({ Buscador-Abrir })
 
 $btnLog.Add_Click({
     $dlg = New-Object System.Windows.Forms.SaveFileDialog
@@ -7337,6 +7759,118 @@ function Layout-Rescatar($cont) {
         if ($c.Controls.Count -gt 0) { Layout-Rescatar $c }
     }
 }
+
+# ---------------------------------------------------------------------------
+#  Buscador de acciones (Ctrl+K)
+# ---------------------------------------------------------------------------
+# Hay 80 acciones repartidas en 10 pestanas, y la herramienta tiene mas
+# capacidad que superficie: se pregunta por botones que ya existen. Esto lista
+# todos y lleva al sitio. NO los ejecuta a proposito: la mitad escriben en
+# equipos, y un buscador que dispara acciones por accidente es peor que no
+# tenerlo. Lleva a la pestana y deja el boton marcado para que lo pulses tu.
+
+# Normaliza para buscar sin acentos ni mayusculas. Pura: se prueba sin ventana.
+function Buscar-Norm([string]$t) {
+    $x = "$t".ToLower()
+    foreach ($par in @(@('á','a'), @('é','e'), @('í','i'), @('ó','o'), @('ú','u'), @('ü','u'), @('ñ','n'))) {
+        $x = $x.Replace($par[0], $par[1])
+    }
+    return $x
+}
+
+# Casan todas las palabras del filtro, en cualquier orden y en cualquier parte
+# del texto: "csv flota" encuentra "Flota / INVENTARIO -> CSV". Pura.
+function Buscar-Casa([string]$texto, [string]$filtro) {
+    $f = (Buscar-Norm $filtro).Trim()
+    if ($f -eq '') { return $true }
+    $t = Buscar-Norm $texto
+    foreach ($w in @($f -split '\s+')) { if ($w -ne '' -and -not $t.Contains($w)) { return $false } }
+    return $true
+}
+
+# Recorre la ventana y saca una entrada por cada boton y casilla con texto,
+# anotando de que pestana y de que grupo cuelga.
+function Acciones-Inventario($cont, [string]$ruta = '') {
+    $r = New-Object System.Collections.ArrayList
+    foreach ($c in $cont.Controls) {
+        $miRuta = $ruta
+        if ($c -is [System.Windows.Forms.TabPage]) { $miRuta = "$($c.Text)" }
+        elseif ($c -is [System.Windows.Forms.GroupBox] -and "$($c.Text)".Trim() -ne '') {
+            $g = "$($c.Text)".Trim()
+            if ($g.Length -gt 40) { $g = $g.Substring(0, 40).Trim() + '...' }
+            $miRuta = $(if ($ruta) { "$ruta / $g" } else { $g })
+        }
+        $esAccion = ($c -is [System.Windows.Forms.Button]) -or ($c -is [System.Windows.Forms.CheckBox])
+        if ($esAccion -and "$($c.Text)".Trim() -ne '') {
+            [void]$r.Add(@{texto="$($c.Text)".Trim(); ruta=$miRuta; ctrl=$c
+                           tipo=$(if ($c -is [System.Windows.Forms.CheckBox]) { 'casilla' } else { 'boton' })})
+        }
+        if ($c.Controls.Count -gt 0) { foreach ($x in (Acciones-Inventario $c $miRuta)) { [void]$r.Add($x) } }
+    }
+    return $r.ToArray()
+}
+
+function Buscador-Abrir {
+    $acciones = @(Acciones-Inventario $form)
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text = 'Buscar accion'
+    $d.Size = New-Object System.Drawing.Size(660, 460)
+    $d.FormBorderStyle = 'FixedDialog'; $d.MaximizeBox = $false; $d.MinimizeBox = $false
+    $d.StartPosition = 'CenterParent'
+    $tB = New-Object System.Windows.Forms.TextBox
+    $tB.Location = New-Object System.Drawing.Point(12, 12)
+    $tB.Size = New-Object System.Drawing.Size(620, 24)
+    $d.Controls.Add($tB)
+    $lb = New-Object System.Windows.Forms.ListBox
+    $lb.Location = New-Object System.Drawing.Point(12, 44)
+    $lb.Size = New-Object System.Drawing.Size(620, 330)
+    $d.Controls.Add($lb)
+    $lblA = New-Object System.Windows.Forms.Label
+    $lblA.Location = New-Object System.Drawing.Point(12, 384)
+    $lblA.Size = New-Object System.Drawing.Size(620, 34)
+    $lblA.ForeColor = [System.Drawing.Color]::Gray
+    $lblA.Text = "Escribe para filtrar. Enter (o doble clic) te lleva a la pestana y deja el boton marcado; no lo pulsa el buscador, lo pulsas tu."
+    $d.Controls.Add($lblA)
+    $vista = @()
+    $pintar = {
+        $vista = @($acciones | Where-Object { Buscar-Casa "$($_.ruta) $($_.texto)" $tB.Text })
+        $lb.BeginUpdate(); $lb.Items.Clear()
+        foreach ($a in $vista) { [void]$lb.Items.Add($(if ($a.ruta) { "$($a.ruta)  ->  $($a.texto)" } else { $a.texto })) }
+        $lb.EndUpdate()
+        if ($lb.Items.Count -gt 0) { $lb.SelectedIndex = 0 }
+        $d.Text = "Buscar accion  ($($lb.Items.Count) de $($acciones.Count))"
+    }.GetNewClosure()
+    $ir = {
+        if ($lb.SelectedIndex -lt 0 -or $lb.SelectedIndex -ge @($vista).Count) { return }
+        $a = @($vista)[$lb.SelectedIndex]
+        $d.Close()
+        # subir hasta la pestana que lo contiene y seleccionarla
+        $c = $a.ctrl
+        while ($c -ne $null -and -not ($c -is [System.Windows.Forms.TabPage])) { $c = $c.Parent }
+        if ($c -is [System.Windows.Forms.TabPage]) { $tabs.SelectedTab = $c }
+        try { $a.ctrl.Focus() } catch {}
+        Con "Buscador: $($a.texto)$(if ($a.ruta) { " (en $($a.ruta))" })" ([System.Drawing.Color]::SteelBlue)
+    }.GetNewClosure()
+    $tB.Add_TextChanged($pintar)
+    $tB.Add_KeyDown({
+        param($s2, $e2)
+        if ($e2.KeyCode -eq 'Down' -and $lb.Items.Count -gt 0) { $lb.SelectedIndex = [Math]::Min($lb.SelectedIndex + 1, $lb.Items.Count - 1); $e2.Handled = $true }
+        elseif ($e2.KeyCode -eq 'Up' -and $lb.Items.Count -gt 0) { $lb.SelectedIndex = [Math]::Max($lb.SelectedIndex - 1, 0); $e2.Handled = $true }
+        elseif ($e2.KeyCode -eq 'Enter') { & $ir; $e2.Handled = $true }
+        elseif ($e2.KeyCode -eq 'Escape') { $d.Close() }
+    }.GetNewClosure())
+    $lb.Add_DoubleClick($ir)
+    $lb.Add_KeyDown({ param($s3, $e3) if ($e3.KeyCode -eq 'Enter') { & $ir; $e3.Handled = $true } }.GetNewClosure())
+    & $pintar
+    $d.Add_Shown({ $tB.Focus() }.GetNewClosure())
+    [void]$d.ShowDialog($form)
+}
+
+$form.KeyPreview = $true
+$form.Add_KeyDown({
+    param($s, $e)
+    if ($e.Control -and $e.KeyCode -eq 'K') { $e.Handled = $true; Buscador-Abrir }
+})
 
 # Todas las tablas de resultados filtran y ordenan al pulsar su cabecera.
 foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvSat, $lvH, $lvI)) { Lv-Filtrable $tabla }

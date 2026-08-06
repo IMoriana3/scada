@@ -16,7 +16,9 @@ $null = New-Item -ItemType Directory -Path (Join-Path $PSScriptRootFake 'plantas
 Get-ChildItem (Join-Path $PSScriptRootFake 'plantas') -File | Remove-Item -Force
 Copy-Item (Join-Path $raizTb 'plantas/elburgo.json') (Join-Path $PSScriptRootFake 'plantas') -Force
 # anadir las funciones definidas en la seccion de handlers
-$i1 = $src.IndexOf('function Texto-NoOk'); $f1 = $src.IndexOf('$btnIdent.Add_Click')
+# desde el bloque de paralelo hasta identificacion: ahi viven el historial, la
+# simulacion de escritura, el parte de WhatsApp, el veredicto de motor y Ident-Leer
+$i1 = $src.IndexOf('$script:LogicaCache = $null'); $f1 = $src.IndexOf('$btnIdent.Add_Click'); $f1 = $src.IndexOf('$btnIdent.Add_Click')
 $i2 = $src.IndexOf('function Diag-LeerTcu'); $f2 = $src.IndexOf('$btnDiag.Add_Click')
 $i3 = $src.IndexOf('function Params-Conexion'); $f3 = $src.IndexOf('function Rango-Tcus')
 $i4 = $src.IndexOf('function Nombres-Legibles'); $f4 = $src.IndexOf('function Refrescar-FiltroLeer')
@@ -29,7 +31,8 @@ $i10 = $src.IndexOf('function Aband-Cronologia'); $f10 = $src.IndexOf('#  Usuari
 $i11 = $src.IndexOf('$ROLES = @('); $f11 = $fin   # hasta el arranque de la interfaz
 $i12 = $src.IndexOf('function Lv-Pasa'); $f12 = $src.IndexOf('function Lv-Filtrable')
 $i13 = $src.IndexOf('function Esclavos-Barrido'); $f13 = $src.IndexOf('function Params-Hsu')
-$logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7) + "`n" + $src.Substring($i8, $f8 - $i8) + "`n" + $src.Substring($i9, $f9 - $i9) + "`n" + $src.Substring($i10, $f10 - $i10) + "`n" + $src.Substring($i11, $f11 - $i11) + "`n" + $src.Substring($i12, $f12 - $i12) + "`n" + $src.Substring($i13, $f13 - $i13)
+$i14 = $src.IndexOf('function Buscar-Norm'); $f14 = $src.IndexOf('function Buscador-Abrir')
+$logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7) + "`n" + $src.Substring($i8, $f8 - $i8) + "`n" + $src.Substring($i9, $f9 - $i9) + "`n" + $src.Substring($i10, $f10 - $i10) + "`n" + $src.Substring($i11, $f11 - $i11) + "`n" + $src.Substring($i12, $f12 - $i12) + "`n" + $src.Substring($i13, $f13 - $i13) + "`n" + $src.Substring($i14, $f14 - $i14)
 # los bloques anadidos tambien usan $PSScriptRoot (usuarios.json, registro/)
 $logica = $logica.Replace('$PSScriptRoot', '$PSScriptRootFake')
 Invoke-Expression $logica
@@ -73,6 +76,15 @@ foreach ($ve in $arbol.FindAll({ param($n) $n -is [System.Management.Automation.
     if (-not $definidas.ContainsKey($n)) { $huerfanas[$n] = $true }
 }
 Check 'sin variables usadas y nunca creadas' (@($huerfanas.Keys | Sort-Object) -join ',') ''
+# PowerShell no distingue mayusculas en los nombres de variable, asi que un
+# $inv, $Inv o $iNv en cualquier sitio pisa $INV (la cultura invariante) y
+# rompe el parseo de decimales de todo lo que se llame desde ese ambito. Paso
+# de verdad con Portada-Bloques. Se prohibe el nombre entero.
+$choques = @{}
+foreach ($nom in @($definidas.Keys)) {
+    if ($nom -ieq 'INV' -and $nom -cne 'INV') { $choques[$nom] = $true }
+}
+Check 'sin variables que pisen $INV' (@($choques.Keys | Sort-Object) -join ',') ''
 
 # ---------- conversiones puras ----------
 $e = Valor-A-Escritura @{addr=40038; tipo='u16'} '1500'
@@ -1243,6 +1255,121 @@ Check 'soc: cuenta las que no se saben' $pf.sin_soc 3
 Check 'soc: ninguna marcada como baja' $pf.con_soc_bajo 0
 # el umbral esta a la vista y es el mismo que se enseña en el aviso
 Check 'soc: umbral definido' ($SOC_MIN_OTA -gt 0) $true
+
+Write-Host ''
+Write-Host '== buscador de acciones =='
+Check 'buscar: sin acentos' (Buscar-Norm 'Diagnóstico Rápido') 'diagnostico rapido'
+Check 'buscar: la ñ tambien' (Buscar-Norm 'Año') 'ano'
+Check 'buscar: filtro vacio pasa todo' (Buscar-Casa 'lo que sea' '') $true
+Check 'buscar: una palabra' (Buscar-Casa 'Flota / INVENTARIO -> CSV' 'csv') $true
+Check 'buscar: varias palabras en cualquier orden' (Buscar-Casa 'Flota / INVENTARIO -> CSV' 'csv flota') $true
+Check 'buscar: una palabra que no esta' (Buscar-Casa 'Flota / INVENTARIO -> CSV' 'csv pem') $false
+Check 'buscar: encuentra con acento escrito sin el' (Buscar-Casa 'Diagnóstico' 'diagnostico') $true
+Check 'buscar: no distingue mayusculas' (Buscar-Casa 'GUARDAR EN NVM' 'nvm') $true
+
+Write-Host ''
+Write-Host '== simular una escritura =='
+$lecSim = @()
+foreach ($t in 1..10) {
+  $lecSim += [pscustomobject]@{NCU='1'; TCU=$t
+    '41125 min_tilt_east_r1 [deg]'=$(if ($t -le 6) { '30' } else { '-45' })
+    '41106 east_pitch [m]'='6'; Estado='OK'}
+}
+$sim = @(Simular-Escritura @(@{nombre='41125 min_tilt_east_r1 [deg]'; texto='30'}, @{nombre='41106 east_pitch [m]'; texto='6'}) $lecSim $null)
+Check 'simular: dos variables' $sim.Count 2
+Check 'simular: cambian las que no lo tienen' (@($sim | Where-Object { $_.Variable -like '*min_tilt*' })[0].Cambian) 4
+Check 'simular: y las que ya lo tienen' (@($sim | Where-Object { $_.Variable -like '*min_tilt*' })[0].Iguales) 6
+Check 'simular: la que no cambia nada' (@($sim | Where-Object { $_.Variable -like '*east_pitch*' })[0].Cambian) 0
+# el reparto es lo que destapa que hay dos configuraciones a proposito
+Check 'simular: enseña el reparto' ((@($sim | Where-Object { $_.Variable -like '*min_tilt*' })[0].Reparto).Contains('30 en 6')) $true
+Check 'simular: y el otro valor' ((@($sim | Where-Object { $_.Variable -like '*min_tilt*' })[0].Reparto).Contains('-45 en 4')) $true
+# una variable que no se leyo no se puede simular, y se dice
+$simX = @(Simular-Escritura @(@{nombre='41111 max_tilt_west_r1 [deg]'; texto='55'}) $lecSim $null)
+Check 'simular: variable no leida se marca' ($simX[0].Cambian) -1
+# limitar a unas TCUs concretas
+$simT = @(Simular-Escritura @(@{nombre='41125 min_tilt_east_r1 [deg]'; texto='30'}) $lecSim @(7,8))
+Check 'simular: solo las TCUs pedidas' ($simT[0].Cambian) 2
+Check 'simular: sin lectura no revienta' (@(Simular-Escritura @(@{nombre='x'; texto='1'}) @() $null)[0].Cambian) -1
+
+Write-Host ''
+Write-Host '== historial local =='
+$hl = @(
+  'fecha;ncu;tcu;variable;valor'
+  '2026-08-01 10:00:00;9;34;41106 east_pitch [m];6'
+  '2026-08-02 10:00:00;9;34;41106 east_pitch [m];6'
+  '2026-08-03 10:00:00;9;34;41106 east_pitch [m];-0,7854'
+  '2026-08-04 10:00:00;9;34;41106 east_pitch [m];-0,7854'
+  '2026-08-05 10:00:00;9;35;41106 east_pitch [m];6'
+)
+$cb = @(Historial-Cambios $hl '' '' '')
+Check 'historial: solo los cambios' $cb.Count 3
+Check 'historial: el primero es la primera lectura' ($cb[0].Antes) ''
+Check 'historial: el cambio dice de que a que' ($cb[1].Antes) '6'
+Check 'historial: y el valor nuevo' ($cb[1].Valor) '-0,7854'
+Check 'historial: la fecha del cambio' ($cb[1].Fecha) '2026-08-03 10:00:00'
+Check 'historial: filtrar por TCU' (@(Historial-Cambios $hl '' '35' '').Count) 1
+Check 'historial: filtrar por variable' (@(Historial-Cambios $hl '' '34' 'east_pitch').Count) 2
+Check 'historial: variable que no esta' (@(Historial-Cambios $hl '' '' 'min_tilt').Count) 0
+Check 'historial: la cabecera no cuenta' (@(Historial-Cambios @('fecha;ncu;tcu;variable;valor') '' '' '').Count) 0
+Check 'historial: vacio no revienta' (@(Historial-Cambios @() '' '' '').Count) 0
+
+Write-Host ''
+Write-Host '== portada del informe =='
+$mP = @{diag=@(
+    [pscustomobject]@{NCU='1'; TCU=1; Salud='OK'}
+    [pscustomobject]@{NCU='1'; TCU=2; Salud='ALARMA'}
+    [pscustomobject]@{NCU='1'; TCU='NCU'; Salud='AVISO'}
+    [pscustomobject]@{NCU='1'; TCU='HSU2'; Salud='OK'})
+  inv=@([pscustomobject]@{FW='v1.6.0'}, [pscustomobject]@{FW='v1.4.3'}, [pscustomobject]@{FW='v1.6.0'})
+  aud=@([pscustomobject]@{NCU='1'; TCU=2; Variable='x'})
+  lectura=@([pscustomobject]@{NCU='1'; TCU=1; '41106 east_pitch [m]'='6'; Estado='OK'})}
+$bl = @(Portada-Bloques $mP)
+Check 'portada: hay recuadros' ($bl.Count -ge 4) $true
+$op = @($bl | Where-Object { $_.titulo -like '*operativos*' })[0]
+Check 'portada: no cuenta la NCU ni la HSU como seguidores' ($op.nota) '1 de 2 sin aviso ni alarma'
+Check 'portada: el porcentaje' ($op.valor) '50 %'
+Check 'portada: y va en rojo' ($op.clase) 'mal'
+Check 'portada: cuenta las versiones de FW' (@($bl | Where-Object { $_.titulo -like '*firmware*' })[0].valor) '2'
+Check 'portada: TCUs con desviacion' (@($bl | Where-Object { $_.titulo -like '*desviada*' })[0].valor) '1'
+Check 'portada: sin datos no inventa recuadros' (@(Portada-Bloques @{diag=@(); inv=@(); aud=@(); lectura=@()}).Count) 0
+
+Write-Host ''
+Write-Host '== barrido en paralelo (contra el simulador) =='
+# Lo que de verdad importa: que cada hilo se lleva SU conexion y devuelve lo
+# mismo que en serie. Se usan tres esclavos del simulador con datos distintos.
+$tareasPar = @(
+  @{ncu=1; ip='127.0.0.1'; puerto=15020; to=4000; tcus=@(5)}
+  @{ncu=2; ip='127.0.0.1'; puerto=15020; to=4000; tcus=@(6)}
+  @{ncu=3; ip='127.0.0.1'; puerto=15020; to=4000; tcus=@(8)}
+)
+$cuerpoPrueba = {
+    param($logica, $RaizTb, $t)
+    Invoke-Expression $logica
+    $r = @{ncu=$t.ncu; alarmas=''; error=''}
+    try {
+        Modbus-Conectar $t.ip $t.puerto $t.to
+        $w = FC03-Leer ([byte]@($t.tcus)[0]) (Dir-Trama 30002) 1
+        $r.alarmas = "0x{0:X4}" -f $w[0]
+    } catch { $r.error = "$_" } finally { Modbus-Cerrar }
+    return $r
+}
+$resPar = $null
+$rutaTb = Join-Path $raizTb 'TCU_Toolbox.ps1'
+try { $resPar = @(Paralelo-Ejecutar $tareasPar $cuerpoPrueba 3 $rutaTb) } catch { Write-Host "FAIL paralelo: $_"; $script:fallos++ }
+if ($null -ne $resPar) {
+    Check 'paralelo: vuelven las tres tareas' $resPar.Count 3
+    Check 'paralelo: ninguna con error' (@($resPar | Where-Object { "$(@($_.salida)[0].error)" -ne '' }).Count) 0
+    Check 'paralelo: cada hilo lee lo suyo' (@(@($resPar | ForEach-Object { @($_.salida)[0].alarmas }) | Sort-Object -Unique).Count -ge 2) $true
+    # el mismo dato leido en serie tiene que coincidir
+    Modbus-Conectar '127.0.0.1' 15020 4000
+    $serie = "0x{0:X4}" -f (FC03-Leer 5 (Dir-Trama 30002) 1)[0]
+    Modbus-Cerrar
+    Check 'paralelo: coincide con el modo serie' (@($resPar | Where-Object { $_.tarea.ncu -eq 1 })[0].salida[0].alarmas) $serie
+}
+Check 'paralelo: lista vacia devuelve vacio' (@(Paralelo-Ejecutar @() $cuerpoPrueba 2 $rutaTb).Count) 0
+Check 'paralelo: la logica se extrae del propio script' ((Logica-Propia $rutaTb).Contains('function Modbus-Transaccion')) $true
+Check 'paralelo: y sin la ventana' ((Logica-Propia $rutaTb).Contains('New-Object System.Windows.Forms.Form')) $false
+Check 'paralelo: PSScriptRoot cambiado por variable' ((Logica-Propia $rutaTb).Contains('$RaizTb')) $true
 
 Write-Host ''
 Write-Host '== verificar tras actualizar =='
