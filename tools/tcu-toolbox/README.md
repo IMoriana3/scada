@@ -36,6 +36,8 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
 
+**Lectura de variables y HSUs rotas (v6.3)** — corregido un fallo que dejaba inservibles dos funciones desde la v5.2 y la v5.3. Las funciones que devuelven una lista lo hacían con `return ,$lista`, y eso hace que el `@(...)` de quien llama se quede con **un solo elemento**: las tres variables elegidas llegaban pegadas en una sola cadena (`no responde: tipo desconocido`) y las HSUs igual (`Leyendo meteo de 1 HSU(s)` con todas las etiquetas juntas). La suite gana una **guarda estática** que falla si alguna función que devuelve con coma se consume con `@()` — comprobado que marca las dos en la v6.2 y ninguna ahora.
+
 **Consola copiable (v6.1)** — el texto de la consola siempre se pudo seleccionar con el ratón y copiar con Ctrl+C, pero cada línea nueva **te robaba la selección**: en una operación larga era imposible copiar nada. Ahora, si hay algo seleccionado, la consola escribe sin tocar la selección ni mover la vista. Y con el **botón derecho** hay menú: Copiar, Seleccionar todo, **Copiar toda la consola** (para pegar un resultado en un correo), Guardar log y Limpiar.
 
 **Etiquetas que tapaban botones (v6.0)** — al maximizar, **TEST COMM** desaparecía: la nota del registrador, que está a su izquierda en la misma fila, es una etiqueta larga y se anclaba a izquierda y derecha, así que se estiraba por encima del botón (y va antes en el z-order, así que lo tapaba). Ahora una etiqueta larga solo se estira si **no tiene nada a su derecha** en la misma franja horizontal.
@@ -61,7 +63,7 @@ Además, transversales a las pestañas (v3.1):
 
 ## Pruebas
 
-`tests/` lleva un simulador Modbus TCP y **278 comprobaciones** de toda la lógica no-GUI, para poder tocar el script sin planta delante:
+`tests/` lleva un simulador Modbus TCP y **286 comprobaciones** de toda la lógica no-GUI, para poder tocar el script sin planta delante:
 
 ```bash
 cd tests && python3 mb_server.py &

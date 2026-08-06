@@ -24,7 +24,9 @@ $i4 = $src.IndexOf('function Nombres-Legibles'); $f4 = $src.IndexOf('function Re
 $i5 = $src.IndexOf('function Hsu-Recorrer'); $f5 = $src.IndexOf('function Hsu-Mostrar')
 $i6 = $src.IndexOf('function Anclaje-Para'); $f6 = $src.IndexOf('# Anclar contra un contenedor')
 $i7 = $src.IndexOf('function Eti-Tcu'); $f7 = $src.IndexOf('# Divide una lista de TCUs')
-$logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7)
+$i8 = $src.IndexOf('function Nombres-Unicos'); $f8 = $src.IndexOf('function Vars-DeTablaLeer')
+$i9 = $src.IndexOf('function Def-DeLectura'); $f9 = $src.IndexOf('$btnLeer.Add_Click')
+$logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7) + "`n" + $src.Substring($i8, $f8 - $i8) + "`n" + $src.Substring($i9, $f9 - $i9)
 Invoke-Expression $logica
 
 $fallos = 0
@@ -668,6 +670,35 @@ Check 'informe escritura antes que inventario' ($hMix.IndexOf('Escritura de vari
 $salidaMaq = & (Join-Path $PSScriptRoot 'maqueta.ps1')
 Check 'maqueta sin solapes' (($salidaMaq -join ' ') -like '*SIN SOLAPES*') 'True'
 Check 'maqueta analiza el script entero' (($salidaMaq -join ' ') -match 'controles analizados: (\d+)' -and [int]$matches[1] -gt 150) 'True'
+
+# ---------- listas que el llamante despliega con @() ----------
+# El fallo de la v5.2/v5.3: devolver ",$arrayList" hace que el "@(...)" de quien
+# llama se quede con UN elemento. Las tres variables de la lectura llegaban
+# pegadas en una sola cadena ("no responde: tipo desconocido") y las HSUs igual
+# ("Leyendo meteo de 1 HSU(s)" con todas las etiquetas juntas).
+$tres = @('41111 max_tilt_west_r1 [deg]', '41125 min_tilt_east_r1 [deg]', '41106 east_pitch [m]')
+$nom = @(Nombres-Unicos $tres)
+Check 'nombres: no se pegan al desplegar' $nom.Count 3
+Check 'nombres: el primero es solo el primero' $nom[0] '41111 max_tilt_west_r1 [deg]'
+Check 'nombres: una sola sigue siendo una' (@(Nombres-Unicos @('41106 east_pitch [m]'))).Count 1
+Check 'nombres: sin repetidos' (@(Nombres-Unicos @('a','b','a'))).Count 2
+Check 'nombres: se ignoran los vacios' (@(Nombres-Unicos @('a','',$null,'b'))).Count 2
+# y la cadena completa: cada nombre tiene que resolver a su definicion
+$defsL = @($nom | ForEach-Object { @{nombre=[string]$_; vdef=(Def-DeLectura $_)} })
+Check 'cada variable resuelve su tipo' (@($defsL | Where-Object { $_.vdef }).Count) 3
+Check 'tipo de la primera' ($defsL[0].vdef.tipo) 'f32deg'
+
+# Guarda estatica: ninguna funcion que devuelva ",\$algo" puede consumirse con
+# @(), porque no se despliega. Es lo que se me escapo dos veces.
+$conComa = @()
+foreach ($fn in $arbol.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+    if ($fn.Body.Extent.Text -match 'return\s*,\s*\$') { $conComa += $fn.Name }
+}
+$malUsadas = @()
+foreach ($fn in $conComa) {
+    if ($src -match ('@\(\s*' + [regex]::Escape($fn) + '[\s\)]')) { $malUsadas += $fn }
+}
+Check 'ninguna lista con coma se consume con @()' ($malUsadas -join ',') ''
 
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }

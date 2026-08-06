@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '6.2'
+$VERSION_TOOLBOX = '6.3'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1805,14 +1805,26 @@ $lvL.View = 'Details'; $lvL.FullRowSelect = $true; $lvL.GridLines = $true
 $tabL.Controls.Add($lvL)
 
 # Nombres elegidos en la tabla, sin repetidos y en el orden en que estan
-function Vars-DeTablaLeer {
+# Nombres unicos, en el orden en que estan. Aparte de la tabla para poder
+# probarlo: aqui se colo el fallo de la v5.2. Devolvia ",$r" (un ArrayList sin
+# desplegar) y el "@(...)" de quien llamaba se quedaba con UN solo elemento: las
+# tres variables llegaban pegadas en una sola cadena.
+function Nombres-Unicos($valores) {
     $r = New-Object System.Collections.ArrayList
-    foreach ($fila in $dgvL.Rows) {
-        if ($fila.IsNewRow) { continue }
-        $n = "$($fila.Cells[0].Value)"
+    foreach ($v in $valores) {
+        $n = "$v"
         if ($n -and -not $r.Contains($n)) { [void]$r.Add($n) }
     }
-    return ,$r
+    return $r.ToArray()
+}
+
+function Vars-DeTablaLeer {
+    $vals = @()
+    foreach ($fila in $dgvL.Rows) {
+        if ($fila.IsNewRow) { continue }
+        $vals += "$($fila.Cells[0].Value)"
+    }
+    return (Nombres-Unicos $vals)
 }
 
 # ============================ TAB VOLCAR TCU ============================
@@ -4956,7 +4968,7 @@ function Hsu-Objetivos {
             throw 'pulsa BUSCAR HSUs primero: con Planta completa o (auto) hay que saber de que NCU cuelga cada HSU'
         }
         [void]$lista.Add(@{etiqueta="HSU esclavo $unit"; ip=$cx.ip; puerto=[int]$cx.puerto; unit=$unit})
-        return ,$lista
+        return $lista.ToArray()
     }
     foreach ($h in $hsus) {
         $puerto = $null
@@ -4967,7 +4979,7 @@ function Hsu-Objetivos {
         $u = $(if ($h.hsu) { [byte]$h.hsu } else { $unit })
         [void]$lista.Add(@{etiqueta=$h.etiqueta; ip=$h.ip; puerto=[int]$puerto; unit=$u})
     }
-    return ,$lista
+    return $lista.ToArray()
 }
 
 # Recorre las HSUs objetivo llamando a $leer (recibe el esclavo) y devuelve
