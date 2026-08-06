@@ -26,7 +26,8 @@ $i5 = $src.IndexOf('function Hsu-Recorrer'); $f5 = $src.IndexOf('function Hsu-Mo
 $i6 = $src.IndexOf('function Anclaje-Para'); $f6 = $src.IndexOf('# Anclar contra un contenedor')
 $i7 = $src.IndexOf('function Eti-Tcu'); $f7 = $src.IndexOf('# Divide una lista de TCUs')
 $i8 = $src.IndexOf('function Nombres-Unicos'); $f8 = $src.IndexOf('function Vars-DeTablaLeer')
-$i9 = $src.IndexOf('function Sospechas-Lectura'); $f9 = $src.IndexOf('$btnLeer.Add_Click')
+# el bloque 9 arranca en los umbrales de bateria porque Bat-Auditar los usa
+$i9 = $src.IndexOf('$BAT = @{'); $f9 = $src.IndexOf('$btnLeer.Add_Click')
 $i10 = $src.IndexOf('function Aband-Cronologia'); $f10 = $src.IndexOf('#  Usuarios, roles y registro')
 $i11 = $src.IndexOf('$ROLES = @('); $f11 = $fin   # hasta el arranque de la interfaz
 $i12 = $src.IndexOf('function Lv-Pasa'); $f12 = $src.IndexOf('function Lv-Filtrable')
@@ -505,7 +506,10 @@ Check 'informe fila alarma' ($html -like '*<tr class="alarma">*') 'True'
 Check 'informe fila ok' ($html -like '*<tr class="ok">*') 'True'
 Check 'informe seccion pem' ($html -like '*Puesta en marcha (PEM)*') 'True'
 Check 'informe resumen grupos' ($html -like '*1 OK | 1 ALARMA*' -or $html -like '*1 ALARMA | 1 OK*') 'True'
-Check 'informe tabla filtrable' ($html -like '*<table class="filtrable"><thead>*') 'True'
+Check 'informe tabla filtrable' ($html -like '*class="filtrable"><thead>*') 'True'
+# cada tabla con su id, para poder enlazarla y para que las pruebas de navegador
+# no dependan del orden en que salgan las secciones
+Check 'informe tabla con id' ($html -like '*<table id="t-diag" class="filtrable"*') 'True'
 Check 'informe tbody' ($html -like '*</tbody></table>*') 'True'
 Check 'informe js filtros' ($html -like '*tr.filtros*' -and $html -like '*function preparar(tb)*') 'True'
 # el JS del informe debe funcionar en navegadores viejos: nada de NodeList.forEach ni arrow
@@ -1293,6 +1297,48 @@ Check 'indice: lectura vacia' ((Aud-Indice @()).Count) 0
 # con el indice, auditar "-10" contra la 34 es conforme y contra la 35 no
 Check 'indice: la 34 cuadra con el preset' (Aud-Igual '-10' $idx['9|34|41069 safe_pos_sign_threshold']) $true
 Check 'indice: la 35 no' (Aud-Igual '-10' $idx['9|35|41069 safe_pos_sign_threshold']) $false
+
+Write-Host ''
+Write-Host '== auditoria de baterias =='
+Check 'mediana: impar' (Mediana @(1,5,3)) 3
+Check 'mediana: par' (Mediana @(1,3,5,7)) 4
+Check 'mediana: uno solo' (Mediana @(9)) 9
+Check 'mediana: vacia' (Mediana @()) $null
+Check 'mediana: aguanta que haya rotos' (Mediana @(26000,26100,25900,12000,26050)) 26000
+function BatFila($ncu,$tcu,$v,$i,$soc,$soh,$tb,$al='',$salud='OK') {
+  return [pscustomobject]@{NCU=$ncu; TCU=$tcu; Salud=$salud; Vbat_mV=$v; Ibat_mA=$i; SoC=$soc; SoH=$soh; Tbat_C=$tb; Alarmas=$al}
+}
+# flota sana: 20 TCUs a 26 V, 90 %
+$flota = @()
+foreach ($t in 1..20) { $flota += BatFila '9' $t 26000 500 90 95 25 }
+Check 'bat: flota sana no da nada' (@(Bat-Auditar $flota).Count) 0
+# la del log de anoche: sin bateria
+$conMala = @($flota) + @(BatFila '9' 21 0 0 0 0 20 'bateria desconectada; SoC critico')
+$rB = @(Bat-Auditar $conMala)
+Check 'bat: detecta la sin bateria' (@($rB | Where-Object { $_.Tipo -eq 'SIN BATERIA' }).Count) 1
+Check 'bat: y es alarma' (@($rB | Where-Object { $_.Tipo -eq 'SIN BATERIA' })[0].Gravedad) 'ALARMA'
+Check 'bat: sin bateria no repite mas hallazgos de esa TCU' (@($rB | Where-Object { $_.TCU -eq 21 }).Count) 1
+# no carga: corriente cero con la bateria a medias
+$rC = @(Bat-Auditar (@($flota) + @(BatFila '9' 22 25000 5 60 95 25)))
+Check 'bat: detecta que no carga' (@($rC | Where-Object { $_.Tipo -eq 'NO CARGA' }).Count) 1
+# pero con la bateria llena, corriente cero es normal
+$rD = @(Bat-Auditar (@($flota) + @(BatFila '9' 23 26000 5 100 95 25)))
+Check 'bat: llena y sin corriente no es problema' (@($rD | Where-Object { $_.Tipo -eq 'NO CARGA' }).Count) 0
+# salud degradada
+Check 'bat: SoH bajo' (@(Bat-Auditar (@($flota) + @(BatFila '9' 24 26000 500 90 45 25))) | Where-Object { $_.Tipo -eq 'SALUD BAJA' }).Count 1
+# temperatura
+Check 'bat: temperatura alta' (@(Bat-Auditar (@($flota) + @(BatFila '9' 25 26000 500 90 95 61))) | Where-Object { $_.Tipo -eq 'TEMPERATURA' }).Count 1
+# fuera de la flota: 22,5 V esta dentro de rango pero la flota va a 26
+$rE = @(Bat-Auditar (@($flota) + @(BatFila '9' 26 22500 300 88 95 25)))
+Check 'bat: la que se sale de la flota' (@($rE | Where-Object { $_.Tipo -eq 'FUERA DE LA FLOTA' }).Count) 1
+Check 'bat: y no la llama fuera de rango' (@($rE | Where-Object { $_.TCU -eq 26 -and $_.Tipo -eq 'TENSION BAJA' }).Count) 0
+# las OFFLINE no cuentan: sus datos son de hace horas
+$rF = @(Bat-Auditar (@($flota) + @(BatFila '9' 27 0 0 0 0 0 '' 'OFFLINE')))
+Check 'bat: las OFFLINE no entran' (@($rF | Where-Object { $_.TCU -eq 27 }).Count) 0
+# la fila de la NCU tampoco
+$rG = @(Bat-Auditar (@($flota) + @([pscustomobject]@{NCU='9'; TCU='NCU'; Salud='ALARMA'; Vbat_mV=0; Ibat_mA=0; SoC=0; SoH=0; Tbat_C=0; Alarmas=''})))
+Check 'bat: la fila de la NCU no entra' (@($rG | Where-Object { "$($_.TCU)" -eq 'NCU' }).Count) 0
+Check 'bat: diagnostico vacio no revienta' (@(Bat-Auditar @()).Count) 0
 
 Write-Host ''
 Write-Host '== modo y comisionado salen del mismo registro =='

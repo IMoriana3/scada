@@ -15,9 +15,9 @@ const { chromium } = require('playwright');
   await p.waitForTimeout(300);
   chk('sin errores de JS', errores.length, 0);
 
-  // el informe lleva dos tablas (diagnostico y lectura): los filtros se
-  // prueban sobre la de diagnostico, asi que todo va colgado de ella
-  const tDiag = p.locator('table.filtrable').first();
+  // cada tabla lleva su id (t-diag, t-lectura, t-bat): los filtros se prueban
+  // sobre la de diagnostico, asi que todo va colgado de ella
+  const tDiag = p.locator('#t-diag');
   const visibles = async () => tDiag.locator('tbody tr:visible').count();
   chk('filas iniciales', await visibles(), 40);
 
@@ -96,7 +96,23 @@ const { chromium } = require('playwright');
   chk('nombra la TCU 9', txtImp.includes('NCU9 TCU 9'), true);
   chk('explica que son radianes', txtImp.includes('-45'), true);
   chk('las TCUs buenas no salen', txtImp.includes('TCU 7'), false);
-  chk('la tabla de lectura sigue estando', await p.locator('table.filtrable').count(), 2);
+  chk('la tabla de lectura sigue estando', await p.locator('table.filtrable').count(), 3);
+
+  // auditoria de baterias: la seccion, y que separe alarma de aviso
+  chk('seccion de baterias', await p.locator('#s-bat').count(), 1);
+  const tBat = p.locator('#t-bat');
+  const txtBat = await tBat.textContent();
+  chk('detecta la bateria desconectada', txtBat.includes('SIN BATERIA'), true);
+  chk('detecta la sobretension', txtBat.includes('SOBRETENSION'), true);
+  chk('detecta la temperatura', txtBat.includes('TEMPERATURA'), true);
+  chk('la TCU sana no sale', txtBat.includes('TCU 7'), false);
+  chk('colorea la alarma', await tBat.locator('tbody tr.alarma').count() > 0, 'true');
+  chk('y el aviso aparte', await tBat.locator('tbody tr.aviso').count() > 0, 'true');
+  // y sus filtros funcionan igual que los del diagnostico (columna Tipo = 2)
+  await tBat.locator('tr.filtros td').nth(2).locator('button.fmb').click();
+  await tBat.locator('tr.filtros td').nth(2).locator('div.fmp label', { hasText: 'SIN BATERIA' }).locator('input').check();
+  await p.waitForTimeout(120);
+  chk('filtra por tipo de fallo', await tBat.locator('tbody tr:visible').count(), 1);
 
   console.log(fallos === 0 ? '\nTODAS OK' : `\n${fallos} FALLOS`);
   await b.close();
