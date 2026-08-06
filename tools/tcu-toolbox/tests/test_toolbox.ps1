@@ -1602,6 +1602,55 @@ Check 'bat: en directo las de motor van vacias' ($src.Contains("Imotor_mA = ''; 
 Check 'bat: y van al CSV del registrador' ($src.Contains("'Vpanel_mV','Ientrada_mA','Imotor_mA','ImotorPico_mA'")) $true
 
 Write-Host ''
+Write-Host '== seccion de carga: el equipo dice si esta cargando =='
+# El bloque compacto de 22 registros no trae el estado del cargador. Vive en el
+# bloque largo (50000 + (TCU-1)*50), offsets 21..31 del mapa R7.1.
+Check 'carga: sin alarmas y con energia = cargando' (Carga-Texto 0x000F 0) 'cargando'
+Check 'carga: bit 5 = bateria llena' (Carga-Texto 0x002F 0) 'bateria llena'
+Check 'carga: sin el bit 3 el cargador no esta habilitado' (Carga-Texto 0x0007 0) 'cargador NO habilitado'
+Check 'carga: sin el bit 1 no hay energia' (Carga-Texto 0x000D 0) 'sin energia para cargar'
+Check 'carga: se juntan los dos motivos' (Carga-Texto 0x0005 0) 'cargador NO habilitado; sin energia para cargar'
+# una alarma manda sobre cualquier estado: es lo que hay que mirar
+Check 'carga: la alarma tapa el estado' (Carga-Texto 0x000F (1 -shl 8)) 'SOBRECORRIENTE DE CARGA'
+Check 'carga: timeout' (Carga-Texto 0x000F (1 -shl 9)) 'TIMEOUT DE CARGA'
+Check 'carga: varias alarmas a la vez' (Carga-Texto 0x000F ((1 -shl 3) -bor (1 -shl 8))) 'fallo de com con el BQ; SOBRECORRIENTE DE CARGA'
+Check 'carga: bits sin uso no inventan texto' (Carga-Texto 0x000F (1 -shl 14)) 'cargando'
+# a quien hay que pedirselo: exactamente las TCUs de la tabla, agrupadas por NCU
+$pedT = @(
+    [pscustomobject]@{NCU='9'; TCU=3}, [pscustomobject]@{NCU='9'; TCU=1}
+    [pscustomobject]@{NCU='12'; TCU=7}, [pscustomobject]@{NCU='9'; TCU=1}
+    [pscustomobject]@{NCU='9'; TCU='NCU'}
+)
+$ped = Carga-Pedidos $pedT
+Check 'carga: dos NCUs' ($ped.Keys.Count) 2
+Check 'carga: ordenadas y sin repetir' ((@($ped['9']) -join ',')) '1,3'
+Check 'carga: la otra NCU va aparte' ((@($ped['12']) -join ',')) '7'
+Check 'carga: la fila de la NCU no se pide' ((@($ped['9']) -contains 0)) $false
+Check 'carga: tabla vacia no pide nada' ((Carga-Pedidos @()).Keys.Count) 0
+# y la columna solo se rellena cuando se ha leido
+$tbC = @(Bat-Tabla $diagB $null @{'9|1' = [pscustomobject]@{Carga='cargando'}})
+Check 'carga: la columna se rellena' ($tbC[0].Carga) 'cargando'
+Check 'carga: y la que no se leyo va vacia' ($tbC[1].Carga) ''
+Check 'carga: sin lectura, toda la columna vacia' ((Bat-Tabla $diagB)[0].Carga) ''
+# la direccion, del mapa: 50000 + (TCU-1)*50 + 21, 11 registros
+Check 'carga: la direccion sale del mapa' ($src.Contains('(50000 + ($tcu - 1) * 50 + 21)) 11')) $true
+Check 'carga: corriente de panel con signo' ($src.Contains('$ip = $w[1]; if ($ip -gt 32767) { $ip -= 65536 }')) $true
+Check 'carga: estado y alarmas de los offsets 29 y 31' ($src.Contains('EstadoCarga = $w[8]; ChargerState = $w[9]; AlarmasCarga = $w[10]')) $true
+# es una lectura APARTE: el diagnostico no la hace, va por su boton
+Check 'carga: tiene su boton' ($src.Contains("`$btnBCar.Text = 'LEER CARGA'")) $true
+Check 'carga: con handler' ($src.Contains('$btnBCar.Add_Click(')) $true
+$blqCar = $src.Substring($src.IndexOf('$btnBCar.Add_Click'), 2600)
+Check 'carga: el handler la pide de verdad' ($blqCar.Contains('$c = Ncu-CargaCompat @($tcu)')) $true
+Check 'carga: por el puerto de la NCU' ($blqCar.Contains('Modbus-Conectar $tr.ip $PUERTO_NCU')) $true
+Check 'carga: con barra de avance' ($blqCar.Contains('Prog-Iniciar $tot')) $true
+Check 'carga: y se puede cancelar' ($blqCar.Contains('if ($script:Cancelar) { break }')) $true
+Check 'carga: repinta la tabla al acabar' ($blqCar.Contains('[void](Bat-Pintar)')) $true
+Check 'carga: el diagnostico no la lee' ($src.Substring($src.IndexOf('function Ncu-DiagCompat'), 3000).Contains('Ncu-CargaCompat')) $false
+Check 'carga: se olvida al diagnosticar de nuevo' ($src.Contains('$script:UltimaCarga = @{}   # lo leido de carga era de la lectura anterior')) $true
+Check 'carga: y va cruda al JSON' ($src.Contains('carga=$script:UltimaCarga')) $true
+Check 'carga: llave que no existe no se pide' ($src.Contains('if (-not $ped.ContainsKey($et)) { continue }')) $true
+
+Write-Host ''
 Write-Host '== modo y comisionado salen del mismo registro =='
 # Los dos viven en 30001: leer uno y no ensenar el otro era tirar informacion,
 # y antes de aplicar un modo a un rango hace falta saber en cual estan.

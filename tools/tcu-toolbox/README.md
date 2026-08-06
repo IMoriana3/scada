@@ -70,15 +70,33 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**El equipo dice si está cargando (v11.4)** — hasta ahora había que deducirlo
+de las corrientes: si entra corriente y la batería no la coge, aviso. El bloque
+compacto de 22 registros por TCU no trae más, pero el mapa **R7.1** de la NCU
+documenta otro bloque, largo, de 50 registros por TCU en
+`50000 + (TCU-1)*50`, y sus offsets **29** y **31** son el estado del cargador y
+sus alarmas.
+
+El botón **LEER CARGA** de la pestaña Baterías pide esos registros —una petición
+corta por TCU, solo cuando se pulsa— y rellena la columna **Carga** con lo que
+contesta el equipo: `cargando`, `batería llena`, `cargador NO habilitado`,
+`sin energía para cargar`, o la alarma si la hay (`SOBRECORRIENTE DE CARGA`,
+`TIMEOUT DE CARGA`, `fallo de com con el BQ`…). Una alarma tapa el estado: es lo
+que hay que mirar. En el JSON van además los registros crudos, por si hay que
+discutirlos con fábrica.
+
+**Aviso**: ese bloque está en el mapa, pero **no está comprobado contra una NCU
+real**. Si ninguna contesta, la consola lo dice en vez de callarse.
+
 **Pestaña Baterías (v11.3)** — las variables de batería estaban repartidas por
 columnas del diagnóstico y por el CSV, sin un sitio donde verlas juntas. Ahora
 tienen el suyo, igual que el inventario tiene el de FW, serie y MAC:
 
-| NCU | TCU | SoC % | SoH % | Vbat mV | Ibat mA | Vpanel mV | Ient mA | Tbat C | Tpcb C | Día | Estado |
-|---|---|---|---|---|---|---|---|---|---|---|---|
+| NCU | TCU | SoC % | SoH % | Vbat mV | Ibat mA | Vpanel mV | Ient mA | Tbat C | Tpcb C | Día | Carga | Estado |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
 
-**No lee nada**: son las mismas medidas del último diagnóstico, puestas en
-tabla. Con sus filtros por columna, su CSV y su JSON. La columna **Estado** sale
+**VER BATERÍAS no lee nada**: son las mismas medidas del último diagnóstico,
+puestas en tabla (la única lectura nueva de la pestaña es LEER CARGA). Con sus filtros por columna, su CSV y su JSON. La columna **Estado** sale
 de la auditoría, para que no haya dos criterios distintos diciendo si una
 batería está bien.
 
