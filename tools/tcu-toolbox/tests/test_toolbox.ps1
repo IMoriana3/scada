@@ -16,7 +16,7 @@ $null = New-Item -ItemType Directory -Path (Join-Path $PSScriptRootFake 'plantas
 Get-ChildItem (Join-Path $PSScriptRootFake 'plantas') -File | Remove-Item -Force
 Copy-Item (Join-Path $raizTb 'plantas/elburgo.json') (Join-Path $PSScriptRootFake 'plantas') -Force
 # anadir las funciones definidas en la seccion de handlers
-$i1 = $src.IndexOf('function Motor-Veredicto'); $f1 = $src.IndexOf('$btnIdent.Add_Click')
+$i1 = $src.IndexOf('function Texto-NoOk'); $f1 = $src.IndexOf('$btnIdent.Add_Click')
 $i2 = $src.IndexOf('function Diag-LeerTcu'); $f2 = $src.IndexOf('$btnDiag.Add_Click')
 $i3 = $src.IndexOf('function Params-Conexion'); $f3 = $src.IndexOf('function Rango-Tcus')
 $i4 = $src.IndexOf('function Nombres-Legibles'); $f4 = $src.IndexOf('function Refrescar-FiltroLeer')
@@ -1140,6 +1140,58 @@ Check 'motor: quieto con corriente' ((Motor-Veredicto 0.0 1800 0.0 1900 0.5 0.0)
 $vInv = Motor-Veredicto -0.6 1810 0.6 1750 0.5 0.0
 Check 'motor: sentido invertido' $vInv.estado 'FALLA'
 Check 'motor: nombra la polaridad' ($vInv.detalle.Contains('INVERTIDO')) $true
+
+Write-Host ''
+Write-Host '== las cabeceras se ven pulsables =='
+# El filtro esta desde la v7.4 pero nadie lo encontraba: no habia nada que
+# dijera que la cabecera se pulsa. Ahora todas llevan una flechita.
+Check 'cabecera: marca de pulsable' ($src.Contains("[char]0x25BE")) $true
+Check 'cabecera: el asterisco marca el filtro activo' ($src.Contains('esta columna filtra')) $true
+Check 'cabecera: se marcan al enganchar la tabla' ($src.Contains('# marca las cabeceras desde el principio')) $true
+# las diez tablas de resultados tienen que estar enganchadas
+$engancha = [regex]::Match($src, 'foreach \(\$tabla in @\(([^)]*)\)\) \{ Lv-Filtrable')
+Check 'cabecera: hay linea que engancha las tablas' $engancha.Success $true
+foreach ($t in @('lvL','lvD','lvG','lvA','lvV','lvP','lvFW','lvSat','lvH','lvI')) {
+    Check "cabecera: ${t} filtrable" ($engancha.Groups[1].Value.Contains("`$$t")) $true
+}
+# y no puede quedarse ninguna fuera: si se crea una tabla nueva hay que anadirla
+$todas = @([regex]::Matches($src, '\$(lv\w+) = New-Object System\.Windows\.Forms\.ListView') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+$sueltas = @($todas | Where-Object { -not $engancha.Groups[1].Value.Contains("`$$_") })
+Check 'cabecera: ninguna tabla sin filtro' ($sueltas -join ',') ''
+
+Write-Host ''
+Write-Host '== parte de averias para WhatsApp =='
+$diagWa = @(
+  [pscustomobject]@{NCU='1'; TCU='NCU'; Salud='AVISO';   Alarmas='reloj NCU: 2026-08-06 04:10'}
+  [pscustomobject]@{NCU='1'; TCU=14;    Salud='ALARMA';  Alarmas='eje bloqueado'}
+  [pscustomobject]@{NCU='1'; TCU=2;     Salud='OK';      Alarmas=''}
+  [pscustomobject]@{NCU='1'; TCU=22;    Salud='AVISO';   Alarmas='SoC bajo (L1)'}
+  [pscustomobject]@{NCU='3'; TCU=9;     Salud='OFFLINE'; Alarmas=''}
+  [pscustomobject]@{NCU='3'; TCU=5;     Salud='OK';      Alarmas=''}
+  [pscustomobject]@{NCU='3'; TCU='HSU2'; Salud='ALARMA'; Alarmas='ALARMA VIENTO'}
+)
+$wa = Texto-NoOk $diagWa 'Ayora' '06/08/2026 04:15' ''
+$lin = @($wa -split "`r`n")
+Check 'wa: la planta en la primera linea' ($lin[0]) 'Ayora - 06/08/2026 04:15'
+Check 'wa: cuenta los no OK' ($lin[1]) 'NO OK: 5 de 7 equipos revisados.'
+Check 'wa: agrupa por NCU' ($wa.Contains('*NCU 1* (3)')) $true
+Check 'wa: y la otra NCU' ($wa.Contains('*NCU 3* (2)')) $true
+Check 'wa: las OK no salen' ($wa.Contains('TCU 2:') -or $wa.Contains('TCU 5:')) $false
+Check 'wa: la TCU con su alarma' ($wa.Contains('- TCU 14: ALARMA - eje bloqueado')) $true
+Check 'wa: sin alarma no deja guion suelto' ($wa.Contains('- TCU 9: OFFLINE')) $true
+Check 'wa: la fila de la NCU se lee' ($wa.Contains('- La NCU: AVISO')) $true
+Check 'wa: la HSU conserva su nombre' ($wa.Contains('- HSU2: ALARMA - ALARMA VIENTO')) $true
+Check 'wa: ordena las TCUs' ($wa.IndexOf('TCU 14') -lt $wa.IndexOf('TCU 22')) $true
+# filtrado por una NCU: es lo que se le manda a un tecnico concreto
+$wa1 = Texto-NoOk $diagWa 'Ayora' '06/08/2026 04:15' '1'
+Check 'wa: por NCU lo dice en la cabecera' (@($wa1 -split "`r`n")[0]) 'Ayora - NCU 1 - 06/08/2026 04:15'
+Check 'wa: por NCU cuenta solo la suya' (@($wa1 -split "`r`n")[1]) 'NO OK: 3 de 4 equipos revisados.'
+Check 'wa: por NCU no cuela la otra' ($wa1.Contains('NCU 3')) $false
+# planta sana
+$waOk = Texto-NoOk @([pscustomobject]@{NCU='1'; TCU=1; Salud='OK'; Alarmas=''}) 'Ayora' '' ''
+Check 'wa: todo OK lo dice' ($waOk.Contains('Todo OK: 1 equipos revisados')) $true
+Check 'wa: sin fecha no deja guion colgando' (@($waOk -split "`r`n")[0]) 'Ayora'
+Check 'wa: diagnostico vacio no revienta' ((Texto-NoOk @() 'Ayora' '' '').Contains('Todo OK')) $true
 
 Write-Host ''
 Write-Host '== plan de firmware: que TCUs faltan y en que version estan =='
