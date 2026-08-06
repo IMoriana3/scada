@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '6.3'
+$VERSION_TOOLBOX = '6.4'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1584,8 +1584,14 @@ $txtWFin = TG $tabW '44' 131 22 45
 
 [void](LG $tabW 'Filtro' 200 42)
 $txtWFiltro = TG $tabW '' 244 22 170
-$lblWFiltro = LG $tabW '' 424 180
+$lblWFiltro = LG $tabW '' 424 104
 $lblWFiltro.ForeColor = [System.Drawing.Color]::Gray
+
+$btnWQuitar = New-Object System.Windows.Forms.Button
+$btnWQuitar.Text = 'Quitar'
+$btnWQuitar.Location = New-Object System.Drawing.Point(534, 18)
+$btnWQuitar.Size = New-Object System.Drawing.Size(78, 28)
+$tabW.Controls.Add($btnWQuitar)
 
 $btnPresetSave = New-Object System.Windows.Forms.Button
 $btnPresetSave.Text = 'Guardar preset'
@@ -1603,7 +1609,8 @@ $dgv = New-Object System.Windows.Forms.DataGridView
 $dgv.Location = New-Object System.Drawing.Point(10, 55)
 $dgv.Size = New-Object System.Drawing.Size(898, 228)
 $dgv.AllowUserToAddRows = $true
-$dgv.RowHeadersVisible = $false
+$dgv.RowHeadersVisible = $true
+$dgv.RowHeadersWidth = 24
 $dgv.BackgroundColor = [System.Drawing.Color]::White
 $colVar = New-Object System.Windows.Forms.DataGridViewComboBoxColumn
 $colVar.HeaderText = 'Variable'; $colVar.Width = 340
@@ -1611,7 +1618,7 @@ foreach ($k in $VARIABLES.Keys) { [void]$colVar.Items.Add($k) }
 $colVal = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
 $colVal.HeaderText = 'Nuevo valor'; $colVal.Width = 150
 $colInfo = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-$colInfo.HeaderText = 'Registro / tipo'; $colInfo.Width = 382; $colInfo.ReadOnly = $true
+$colInfo.HeaderText = 'Registro / tipo'; $colInfo.Width = 358; $colInfo.ReadOnly = $true
 [void]$dgv.Columns.Add($colVar); [void]$dgv.Columns.Add($colVal); [void]$dgv.Columns.Add($colInfo)
 $tabW.Controls.Add($dgv)
 
@@ -1636,6 +1643,8 @@ $dgv.Add_CellValueChanged({
 # Una celda con un valor que no este en la lista del combo (p.ej. cargada con
 # el filtro activo) no debe reventar el grid.
 $dgv.Add_DataError({ param($s, $e) $e.ThrowException = $false })
+$btnWQuitar.Add_Click({ Quitar-Filas $dgv; Refrescar-FiltroEscribir })
+$dgv.Add_KeyDown({ param($s, $e) if ($e.KeyCode -eq 'Delete') { Quitar-Filas $dgv; Refrescar-FiltroEscribir; $e.Handled = $true } })
 
 # Filtro del combo de variables: reduce la lista a lo que casa con el texto,
 # conservando siempre los nombres ya usados en filas existentes.
@@ -1722,8 +1731,16 @@ $txtLFin = TG $tabL '44' 131 22 45
 
 [void](LG $tabL 'Filtro' 200 42)
 $txtLFiltro = TG $tabL '' 244 22 170
-$lblLFiltro = LG $tabL '' 424 180
+$lblLFiltro = LG $tabL '' 424 104
 $lblLFiltro.ForeColor = [System.Drawing.Color]::Gray
+
+# Quitar la variable seleccionada. Existia con la lista de la v5.1 y se perdio
+# al pasar a tabla; sin cabeceras de fila no hay forma evidente de borrar una.
+$btnLQuitar = New-Object System.Windows.Forms.Button
+$btnLQuitar.Text = 'Quitar'
+$btnLQuitar.Location = New-Object System.Drawing.Point(534, 18)
+$btnLQuitar.Size = New-Object System.Drawing.Size(78, 28)
+$tabL.Controls.Add($btnLQuitar)
 
 $btnLeer = New-Object System.Windows.Forms.Button
 $btnLeer.Text = 'LEER'
@@ -1746,12 +1763,13 @@ $dgvL = New-Object System.Windows.Forms.DataGridView
 $dgvL.Location = New-Object System.Drawing.Point(10, 55)
 $dgvL.Size = New-Object System.Drawing.Size(898, 118)
 $dgvL.AllowUserToAddRows = $true
-$dgvL.RowHeadersVisible = $false
+$dgvL.RowHeadersVisible = $true          # el selector de fila: con el se marca y se borra con Supr
+$dgvL.RowHeadersWidth = 24
 $dgvL.BackgroundColor = [System.Drawing.Color]::White
 $colLVar = New-Object System.Windows.Forms.DataGridViewComboBoxColumn
 $colLVar.HeaderText = 'Variable'; $colLVar.Width = 420
 $colLInfo = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
-$colLInfo.HeaderText = 'Registro / tipo'; $colLInfo.Width = 452; $colLInfo.ReadOnly = $true
+$colLInfo.HeaderText = 'Registro / tipo'; $colLInfo.Width = 428; $colLInfo.ReadOnly = $true
 [void]$dgvL.Columns.Add($colLVar); [void]$dgvL.Columns.Add($colLInfo)
 $tabL.Controls.Add($dgvL)
 
@@ -1763,6 +1781,17 @@ $dgvL.Add_CellValueChanged({
     }
 })
 $dgvL.Add_DataError({ param($s, $e) $e.ThrowException = $false })
+
+# Quitar filas: por boton, y con Supr sobre la fila marcada. Se quitan todas
+# las seleccionadas, para pasar de tres variables a dos de un tiron.
+function Quitar-Filas($grid) {
+    $borrar = @()
+    foreach ($c in $grid.SelectedCells) { if (-not $grid.Rows[$c.RowIndex].IsNewRow) { $borrar += $c.RowIndex } }
+    foreach ($f in $grid.SelectedRows) { if (-not $f.IsNewRow) { $borrar += $f.Index } }
+    foreach ($i in @($borrar | Sort-Object -Unique -Descending)) { $grid.Rows.RemoveAt($i) }
+}
+$btnLQuitar.Add_Click({ Quitar-Filas $dgvL; Refrescar-FiltroLeer })
+$dgvL.Add_KeyDown({ param($s, $e) if ($e.KeyCode -eq 'Delete') { Quitar-Filas $dgvL; Refrescar-FiltroLeer; $e.Handled = $true } })
 
 function Nombres-Legibles { return @(Nombres-Ordenados @($VARIABLES.Keys)) + @(Nombres-Ordenados @($ESTADO.Keys) | ForEach-Object { 'ESTADO ' + $_ }) }
 
