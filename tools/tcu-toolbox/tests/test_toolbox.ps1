@@ -15,7 +15,6 @@ $PSScriptRootFake = Join-Path $tmp 'tb_fake'
 $null = New-Item -ItemType Directory -Path (Join-Path $PSScriptRootFake 'plantas') -Force
 Get-ChildItem (Join-Path $PSScriptRootFake 'plantas') -File | Remove-Item -Force
 Copy-Item (Join-Path $raizTb 'plantas/elburgo.json') (Join-Path $PSScriptRootFake 'plantas') -Force
-$logica = $logica.Replace('$PSScriptRoot', '$PSScriptRootFake')
 # anadir las funciones definidas en la seccion de handlers
 $i1 = $src.IndexOf('function Ident-Leer'); $f1 = $src.IndexOf('$btnIdent.Add_Click')
 $i2 = $src.IndexOf('function Diag-LeerTcu'); $f2 = $src.IndexOf('$btnDiag.Add_Click')
@@ -26,8 +25,13 @@ $i6 = $src.IndexOf('function Anclaje-Para'); $f6 = $src.IndexOf('# Anclar contra
 $i7 = $src.IndexOf('function Eti-Tcu'); $f7 = $src.IndexOf('# Divide una lista de TCUs')
 $i8 = $src.IndexOf('function Nombres-Unicos'); $f8 = $src.IndexOf('function Vars-DeTablaLeer')
 $i9 = $src.IndexOf('function Sospechas-Lectura'); $f9 = $src.IndexOf('$btnLeer.Add_Click')
-$i10 = $src.IndexOf('function Aband-Cronologia'); $f10 = $src.IndexOf('#  Interfaz')
-$logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7) + "`n" + $src.Substring($i8, $f8 - $i8) + "`n" + $src.Substring($i9, $f9 - $i9) + "`n" + $src.Substring($i10, $f10 - $i10)
+$i10 = $src.IndexOf('function Aband-Cronologia'); $f10 = $src.IndexOf('#  Usuarios, roles y registro')
+$i11 = $src.IndexOf('$ROLES = @('); $f11 = $fin   # hasta el arranque de la interfaz
+$i12 = $src.IndexOf('function Lv-Pasa'); $f12 = $src.IndexOf('function Lv-Filtrable')
+$i13 = $src.IndexOf('function Esclavos-Barrido'); $f13 = $src.IndexOf('function Params-Hsu')
+$logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7) + "`n" + $src.Substring($i8, $f8 - $i8) + "`n" + $src.Substring($i9, $f9 - $i9) + "`n" + $src.Substring($i10, $f10 - $i10) + "`n" + $src.Substring($i11, $f11 - $i11) + "`n" + $src.Substring($i12, $f12 - $i12) + "`n" + $src.Substring($i13, $f13 - $i13)
+# los bloques anadidos tambien usan $PSScriptRoot (usuarios.json, registro/)
+$logica = $logica.Replace('$PSScriptRoot', '$PSScriptRootFake')
 Invoke-Expression $logica
 
 $fallos = 0
@@ -990,6 +994,67 @@ Check 'grupos: sin NCU y planta completa se rechaza' (@($g4.grupos).Count) 0
 $g5 = Grupos-CsvPorNcu @($pv.jobs) $cxUna
 Check 'grupos: sin NCU y una NCU vale' (@($g5.grupos).Count) 1
 Check 'grupos: usa la conexion de la ventana' (@($g5.grupos)[0].cx.etiqueta) '503'
+
+# --------------------------------------------------------------------------
+#  Usuarios, roles y registro
+# --------------------------------------------------------------------------
+Write-Host ''
+Write-Host '== contrasenas =='
+$uA = Usuario-Nuevo 'ana' 'Ana Perez' 'admin' 'clave1234'
+Check 'usuario: no guarda la contrasena' ("$($uA | ConvertTo-Json)".Contains('clave1234')) $false
+Check 'usuario: guarda hash' ("$($uA.hash)".Length -gt 20) $true
+Check 'usuario: sal propia' ("$($uA.sal)".Length -gt 10) $true
+Check 'usuario: el hash depende de la sal' ((Pwd-Hash 'clave1234' $uA.sal 100000) -eq $uA.hash) $true
+$uB = Usuario-Nuevo 'bea' 'Bea Ruiz' 'lectura' 'clave1234'
+Check 'usuario: misma clave, distinto hash' ($uA.hash -eq $uB.hash) $false
+$lista = @($uA, $uB)
+Check 'login: usuario y clave buenos' ((Usuario-Validar $lista 'ana' 'clave1234').rol) 'admin'
+Check 'login: clave mala' (Usuario-Validar $lista 'ana' 'otra') $null
+Check 'login: usuario que no existe' (Usuario-Validar $lista 'nadie' 'clave1234') $null
+Check 'login: no distingue mayusculas en el usuario' ((Usuario-Validar $lista 'ANA' 'clave1234').usuario) 'ana'
+Check 'login: la clave si distingue' (Usuario-Validar $lista 'ana' 'CLAVE1234') $null
+Check 'login: lista vacia' (Usuario-Validar @() 'ana' 'clave1234') $null
+
+Write-Host ''
+Write-Host '== jerarquia de roles =='
+$script:Usuario = $uB   # lectura
+Check 'rol lectura: no escribe' (Puede 'tecnico') $false
+Check 'rol lectura: si lee' (Puede 'lectura') $true
+Check 'rol lectura: no es admin' (Puede 'admin') $false
+$script:Usuario = @{usuario='t'; nombre='T'; rol='tecnico'}
+Check 'rol tecnico: escribe' (Puede 'tecnico') $true
+Check 'rol tecnico: no es admin' (Puede 'admin') $false
+$script:Usuario = $uA
+Check 'rol admin: puede todo' ((Puede 'lectura') -and (Puede 'tecnico') -and (Puede 'admin')) $true
+$script:Usuario = $null
+Check 'sin sesion: no puede nada' (Puede 'lectura') $false
+$script:Usuario = $uA
+
+Write-Host ''
+Write-Host '== filtro de las tablas de resultados =='
+Check 'filtro: sin filtros pasa todo' (Lv-Pasa @('9','34','55') @{}) $true
+Check 'filtro: valor que casa' (Lv-Pasa @('9','34','55') @{'0'=@('9')}) $true
+Check 'filtro: valor que no casa' (Lv-Pasa @('9','34','55') @{'0'=@('10')}) $false
+Check 'filtro: varios valores en una columna' (Lv-Pasa @('9','34','55') @{'0'=@('9','10')}) $true
+Check 'filtro: dos columnas a la vez' (Lv-Pasa @('9','34','55') @{'0'=@('9'); '2'=@('55')}) $true
+Check 'filtro: dos columnas, una falla' (Lv-Pasa @('9','34','55') @{'0'=@('9'); '2'=@('30')}) $false
+Check 'filtro: columna que no existe' (Lv-Pasa @('9') @{'5'=@('x')}) $false
+Check 'filtro: celda vacia' (Lv-Pasa @('9','') @{'1'=@('')}) $true
+Check 'orden: numero se ordena como numero' (Lv-Clave '10') 10
+Check 'orden: coma decimal' (Lv-Clave '-0,7854') -0.7854
+Check 'orden: texto no es numero' ([double]::IsNaN((Lv-Clave 'ALARMA'))) $true
+
+Write-Host ''
+Write-Host '== barrido de esclavos =='
+$bar = @(Esclavos-Barrido 185 1 247)
+Check 'barrido: no repite' ($bar.Count) (@($bar | Sort-Object -Unique).Count)
+Check 'barrido: cubre el rango' ($bar.Count) 247
+Check 'barrido: empieza por el que hay puesto' ($bar[0]) 185
+Check 'barrido: rango corto se respeta' (@(Esclavos-Barrido 185 1 10).Count) 10
+Check 'barrido: no se cuela el actual fuera de rango' (@(Esclavos-Barrido 185 1 10) -contains 185) $false
+Check 'tipo: 1 es TCU' ((Tipo-Producto 0x0011).nombre) 'TCU'
+Check 'tipo: 2 es HSU' ((Tipo-Producto 0x0012).nombre) 'HSU'
+Check 'tipo: HW del nibble alto' ((Tipo-Producto 0x0062).hw) 6
 
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }

@@ -37,6 +37,53 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
 
+## Usuarios y roles (v7.4)
+
+El arranque pide **usuario y contraseña**, siempre. El primer arranque no tiene
+usuarios, así que obliga a crear el **administrador** antes de dejar entrar a
+nadie; a partir de ahí las altas se hacen desde el botón **Usuarios...** de la
+barra de abajo.
+
+Las contraseñas no se guardan: en `usuarios.json` va un **PBKDF2 con sal propia
+por usuario** (100.000 iteraciones). Tres roles:
+
+| Rol | Puede |
+|---|---|
+| **lectura** | Diagnóstico, lecturas, informes y SAT. No escribe nada. |
+| **técnico** | Todo lo anterior + escribir variables, presets, NVM, movimientos del seguidor y firmware. |
+| **admin** | Todo + identidad de red, topología y gestión de usuarios. |
+
+Y lo que le da sentido: **el registro de acciones**. Cada escritura deja una
+línea en `registro/acciones_AAAAMM.csv` con fecha, usuario, rol, planta, NCU,
+TCU, y el valor **antes y después**. Es lo que contesta el día que alguien
+pregunta quién cambió el `min_tilt` de la NCU 11. El campo «Técnico» de los
+informes HTML pasa también a ser el usuario de la sesión, no el de Windows.
+
+**Lo que esto NO es: protección.** Un `.ps1` es texto plano y quien sepa abrirlo
+se pone administrador en treinta segundos. Es una barrera contra el **error** —el
+ayudante que le da a «escribir planta completa» sin saber qué hace— y, sobre
+todo, **trazabilidad**. Para lo otro hace falta licencia y marca de agua, que es
+otra conversación.
+
+**Filtros en las tablas de resultados (v7.4)** — pulsando la **cabecera de una
+columna** se abre un menú con los valores distintos de esa columna y sus
+recuentos, para marcar varios a la vez, más ordenar A-Z / Z-A (con orden
+numérico cuando la columna son números, así que la TCU 10 ya no va delante de la
+9) y copiar al portapapeles lo que se ve. Las columnas filtradas se marcan con
+`*`. Funciona en las diez tablas de la herramienta y sin mover un píxel del
+diseño: en estas pestañas no sobra sitio para una fila de filtros como la del
+informe HTML.
+
+**BUSCAR ESCLAVO (v7.4)** — la caché de la NCU dice **cuántas** HSUs hay y cómo
+están, pero no su número de esclavo Modbus, que es lo que hace falta para
+hablar con ellas directamente. Este botón lo busca: por cada gateway de la NCU
+pide el `Product ID` (30300) a cada esclavo y apunta los que contestan, con su
+tipo (TCU/HSU). Empieza por los sospechosos —el que haya puesto, 185, 200,
+247…— para que un barrido interrumpido ya suela haber encontrado algo. Además,
+elegir una HSU en el desplegable **fija ya su puerto de gateway**: antes dejaba
+`auto` y la siguiente operación moría con *«puerto 'auto' requiere una entrada
+(auto) seleccionada»*.
+
 **Aviso cuando el navegador bloquea el JavaScript (v7.3)** — la fila de filtros de las tablas del informe la monta el JavaScript al abrir la página: tiene que ser así, porque el filtrado y la ordenación también son JavaScript. En el PC de planta el navegador bloquea por defecto los scripts de los ficheros locales (la barra de *«Internet Explorer ha restringido la ejecución de scripts»*), y entonces las tablas salen sin filtros y el informe parece roto. Ahora el HTML lleva un aviso arriba explicando qué pasa y qué pulsar; **el propio JavaScript lo borra nada más arrancar**, así que solo lo ve quien tiene el problema.
 
 **Segunda lectura de los valores anómalos (v7.2)** — el guardarraíl de la v5.0 tiene un hueco que se ha visto en campo: comprueba que el código de función y el número de registros de la respuesta son los que se pidieron, y eso caza casi todo, pero **no dos lecturas de la misma forma seguidas**. Dos `FC03` de un registro (`41068` y `41069`, por ejemplo) son peticiones idénticas en tamaño, así que si la NCU contesta con el cuerpo de la anterior sellado con el identificador de la petición en curso, cuadra todo y se cuela. En Ayora salió así un `safe_pos_sign_threshold = 2560`, que es exactamente el `0x0A00` del registro de al lado — y al releer esa misma TCU, el valor era el correcto.

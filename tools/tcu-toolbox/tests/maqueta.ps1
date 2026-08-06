@@ -1,4 +1,4 @@
-# Auditoria estatica de la maqueta: extrae la geometria de todos los controles
+﻿# Auditoria estatica de la maqueta: extrae la geometria de todos los controles
 # del script, aplica las reglas de anclaje y simula agrandar la ventana, para
 # ver si algo acaba encima de algo.
 $raizTb = Split-Path $PSScriptRoot -Parent
@@ -31,10 +31,16 @@ foreach ($l in ($src -split "`r?`n")) {
     }
 }
 
+# Los dialogos modales (login, alta de usuario, gestion) son FixedDialog: no se
+# redimensionan, asi que simular que la ventana crece no dice nada de ellos. Y
+# como todos reutilizan la variable $d, el parser los mezclaria en un solo
+# contenedor y cantaria solapes que no existen. Fuera: la auditoria es de la
+# ventana principal, que es la unica que crece.
 $porPadre = @{}
 foreach ($k in $ctrl.Keys) {
     $p = $ctrl[$k].padre
     if (-not $p) { continue }
+    if ($p -ne 'form' -and $ctrl.ContainsKey($p) -and $ctrl[$p].tipo -eq 'Form') { continue }
     if (-not $porPadre.ContainsKey($p)) { $porPadre[$p] = @() }
     $porPadre[$p] += ,@{nombre=$k; g=$ctrl[$k]}
 }

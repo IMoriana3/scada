@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '7.3'
+$VERSION_TOOLBOX = '7.4'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1756,6 +1756,78 @@ function Aband-Cronologia($muestras, [double]$tolLlegada = 1.0, [double]$tolCamb
 }
 
 # ---------------------------------------------------------------------------
+#  Usuarios, roles y registro de acciones
+# ---------------------------------------------------------------------------
+# Que esto NO es: proteccion. Un .ps1 es texto plano, y quien sepa abrirlo se
+# pone administrador en treinta segundos. Es una barrera contra el ERROR (que
+# el ayudante no le de a "escribir planta completa" sin saber lo que hace) y,
+# sobre todo, TRAZABILIDAD: quien escribio que, cuando y en que TCU.
+$ROLES = @('lectura', 'tecnico', 'admin')
+$ROL_DESC = @{
+  lectura = 'Diagnostico, lecturas, informes y SAT. No escribe nada.'
+  tecnico = 'Todo lo anterior + escribir variables, presets, NVM y firmware.'
+  admin   = 'Todo + identidad de red, topologia y gestion de usuarios.'
+}
+$script:Usuario = $null
+$FICH_USUARIOS = Join-Path $PSScriptRoot 'usuarios.json'
+
+# PBKDF2 con sal por usuario: la contrasena nunca se guarda, ni en claro ni en
+# un hash pelado que se rompa con una tabla.
+function Pwd-Hash([string]$pass, [string]$salB64, [int]$iter) {
+    $sal = [Convert]::FromBase64String($salB64)
+    $k = New-Object System.Security.Cryptography.Rfc2898DeriveBytes($pass, $sal, $iter)
+    try { return [Convert]::ToBase64String($k.GetBytes(32)) } finally { $k.Dispose() }
+}
+function Pwd-Sal {
+    $b = New-Object byte[] 16
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($b) } finally { $rng.Dispose() }
+    return [Convert]::ToBase64String($b)
+}
+function Usuario-Nuevo([string]$usuario, [string]$nombre, [string]$rol, [string]$pass) {
+    $sal = Pwd-Sal
+    $iter = 100000
+    return [ordered]@{usuario=$usuario; nombre=$nombre; rol=$rol; sal=$sal; iteraciones=$iter; hash=(Pwd-Hash $pass $sal $iter)}
+}
+# Comprueba usuario+contrasena contra la lista. Pura: se prueba sin ventana.
+function Usuario-Validar($usuarios, [string]$usuario, [string]$pass) {
+    foreach ($u in @($usuarios)) {
+        if ("$($u.usuario)".ToLower() -ne "$usuario".ToLower()) { continue }
+        $h = Pwd-Hash $pass "$($u.sal)" ([int]$u.iteraciones)
+        if ($h -eq "$($u.hash)") { return $u }
+        return $null
+    }
+    return $null
+}
+function Usuarios-Cargar {
+    if (-not (Test-Path $FICH_USUARIOS)) { return @() }
+    try { return @(Get-Content $FICH_USUARIOS -Raw | ConvertFrom-Json) } catch { return @() }
+}
+function Usuarios-Guardar($lista) {
+    ConvertTo-Json @($lista) -Depth 4 | Set-Content $FICH_USUARIOS -Encoding UTF8
+}
+# Jerarquia de permisos: admin >= tecnico >= lectura.
+function Puede([string]$minimo) {
+    if (-not $script:Usuario) { return $false }
+    $orden = @{lectura=0; tecnico=1; admin=2}
+    return ([int]$orden["$($script:Usuario.rol)"] -ge [int]$orden[$minimo])
+}
+
+# Registro de acciones: una linea por escritura, se acumula en el PC de planta.
+# Es lo que contesta el dia que alguien pregunta quien cambio tal cosa.
+function Auditar([string]$accion, [string]$ncu, $tcu, [string]$detalle) {
+    try {
+        $dir = Join-Path $PSScriptRoot 'registro'
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+        $f = Join-Path $dir ('acciones_' + (Get-Date -Format 'yyyyMM') + '.csv')
+        if (-not (Test-Path $f)) { Set-Content -Path $f -Value 'fecha;usuario;rol;planta;accion;ncu;tcu;detalle' -Encoding UTF8 }
+        $lin = ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), "$($script:Usuario.usuario)", "$($script:Usuario.rol)",
+                (Nombre-Planta), $accion, $ncu, "$tcu", ("$detalle" -replace '[;\r\n]', ' ')) -join ';'
+        Add-Content -Path $f -Value $lin -Encoding UTF8
+    } catch {}
+}
+
+# ---------------------------------------------------------------------------
 #  Interfaz
 # ---------------------------------------------------------------------------
 $form = New-Object System.Windows.Forms.Form
@@ -2595,16 +2667,18 @@ $tabSAT = New-Object System.Windows.Forms.TabPage
 $tabSAT.Text = 'SAT'
 $tabs.TabPages.Add($tabSAT)
 
-[void](LG $tabSAT 'Muestreo TCU s' 10 86)
-$txtSatInt = TG $tabSAT '60' 100 22 42
-[void](LG $tabSAT 'Comms s' 150 52)
-$txtSatCom = TG $tabSAT '15' 206 22 38
+# Los anchos van holgados: con el tema oscuro la letra es mayor y antes se
+# comian la unidad ("Muestreo TCU" en vez de "Muestreo TCU s").
+[void](LG $tabSAT 'Muestreo TCU s' 10 100)
+$txtSatInt = TG $tabSAT '60' 114 22 42
+[void](LG $tabSAT 'Comms s' 164 58)
+$txtSatCom = TG $tabSAT '15' 226 22 38
 # Duracion con unidad: el ensayo del anexo son 7 dias, pero para comprobar el
 # montaje antes de arrancarlo de verdad se quieren 20 minutos.
-[void](LG $tabSAT 'Duracion' 252 56)
-$txtSatDur = TG $tabSAT '7' 312 22 34
+[void](LG $tabSAT 'Duracion' 272 56)
+$txtSatDur = TG $tabSAT '7' 332 22 34
 $cbSatUnid = New-Object System.Windows.Forms.ComboBox
-$cbSatUnid.Location = New-Object System.Drawing.Point(350, 21)
+$cbSatUnid.Location = New-Object System.Drawing.Point(370, 21)
 $cbSatUnid.Size = New-Object System.Drawing.Size(66, 22)
 $cbSatUnid.DropDownStyle = 'DropDownList'
 foreach ($u in @('min','horas','dias')) { [void]$cbSatUnid.Items.Add($u) }
@@ -2613,7 +2687,7 @@ $tabSAT.Controls.Add($cbSatUnid)
 
 $btnSatIni = New-Object System.Windows.Forms.Button
 $btnSatIni.Text = 'INICIAR REGISTRO'
-$btnSatIni.Location = New-Object System.Drawing.Point(424, 18)
+$btnSatIni.Location = New-Object System.Drawing.Point(444, 18)
 $btnSatIni.Size = New-Object System.Drawing.Size(160, 28)
 $btnSatIni.BackColor = [System.Drawing.Color]::FromArgb(0,120,60)
 $btnSatIni.ForeColor = [System.Drawing.Color]::White
@@ -2621,14 +2695,14 @@ $tabSAT.Controls.Add($btnSatIni)
 
 $btnSatFin = New-Object System.Windows.Forms.Button
 $btnSatFin.Text = 'PARAR'
-$btnSatFin.Location = New-Object System.Drawing.Point(592, 18)
-$btnSatFin.Size = New-Object System.Drawing.Size(90, 28)
+$btnSatFin.Location = New-Object System.Drawing.Point(612, 18)
+$btnSatFin.Size = New-Object System.Drawing.Size(80, 28)
 $btnSatFin.Enabled = $false
 $tabSAT.Controls.Add($btnSatFin)
 
 $btnSatAnal = New-Object System.Windows.Forms.Button
 $btnSatAnal.Text = 'ANALIZAR Y EMITIR'
-$btnSatAnal.Location = New-Object System.Drawing.Point(690, 18)
+$btnSatAnal.Location = New-Object System.Drawing.Point(700, 18)
 $btnSatAnal.Size = New-Object System.Drawing.Size(160, 28)
 $btnSatAnal.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
 $btnSatAnal.ForeColor = [System.Drawing.Color]::White
@@ -2670,10 +2744,10 @@ $tabSAT.Controls.Add($btnSatHoja)
 
 # Ritmo y tope del cronometro. El tope evita dejarlo corriendo toda la noche
 # si el ensayo se alarga o alguien se olvida de pararlo; a 0 no para solo.
-[void](LG $tabSAT 'cada s' 706 44 57)
+[void](LG $tabSAT 'cada s' 700 48 57)
 $txtCronInt = TG $tabSAT '3' 752 51 30
-[void](LG $tabSAT 'max min' 788 50 57)
-$txtCronMax = TG $tabSAT '30' 842 51 34
+[void](LG $tabSAT 'max min' 790 56 57)
+$txtCronMax = TG $tabSAT '30' 850 51 34
 
 # Criterios de aceptacion: van editables porque son de contrato, no del
 # equipo. El registro no depende de ellos, asi que cambiarlos y volver a
@@ -2784,7 +2858,13 @@ $cbHsuSel.Location = New-Object System.Drawing.Point(133, 82)
 $cbHsuSel.Size = New-Object System.Drawing.Size(300, 22)
 $cbHsuSel.DropDownStyle = 'DropDownList'
 $tabH.Controls.Add($cbHsuSel)
-$lblHSel = LG $tabH 'Escanea la planta para listar sus HSUs y de que NCU cuelga cada una.' 443 465 85
+$btnHEsclavo = New-Object System.Windows.Forms.Button
+$btnHEsclavo.Text = 'BUSCAR ESCLAVO'
+$btnHEsclavo.Location = New-Object System.Drawing.Point(443, 80)
+$btnHEsclavo.Size = New-Object System.Drawing.Size(130, 26)
+$tabH.Controls.Add($btnHEsclavo)
+
+$lblHSel = LG $tabH 'Escanea la planta para listar sus HSUs y de que NCU cuelga cada una.' 581 327 85
 $lblHSel.ForeColor = [System.Drawing.Color]::Gray
 
 $lvH = New-Object System.Windows.Forms.ListView
@@ -2875,6 +2955,12 @@ $btnLog.Location = New-Object System.Drawing.Point(825, 741)
 $btnLog.Size = New-Object System.Drawing.Size(110, 28)
 $form.Controls.Add($btnLog)
 
+$btnUsuarios = New-Object System.Windows.Forms.Button
+$btnUsuarios.Text = 'Usuarios...'
+$btnUsuarios.Location = New-Object System.Drawing.Point(586, 741)
+$btnUsuarios.Size = New-Object System.Drawing.Size(105, 28)
+$form.Controls.Add($btnUsuarios)
+
 $btnInforme = New-Object System.Windows.Forms.Button
 $btnInforme.Text = 'INFORME HTML'
 $btnInforme.Location = New-Object System.Drawing.Point(700, 741)
@@ -2883,9 +2969,156 @@ $form.Controls.Add($btnInforme)
 
 $lblLog = New-Object System.Windows.Forms.Label
 $lblLog.Location = New-Object System.Drawing.Point(10, 746)
-$lblLog.Size = New-Object System.Drawing.Size(680, 20)
+$lblLog.Size = New-Object System.Drawing.Size(566, 20)
 $lblLog.ForeColor = [System.Drawing.Color]::Gray
 $form.Controls.Add($lblLog)
+
+# ---------------------------------------------------------------------------
+#  Filtro y orden en las tablas de resultados
+# ---------------------------------------------------------------------------
+# El informe HTML ya filtraba por columna y en pantalla no se podia. Se hace al
+# pulsar la cabecera de la columna, que no estaba usada para nada, y sin mover
+# ni un pixel del diseno: en estas pestanas no sobra sitio para una fila de
+# filtros como la del HTML.
+#
+# La lista original se guarda en $lv.Tag. Cada tabla la rellena su propio
+# handler con Items.Add, asi que no hay un punto unico donde enterarse: se
+# detecta comparando cuantas filas dejamos la ultima vez con las que hay ahora.
+# Si no cuadran, la tabla se ha repintado y se vuelve a partir de cero.
+
+# Decide que filas pasan los filtros activos. Pura: se prueba sin ventana.
+# $filtros: indice de columna -> lista de valores admitidos.
+function Lv-Pasa($textos, $filtros) {
+    foreach ($k in $filtros.Keys) {
+        $col = [int]$k
+        if ($col -ge @($textos).Count) { return $false }
+        if (@($filtros[$k]) -notcontains "$($textos[$col])") { return $false }
+    }
+    return $true
+}
+
+# Orden natural: si toda la columna son numeros, ordena como numeros; si no,
+# como texto. Sin esto la TCU 10 va delante de la 9.
+function Lv-Clave([string]$t) {
+    $d = 0.0
+    if ([double]::TryParse($t.Replace(',', '.'), [Globalization.NumberStyles]::Float, $INV, [ref]$d)) { return $d }
+    return [double]::NaN
+}
+
+function Lv-Estado($lv) {
+    if ($null -eq $lv.Tag -or -not ($lv.Tag -is [hashtable])) {
+        $lv.Tag = @{orig=@(); filtros=@{}; dejadas=-1; cab=@()}
+    }
+    return $lv.Tag
+}
+
+# Vuelve a coger la lista completa si la tabla se ha repintado desde fuera.
+function Lv-Sincronizar($lv) {
+    $e = Lv-Estado $lv
+    if ($e.dejadas -eq $lv.Items.Count) { return }
+    $e.filtros = @{}
+    $e.orig = @($lv.Items)
+    $e.dejadas = $lv.Items.Count
+    if (@($e.cab).Count -eq 0) { $e.cab = @($lv.Columns | ForEach-Object { $_.Text }) }
+    else { for ($i = 0; $i -lt $lv.Columns.Count -and $i -lt @($e.cab).Count; $i++) { $lv.Columns[$i].Text = $e.cab[$i] } }
+}
+
+function Lv-Aplicar($lv) {
+    $e = Lv-Estado $lv
+    $vis = @(@($e.orig) | Where-Object { Lv-Pasa (@($_.SubItems | ForEach-Object { $_.Text })) $e.filtros })
+    $lv.BeginUpdate()
+    $lv.Items.Clear()
+    foreach ($it in $vis) { [void]$lv.Items.Add($it) }
+    $lv.EndUpdate()
+    $e.dejadas = $lv.Items.Count
+    # marca en la cabecera que columnas filtran, y cuanto queda a la vista
+    for ($i = 0; $i -lt $lv.Columns.Count -and $i -lt @($e.cab).Count; $i++) {
+        $lv.Columns[$i].Text = $e.cab[$i] + $(if ($e.filtros.ContainsKey("$i")) { ' *' } else { '' })
+    }
+    if ($e.filtros.Count -gt 0) {
+        Con ("Filtro en la tabla: {0} de {1} filas a la vista. Pulsa la cabecera para quitarlo." -f $vis.Count, @($e.orig).Count) ([System.Drawing.Color]::SteelBlue)
+    }
+}
+
+function Lv-Ordenar($lv, [int]$col, [bool]$asc) {
+    $e = Lv-Estado $lv
+    $vals = @(@($e.orig) | ForEach-Object { if ($col -lt $_.SubItems.Count) { Lv-Clave $_.SubItems[$col].Text } else { [double]::NaN } })
+    $numerica = (@($vals | Where-Object { [double]::IsNaN($_) }).Count -eq 0) -and @($vals).Count -gt 0
+    $e.orig = @(@($e.orig) | Sort-Object -Descending:(-not $asc) -Property @{Expression={
+        $t = $(if ($col -lt $_.SubItems.Count) { $_.SubItems[$col].Text } else { '' })
+        if ($numerica) { Lv-Clave $t } else { $t } }})
+    Lv-Aplicar $lv
+}
+
+# Menu de la cabecera: ordenar y elegir varios valores a la vez, como el HTML.
+function Lv-Menu($lv, [int]$col) {
+    Lv-Sincronizar $lv
+    $e = Lv-Estado $lv
+    $m = New-Object System.Windows.Forms.ContextMenuStrip
+    $nombre = $(if ($col -lt @($e.cab).Count) { $e.cab[$col] } else { "columna $col" })
+    $mAsc = $m.Items.Add("Ordenar por '$nombre' A-Z")
+    $mAsc.Add_Click({ Lv-Ordenar $lv $col $true }.GetNewClosure())
+    $mDes = $m.Items.Add("Ordenar por '$nombre' Z-A")
+    $mDes.Add_Click({ Lv-Ordenar $lv $col $false }.GetNewClosure())
+    [void]$m.Items.Add('-')
+    # valores distintos de la columna, sobre la lista COMPLETA
+    $cuenta = @{}
+    foreach ($it in @($e.orig)) {
+        $t = $(if ($col -lt $it.SubItems.Count) { $it.SubItems[$col].Text } else { '' })
+        $cuenta[$t] = 1 + [int]$cuenta[$t]
+    }
+    $claves = @($cuenta.Keys | Sort-Object)
+    if ($claves.Count -gt 60) {
+        $mAviso = $m.Items.Add("($($claves.Count) valores distintos: demasiados para listarlos)")
+        $mAviso.Enabled = $false
+    } else {
+        $activos = $(if ($e.filtros.ContainsKey("$col")) { @($e.filtros["$col"]) } else { $null })
+        foreach ($k in $claves) {
+            $it = New-Object System.Windows.Forms.ToolStripMenuItem
+            $it.Text = $(if ($k -eq '') { '(vacio)' } else { $k }) + "   ($($cuenta[$k]))"
+            $it.CheckOnClick = $true
+            $it.Checked = ($null -eq $activos) -or (@($activos) -contains $k)
+            $it.Tag = $k
+            $m.Items.Add($it) | Out-Null
+        }
+        $m.Add_Closed({
+            param($s2, $e2)
+            if ($e2.CloseReason -ne 'AppFocusChange' -and $e2.CloseReason -ne 'AppClicked' -and $e2.CloseReason -ne 'ItemClicked') { return }
+            $marcados = @()
+            $total = 0
+            foreach ($x in $s2.Items) {
+                if ($x -is [System.Windows.Forms.ToolStripMenuItem] -and $x.CheckOnClick) {
+                    $total++
+                    if ($x.Checked) { $marcados += "$($x.Tag)" }
+                }
+            }
+            if ($total -eq 0) { return }
+            $est = Lv-Estado $lv
+            if ($marcados.Count -eq 0 -or $marcados.Count -eq $total) { [void]$est.filtros.Remove("$col") }
+            else { $est.filtros["$col"] = $marcados }
+            Lv-Aplicar $lv
+        }.GetNewClosure())
+    }
+    [void]$m.Items.Add('-')
+    $mQuitar = $m.Items.Add('Quitar todos los filtros')
+    $mQuitar.Add_Click({ $est = Lv-Estado $lv; $est.filtros = @{}; Lv-Aplicar $lv }.GetNewClosure())
+    $mCopiar = $m.Items.Add('Copiar lo que se ve (TSV)')
+    $mCopiar.Add_Click({
+        $lin = @((@($lv.Columns | ForEach-Object { $_.Text -replace ' \*$', '' })) -join [char]9)
+        foreach ($it in $lv.Items) { $lin += (@($it.SubItems | ForEach-Object { $_.Text }) -join [char]9) }
+        try { [System.Windows.Forms.Clipboard]::SetText($lin -join "`r`n") } catch {}
+    }.GetNewClosure())
+    return $m
+}
+
+function Lv-Filtrable($lv) {
+    [void](Lv-Estado $lv)
+    $lv.Add_ColumnClick({
+        param($s3, $e3)
+        try { (Lv-Menu $s3 $e3.Column).Show([System.Windows.Forms.Control]::MousePosition) }
+        catch { Con "AVISO: no se pudo abrir el filtro de la columna ($_)" ([System.Drawing.Color]::Orange) }
+    })
+}
 
 # Menu del boton derecho de la consola. Ctrl+C y Ctrl+A ya funcionaban, pero
 # no se ven; y "copiar toda la consola" es lo que se quiere para pegar un
@@ -2969,7 +3202,7 @@ $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $
                     $btnPresetSave, $btnPresetLoad, $btnCargarBackup, $btnLCsv, $btnDCsv, $btnBackupJson,
                     $btnComparar, $btnGCsv, $btnGJson, $btnICsv,
                     $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnInvF, $btnInvFCsv,
-                    $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm,
+                    $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm, $btnHEsclavo,
                     $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComis, $btnPComisSet, $btnPCsv,
                     $btnGBucle, $btnPSeg, $btnAudJson, $btnInvJson, $btnHBuscar, $btnGComm,
                     $btnFwPlan, $btnFwVerif, $btnFwPrep)
@@ -3251,6 +3484,13 @@ function Escribir-EnTcus($tcus) {
     # La identidad de red no se puede escribir en bloque: dos TCUs con el mismo
     # numero de esclavo hacen desaparecer a una de las dos de la red.
     $identV = @($vars | Where-Object { $ADDR_IDENTIDAD -contains $_.addr })
+    if ($identV.Count -gt 0 -and -not (Puede 'admin')) {
+        [void][System.Windows.Forms.MessageBox]::Show(
+            "Cambiar la IDENTIDAD DE RED (esclavo, PAN ID, clave) es de administrador.`r`n`r`nTu rol es '$($script:Usuario.rol)'.",
+            'Permiso insuficiente', 'OK', 'Stop')
+        Con "Escritura cancelada: identidad de red requiere rol admin (tu rol: $($script:Usuario.rol))." ([System.Drawing.Color]::Salmon)
+        return
+    }
     if ($identV.Count -gt 0) {
         $lista = ($identV | ForEach-Object { "  $($_.nombre)" }) -join "`r`n"
         if ($nTcus -gt 1) {
@@ -3371,6 +3611,7 @@ function Escribir-EnTcus($tcus) {
                             $script:UltimaEscritura += [pscustomobject]@{
                                 NCU=$script:NcuLog; TCU=[int]$tcu; Variable=$v.nombre
                                 Antes=$previo; Despues=$v.texto; Estado='OK'}
+                            Auditar 'ESCRIBIR' $script:NcuLog $tcu "$($v.nombre): $previo -> $($v.texto)"
                         } catch {
                             $fallo = "$($v.nombre): $_"
                             $ultErr = "$_"
@@ -3382,6 +3623,7 @@ function Escribir-EnTcus($tcus) {
                         $script:UltimaEscritura += [pscustomobject]@{
                             NCU=$script:NcuLog; TCU=[int]$tcu; Variable=$v.nombre
                             Antes=$previo; Despues=$v.texto; Estado="FALLO: $ultErr"}
+                        Auditar 'ESCRIBIR_FALLO' $script:NcuLog $tcu "$($v.nombre) = $($v.texto): $ultErr"
                         break
                     }
                 }
@@ -4582,8 +4824,10 @@ $btnCsvTcu.Add_Click({ Lanzar {
                     if (-not $hecho) { $todoOk = $false; break }
                 }
             }
-            if ($todoOk) { $ok++; Con ((Eti-Tcu $tcu) + ("  OK   {0}" -f ($cambios -join ' | '))) ([System.Drawing.Color]::LightGreen) }
-            else { $ko++; Con ((Eti-Tcu $tcu) + ("  FALLO  {0}" -f $fallo)) ([System.Drawing.Color]::Salmon) }
+            if ($todoOk) { $ok++; Con ((Eti-Tcu $tcu) + ("  OK   {0}" -f ($cambios -join ' | '))) ([System.Drawing.Color]::LightGreen)
+                Auditar 'CSV_POR_TCU' $script:NcuLog $tcu ($cambios -join ' | ') }
+            else { $ko++; Con ((Eti-Tcu $tcu) + ("  FALLO  {0}" -f $fallo)) ([System.Drawing.Color]::Salmon)
+                Auditar 'CSV_POR_TCU_FALLO' $script:NcuLog $tcu $fallo }
         }
     }
     Modbus-Cerrar
@@ -5926,6 +6170,73 @@ $btnHBuscar.Add_Click({ Lanzar {
     Con "HSUs encontradas: $($script:HsusPlanta.Count). Al elegir una en el desplegable se fija su IP (y esclavo si la topologia lo trae) para las operaciones directas." ([System.Drawing.Color]::SteelBlue)
 } })
 
+# Barrido de esclavos: la caché de la NCU dice CUÁNTAS HSUs hay y cómo están,
+# pero no su número de esclavo Modbus, que es lo que hace falta para hablar con
+# ellas directamente. Esto lo busca probando: por cada gateway de la NCU, pide
+# el Product ID (30300) a cada esclavo y apunta los que contestan.
+$btnHEsclavo.Add_Click({ Lanzar {
+    $h = $script:HsuSel
+    $ip = ''; $gws = @(); $eti = ''
+    if ($h -and $h.ip) {
+        $ip = $h.ip; $eti = $h.etiqueta
+        $gws = @($(if ($h.gws) { @($h.gws | ForEach-Object { [int]$_.puerto }) } else { @(Hsu-Puerto $h) }))
+    } else {
+        $ip = $txtIp.Text.Trim()
+        if (-not $ip -or $ip -eq 'NA' -or $ip -eq '(planta)') {
+            [void][System.Windows.Forms.MessageBox]::Show("Elige una HSU en el desplegable (BUSCAR HSUs), o pon a mano la IP de una NCU.`r`n`r`nEl barrido va contra UNA NCU: probar la planta entera tardaria horas.",'Buscar esclavo','OK','Information'); return
+        }
+        $pt = $txtPort.Text.Trim()
+        $gws = @($(if ($pt -eq 'auto' -or -not $pt) { @(503, 504) } else { @([int]$pt) }))
+    }
+    $to = Val-Int $txtTo.Text 'Timeout' 500 60000
+    $lista = @(Esclavos-Barrido ([int]$txtHSlave.Text) 1 247)
+    $tot = $lista.Count * @($gws).Count
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "Buscar equipos en $ip, gateways $($gws -join ' y '), esclavos 1-247.`r`n`r`n$tot consultas. Cada esclavo que no existe cuesta lo que tarde la NCU en rendirse con el Zigbee, asi que esto puede irse a varios minutos.`r`n`r`nSe puede parar con CANCELAR en cualquier momento y lo encontrado se queda en la lista.`r`n`r`nContinuar?",
+        'Buscar esclavo', 'YesNo', 'Warning')
+    if ($r -ne 'Yes') { return }
+    $lvH.Items.Clear()
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Barrido de esclavos en $ip$(if ($eti) { " ($eti)" }): gateways $($gws -join ', '), $tot consultas." ([System.Drawing.Color]::SteelBlue)
+    $hallados = 0; $hechas = 0
+    foreach ($puerto in $gws) {
+        if ($script:Cancelar) { break }
+        try { Modbus-Conectar $ip $puerto $to }
+        catch { Con "ERROR de conexion (${ip}:${puerto}): $_" ([System.Drawing.Color]::Salmon); continue }
+        Con "--- gateway $puerto ---" ([System.Drawing.Color]::SteelBlue)
+        foreach ($u in $lista) {
+            if (Chequear-Cancelado) { break }
+            $hechas++
+            $prod = $null
+            try { $prod = (FC03-Leer ([byte]$u) (Dir-Trama 30300) 1)[0] } catch { }
+            if ($null -eq $prod) {
+                if ($hechas % 25 -eq 0) { Con ("  {0}/{1} probados, {2} encontrados..." -f $hechas, $tot, $hallados) ([System.Drawing.Color]::Gainsboro) }
+                continue
+            }
+            $t = Tipo-Producto $prod
+            $hallados++
+            $item = New-Object System.Windows.Forms.ListViewItem("esclavo $u  (GW $puerto)")
+            [void]$item.SubItems.Add($t.nombre)
+            [void]$item.SubItems.Add(("Product ID 0x{0:X4}  -  HW {1}, FW corto {2}" -f $prod, $t.hw, $t.fw))
+            $item.ForeColor = $(if ($t.nombre -eq 'HSU') { [System.Drawing.Color]::DarkGreen } else { [System.Drawing.Color]::Gray })
+            $lvH.Items.Add($item) | Out-Null
+            $color = $(if ($t.nombre -eq 'HSU') { [System.Drawing.Color]::LightGreen } else { [System.Drawing.Color]::Gainsboro })
+            Con ("  GW {0}  esclavo {1,3}  ->  {2}   (0x{3:X4})" -f $puerto, $u, $t.nombre, $prod) $color
+            [System.Windows.Forms.Application]::DoEvents()
+        }
+        Modbus-Cerrar
+    }
+    Modbus-Cerrar
+    Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
+    $hsus = @($lvH.Items | Where-Object { $_.SubItems[1].Text -eq 'HSU' })
+    if ($hsus.Count -gt 0) {
+        Con "Encontradas $($hsus.Count) HSUs. Pon su numero de esclavo en la casilla de arriba y ya puedes leer METEO, CONFIG y caja negra." ([System.Drawing.Color]::LightGreen)
+        Con "Anotalo en la topologia de la planta (campo 'hsu' de la NCU) y no habra que volver a barrer." ([System.Drawing.Color]::LightGreen)
+    } else {
+        Con "Ningun equipo de tipo HSU en $hechas consultas. Si aparecieron TCUs, la conexion y el gateway son correctos y la HSU cuelga del OTRO gateway; si no aparecio nada, revisa IP y puerto." ([System.Drawing.Color]::Orange)
+    }
+} })
+
 $cbHsuSel.Add_SelectedIndexChanged({
     if ($script:Ocupado) { return }
     $i = $cbHsuSel.SelectedIndex
@@ -5935,11 +6246,56 @@ $cbHsuSel.Add_SelectedIndexChanged({
     $script:HsuSel = $h
     $txtIp.Text = $h.ip
     if ($h.hsu) { $txtHSlave.Text = "$($h.hsu)" }
-    Con "HSU seleccionada: $($h.etiqueta) -> IP $($h.ip)$(if ($h.hsu) { ", esclavo $($h.hsu)" } else { '' }). Pon el puerto del GW del que cuelga para METEO/CONFIG/caja negra." ([System.Drawing.Color]::SteelBlue)
+    # Antes solo se ponia la IP y el puerto se quedaba en 'auto', que exige una
+    # entrada (auto) con su IP sin tocar: al haberla cambiado aqui, la siguiente
+    # operacion moria con "puerto 'auto' requiere...". Se deja un puerto real.
+    $txtPort.Text = "$(Hsu-Puerto $h)"
+    Con "HSU seleccionada: $($h.etiqueta) -> $($h.ip):$($txtPort.Text)$(if ($h.hsu) { ", esclavo $($h.hsu)" } else { '' }). Si cuelga del otro gateway, cambia el puerto a mano." ([System.Drawing.Color]::SteelBlue)
 })
 
+# Gateway por el que se llega a una HSU: el que declare su NCU (el de numero
+# mas bajo si hay varios) y, si la topologia no lo dice, el 503.
+function Hsu-Puerto($h) {
+    if ($h -and $h.gws -and @($h.gws).Count -gt 0) { return [int](@($h.gws | Sort-Object { [int]$_.puerto })[0].puerto) }
+    if ($h -and $h.puerto) { return [int]$h.puerto }
+    return 503
+}
+
+# Numeros de esclavo a probar en un barrido, en el orden en que conviene
+# probarlos: primero los sospechosos (el que hay puesto, los tipicos de HSU) y
+# luego el resto. Asi un barrido que se corta a media pasada ya suele haber
+# encontrado algo. Pura: se prueba sin planta.
+function Esclavos-Barrido([int]$actual, [int]$desde, [int]$hasta) {
+    $vistos = @{}
+    $r = New-Object System.Collections.ArrayList
+    foreach ($v in (@($actual, 185, 200, 247, 1, 100) + @($desde..$hasta))) {
+        $n = [int]$v
+        if ($n -lt $desde -or $n -gt $hasta) { continue }
+        if ($vistos.ContainsKey($n)) { continue }
+        $vistos[$n] = $true
+        [void]$r.Add($n)
+    }
+    return $r.ToArray()
+}
+
+# Que hay en un esclavo que ha contestado al Product ID (30300). El nibble bajo
+# es el tipo de equipo; lo que no es TCU es lo que buscamos.
+function Tipo-Producto([int]$prod) {
+    $tipo = $prod -band 0xF
+    $nom = switch ($tipo) { 1 { 'TCU' } 2 { 'HSU' } default { "tipo $tipo" } }
+    return @{tipo=$tipo; nombre=$nom; hw=(($prod -shr 4) -band 0xF); fw=(($prod -shr 8) -band 0xFF)}
+}
+
 function Params-Hsu {
-    $cx = Params-Conexion
+    # Con una HSU elegida en el desplegable no hace falta que la entrada de
+    # conexion cuadre: BUSCAR HSUs ya resolvio de que NCU cuelga y por donde.
+    $cx = $null
+    try { $cx = Params-Conexion }
+    catch {
+        if (-not ($script:HsuSel -and $script:HsuSel.ip)) { throw }
+        $cx = @{ip=$script:HsuSel.ip; puerto=$null; gws=$null; multi=$null; etiqueta='auto'
+                to=(Val-Int $txtTo.Text 'Timeout' 500 60000); reint=(Val-Int $txtRet.Text 'Reintentos' 1 10)}
+    }
     if ($cx.multi -or -not $cx.puerto) {
         # La HSU cuelga de un gateway concreto, pero si se ha elegido una en el
         # desplegable ya sabemos de que NCU es (BUSCAR HSUs lo resuelve): se usa
@@ -5947,10 +6303,7 @@ function Params-Hsu {
         # entrada de conexion a mano.
         $h = $script:HsuSel
         if ($h -and $h.ip) {
-            $puerto = $null
-            $gws = $(if ($h.gws) { $h.gws } else { $cx.gws })
-            if ($gws -and @($gws).Count -gt 0) { $puerto = @($gws | Sort-Object { [int]$_.puerto })[0].puerto }
-            if (-not $puerto) { $puerto = 503 }   # GW1, el habitual cuando la topologia no lo declara
+            $puerto = Hsu-Puerto $h
             $cx = @{ip=$h.ip; puerto=[int]$puerto; gws=$null; multi=$null; etiqueta="$puerto"; to=$cx.to; reint=$cx.reint}
             Con "HSU $($h.etiqueta): usando $($cx.ip):$($cx.puerto), el primer gateway de su NCU. Si cuelga del otro, pon el puerto a mano." ([System.Drawing.Color]::SteelBlue)
         } else {
@@ -5967,7 +6320,13 @@ function Params-Hsu {
 # es lo que resuelve de que NCU cuelga cada una y por que gateway se llega.
 function Hsu-Objetivos {
     $unit = [byte](Val-Int $txtHSlave.Text 'Esclavo HSU' 1 255)
-    $cx = Params-Conexion
+    $cx = $null
+    try { $cx = Params-Conexion }
+    catch {
+        if (@($script:HsusPlanta).Count -eq 0) { throw }
+        $cx = @{ip=''; puerto=$null; gws=$null; multi=$null; etiqueta='auto'
+                to=(Val-Int $txtTo.Text 'Timeout' 500 60000); reint=(Val-Int $txtRet.Text 'Reintentos' 1 10)}
+    }
     $lista = New-Object System.Collections.ArrayList
     $hsus = @($script:HsusPlanta)
     if ($script:HsuSel -and $script:HsuSel.ip) { $hsus = @($script:HsuSel) }
@@ -5983,7 +6342,7 @@ function Hsu-Objetivos {
         $gws = $(if ($h.gws) { $h.gws } else { $cx.gws })
         if ($gws -and @($gws).Count -gt 0) { $puerto = @($gws | Sort-Object { [int]$_.puerto })[0].puerto }
         if (-not $puerto -and $cx.puerto) { $puerto = $cx.puerto }
-        if (-not $puerto) { $puerto = 503 }
+        if (-not $puerto) { $puerto = Hsu-Puerto $h }
         $u = $(if ($h.hsu) { [byte]$h.hsu } else { $unit })
         [void]$lista.Add(@{etiqueta=$h.etiqueta; ip=$h.ip; puerto=[int]$puerto; unit=$u})
     }
@@ -6244,7 +6603,8 @@ $btnInforme.Add_Click({
         }
         $m = @{
             planta = (Nombre-Planta); ip = $txtIp.Text.Trim()
-            fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm'); usuario = "$env:USERNAME"
+            fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm')
+            usuario = $(if ($script:Usuario) { "$($script:Usuario.nombre) ($($script:Usuario.usuario))" } else { "$env:USERNAME" })
             version = $VERSION_TOOLBOX; mapa = $VERSION_MAPA
             orden = $script:OrdenDe; horas = $script:HoraDe
         }
@@ -6662,6 +7022,9 @@ function Layout-Rescatar($cont) {
     }
 }
 
+# Todas las tablas de resultados filtran y ordenan al pulsar su cabecera.
+foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvSat, $lvH, $lvI)) { Lv-Filtrable $tabla }
+
 $form.Add_Shown({
     try {
         if ($script:TemaNombre -ne 'clasico') { Tema-AjustarAnchos $form }
@@ -6673,6 +7036,192 @@ $form.Add_Shown({
     }
 })
 
+# ---------------------------------------------------------------------------
+#  Login (obligatorio) y aplicacion del rol
+# ---------------------------------------------------------------------------
+# Dialogo de alta: el primer arranque no tiene usuarios, asi que pide crear el
+# administrador antes de dejar entrar a nadie.
+function Dialogo-Usuario([string]$titulo, [string]$rolFijo) {
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text = $titulo; $d.Size = New-Object System.Drawing.Size(420, 280)
+    $d.FormBorderStyle = 'FixedDialog'; $d.MaximizeBox = $false; $d.MinimizeBox = $false
+    $d.StartPosition = 'CenterScreen'
+    [void](LG $d 'Usuario' 15 80 20);    $tU = TG $d '' 110 18 270
+    [void](LG $d 'Nombre' 15 80 50);     $tN = TG $d '' 110 48 270
+    [void](LG $d 'Contrasena' 15 90 80); $tP = TG $d '' 110 78 270; $tP.UseSystemPasswordChar = $true
+    [void](LG $d 'Repetir' 15 80 110);   $tP2 = TG $d '' 110 108 270; $tP2.UseSystemPasswordChar = $true
+    [void](LG $d 'Rol' 15 80 140)
+    $cbR = New-Object System.Windows.Forms.ComboBox
+    $cbR.Location = New-Object System.Drawing.Point(110, 138)
+    $cbR.Size = New-Object System.Drawing.Size(270, 22); $cbR.DropDownStyle = 'DropDownList'
+    foreach ($r in $ROLES) { [void]$cbR.Items.Add($r) }
+    $cbR.SelectedItem = $(if ($rolFijo) { $rolFijo } else { 'tecnico' })
+    if ($rolFijo) { $cbR.Enabled = $false }
+    $d.Controls.Add($cbR)
+    $lblR = LG $d '' 110 270 165; $lblR.ForeColor = [System.Drawing.Color]::Gray
+    $lblR.Text = $ROL_DESC["$($cbR.SelectedItem)"]
+    $cbR.Add_SelectedIndexChanged({ $lblR.Text = $ROL_DESC["$($cbR.SelectedItem)"] }.GetNewClosure())
+    $bOk = New-Object System.Windows.Forms.Button
+    $bOk.Text = 'Crear'; $bOk.Location = New-Object System.Drawing.Point(200, 200); $bOk.Size = New-Object System.Drawing.Size(85, 28)
+    $bCa = New-Object System.Windows.Forms.Button
+    $bCa.Text = 'Cancelar'; $bCa.Location = New-Object System.Drawing.Point(295, 200); $bCa.Size = New-Object System.Drawing.Size(85, 28)
+    $bCa.DialogResult = 'Cancel'
+    $d.Controls.Add($bOk); $d.Controls.Add($bCa); $d.AcceptButton = $bOk; $d.CancelButton = $bCa
+    $script:UsrNuevo = $null
+    $bOk.Add_Click({
+        $u = $tU.Text.Trim()
+        if ($u -eq '') { [void][System.Windows.Forms.MessageBox]::Show('El usuario no puede estar vacio.','Aviso'); return }
+        if ($tP.Text.Length -lt 4) { [void][System.Windows.Forms.MessageBox]::Show('La contrasena necesita al menos 4 caracteres.','Aviso'); return }
+        if ($tP.Text -ne $tP2.Text) { [void][System.Windows.Forms.MessageBox]::Show('Las dos contrasenas no coinciden.','Aviso'); return }
+        $script:UsrNuevo = Usuario-Nuevo $u $(if ($tN.Text.Trim()) { $tN.Text.Trim() } else { $u }) "$($cbR.SelectedItem)" $tP.Text
+        $d.DialogResult = 'OK'; $d.Close()
+    }.GetNewClosure())
+    [void]$d.ShowDialog()
+    return $script:UsrNuevo
+}
+
+function Dialogo-Login($usuarios) {
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text = "TCU Toolbox v$VERSION_TOOLBOX - identificate"
+    $d.Size = New-Object System.Drawing.Size(400, 210)
+    $d.FormBorderStyle = 'FixedDialog'; $d.MaximizeBox = $false; $d.MinimizeBox = $false
+    $d.StartPosition = 'CenterScreen'
+    [void](LG $d 'Usuario' 15 80 25);    $tU = TG $d "$env:USERNAME" 105 23 255
+    [void](LG $d 'Contrasena' 15 90 58); $tP = TG $d '' 105 56 255; $tP.UseSystemPasswordChar = $true
+    $lblE = LG $d '' 15 350 90; $lblE.ForeColor = [System.Drawing.Color]::Firebrick
+    $bOk = New-Object System.Windows.Forms.Button
+    $bOk.Text = 'Entrar'; $bOk.Location = New-Object System.Drawing.Point(190, 125); $bOk.Size = New-Object System.Drawing.Size(85, 28)
+    $bOk.BackColor = [System.Drawing.Color]::FromArgb(0,90,160); $bOk.ForeColor = [System.Drawing.Color]::White
+    $bCa = New-Object System.Windows.Forms.Button
+    $bCa.Text = 'Salir'; $bCa.Location = New-Object System.Drawing.Point(285, 125); $bCa.Size = New-Object System.Drawing.Size(85, 28)
+    $bCa.DialogResult = 'Cancel'
+    $d.Controls.Add($bOk); $d.Controls.Add($bCa); $d.AcceptButton = $bOk; $d.CancelButton = $bCa
+    $script:UsrLogin = $null
+    $bOk.Add_Click({
+        $u = Usuario-Validar $usuarios $tU.Text.Trim() $tP.Text
+        if ($null -eq $u) { $lblE.Text = 'Usuario o contrasena incorrectos.'; $tP.Text = ''; $tP.Focus(); return }
+        $script:UsrLogin = $u
+        $d.DialogResult = 'OK'; $d.Close()
+    }.GetNewClosure())
+    $d.Add_Shown({ if ($tU.Text) { $tP.Focus() } else { $tU.Focus() } }.GetNewClosure())
+    [void]$d.ShowDialog()
+    return $script:UsrLogin
+}
+
+# Botones que cada rol NO puede usar. Todo lo que escriba en un equipo es de
+# tecnico para arriba; lo que toca identidad de red, firmware o topologia, solo
+# de administrador.
+$BOTONES_TECNICO = @($btnEscribir, $btnNvm, $btnCsvTcu, $btnFallidas, $btnSync, $btnFwPrep,
+                     $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComisSet,
+                     $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm)
+# La topologia decide a que equipos apunta todo lo demas: cambiarla es de admin.
+$BOTONES_ADMIN   = @($btnPlantas)
+
+function Aplicar-Rol {
+    foreach ($b in $BOTONES_TECNICO) { if ($b) { $b.Enabled = (Puede 'tecnico') } }
+    foreach ($b in $BOTONES_ADMIN)   { if ($b) { $b.Enabled = (Puede 'admin') } }
+    $form.Text = "TCU Toolbox v$VERSION_TOOLBOX - Sunner  (mapa $VERSION_MAPA)   -   $($script:Usuario.nombre) [$($script:Usuario.rol)]"
+}
+
+# Gestion de usuarios: cualquiera puede cambiarse su propia contrasena; dar de
+# alta, borrar y cambiar roles es de administrador.
+$btnUsuarios.Add_Click({
+    $lista = @(Usuarios-Cargar)
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text = 'Usuarios'; $d.Size = New-Object System.Drawing.Size(560, 380)
+    $d.FormBorderStyle = 'FixedDialog'; $d.MaximizeBox = $false; $d.MinimizeBox = $false
+    $d.StartPosition = 'CenterParent'
+    $lv = New-Object System.Windows.Forms.ListView
+    $lv.Location = New-Object System.Drawing.Point(12, 12)
+    $lv.Size = New-Object System.Drawing.Size(520, 240)
+    $lv.View = 'Details'; $lv.FullRowSelect = $true; $lv.GridLines = $true
+    [void]$lv.Columns.Add('Usuario', 130); [void]$lv.Columns.Add('Nombre', 200); [void]$lv.Columns.Add('Rol', 170)
+    $d.Controls.Add($lv)
+    $pintar = {
+        $lv.Items.Clear()
+        foreach ($u in $lista) {
+            $it = New-Object System.Windows.Forms.ListViewItem("$($u.usuario)")
+            [void]$it.SubItems.Add("$($u.nombre)"); [void]$it.SubItems.Add("$($u.rol)")
+            if ("$($u.usuario)" -eq "$($script:Usuario.usuario)") { $it.Font = New-Object System.Drawing.Font($lv.Font, [System.Drawing.FontStyle]::Bold) }
+            $lv.Items.Add($it) | Out-Null
+        }
+    }
+    & $pintar
+    $bAlta = New-Object System.Windows.Forms.Button
+    $bAlta.Text = 'Alta...'; $bAlta.Location = New-Object System.Drawing.Point(12, 262); $bAlta.Size = New-Object System.Drawing.Size(110, 28)
+    $bAlta.Enabled = (Puede 'admin')
+    $bBaja = New-Object System.Windows.Forms.Button
+    $bBaja.Text = 'Baja'; $bBaja.Location = New-Object System.Drawing.Point(130, 262); $bBaja.Size = New-Object System.Drawing.Size(110, 28)
+    $bBaja.Enabled = (Puede 'admin')
+    $bPass = New-Object System.Windows.Forms.Button
+    $bPass.Text = 'Cambiar mi contrasena...'; $bPass.Location = New-Object System.Drawing.Point(248, 262); $bPass.Size = New-Object System.Drawing.Size(180, 28)
+    $bCerrar = New-Object System.Windows.Forms.Button
+    $bCerrar.Text = 'Cerrar'; $bCerrar.Location = New-Object System.Drawing.Point(436, 262); $bCerrar.Size = New-Object System.Drawing.Size(96, 28)
+    $bCerrar.DialogResult = 'OK'
+    $lblN = LG $d '' 12 520 300
+    $lblN.ForeColor = [System.Drawing.Color]::Gray
+    $lblN.Text = $(if (Puede 'admin') { 'Recuerda: esto evita errores, no protege el programa. Un .ps1 es texto plano.' }
+                   else { "Tu rol es '$($script:Usuario.rol)': para dar de alta o cambiar roles hace falta un administrador." })
+    $d.Controls.Add($bAlta); $d.Controls.Add($bBaja); $d.Controls.Add($bPass); $d.Controls.Add($bCerrar)
+    $d.AcceptButton = $bCerrar
+    $bAlta.Add_Click({
+        $n = Dialogo-Usuario 'Alta de usuario' ''
+        if (-not $n) { return }
+        if (@($lista | Where-Object { "$($_.usuario)".ToLower() -eq "$($n.usuario)".ToLower() }).Count -gt 0) {
+            [void][System.Windows.Forms.MessageBox]::Show('Ya existe un usuario con ese nombre.','Aviso'); return
+        }
+        $lista = @($lista) + $n
+        try { Usuarios-Guardar $lista } catch { [void][System.Windows.Forms.MessageBox]::Show("No se pudo guardar: $_",'Error'); return }
+        Auditar 'USUARIO_ALTA' '' '' "$($n.usuario) con rol $($n.rol)"
+        Con "Usuario dado de alta: $($n.usuario) (rol $($n.rol))" ([System.Drawing.Color]::LightGreen)
+        & $pintar
+    }.GetNewClosure())
+    $bBaja.Add_Click({
+        if ($lv.SelectedItems.Count -eq 0) { return }
+        $u = $lv.SelectedItems[0].Text
+        if ($u -eq "$($script:Usuario.usuario)") { [void][System.Windows.Forms.MessageBox]::Show('No puedes borrarte a ti mismo.','Aviso'); return }
+        $admins = @($lista | Where-Object { "$($_.rol)" -eq 'admin' -and "$($_.usuario)" -ne $u })
+        if ($admins.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('Tiene que quedar al menos un administrador.','Aviso'); return }
+        if ([System.Windows.Forms.MessageBox]::Show("Dar de baja a '$u'?",'Baja','YesNo','Warning') -ne 'Yes') { return }
+        $lista = @($lista | Where-Object { "$($_.usuario)" -ne $u })
+        try { Usuarios-Guardar $lista } catch { [void][System.Windows.Forms.MessageBox]::Show("No se pudo guardar: $_",'Error'); return }
+        Auditar 'USUARIO_BAJA' '' '' $u
+        Con "Usuario dado de baja: $u" ([System.Drawing.Color]::Orange)
+        & $pintar
+    }.GetNewClosure())
+    $bPass.Add_Click({
+        $n = Dialogo-Usuario 'Cambiar mi contrasena' "$($script:Usuario.rol)"
+        if (-not $n) { return }
+        if ("$($n.usuario)".ToLower() -ne "$($script:Usuario.usuario)".ToLower()) {
+            [void][System.Windows.Forms.MessageBox]::Show("Escribe tu propio usuario ($($script:Usuario.usuario)).",'Aviso'); return
+        }
+        $lista = @(@($lista | Where-Object { "$($_.usuario)".ToLower() -ne "$($n.usuario)".ToLower() }) + $n)
+        try { Usuarios-Guardar $lista } catch { [void][System.Windows.Forms.MessageBox]::Show("No se pudo guardar: $_",'Error'); return }
+        Auditar 'USUARIO_PASS' '' '' "$($n.usuario)"
+        Con "Contrasena cambiada para $($n.usuario)." ([System.Drawing.Color]::LightGreen)
+        & $pintar
+    }.GetNewClosure())
+    [void]$d.ShowDialog($form)
+})
+
+$usuarios = @(Usuarios-Cargar)
+if ($usuarios.Count -eq 0) {
+    [void][System.Windows.Forms.MessageBox]::Show(
+        "Primer arranque: no hay usuarios dados de alta.`r`n`r`nVas a crear el ADMINISTRADOR. Guarda bien la contrasena: si se pierde, hay que borrar usuarios.json a mano.",
+        'TCU Toolbox', 'OK', 'Information')
+    $nuevo = Dialogo-Usuario 'Crear administrador' 'admin'
+    if (-not $nuevo) { return }
+    $usuarios = @($nuevo)
+    try { Usuarios-Guardar $usuarios }
+    catch { [void][System.Windows.Forms.MessageBox]::Show("No se pudo guardar usuarios.json: $_",'Error'); return }
+}
+$script:Usuario = Dialogo-Login $usuarios
+if (-not $script:Usuario) { return }
+
 Config-Restaurar
+Aplicar-Rol
+Con "Sesion iniciada: $($script:Usuario.nombre) ($($script:Usuario.usuario)), rol $($script:Usuario.rol). $($ROL_DESC["$($script:Usuario.rol)"])" ([System.Drawing.Color]::LightGreen)
+if (-not (Puede 'tecnico')) { Con 'Rol de solo lectura: los botones que escriben en los equipos estan desactivados.' ([System.Drawing.Color]::Orange) }
+Auditar 'SESION' '' '' "entra $($script:Usuario.usuario)"
 [void]$form.ShowDialog()
 Modbus-Cerrar
