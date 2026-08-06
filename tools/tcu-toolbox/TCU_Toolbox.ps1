@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '6.9'
+$VERSION_TOOLBOX = '7.0'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2483,12 +2483,21 @@ $tabs.TabPages.Add($tabSAT)
 $txtSatInt = TG $tabSAT '60' 100 22 42
 [void](LG $tabSAT 'Comms s' 150 52)
 $txtSatCom = TG $tabSAT '15' 206 22 38
-[void](LG $tabSAT 'Dias' 252 30)
-$txtSatDias = TG $tabSAT '7' 286 22 32
+# Duracion con unidad: el ensayo del anexo son 7 dias, pero para comprobar el
+# montaje antes de arrancarlo de verdad se quieren 20 minutos.
+[void](LG $tabSAT 'Duracion' 252 56)
+$txtSatDur = TG $tabSAT '7' 312 22 34
+$cbSatUnid = New-Object System.Windows.Forms.ComboBox
+$cbSatUnid.Location = New-Object System.Drawing.Point(350, 21)
+$cbSatUnid.Size = New-Object System.Drawing.Size(66, 22)
+$cbSatUnid.DropDownStyle = 'DropDownList'
+foreach ($u in @('min','horas','dias')) { [void]$cbSatUnid.Items.Add($u) }
+$cbSatUnid.SelectedItem = 'dias'
+$tabSAT.Controls.Add($cbSatUnid)
 
 $btnSatIni = New-Object System.Windows.Forms.Button
 $btnSatIni.Text = 'INICIAR REGISTRO'
-$btnSatIni.Location = New-Object System.Drawing.Point(330, 18)
+$btnSatIni.Location = New-Object System.Drawing.Point(424, 18)
 $btnSatIni.Size = New-Object System.Drawing.Size(160, 28)
 $btnSatIni.BackColor = [System.Drawing.Color]::FromArgb(0,120,60)
 $btnSatIni.ForeColor = [System.Drawing.Color]::White
@@ -2496,15 +2505,15 @@ $tabSAT.Controls.Add($btnSatIni)
 
 $btnSatFin = New-Object System.Windows.Forms.Button
 $btnSatFin.Text = 'PARAR'
-$btnSatFin.Location = New-Object System.Drawing.Point(498, 18)
+$btnSatFin.Location = New-Object System.Drawing.Point(592, 18)
 $btnSatFin.Size = New-Object System.Drawing.Size(90, 28)
 $btnSatFin.Enabled = $false
 $tabSAT.Controls.Add($btnSatFin)
 
 $btnSatAnal = New-Object System.Windows.Forms.Button
 $btnSatAnal.Text = 'ANALIZAR Y EMITIR'
-$btnSatAnal.Location = New-Object System.Drawing.Point(596, 18)
-$btnSatAnal.Size = New-Object System.Drawing.Size(170, 28)
+$btnSatAnal.Location = New-Object System.Drawing.Point(690, 18)
+$btnSatAnal.Size = New-Object System.Drawing.Size(160, 28)
 $btnSatAnal.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
 $btnSatAnal.ForeColor = [System.Drawing.Color]::White
 $tabSAT.Controls.Add($btnSatAnal)
@@ -2512,7 +2521,7 @@ $tabSAT.Controls.Add($btnSatAnal)
 [void](LG $tabSAT 'Ensayo' 10 44 57)
 $cbSatEnsayo = New-Object System.Windows.Forms.ComboBox
 $cbSatEnsayo.Location = New-Object System.Drawing.Point(58, 53)
-$cbSatEnsayo.Size = New-Object System.Drawing.Size(268, 22)
+$cbSatEnsayo.Size = New-Object System.Drawing.Size(200, 22)
 $cbSatEnsayo.DropDownStyle = 'DropDownList'
 foreach ($e in @('D.2.1 abanderamiento por viento','D.2.2 abanderamiento por nieve',
                  'D.2.3 abanderamiento por fallo de comunicacion','D.2.4 abanderamiento por baja bateria',
@@ -2524,7 +2533,7 @@ $tabSAT.Controls.Add($cbSatEnsayo)
 
 $btnSatCron = New-Object System.Windows.Forms.Button
 $btnSatCron.Text = 'INICIAR CRONOMETRO'
-$btnSatCron.Location = New-Object System.Drawing.Point(334, 51)
+$btnSatCron.Location = New-Object System.Drawing.Point(266, 51)
 $btnSatCron.Size = New-Object System.Drawing.Size(170, 26)
 $btnSatCron.BackColor = [System.Drawing.Color]::FromArgb(160,80,0)
 $btnSatCron.ForeColor = [System.Drawing.Color]::White
@@ -2532,16 +2541,23 @@ $tabSAT.Controls.Add($btnSatCron)
 
 $btnSatCronFin = New-Object System.Windows.Forms.Button
 $btnSatCronFin.Text = 'PARAR Y EMITIR'
-$btnSatCronFin.Location = New-Object System.Drawing.Point(512, 51)
+$btnSatCronFin.Location = New-Object System.Drawing.Point(444, 51)
 $btnSatCronFin.Size = New-Object System.Drawing.Size(140, 26)
 $btnSatCronFin.Enabled = $false
 $tabSAT.Controls.Add($btnSatCronFin)
 
 $btnSatHoja = New-Object System.Windows.Forms.Button
 $btnSatHoja.Text = 'HOJA D.1.2'
-$btnSatHoja.Location = New-Object System.Drawing.Point(660, 51)
+$btnSatHoja.Location = New-Object System.Drawing.Point(592, 51)
 $btnSatHoja.Size = New-Object System.Drawing.Size(106, 26)
 $tabSAT.Controls.Add($btnSatHoja)
+
+# Ritmo y tope del cronometro. El tope evita dejarlo corriendo toda la noche
+# si el ensayo se alarga o alguien se olvida de pararlo; a 0 no para solo.
+[void](LG $tabSAT 'cada s' 706 44 57)
+$txtCronInt = TG $tabSAT '3' 752 51 30
+[void](LG $tabSAT 'max min' 788 50 57)
+$txtCronMax = TG $tabSAT '30' 842 51 34
 
 # Criterios de aceptacion: van editables porque son de contrato, no del
 # equipo. El registro no depende de ellos, asi que cambiarlos y volver a
@@ -2556,6 +2572,8 @@ $txtSatDRsu = TG $tabSAT '99,5' 328 84 42
 $txtSatCTcu = TG $tabSAT '98,5' 462 84 42
 [void](LG $tabSAT 'Comms RSU %' 512 78 86)
 $txtSatCRsu = TG $tabSAT '99,5' 594 84 42
+[void](LG $tabSAT 'Ventana D.4 s' 644 84 86)
+$txtSatVent = TG $tabSAT '120' 732 84 38
 
 $lblSat = LG $tabSAT 'Anexo 4. El registro de arriba cubre D.1.1, D.3.4 y D.4; el cronometro de abajo, los abanderamientos. Deja la ventana abierta mientras dure el ensayo.' 10 890 112
 $lblSat.ForeColor = [System.Drawing.Color]::Gray
@@ -5297,7 +5315,8 @@ $btnSatIni.Add_Click({
     try {
         $script:SatIntTcu = Val-Int $txtSatInt.Text 'Muestreo TCU' 15 3600
         $script:SatIntCom = Val-Int $txtSatCom.Text 'Muestreo comms' 5 3600
-        $dias = Val-Int $txtSatDias.Text 'Dias' 1 30
+        $dur = Val-Int $txtSatDur.Text 'Duracion' 1 100000
+        $unid = "$($cbSatUnid.SelectedItem)"
         $cx = Params-Conexion
         if (-not $cx.multi) {
             $r0 = [System.Windows.Forms.MessageBox]::Show(
@@ -5307,13 +5326,17 @@ $btnSatIni.Add_Click({
         }
         $script:SatDir = Join-Path (Join-Path $PSScriptRoot 'informes') ('sat_' + ((Nombre-Planta) -replace '[^\w\-]', '_'))
         if (-not (Test-Path $script:SatDir)) { New-Item -ItemType Directory -Path $script:SatDir -Force | Out-Null }
-        $script:SatHasta = (Get-Date).AddDays($dias)
+        $script:SatHasta = switch ($unid) {
+            'min'   { (Get-Date).AddMinutes($dur) }
+            'horas' { (Get-Date).AddHours($dur) }
+            default { (Get-Date).AddDays($dur) }
+        }
         $script:SatProxTcu = [datetime]::MinValue; $script:SatProxCom = [datetime]::MinValue
         $script:SatPasesT = 0; $script:SatPasesC = 0; $script:SatFallos = 0
         $script:SatOn = $true
         $btnSatIni.Enabled = $false; $btnSatFin.Enabled = $true
         $tmrSat.Start()
-        Sat-Log 'INICIO' "Cada $($script:SatIntTcu)s (TCU) y $($script:SatIntCom)s (comms) hasta $($script:SatHasta.ToString('yyyy-MM-dd HH:mm')). Carpeta: $script:SatDir"
+        Sat-Log 'INICIO' "$dur ${unid}: cada $($script:SatIntTcu)s (TCU) y $($script:SatIntCom)s (comms), hasta $($script:SatHasta.ToString('yyyy-MM-dd HH:mm')). Carpeta: $script:SatDir"
         Con "Registro SAT iniciado. NO CIERRES ESTA VENTANA hasta que termine el ensayo. Carpeta: $script:SatDir" ([System.Drawing.Color]::Orange)
     } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon) }
 })
@@ -5337,11 +5360,17 @@ $script:CronMuestras = @{}      # "ncu|tcu" -> lista de @{ts; real; obj}
 $script:CronMeteo = New-Object System.Collections.ArrayList
 $script:CronEnsayo = ''
 $script:CronIni = $null
+$script:CronTope = 30
 
 $tmrCron = New-Object System.Windows.Forms.Timer
-$tmrCron.Interval = 3000
+$tmrCron.Interval = 3000   # se ajusta al arrancar cada ensayo
 $tmrCron.Add_Tick({
     if (-not $script:CronOn -or $script:Ocupado) { return }
+    if ($script:CronTope -gt 0 -and $script:CronIni -and ((Get-Date) - $script:CronIni).TotalMinutes -gt $script:CronTope) {
+        Sat-Log 'CRONOMETRO' "Tope de $($script:CronTope) min alcanzado: se para y se emite."
+        $btnSatCronFin.PerformClick()
+        return
+    }
     $script:Ocupado = $true
     try {
         $cx = Params-Conexion
@@ -5384,6 +5413,10 @@ $btnSatCron.Add_Click({
         "$($script:CronEnsayo)`r`n`r`n$aviso`r`n`r`nEl cronometro muestrea cada 3 s y apunta, por TCU, cuando llega la orden, con que inclinacion, cuando llega a la posicion de seguridad y cuando vuelve a seguimiento.`r`n`r`nEmpezar a cronometrar?",
         'Ensayo de abanderamiento', 'OKCancel', 'Information')
     if ($r -ne 'OK') { return }
+    try {
+        $tmrCron.Interval = 1000 * (Val-Int $txtCronInt.Text 'Intervalo del cronometro' 1 60)
+        $script:CronTope = Val-Int $txtCronMax.Text 'Tope del cronometro' 0 1440
+    } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
     $script:CronMuestras = @{}
     $script:CronMeteo = New-Object System.Collections.ArrayList
     $script:CronIni = Get-Date
@@ -5488,9 +5521,10 @@ $btnSatAnal.Add_Click({ Lanzar {
     $minRsu  = Parse-RealFinito $txtSatDRsu.Text
     $minCTcu = Parse-RealFinito $txtSatCTcu.Text
     $minCRsu = Parse-RealFinito $txtSatCRsu.Text
+    $ventD4  = Val-Int $txtSatVent.Text 'Ventana D.4' 15 600
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Analizando ensayos SAT en $dir" ([System.Drawing.Color]::SteelBlue)
-    Con "Criterios: precision <=$tolPrec deg | operacion TCU >=$minTcu% RSU/NCU >=$minRsu% | comms TCU >=$minCTcu% RSU >=$minCRsu%" ([System.Drawing.Color]::Gainsboro)
+    Con "Criterios: precision <=$tolPrec deg | operacion TCU >=$minTcu% RSU/NCU >=$minRsu% | comms TCU >=$minCTcu% RSU >=$minCRsu%, ventana $ventD4 s" ([System.Drawing.Color]::Gainsboro)
     $fp = @(Get-ChildItem (Join-Path $dir 'precision_*.csv') -ErrorAction SilentlyContinue)
     $fc = @(Get-ChildItem (Join-Path $dir 'comm_*.csv') -ErrorAction SilentlyContinue)
     if ($fp.Count -eq 0 -and $fc.Count -eq 0) { Con 'No hay ficheros de registro en esa carpeta.' ([System.Drawing.Color]::Orange); return }
@@ -5538,7 +5572,7 @@ $btnSatAnal.Add_Click({ Lanzar {
         $fallos = @($ev | Where-Object { $_.evento -eq 'FALLO' } | ForEach-Object {
             [pscustomobject]@{dia=$_.fecha; ncu=$_.ncu; equipo=$_.equipo; ts=$_.ts} })
         Con "  D.4: $($ev.Count) eventos, $($fallos.Count) fallos brutos" ([System.Drawing.Color]::Gainsboro)
-        $dc = @(Sat-DispComms $fallos $intentos $minCTcu 120 $minCRsu)
+        $dc = @(Sat-DispComms $fallos $intentos $minCTcu $ventD4 $minCRsu)
         $malC = @($dc | Where-Object { $_.Cumple -eq 'NO' })
         $dc | Export-Csv (Join-Path $dir 'RESULTADO_D4_disp_comunicaciones.csv') -NoTypeInformation -Encoding UTF8 -Delimiter ';'
         Sat-Log 'D.4' ("Comunicaciones TCU >=$minCTcu% / RSU >=$minCRsu%: {0} de {1} equipo-dia cumplen{2}" -f ($dc.Count - $malC.Count), $dc.Count, $(if ($malC.Count) { " - INCUMPLEN: " + (($malC | Select-Object -First 20 | ForEach-Object { "$($_.Dia) NCU$($_.NCU)/$($_.Equipo) $($_.Disponibilidad_pct)%" }) -join ', ') } else { '' }))
@@ -5938,7 +5972,9 @@ function Config-Guardar {
             planta = "$($cbPlanta.SelectedItem)"; ip = $txtIp.Text.Trim(); puerto = $txtPort.Text.Trim()
             timeout = $txtTo.Text.Trim(); reintentos = $txtRet.Text.Trim(); hsu = $txtHSlave.Text.Trim()
             tema = $script:TemaNombre; rollback = $chkRoll.Checked
-            sat = @{tol=$txtSatTol.Text; dtcu=$txtSatDTcu.Text; drsu=$txtSatDRsu.Text; ctcu=$txtSatCTcu.Text; crsu=$txtSatCRsu.Text}
+            sat = @{tol=$txtSatTol.Text; dtcu=$txtSatDTcu.Text; drsu=$txtSatDRsu.Text; ctcu=$txtSatCTcu.Text; crsu=$txtSatCRsu.Text
+                    vent=$txtSatVent.Text; cronint=$txtCronInt.Text; cronmax=$txtCronMax.Text; dur=$txtSatDur.Text; unid="$($cbSatUnid.SelectedItem)"
+                    muestreo=$txtSatInt.Text; comms=$txtSatCom.Text}
         }
         ConvertTo-Json $cfg | Set-Content $script:FichConfigLocal -Encoding UTF8
     } catch {}
@@ -5964,6 +6000,13 @@ function Config-Restaurar {
             if ("$($cfg.sat.drsu)") { $txtSatDRsu.Text = "$($cfg.sat.drsu)" }
             if ("$($cfg.sat.ctcu)") { $txtSatCTcu.Text = "$($cfg.sat.ctcu)" }
             if ("$($cfg.sat.crsu)") { $txtSatCRsu.Text = "$($cfg.sat.crsu)" }
+            if ("$($cfg.sat.vent)")     { $txtSatVent.Text = "$($cfg.sat.vent)" }
+            if ("$($cfg.sat.cronint)")  { $txtCronInt.Text = "$($cfg.sat.cronint)" }
+            if ("$($cfg.sat.cronmax)")  { $txtCronMax.Text = "$($cfg.sat.cronmax)" }
+            if ("$($cfg.sat.dur)")      { $txtSatDur.Text = "$($cfg.sat.dur)" }
+            if ("$($cfg.sat.unid)" -and $cbSatUnid.Items.Contains("$($cfg.sat.unid)")) { $cbSatUnid.SelectedItem = "$($cfg.sat.unid)" }
+            if ("$($cfg.sat.muestreo)") { $txtSatInt.Text  = "$($cfg.sat.muestreo)" }
+            if ("$($cfg.sat.comms)")    { $txtSatCom.Text  = "$($cfg.sat.comms)" }
         }
         Con "Sesion anterior restaurada: planta '$($cbPlanta.SelectedItem)' (config_local.json)." ([System.Drawing.Color]::SteelBlue)
     } catch { Con "AVISO: config_local.json ilegible ($_) - ignorado" ([System.Drawing.Color]::Orange) }
