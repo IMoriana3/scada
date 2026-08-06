@@ -60,6 +60,16 @@ cuántos valores salieron de la lectura sin tocar la planta.
 **Y la pestaña *Flota* pasa a llamarse *Auditoría*** — que es lo que se hace ahí.
 El inventario sigue dentro, y Ctrl+K lo encuentra por su nombre.
 
+**El modo también se lee (v9.6)** — en PEM se podía **aplicar** un modo pero no
+**ver** en cuál estaban, que es justo lo que hace falta antes de aplicarlo a un
+rango. Y no costaba nada: el modo (bits 9:8) y el estado de comisionado (bits
+4:3) viven en el **mismo registro 30001** que ya leía *LEER ESTADO*. Ahora ese
+botón —**ESTADO Y MODO**— saca los dos, con su reparto en el resumen
+(`40 COMISIONADO | 40 modo AUTO | 2 modo MANUAL`), sin una sola lectura de más.
+
+El diagnóstico pasa a usar la misma función para decodificarlo, para que no haya
+dos sitios distintos diciendo qué modo tiene una TCU.
+
 **La auditoría prepara la lectura (v9.5)** — botón **Leer variables**: carga en
 *Leer variable* las variables del preset de referencia y el rango de la
 auditoría, y te lleva allí. Luego se vuelve con **Usar la última lectura**
