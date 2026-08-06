@@ -60,6 +60,33 @@ cuántos valores salieron de la lectura sin tocar la planta.
 **Y la pestaña *Flota* pasa a llamarse *Auditoría*** — que es lo que se hace ahí.
 El inventario sigue dentro, y Ctrl+K lo encuentra por su nombre.
 
+## Pestaña Cierre (v9.2)
+
+Una TCU **actualizada no está terminada**: le faltan los parámetros (la
+actualización puede llevárselos), guardarlos en NVM y volver a AUTO. Nada llevaba
+la cuenta, y por eso se olvidaban.
+
+La pestaña **Cierre** es esa cuenta. Cada TCU que `VERIFICAR TRAS ACTUALIZAR`
+confirma en la versión objetivo entra en la lista, y se va marcando sola con lo
+que ya se hace:
+
+| Marca | La pone |
+|---|---|
+| Parámetros | la **auditoría** contra el preset (OK si esa TCU no tiene desviaciones) |
+| NVM | **GUARDAR EN NVM** |
+| Modo | el **diagnóstico**, si la TCU está en AUTO |
+
+Mientras quede alguna sin cerrar, el nombre de la pestaña lo dice —`Cierre (3)`—,
+sale un aviso en consola al arrancar y un recuadro en la portada del informe.
+
+**La pestaña no escribe nada.** Sus dos botones **preparan**: dejan *Escribir*
+cargado con el preset y el rango de las que faltan, o *PEM* con el rango y el modo
+AUTO puestos, y te llevan allí para que pulses tú. La misma idea que el buscador:
+te lleva, no dispara. Así no hay lógica de escritura duplicada en dos pestañas.
+
+La lista **sobrevive a cerrar el programa** (`cierre/<planta>.json`) y es una por
+planta, que es lo que hace falta cuando la campaña dura días.
+
 ## v9.0 — seis cosas de golpe
 
 **Buscador de acciones (Ctrl+K, o el botón *Buscar*)** — hay 80 acciones en 10

@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '9.1'
+$VERSION_TOOLBOX = '9.2'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -669,6 +669,11 @@ function Portada-Bloques($m) {
     if ($aud.Count -gt 0) {
         $tcusMal = @(@($aud | ForEach-Object { "$($_.NCU)/$($_.TCU)" }) | Sort-Object -Unique).Count
         [void]$r.Add(@{titulo='Configuracion desviada'; valor="$tcusMal"; nota="$($aud.Count) desviaciones contra el preset"; clase='mal'})
+    }
+    # @($null) tiene UN elemento, asi que hay que preguntar por el nulo aparte
+    $cie = @($(if ($null -ne $m.cierre) { $m.cierre } else { @() }))
+    if ($cie.Count -gt 0) {
+        [void]$r.Add(@{titulo='Actualizadas sin cerrar'; valor="$($cie.Count)"; nota='les falta parametros, NVM o modo AUTO'; clase='mal'})
     }
     $lec = @($m.lectura)
     if ($lec.Count -gt 0) {
@@ -2810,6 +2815,65 @@ $lvFW.View = 'Details'; $lvFW.FullRowSelect = $true; $lvFW.GridLines = $true
 [void]$lvFW.Columns.Add('Estado / nota', 470)
 $tabFW.Controls.Add($lvFW)
 
+# ============================ TAB CIERRE ============================
+# Una TCU actualizada no esta terminada. Aqui se ve que le falta y desde aqui se
+# PREPARA lo que toca en la pestana que corresponde: esta no escribe nada.
+$tabC = New-Object System.Windows.Forms.TabPage
+$tabC.Text = 'Cierre'
+$tabs.TabPages.Add($tabC)
+
+$lblCInfo = LG $tabC 'Cada TCU actualizada entra aqui hasta tener parametros, NVM y modo AUTO. Se rellena sola al verificar, auditar, guardar en NVM y diagnosticar.' 10 890 16
+$lblCInfo.ForeColor = [System.Drawing.Color]::Gray
+
+$btnCPrep = New-Object System.Windows.Forms.Button
+$btnCPrep.Text = 'PREPARAR ESCRITURA'
+$btnCPrep.Location = New-Object System.Drawing.Point(10, 40)
+$btnCPrep.Size = New-Object System.Drawing.Size(170, 28)
+$btnCPrep.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnCPrep.ForeColor = [System.Drawing.Color]::White
+$tabC.Controls.Add($btnCPrep)
+
+$btnCModo = New-Object System.Windows.Forms.Button
+$btnCModo.Text = 'PREPARAR MODO AUTO'
+$btnCModo.Location = New-Object System.Drawing.Point(188, 40)
+$btnCModo.Size = New-Object System.Drawing.Size(170, 28)
+$tabC.Controls.Add($btnCModo)
+
+$btnCRef = New-Object System.Windows.Forms.Button
+$btnCRef.Text = 'Refrescar'
+$btnCRef.Location = New-Object System.Drawing.Point(366, 40)
+$btnCRef.Size = New-Object System.Drawing.Size(96, 28)
+$tabC.Controls.Add($btnCRef)
+
+$btnCQuitar = New-Object System.Windows.Forms.Button
+$btnCQuitar.Text = 'Quitar de la lista'
+$btnCQuitar.Location = New-Object System.Drawing.Point(470, 40)
+$btnCQuitar.Size = New-Object System.Drawing.Size(130, 28)
+$tabC.Controls.Add($btnCQuitar)
+
+$btnCCsv = New-Object System.Windows.Forms.Button
+$btnCCsv.Text = 'CSV'
+$btnCCsv.Location = New-Object System.Drawing.Point(608, 40)
+$btnCCsv.Size = New-Object System.Drawing.Size(70, 28)
+$tabC.Controls.Add($btnCCsv)
+
+$lblCRes = LG $tabC '' 690 218 46
+$lblCRes.ForeColor = [System.Drawing.Color]::Gray
+
+$lvC = New-Object System.Windows.Forms.ListView
+$lvC.Location = New-Object System.Drawing.Point(10, 76)
+$lvC.Size = New-Object System.Drawing.Size(898, 284)
+$lvC.View = 'Details'; $lvC.FullRowSelect = $true; $lvC.GridLines = $true; $lvC.MultiSelect = $true
+[void]$lvC.Columns.Add('NCU', 55)
+[void]$lvC.Columns.Add('TCU', 55)
+[void]$lvC.Columns.Add('Firmware', 130)
+[void]$lvC.Columns.Add('Parametros', 100)
+[void]$lvC.Columns.Add('NVM', 80)
+[void]$lvC.Columns.Add('Modo', 80)
+[void]$lvC.Columns.Add('Desde', 120)
+[void]$lvC.Columns.Add('Estado', 260)
+$tabC.Controls.Add($lvC)
+
 # ============================ TAB SAT ============================
 $tabSAT = New-Object System.Windows.Forms.TabPage
 $tabSAT.Text = 'SAT'
@@ -3585,6 +3649,8 @@ $btnPlantas.Add_Click({
 })
 
 $cbPlanta.Add_SelectedIndexChanged({
+    # cada planta tiene su lista de cierre
+    try { Cierre-Cargar (Nombre-Planta); Cierre-Pintar } catch {}
     $p = $PLANTAS[$cbPlanta.SelectedItem]
     if ($p -and $p.ncus) {
         # planta completa: solo Diagnostico; IP, puertos y rangos van por NCU
@@ -3886,7 +3952,7 @@ $btnNvm.Add_Click({ Lanzar {
             $hecho = $false
             if ($segOk) {
                 for ($i = 1; $i -le $cx.reint -and -not $hecho; $i++) {
-                    try { FC22-Mascara $tcu 40007 0x7FFF 0x8000; $hecho = $true }
+                    try { FC22-Mascara $tcu 40007 0x7FFF 0x8000; $hecho = $true; Cierre-MarcarSiEsta $script:NcuLog ([int]$tcu) 'nvm' 'OK' }
                     catch {
                         if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
                         Start-Sleep -Milliseconds (300 * $i)
@@ -4283,6 +4349,70 @@ $btnLCsv.Add_Click({
         Con "CSV exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
     }
 })
+
+# ---------------------------------------------------------------------------
+#  Cierre post-actualizacion
+# ---------------------------------------------------------------------------
+# Una TCU actualizada NO esta terminada: le faltan los parametros (la
+# actualizacion puede llevarselos), guardarlos en NVM y volver a AUTO. Nada
+# llevaba la cuenta, y por eso se olvidaban. Esto es esa cuenta, y sobrevive a
+# cerrar el programa: se guarda por planta en cierre/.
+#
+# La lista NO escribe nada. Se rellena sola con lo que ya se hace (verificar,
+# auditar, NVM, diagnosticar) y los botones solo PREPARAN: dejan la pestana que
+# toca cargada y te llevan alli. Escribir sigue viviendo en Escribir.
+$script:Cierre = @{}
+
+function Cierre-Fichero([string]$planta) {
+    $dir = Join-Path $PSScriptRoot 'cierre'
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+    return Join-Path $dir (($planta -replace '[^\w\-\.]', '_') + '.json')
+}
+function Cierre-Cargar([string]$planta) {
+    $script:Cierre = @{}
+    try {
+        $f = Cierre-Fichero $planta
+        if (-not (Test-Path $f)) { return }
+        foreach ($e in @(Get-Content $f -Raw | ConvertFrom-Json)) {
+            $script:Cierre["$($e.ncu)|$($e.tcu)"] = @{ncu="$($e.ncu)"; tcu=[int]$e.tcu; fw="$($e.fw)"
+                params="$($e.params)"; nvm="$($e.nvm)"; modo="$($e.modo)"; desde="$($e.desde)"}
+        }
+    } catch {}
+}
+function Cierre-Guardar([string]$planta) {
+    try {
+        $lista = @($script:Cierre.Values | Sort-Object { [int]("0" + "$($_.ncu)") }, { [int]$_.tcu })
+        ConvertTo-Json @($lista) -Depth 4 | Set-Content (Cierre-Fichero $planta) -Encoding UTF8
+    } catch {}
+}
+# Alta o actualizacion de una TCU en la lista. $campo vacio = solo darla de alta.
+function Cierre-Marcar([string]$ncu, [int]$tcu, [string]$campo, [string]$valor, [string]$fw = '') {
+    $k = "$ncu|$tcu"
+    if (-not $script:Cierre.ContainsKey($k)) {
+        $script:Cierre[$k] = @{ncu=$ncu; tcu=$tcu; fw=$fw; params=''; nvm=''; modo=''; desde=(Get-Date -Format 'yyyy-MM-dd HH:mm')}
+    }
+    if ($fw -ne '') { $script:Cierre[$k].fw = $fw }
+    if ($campo -ne '') { $script:Cierre[$k][$campo] = $valor }
+}
+# Solo toca a las que YA estan en la lista: auditar o diagnosticar la planta
+# entera no puede meter en la cola a 754 TCUs que nadie ha actualizado.
+function Cierre-MarcarSiEsta([string]$ncu, [int]$tcu, [string]$campo, [string]$valor) {
+    $k = "$ncu|$tcu"
+    if (-not $script:Cierre.ContainsKey($k)) { return }
+    $script:Cierre[$k][$campo] = $valor
+}
+# Que le falta a una TCU para estar cerrada. Pura: se prueba sin ventana.
+function Cierre-Estado($f) {
+    $falta = @()
+    if ("$($f.params)" -ne 'OK') { $falta += 'parametros' }
+    if ("$($f.nvm)" -ne 'OK') { $falta += 'NVM' }
+    if ("$($f.modo)" -ne 'OK') { $falta += 'modo AUTO' }
+    if ($falta.Count -eq 0) { return 'CERRADA' }
+    return 'falta ' + ($falta -join ', ')
+}
+function Cierre-Pendientes {
+    return @($script:Cierre.Values | Where-Object { (Cierre-Estado $_) -ne 'CERRADA' })
+}
 
 # ---------------------------------------------------------------------------
 #  Barridos de planta en paralelo
@@ -4854,6 +4984,7 @@ function Diag-Correr {
                     }
                     $lvG.Items.Add($item) | Out-Null
                     $script:UltimoDiag += $d
+                    if ("$($d.TCU)" -match '^\d+$') { Cierre-MarcarSiEsta $eti ([int]$d.TCU) 'modo' $(if ("$($d.Modo)" -eq 'AUTO') { 'OK' } else { "$($d.Modo)" }) }
                     if ("$($d.Salud)" -ne 'OK') { Con ("NCU{0} TCU {1,3}  {2,-8} {3}" -f $eti, $d.TCU, $d.Salud, $d.Alarmas) ([System.Drawing.Color]::Orange) }
                 }
                 [System.Windows.Forms.Application]::DoEvents()
@@ -4949,6 +5080,7 @@ function Diag-Correr {
             }
             $lvG.Items.Add($item) | Out-Null
             $script:UltimoDiag += $d
+            if ("$($d.TCU)" -match '^\d+$') { Cierre-MarcarSiEsta $etiquetaNcu ([int]$d.TCU) 'modo' $(if ("$($d.Modo)" -eq 'AUTO') { 'OK' } else { "$($d.Modo)" }) }
             if ($d.Salud -ne 'OK') {
                 Con ("{0}TCU {1,3}  {2,-8} {3}" -f $(if ($etiquetaNcu) { "NCU$etiquetaNcu " } else { '' }), $d.TCU, $d.Salud, $d.Alarmas) ([System.Drawing.Color]::Orange)
             }
@@ -5007,6 +5139,7 @@ function Diag-Correr {
     }
     }
     Modbus-Cerrar
+    Cierre-Guardar (Nombre-Planta); Cierre-Pintar
     $lblGResumen.Text = "TCUs -> OK: $nOk  Aviso: $nAviso  Alarma: $nAlarma  Off: $nOff" +
         $(if (($nHOk + $nHMal) -gt 0) { "   |   HSUs: $($nHOk + $nHMal) ($nHOk OK)" } else { '' })
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
@@ -5499,6 +5632,89 @@ function Aud-Igual([string]$esperado, [string]$leido) {
     return $false
 }
 
+# ---------------------------------------------------------------------------
+#  Cierre post-actualizacion (interfaz)
+# ---------------------------------------------------------------------------
+function Cierre-Pintar {
+    $lvC.BeginUpdate(); $lvC.Items.Clear()
+    foreach ($f in @($script:Cierre.Values | Sort-Object { [int]("0" + "$($_.ncu)") }, { [int]$_.tcu })) {
+        $est = Cierre-Estado $f
+        $item = New-Object System.Windows.Forms.ListViewItem("$($f.ncu)")
+        foreach ($c in @($f.tcu, $f.fw, $(if ($f.params) { $f.params } else { '-' }), $(if ($f.nvm) { $f.nvm } else { '-' }),
+                         $(if ($f.modo) { $f.modo } else { '-' }), $f.desde, $est)) { [void]$item.SubItems.Add("$c") }
+        $item.ForeColor = $(if ($est -eq 'CERRADA') { [System.Drawing.Color]::DarkGreen } else { [System.Drawing.Color]::DarkOrange })
+        $lvC.Items.Add($item) | Out-Null
+    }
+    $lvC.EndUpdate()
+    $pend = @(Cierre-Pendientes).Count
+    $lblCRes.Text = "$($script:Cierre.Count) actualizadas | $pend sin cerrar"
+    $tabC.Text = $(if ($pend -gt 0) { "Cierre ($pend)" } else { 'Cierre' })
+}
+
+# Aviso de pendientes: se dice una vez por sesion y cada vez que cambia la
+# lista. Es lo que sustituye a acordarse.
+function Cierre-Avisar {
+    $p = @(Cierre-Pendientes)
+    if ($p.Count -eq 0) { return }
+    $q = @($p | Select-Object -First 12 | ForEach-Object { "NCU$($_.ncu) TCU $($_.tcu)" })
+    Con "PENDIENTES DE CIERRE: $($p.Count) TCUs actualizadas sin terminar ($(($q) -join ', ')$(if ($p.Count -gt 12) { ' y mas' })). Mira la pestana Cierre." ([System.Drawing.Color]::Orange)
+}
+
+$btnCRef.Add_Click({ Cierre-Pintar; Cierre-Avisar })
+
+$btnCQuitar.Add_Click({
+    if ($lvC.SelectedItems.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('Marca en la tabla las TCUs que quieras quitar.','Aviso'); return }
+    $n = 0
+    foreach ($it in @($lvC.SelectedItems)) { if ($script:Cierre.Remove("$($it.Text)|$($it.SubItems[1].Text)")) { $n++ } }
+    Cierre-Guardar (Nombre-Planta); Cierre-Pintar
+    Con "Quitadas $n TCUs de la lista de cierre." ([System.Drawing.Color]::Gainsboro)
+})
+
+$btnCCsv.Add_Click({
+    if ($script:Cierre.Count -eq 0) { return }
+    $dlg = New-Object System.Windows.Forms.SaveFileDialog
+    $dlg.Filter = 'CSV (*.csv)|*.csv'
+    $dlg.FileName = 'cierre_' + ((Nombre-Planta) -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
+    if ($dlg.ShowDialog() -ne 'OK') { return }
+    @($script:Cierre.Values | Sort-Object { [int]("0" + "$($_.ncu)") }, { [int]$_.tcu } | ForEach-Object {
+        [pscustomobject]@{NCU=$_.ncu; TCU=$_.tcu; Firmware=$_.fw; Parametros=$_.params; NVM=$_.nvm; Modo=$_.modo; Desde=$_.desde; Estado=(Cierre-Estado $_)}
+    }) | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+    Con "CSV de cierre exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
+})
+
+# PREPARAR: esta pestana no escribe. Deja Escribir cargado con el preset y las
+# TCUs que faltan, y te lleva alli para que pulses tu.
+$btnCPrep.Add_Click({
+    $falta = @(Cierre-Pendientes | Where-Object { "$($_.params)" -ne 'OK' })
+    if ($falta.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('No hay ninguna TCU pendiente de parametros.','Cierre'); return }
+    if (-not $script:PresetRef -or @($script:PresetRef).Count -eq 0) {
+        [void][System.Windows.Forms.MessageBox]::Show("Carga primero el preset de referencia en la pestana Auditoria: es el que dice que hay que escribir.",'Falta el preset','OK','Information'); return
+    }
+    $pares = @($script:PresetRef | ForEach-Object { [pscustomobject]@{variable=$_.nombre; valor=$_.texto} })
+    $n = Cargar-FilasEnGrid $pares
+    $ncus = @(@($falta | ForEach-Object { "$($_.ncu)" }) | Sort-Object -Unique)
+    $tcus = @($falta | ForEach-Object { [int]$_.tcu } | Sort-Object -Unique)
+    $txtWIni.Text = "$($tcus[0])"; $txtWFin.Text = "$($tcus[-1])"
+    $tabs.SelectedTab = $tabW
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Preparado para escribir: $n variables del preset '$($script:PresetRefNombre)' y el rango TCU $($tcus[0])-$($tcus[-1])." ([System.Drawing.Color]::SteelBlue)
+    Con "  Faltan parametros en $($falta.Count) TCUs de $($ncus.Count) NCU(s): $(@($falta | ForEach-Object { "NCU$($_.ncu) TCU $($_.tcu)" }) -join ', ')" ([System.Drawing.Color]::Orange)
+    if ($ncus.Count -gt 1) { Con "  OJO: son de varias NCUs. Escribe una NCU cada vez, o usa 'CSV por TCU...' con columna NCU." ([System.Drawing.Color]::Orange) }
+    Con "  Pulsa SIMULAR para ver que cambiaria, y luego ESCRIBIR. Al terminar, GUARDAR EN NVM." ([System.Drawing.Color]::Gainsboro)
+})
+
+$btnCModo.Add_Click({
+    $falta = @(Cierre-Pendientes | Where-Object { "$($_.modo)" -ne 'OK' })
+    if ($falta.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('No hay ninguna TCU pendiente de volver a AUTO.','Cierre'); return }
+    $tcus = @($falta | ForEach-Object { [int]$_.tcu } | Sort-Object -Unique)
+    $txtPIni.Text = "$($tcus[0])"; $txtPFin.Text = "$($tcus[-1])"
+    $cbPModo.SelectedItem = 'AUTO'
+    $tabs.SelectedTab = $tabP
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Preparado el modo: rango TCU $($tcus[0])-$($tcus[-1]) y modo AUTO. Pulsa APLICAR MODO." ([System.Drawing.Color]::SteelBlue)
+    Con "  Sin AUTO en $($falta.Count) TCUs: $(@($falta | ForEach-Object { "NCU$($_.ncu) TCU $($_.tcu)" }) -join ', ')" ([System.Drawing.Color]::Orange)
+})
+
 # ------------------------- AUDITORIA GOLDEN PRESET -------------------------
 $btnPresetRef.Add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
@@ -5629,6 +5845,7 @@ $btnAud.Add_Click({ Lanzar {
                     $lvA.Items.Add($item) | Out-Null
                 }
             }
+            if ($errTcu -eq 0) { Cierre-MarcarSiEsta $etNcu ([int]$tcu) 'params' $(if ($desvTcu -eq 0) { 'OK' } else { 'NOK' }) }
             if ($errTcu -gt 0) { $nErr++ }
             elseif ($desvTcu -gt 0) { $nDesv++; Con ("{0}TCU {1,3}  {2} desviaciones" -f $(if ($etNcu) { "NCU$etNcu " } else { '' }), $tcu, $desvTcu) ([System.Drawing.Color]::Orange) }
             else { $nTcusOk++ }
@@ -5642,6 +5859,7 @@ $btnAud.Add_Click({ Lanzar {
     }
     Modbus-Cerrar
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
+    Cierre-Guardar (Nombre-Planta); Cierre-Pintar
     Con "Auditoria: $nTcusOk TCUs conformes | $nDesv con desviaciones | $nErr sin respuesta. $($script:UltimaAud.Count) filas listadas." ([System.Drawing.Color]::SteelBlue)
     if ($nCache -gt 0) { Con "  $nCache valores salieron de la ultima lectura, sin volver a preguntar a la planta." ([System.Drawing.Color]::Gainsboro) }
     if ($nFalsas -gt 0) { Con "  $nFalsas comparaciones fallaron y al releer daban el valor bueno: eran respuestas descolocadas de la NCU, no desviaciones." ([System.Drawing.Color]::Orange) }
@@ -7393,7 +7611,8 @@ $btnInforme.Add_Click({
         $dir = Join-Path $PSScriptRoot 'informes'
         if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
         $datos = @{diag = $script:UltimoDiag; pem = $script:UltimoPem; aud = $script:UltimaAud
-                   inv = $script:UltimoInv; esc = $script:UltimaEscritura; lectura = $script:UltimaLectura}
+                   inv = $script:UltimoInv; esc = $script:UltimaEscritura; lectura = $script:UltimaLectura
+                   cierre = @(Cierre-Pendientes)}
         $conDatos = @($datos.Keys | Where-Object { @($datos[$_]).Count -gt 0 })
         $ultimo = ''; $nUlt = -1
         foreach ($k in $conDatos) {
@@ -7946,7 +8165,7 @@ $form.Add_KeyDown({
 })
 
 # Todas las tablas de resultados filtran y ordenan al pulsar su cabecera.
-foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvSat, $lvH, $lvI)) { Lv-Filtrable $tabla }
+foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvSat, $lvH, $lvI, $lvC)) { Lv-Filtrable $tabla }
 
 $form.Add_Shown({
     try {
@@ -8169,5 +8388,8 @@ Aplicar-Rol
 Con "Sesion iniciada: $($script:Usuario.nombre) ($($script:Usuario.usuario)), rol $($script:Usuario.rol). $($ROL_DESC["$($script:Usuario.rol)"])" ([System.Drawing.Color]::LightGreen)
 if (-not (Puede 'tecnico')) { Con 'Rol de solo lectura: los botones que escriben en los equipos estan desactivados.' ([System.Drawing.Color]::Orange) }
 Auditar 'SESION' '' '' "entra $($script:Usuario.usuario)"
+Cierre-Cargar (Nombre-Planta)
+Cierre-Pintar
+Cierre-Avisar
 [void]$form.ShowDialog()
 Modbus-Cerrar
