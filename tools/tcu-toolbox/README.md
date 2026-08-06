@@ -70,6 +70,29 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**Cada bloque con su tabla de bits (v11.0)** — el bloque compat de la NCU
+(30500+) lleva **su propio mapa**, no el de la TCU. Coinciden en casi todos los
+bits, pero no en todos, y se estaba decodificando con la tabla de la TCU: donde
+la NCU dice `Reserved`, salía una alarma inventada.
+
+| registro | bit | mapa TCU | mapa NCU compat |
+|---|---|---|---|
+| Alarms1 | 6 | sensor T batería desconectado | *no existe* |
+| Alarms1 | 9 | params com por defecto | *no existe* |
+| Alarms1 | 10 | batería desconectada | `Reserved` |
+| Alarms2 | 12 | com con NCU perdida | `Reserved` |
+| Alarms2 | 15 | fallo en driver de motor | *no existe* |
+
+Así aparecía **«com con NCU perdida»** en TCUs que estaban comunicando en ese
+mismo momento, con su edad en 10 s. Ahora el modo *via NCU* usa
+`$BITS_AL1_NCU`/`$BITS_AL2_NCU` —sacadas de `NCU_Modbus_Map_R7_1`, hoja *TCU
+Compat*— y el modo directo sigue con las de la TCU. La máscara de alarma crítica
+también se separa: el bit 15 (driver de motor) no existe en el mapa de la NCU.
+
+**Efecto en la auditoría de baterías:** el texto *«la TCU declara batería
+desconectada»* solo puede salir del diagnóstico **directo**. En *via NCU* la
+detección recae en la tensión (`< 15 000 mV`), que la caché sí trae.
+
 **Corregido en v10.7: el número del hueco no es un índice de la NCU.** La caché
 numera los huecos con la numeración de **la planta entera** — en Ayora la NCU 15
 tiene sus dos estaciones en los huecos **8 y 9**, y la NCU 16 la suya en el

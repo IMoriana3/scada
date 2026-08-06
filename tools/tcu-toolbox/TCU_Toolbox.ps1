@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '10.9'
+$VERSION_TOOLBOX = '11.0'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -508,8 +508,25 @@ $CHARGER_STATES = @{
 # Bits criticos -> estado ALARMA en el diagnostico. Mismo criterio que
 # collector/decode.py (tracker_health): out_of_range, stop_button,
 # batt_critical (bit 14, no el L3 del bit 12), eje y motor.
+# El bloque compat de la NCU (30500+) lleva SU propio mapa, no el de la TCU.
+# Casi todos los bits coinciden, pero no todos: donde el mapa de la NCU dice
+# Reserved, decodificar con la tabla de la TCU se inventaba una alarma. Los que
+# no existen alli son el 6, 9 y 10 de Alarms1 y el 12 y 15 de Alarms2 - entre
+# ellos 'bateria desconectada' y 'com con NCU perdida', que es como se vio.
+# Cada bloque con su tabla: esta es la de NCU_Modbus_Map_R7_1, hoja TCU Compat.
+$BITS_AL1_NCU = @{   # 30502 Alarms1_s1
+  2='tilt fuera de rango'; 4='seta de emergencia pulsada'; 7='config por defecto (fallo NVM)'
+  8='fallo com con Xbee'; 11='SoC muy bajo (L2)'; 12='SoC insuficiente (L3)'
+  13='SoC bajo (L1)'; 14='SoC critico (<10%)'; 15='FW de test / no oficial'
+}
+$BITS_AL2_NCU = @{   # 30503 Alarms2_s1 (memorizadas)
+  2='fecha/hora sin ajustar'; 4='cortocircuito de motor'; 5='sobrecorriente de motor'
+  8='eje bloqueado'; 14='motor mas lento de lo esperado'
+}
 $CRIT_AL1 = (1 -shl 2) -bor (1 -shl 4) -bor (1 -shl 14)                    # rango, seta, SoC critico <10%
 $CRIT_AL2 = (1 -shl 4) -bor (1 -shl 5) -bor (1 -shl 8) -bor (1 -shl 15)   # corto, sobrecorriente, eje, driver
+# el 15 (driver de motor) no existe en el mapa de la NCU: fuera de su mascara
+$CRIT_AL2_NCU = (1 -shl 4) -bor (1 -shl 5) -bor (1 -shl 8)
 
 function Bits-Texto([int]$valor, [hashtable]$tabla) {
     $lista = @()
@@ -1221,7 +1238,7 @@ function Ncu-DiagCompat([int[]]$tcus) {
                 $dif = [math]::Abs($tilt - $targ)
                 $edad = -1
                 if ($reloj -gt 1000000000 -and $lastc[$tcu] -gt 1000000000) { $edad = $reloj - $lastc[$tcu] }
-                $alarmas = @(Bits-Texto $al1 $BITS_AL1) + @(Bits-Texto $al2 $BITS_AL2)
+                $alarmas = @(Bits-Texto $al1 $BITS_AL1_NCU) + @(Bits-Texto $al2 $BITS_AL2_NCU)
                 $notas = @()
                 if ($dif -gt 5) { $notas += ("dif {0:0.0} deg" -f $dif) }
                 if ((($fl -shr 15) -band 1) -eq 0) { $notas += 'system OK = 0' }
@@ -1234,7 +1251,7 @@ function Ncu-DiagCompat([int[]]$tcus) {
                     $salud = 'OFFLINE'
                     $notas = @($(if ($lastc[$tcu] -eq 0) { 'la NCU nunca ha leido este TCU' } else { "sin datos en la NCU desde hace $edad s" }))
                 }
-                elseif ((($al1 -band $CRIT_AL1) -ne 0) -or (($al2 -band $CRIT_AL2) -ne 0)) { $salud = 'ALARMA' }
+                elseif ((($al1 -band $CRIT_AL1) -ne 0) -or (($al2 -band $CRIT_AL2_NCU) -ne 0)) { $salud = 'ALARMA' }
                 elseif ($alarmas.Count -gt 0 -or $notas.Count -gt 0) { $salud = 'AVISO' }
                 $res[$tcu] = [pscustomobject]@{
                     TCU = $tcu; Salud = $salud
@@ -4349,6 +4366,9 @@ function Bat-Auditar($diag, $cfg = $null) {
         $tb = 0.0; $tieneTb = [double]::TryParse(("$($f.Tbat_C)" -replace ',', '.'), [Globalization.NumberStyles]::Float, $INV, [ref]$tb)
         $add = { param($tipo, $det, $grav) [void]$r.Add([pscustomobject]@{NCU="$($f.NCU)"; TCU=$f.TCU; Tipo=$tipo; Detalle=$det; Gravedad=$grav}) }
         $sinBat = $false
+        # Ojo: ese texto solo sale del diagnostico DIRECTO. El bloque compat de
+        # la NCU no tiene ese bit (su mapa lo da como Reserved), asi que en modo
+        # via NCU la deteccion recae en la tension, que es la linea de abajo.
         if ("$($f.Alarmas)" -like '*bateria desconectada*') { & $add 'SIN BATERIA' 'la TCU declara bateria desconectada' 'ALARMA'; $sinBat = $true }
         elseif ($tieneV -and $v -lt $cfg.vbat_min) { & $add 'SIN BATERIA' "tension $v mV: no hay bateria util" 'ALARMA'; $sinBat = $true }
         if ($sinBat) { continue }          # lo demas ya no dice nada
