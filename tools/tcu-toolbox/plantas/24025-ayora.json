@@ -14,14 +14,16 @@
       "ip": "192.168.4.20",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 69
+      "tcu_fin": 69,
+      "hsus": 1
     },
     {
       "nombre": "Ayora NCU3",
       "ip": "192.168.4.30",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 66
+      "tcu_fin": 66,
+      "hsus": 1
     },
     {
       "nombre": "Ayora NCU4",
@@ -35,7 +37,8 @@
       "ip": "192.168.4.45",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 48
+      "tcu_fin": 48,
+      "hsus": 1
     },
     {
       "nombre": "Ayora NCU6",
@@ -56,7 +59,8 @@
       "ip": "192.168.4.60",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 44
+      "tcu_fin": 44,
+      "hsus": 1
     },
     {
       "nombre": "Ayora NCU9",
@@ -77,21 +81,24 @@
       "ip": "192.168.4.75",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 65
+      "tcu_fin": 65,
+      "hsus": 1
     },
     {
       "nombre": "Ayora NCU12",
       "ip": "192.168.4.80",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 53
+      "tcu_fin": 53,
+      "hsus": 1
     },
     {
       "nombre": "Ayora NCU13",
       "ip": "192.168.4.90",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 72
+      "tcu_fin": 72,
+      "hsus": 1
     },
     {
       "nombre": "Ayora NCU14",
@@ -105,14 +112,16 @@
       "ip": "192.168.4.100",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 43
+      "tcu_fin": 43,
+      "hsus": 2
     },
     {
       "nombre": "Ayora NCU16",
       "ip": "192.168.4.110",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 45
+      "tcu_fin": 45,
+      "hsus": 1
     }
   ]
 }

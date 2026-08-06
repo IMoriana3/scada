@@ -70,6 +70,24 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**BUSCAR HSUs dice si falta alguna (v10.5)** — encontrar nueve no significa nada
+si no sabes que hay diez. La columna **RSU** del Excel maestro (una por gateway)
+ya dice cuántas estaciones lleva cada NCU, así que ahora se cuenta y viaja al
+JSON como `hsus`. Al terminar el barrido, la toolbox compara:
+
+```
+FALTAN HSUs: la topologia espera 10 y no salen todas en NCU15 (1 de 2).
+O no estan dadas de alta en esa NCU, o no comunican.
+```
+
+Y al revés, si aparecen más de las declaradas, dice que hay que actualizar la
+columna RSU. Sin dato de topología no se inventa nada: se calla.
+
+**Ojo con las filas de continuación**: una NCU con **dos** estaciones ocupa dos
+filas en el Excel, y la segunda solo lleva el número de RSU, sin NCU ni IP. En
+Ayora es el caso de la **NCU 15** (RSU 8 y 9). El generador las suma a la NCU de
+arriba; antes se saltaba esa fila entera y se perdía una de las diez.
+
 **El resumen de la auditoría mezclaba unidades (v10.3)** — decía
 `0 con desviaciones. 5 filas listadas.` y parecía contradecirse. No lo era: lo
 primero son **TCUs** y lo segundo **variables**, y esas cinco filas eran de

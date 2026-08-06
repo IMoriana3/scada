@@ -7,14 +7,16 @@
       "ip": "10.21.236.1",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 68
+      "tcu_fin": 68,
+      "hsus": 1
     },
     {
       "nombre": "San Jose NCU1 GW2",
       "ip": "10.21.236.1",
       "puerto": 504,
       "tcu_ini": 69,
-      "tcu_fin": 119
+      "tcu_fin": 119,
+      "hsus": 1
     },
     {
       "nombre": "San Jose NCU2 GW1",
@@ -77,28 +79,32 @@
       "ip": "10.21.236.31",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 68
+      "tcu_fin": 68,
+      "hsus": 1
     },
     {
       "nombre": "San Jose NCU6 GW2",
       "ip": "10.21.236.31",
       "puerto": 504,
       "tcu_ini": 69,
-      "tcu_fin": 119
+      "tcu_fin": 119,
+      "hsus": 1
     },
     {
       "nombre": "San Jose NCU8 GW1",
       "ip": "10.21.236.36",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 69
+      "tcu_fin": 69,
+      "hsus": 1
     },
     {
       "nombre": "San Jose NCU8 GW2",
       "ip": "10.21.236.36",
       "puerto": 504,
       "tcu_ini": 70,
-      "tcu_fin": 119
+      "tcu_fin": 119,
+      "hsus": 1
     },
     {
       "nombre": "San Jose NCU9 GW1",
@@ -133,14 +139,16 @@
       "ip": "10.21.236.51",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 38
+      "tcu_fin": 38,
+      "hsus": 1
     },
     {
       "nombre": "San Jose NCU11 GW2",
       "ip": "10.21.236.51",
       "puerto": 504,
       "tcu_ini": 39,
-      "tcu_fin": 118
+      "tcu_fin": 118,
+      "hsus": 1
     },
     {
       "nombre": "San Jose NCU13 GW1",
@@ -196,7 +204,8 @@
       "ip": "10.21.236.96",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 69
+      "tcu_fin": 69,
+      "hsus": 1
     }
   ]
 }
