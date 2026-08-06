@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.2'
+$VERSION_TOOLBOX = '11.3'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2627,6 +2627,68 @@ $tabG.Controls.Add($lvG)
 # ============================ TAB AUDITORIA ============================
 # Se llamaba 'Flota', que no decia nada de lo que hay dentro. Sigue llevando
 # tambien el inventario, y el buscador (Ctrl+K) lo encuentra por su nombre.
+# ============================ TAB BATERIAS ============================
+# El diagnostico ya trae de cada TCU la tension, la corriente, el SoC, el SoH,
+# las temperaturas y -desde el mapa de la NCU- la tension de panel y la
+# corriente de entrada. Estaban repartidas por columnas del diagnostico y en el
+# CSV, pero no habia donde verlas juntas. Esta pestana no lee nada: es la misma
+# lectura, puesta como el inventario de firmware.
+$tabB = New-Object System.Windows.Forms.TabPage
+$tabB.Text = 'Baterias'
+$tabs.TabPages.Add($tabB)
+
+$lblBInfo = LG $tabB 'Las baterias del ultimo diagnostico: no vuelve a leer nada. Haz un DIAGNOSTICAR y pulsa VER.' 10 890 16
+$lblBInfo.ForeColor = [System.Drawing.Color]::Gray
+
+$btnBVer = New-Object System.Windows.Forms.Button
+$btnBVer.Text = 'VER BATERIAS'
+$btnBVer.Location = New-Object System.Drawing.Point(10, 40)
+$btnBVer.Size = New-Object System.Drawing.Size(140, 28)
+$btnBVer.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnBVer.ForeColor = [System.Drawing.Color]::White
+$tabB.Controls.Add($btnBVer)
+
+$btnBAud = New-Object System.Windows.Forms.Button
+$btnBAud.Text = 'AUDITAR'
+$btnBAud.Location = New-Object System.Drawing.Point(158, 40)
+$btnBAud.Size = New-Object System.Drawing.Size(96, 28)
+$tabB.Controls.Add($btnBAud)
+
+$btnBCsv = New-Object System.Windows.Forms.Button
+$btnBCsv.Text = 'CSV'
+$btnBCsv.Location = New-Object System.Drawing.Point(262, 40)
+$btnBCsv.Size = New-Object System.Drawing.Size(70, 28)
+$btnBCsv.Enabled = $false
+$tabB.Controls.Add($btnBCsv)
+
+$btnBJson = New-Object System.Windows.Forms.Button
+$btnBJson.Text = 'JSON'
+$btnBJson.Location = New-Object System.Drawing.Point(340, 40)
+$btnBJson.Size = New-Object System.Drawing.Size(70, 28)
+$btnBJson.Enabled = $false
+$tabB.Controls.Add($btnBJson)
+
+$lblBRes = LG $tabB '' 420 488 46
+$lblBRes.ForeColor = [System.Drawing.Color]::Gray
+
+$lvB = New-Object System.Windows.Forms.ListView
+$lvB.Location = New-Object System.Drawing.Point(10, 76)
+$lvB.Size = New-Object System.Drawing.Size(898, 284)
+$lvB.View = 'Details'; $lvB.FullRowSelect = $true; $lvB.GridLines = $true
+[void]$lvB.Columns.Add('NCU', 46)
+[void]$lvB.Columns.Add('TCU', 46)
+[void]$lvB.Columns.Add('SoC %', 52)
+[void]$lvB.Columns.Add('SoH %', 52)
+[void]$lvB.Columns.Add('Vbat mV', 66)
+[void]$lvB.Columns.Add('Ibat mA', 66)
+[void]$lvB.Columns.Add('Vpanel mV', 74)
+[void]$lvB.Columns.Add('Ient mA', 64)
+[void]$lvB.Columns.Add('Tbat C', 56)
+[void]$lvB.Columns.Add('Tpcb C', 56)
+[void]$lvB.Columns.Add('Dia', 40)
+[void]$lvB.Columns.Add('Estado', 268)
+$tabB.Controls.Add($lvB)
+
 $tabF = New-Object System.Windows.Forms.TabPage
 $tabF.Text = 'Auditoria'
 $tabs.TabPages.Add($tabF)
@@ -3640,7 +3702,7 @@ function Con([string]$t, $color) {
 
 $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $btnDiag, $btnSync, $btnIdent,
                     $btnPresetSave, $btnPresetLoad, $btnLPreset, $btnCargarBackup, $btnLCsv, $btnDCsv, $btnBackupJson,
-                    $btnComparar, $btnGCsv, $btnGJson, $btnGWa, $btnGBat, $btnICsv,
+                    $btnComparar, $btnGCsv, $btnGJson, $btnGWa, $btnGBat, $btnBVer, $btnBAud, $btnBCsv, $btnBJson, $btnICsv,
                     $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnAudEscr, $btnInvF, $btnInvFCsv,
                     $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm, $btnHEsclavo,
                     $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComis, $btnPComisSet, $btnPCsv,
@@ -4361,6 +4423,34 @@ function Mediana($valores) {
 }
 
 # Devuelve una fila por problema encontrado. Pura: se prueba sin planta.
+# Una fila por TCU con lo que trae el diagnostico de su bateria. Pura: no lee
+# nada, solo ordena lo que ya hay. El estado sale de la auditoria, para no tener
+# dos criterios distintos diciendo si una bateria esta bien.
+function Bat-Tabla($diag, $hallazgos = $null) {
+    $porTcu = @{}
+    foreach ($h in @($hallazgos)) { 
+        $k = "$($h.NCU)|$($h.TCU)"
+        if (-not $porTcu.ContainsKey($k)) { $porTcu[$k] = @() }
+        $porTcu[$k] += "$($h.Tipo)"
+    }
+    $r = @()
+    foreach ($f in @($diag)) {
+        if ("$($f.TCU)" -notmatch '^\d+$') { continue }
+        $k = "$($f.NCU)|$($f.TCU)"
+        $r += ,[pscustomobject]@{
+            NCU = "$($f.NCU)"; TCU = [int]$f.TCU
+            SoC = "$($f.SoC)"; SoH = "$($f.SoH)"
+            Vbat_mV = "$($f.Vbat_mV)"; Ibat_mA = "$($f.Ibat_mA)"
+            Vpanel_mV = "$($f.Vpanel_mV)"; Ientrada_mA = "$($f.Ientrada_mA)"
+            Tbat_C = "$($f.Tbat_C)"; Tpcb_C = "$($f.Tpcb_C)"
+            Dia = $(if ("$($f.Dia)" -eq '1') { 'si' } elseif ("$($f.Dia)" -eq '0') { 'no' } else { '' })
+            Estado = $(if ($porTcu.ContainsKey($k)) { ($porTcu[$k] -join '; ') }
+                       elseif ("$($f.Salud)" -eq 'OFFLINE') { 'sin datos' } else { 'OK' })
+        }
+    }
+    return $r
+}
+
 function Bat-Auditar($diag, $cfg = $null) {
     if ($null -eq $cfg) { $cfg = $BAT }
     $filas = @($diag | Where-Object { "$($_.TCU)" -match '^\d+$' -and "$($_.Salud)" -ne 'OFFLINE' })
@@ -5284,13 +5374,16 @@ $btnComparar.Add_Click({
 # ------------------------- logica DIAGNOSTICO -------------------------
 function Diag-LeerTcu([byte]$tcu) {
     $r1 = FC03-Leer $tcu (Dir-Trama 30001) 6    # main, al1..al4, status
-    $r2 = FC03-Leer $tcu (Dir-Trama 30094) 5    # vbat, ibat, soc/soh, tbat, tpcb
+    # 30091..30098 de un tiron: bus, panel (V e I), bateria (V e I), SoC/SoH y
+    # las dos temperaturas. El panel y su corriente estan en el mapa de la TCU
+    # (30092/30093), asi que el modo directo tampoco tiene por que ir sin ellos.
+    $r2 = FC03-Leer $tcu (Dir-Trama 30091) 8
     $r3 = FC03-Leer $tcu (Dir-Trama 30111) 2    # tilt, target
 
     $al1 = $r1[1]; $al2 = $r1[2]; $al3 = $r1[3]; $al4 = $r1[4]; $st = $r1[5]
-    $ibat = $r2[1]; if ($ibat -gt 32767) { $ibat -= 65536 }
-    $tbat = $r2[3]; if ($tbat -gt 32767) { $tbat -= 65536 }
-    $tpcb = $r2[4]; if ($tpcb -gt 32767) { $tpcb -= 65536 }
+    $ibat = $r2[4]; if ($ibat -gt 32767) { $ibat -= 65536 }
+    $tbat = $r2[6]; if ($tbat -gt 32767) { $tbat -= 65536 }
+    $tpcb = $r2[7]; if ($tpcb -gt 32767) { $tpcb -= 65536 }
     $tilt = $r3[0]; if ($tilt -gt 32767) { $tilt -= 65536 }
     $targ = $r3[1]; if ($targ -gt 32767) { $targ -= 65536 }
     $dif = [math]::Abs($tilt - $targ) / 10.0
@@ -5318,11 +5411,11 @@ function Diag-LeerTcu([byte]$tcu) {
     return [pscustomobject]@{
         TCU = [int]$tcu; Salud = $salud; Modo = $modo
         Tilt = [math]::Round($tilt/10.0, 1); Objetivo = [math]::Round($targ/10.0, 1); Dif = [math]::Round($dif, 1)
-        SoC = ($r2[2] -band 0xFF); SoH = (($r2[2] -shr 8) -band 0xFF)
-        Vbat_mV = $r2[0]; Ibat_mA = $ibat
-        # el mapa de la TCU no documenta estos cuatro donde el de la NCU si:
-        # se dejan vacios en el modo directo antes que inventar direcciones
-        Vpanel_mV = ''; Ientrada_mA = ''; Imotor_mA = ''; ImotorPico_mA = ''
+        SoC = ($r2[5] -band 0xFF); SoH = (($r2[5] -shr 8) -band 0xFF)
+        Vbat_mV = $r2[3]; Ibat_mA = $ibat
+        # panel y su corriente salen del mapa de la TCU (30092/30093). Las de
+        # motor no estan ahi como tales: esas si se quedan vacias.
+        Vpanel_mV = $r2[1]; Ientrada_mA = $r2[2]; Imotor_mA = ''; ImotorPico_mA = ''
         Dia = (($r1[0] -shr 7) -band 1)
         Tbat_C = [math]::Round($tbat/10.0, 1); Tpcb_C = [math]::Round($tpcb/10.0, 1)
         Alarmas = (($alarmas + $notas) -join '; ')
@@ -5683,11 +5776,67 @@ $cbGVerNcu.Add_SelectedIndexChanged({ if (-not $script:Ocupado) { Diag-Refrescar
 
 # Trabaja sobre el ultimo diagnostico: la tension, la corriente, el SoH y las
 # temperaturas ya se leyeron ahi. Cero lecturas nuevas.
+$script:UltimaBatTabla = @()
+
+function Bat-Pintar {
+    if (@($script:UltimoDiag).Count -eq 0) {
+        [void][System.Windows.Forms.MessageBox]::Show('Haz primero un DIAGNOSTICAR: estas son sus baterias, no se lee nada nuevo.','Falta el diagnostico'); return $false
+    }
+    $script:UltimaBat = @(Bat-Auditar $script:UltimoDiag)
+    $script:UltimaBatTabla = @(Bat-Tabla $script:UltimoDiag $script:UltimaBat)
+    $lvB.BeginUpdate(); $lvB.Items.Clear()
+    foreach ($f in $script:UltimaBatTabla) {
+        $item = New-Object System.Windows.Forms.ListViewItem("$($f.NCU)")
+        foreach ($c in @($f.TCU, $f.SoC, $f.SoH, $f.Vbat_mV, $f.Ibat_mA, $f.Vpanel_mV, $f.Ientrada_mA,
+                         $f.Tbat_C, $f.Tpcb_C, $f.Dia, $f.Estado)) { [void]$item.SubItems.Add("$c") }
+        $item.ForeColor = $(if ($f.Estado -eq 'OK') { [System.Drawing.Color]::DarkGreen }
+                            elseif ($f.Estado -eq 'sin datos') { [System.Drawing.Color]::Gray }
+                            elseif ($f.Estado -like '*SIN BATERIA*' -or $f.Estado -like '*SOBRETENSION*') { [System.Drawing.Color]::Firebrick }
+                            else { [System.Drawing.Color]::DarkOrange })
+        $lvB.Items.Add($item) | Out-Null
+    }
+    $lvB.EndUpdate()
+    $nMal = @($script:UltimaBatTabla | Where-Object { $_.Estado -ne 'OK' -and $_.Estado -ne 'sin datos' }).Count
+    $nSin = @($script:UltimaBatTabla | Where-Object { $_.Estado -eq 'sin datos' }).Count
+    $lblBRes.Text = "$($script:UltimaBatTabla.Count) TCUs | $nMal con algo que mirar | $nSin sin datos"
+    $btnBCsv.Enabled = ($script:UltimaBatTabla.Count -gt 0)
+    $btnBJson.Enabled = $btnBCsv.Enabled
+    return $true
+}
+
+$btnBVer.Add_Click({ if (Bat-Pintar) { Con "Baterias: $($script:UltimaBatTabla.Count) TCUs del ultimo diagnostico." ([System.Drawing.Color]::SteelBlue) } })
+$btnBAud.Add_Click({ if (Bat-Pintar) { $btnGBat.PerformClick() } })
+
+$btnBCsv.Add_Click({
+    if (@($script:UltimaBatTabla).Count -eq 0) { return }
+    $dlg = New-Object System.Windows.Forms.SaveFileDialog
+    $dlg.Filter = 'CSV (*.csv)|*.csv'
+    $dlg.FileName = 'baterias_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
+    if ($dlg.ShowDialog() -eq 'OK') {
+        $script:UltimaBatTabla | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+        Con "Baterias exportadas: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
+    }
+})
+
+$btnBJson.Add_Click({
+    if (@($script:UltimaBatTabla).Count -eq 0) { return }
+    $dlg = New-Object System.Windows.Forms.SaveFileDialog
+    $dlg.Filter = 'JSON (*.json)|*.json'
+    $dlg.FileName = 'baterias_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.json'
+    if ($dlg.ShowDialog() -eq 'OK') {
+        $o = @{tipo='baterias_tcu'; planta=(Nombre-Planta); fecha=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+               toolbox=$VERSION_TOOLBOX; tecnico=$script:Usuario; tcus=@($script:UltimaBatTabla)}
+        ConvertTo-Json $o -Depth 5 | Set-Content $dlg.FileName -Encoding UTF8
+        Con "Baterias en JSON: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
+    }
+})
+
 $btnGBat.Add_Click({
     if (@($script:UltimoDiag).Count -eq 0) {
         [void][System.Windows.Forms.MessageBox]::Show('Haz primero un DIAGNOSTICAR: la auditoria de baterias se hace con esos datos, sin volver a leer.','Falta el diagnostico'); return
     }
     $script:UltimaBat = @(Bat-Auditar $script:UltimoDiag)
+    $script:UltimaBatTabla = @(Bat-Tabla $script:UltimoDiag $script:UltimaBat)
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     $vistos = @($script:UltimoDiag | Where-Object { "$($_.TCU)" -match '^\d+$' -and "$($_.Salud)" -ne 'OFFLINE' }).Count
     if ($script:UltimaBat.Count -eq 0) {
@@ -5707,6 +5856,7 @@ $btnGBat.Add_Click({
         Con ("  NCU{0,-3} TCU {1,3}  {2,-18} {3}" -f $b.NCU, $b.TCU, $b.Tipo, $b.Detalle) $(if ($b.Gravedad -eq 'ALARMA') { [System.Drawing.Color]::Salmon } else { [System.Drawing.Color]::Orange })
     }
     Con "Las de FUERA DE LA FLOTA no estan fuera de rango: se salen de lo que tienen las demas, que con 754 medidas es la mejor referencia que hay." ([System.Drawing.Color]::Gainsboro)
+    Con "La tabla con todas las variables de bateria esta en la pestana Baterias." ([System.Drawing.Color]::Gainsboro)
     Marcar-Bloque 'bat'
 })
 
@@ -8888,7 +9038,7 @@ $form.Add_KeyDown({
 })
 
 # Todas las tablas de resultados filtran y ordenan al pulsar su cabecera.
-foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvSat, $lvH, $lvI, $lvC)) { Lv-Filtrable $tabla }
+foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvSat, $lvH, $lvI, $lvC, $lvB)) { Lv-Filtrable $tabla }
 
 $form.Add_Shown({
     try {
