@@ -1411,6 +1411,33 @@ Check 'indice: la 34 cuadra con el preset' (Aud-Igual '-10' $idx['9|34|41069 saf
 Check 'indice: la 35 no' (Aud-Igual '-10' $idx['9|35|41069 safe_pos_sign_threshold']) $false
 
 Write-Host ''
+Write-Host '== cada bloque con su tabla de bits =='
+# El bloque compat de la NCU (30500+) es SU mapa, no el de la TCU. Coinciden en
+# casi todo, pero donde la NCU dice Reserved la tabla de la TCU se inventaba una
+# alarma: el bit 12 de Alarms2 salia como "com con NCU perdida" en TCUs que
+# estaban comunicando.
+Check 'bits: el 12 de Alarms2 no existe en la NCU' ($BITS_AL2_NCU.ContainsKey(12)) $false
+Check 'bits: pero si en la TCU' ($BITS_AL2.ContainsKey(12)) $true
+Check 'bits: el 10 de Alarms1 tampoco (bateria desconectada)' ($BITS_AL1_NCU.ContainsKey(10)) $false
+Check 'bits: ni el 6 ni el 9' (($BITS_AL1_NCU.ContainsKey(6)) -or ($BITS_AL1_NCU.ContainsKey(9))) $false
+Check 'bits: ni el 15 de Alarms2' ($BITS_AL2_NCU.ContainsKey(15)) $false
+# y los que si coinciden tienen que estar en las dos
+foreach ($b in @(2,4,7,8,11,12,13,14,15)) { Check "bits: Alarms1 NCU tiene el $b" ($BITS_AL1_NCU.ContainsKey($b)) $true }
+foreach ($b in @(2,4,5,8,14)) { Check "bits: Alarms2 NCU tiene el $b" ($BITS_AL2_NCU.ContainsKey($b)) $true }
+# el driver de motor no esta en el mapa de la NCU: fuera de su mascara critica
+Check 'bits: la mascara de la NCU no lleva el driver' (($CRIT_AL2_NCU -band (1 -shl 15)) -eq 0) $true
+Check 'bits: pero si corto, sobrecorriente y eje' (($CRIT_AL2_NCU -band ((1 -shl 4) -bor (1 -shl 5) -bor (1 -shl 8))) -eq $CRIT_AL2_NCU) $true
+# y el bloque compat tiene que decodificar con la tabla de la NCU, no con la otra
+$iCom = $src.IndexOf('function Ncu-DiagCompat'); $fCom = $src.IndexOf('function Ncu-HsuCompat')
+$com = $src.Substring($iCom, $fCom - $iCom)
+Check 'bits: el compat usa la tabla de la NCU' ($com.Contains('$BITS_AL1_NCU) + @(Bits-Texto $al2 $BITS_AL2_NCU)')) $true
+Check 'bits: y no la de la TCU' ($com.Contains('$BITS_AL1)')) $false
+Check 'bits: con su mascara critica' ($com.Contains('$CRIT_AL2_NCU')) $true
+# una TCU con el bit 12 puesto ya no inventa la alarma
+Check 'bits: el 12 solo no da texto' ((@(Bits-Texto 0x1000 $BITS_AL2_NCU)).Count) 0
+Check 'bits: pero el eje bloqueado si' ((@(Bits-Texto 0x0100 $BITS_AL2_NCU))[0]) 'eje bloqueado'
+
+Write-Host ''
 Write-Host '== auditoria de baterias =='
 Check 'mediana: impar' (Mediana @(1,5,3)) 3
 Check 'mediana: par' (Mediana @(1,3,5,7)) 4
