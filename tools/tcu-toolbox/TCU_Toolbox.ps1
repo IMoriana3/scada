@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '6.8'
+$VERSION_TOOLBOX = '6.9'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2543,12 +2543,26 @@ $btnSatHoja.Location = New-Object System.Drawing.Point(660, 51)
 $btnSatHoja.Size = New-Object System.Drawing.Size(106, 26)
 $tabSAT.Controls.Add($btnSatHoja)
 
-$lblSat = LG $tabSAT 'Anexo 4. El registro de arriba cubre D.1.1, D.3.4 y D.4; el cronometro de abajo, los abanderamientos. Deja la ventana abierta mientras dure el ensayo.' 10 890 84
+# Criterios de aceptacion: van editables porque son de contrato, no del
+# equipo. El registro no depende de ellos, asi que cambiarlos y volver a
+# analizar no obliga a repetir el ensayo.
+[void](LG $tabSAT 'Precision deg' 10 78 86)
+$txtSatTol = TG $tabSAT '1' 92 84 34
+[void](LG $tabSAT 'Disp. TCU %' 136 70 86)
+$txtSatDTcu = TG $tabSAT '99' 210 84 40
+[void](LG $tabSAT 'RSU/NCU %' 258 66 86)
+$txtSatDRsu = TG $tabSAT '99,5' 328 84 42
+[void](LG $tabSAT 'Comms TCU %' 380 78 86)
+$txtSatCTcu = TG $tabSAT '98,5' 462 84 42
+[void](LG $tabSAT 'Comms RSU %' 512 78 86)
+$txtSatCRsu = TG $tabSAT '99,5' 594 84 42
+
+$lblSat = LG $tabSAT 'Anexo 4. El registro de arriba cubre D.1.1, D.3.4 y D.4; el cronometro de abajo, los abanderamientos. Deja la ventana abierta mientras dure el ensayo.' 10 890 112
 $lblSat.ForeColor = [System.Drawing.Color]::Gray
 
 $lvSat = New-Object System.Windows.Forms.ListView
-$lvSat.Location = New-Object System.Drawing.Point(10, 108)
-$lvSat.Size = New-Object System.Drawing.Size(898, 252)
+$lvSat.Location = New-Object System.Drawing.Point(10, 136)
+$lvSat.Size = New-Object System.Drawing.Size(898, 224)
 $lvSat.View = 'Details'; $lvSat.FullRowSelect = $true; $lvSat.GridLines = $true
 [void]$lvSat.Columns.Add('Hora', 130)
 [void]$lvSat.Columns.Add('Ensayo', 110)
@@ -5469,8 +5483,14 @@ $btnSatAnal.Add_Click({ Lanzar {
         if ($dlg.ShowDialog() -ne 'OK') { return }
         $dir = $dlg.SelectedPath
     }
+    $tolPrec = Parse-RealFinito $txtSatTol.Text
+    $minTcu  = Parse-RealFinito $txtSatDTcu.Text
+    $minRsu  = Parse-RealFinito $txtSatDRsu.Text
+    $minCTcu = Parse-RealFinito $txtSatCTcu.Text
+    $minCRsu = Parse-RealFinito $txtSatCRsu.Text
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Analizando ensayos SAT en $dir" ([System.Drawing.Color]::SteelBlue)
+    Con "Criterios: precision <=$tolPrec deg | operacion TCU >=$minTcu% RSU/NCU >=$minRsu% | comms TCU >=$minCTcu% RSU >=$minCRsu%" ([System.Drawing.Color]::Gainsboro)
     $fp = @(Get-ChildItem (Join-Path $dir 'precision_*.csv') -ErrorAction SilentlyContinue)
     $fc = @(Get-ChildItem (Join-Path $dir 'comm_*.csv') -ErrorAction SilentlyContinue)
     if ($fp.Count -eq 0 -and $fc.Count -eq 0) { Con 'No hay ficheros de registro en esa carpeta.' ([System.Drawing.Color]::Orange); return }
@@ -5480,14 +5500,14 @@ $btnSatAnal.Add_Click({ Lanzar {
         $filas = @()
         foreach ($f in $fp) { $filas += @(Import-Csv $f.FullName -Delimiter ';') }
         Con "  D.1.1 / D.3.4: $($filas.Count) registros de $($fp.Count) dia(s)" ([System.Drawing.Color]::Gainsboro)
-        $pr = @(Sat-Precision $filas 1.0 2)
+        $pr = @(Sat-Precision $filas $tolPrec 2)
         $malP = @($pr | Where-Object { $_.Cumple -eq 'NO' })
         $pr | Export-Csv (Join-Path $dir 'RESULTADO_D1.1_precision.csv') -NoTypeInformation -Encoding UTF8 -Delimiter ';'
-        Sat-Log 'D.1.1' ("Precision <=1 deg: {0} de {1} TCUs cumplen{2}" -f ($pr.Count - $malP.Count), $pr.Count, $(if ($malP.Count) { " - INCUMPLEN: " + (($malP | ForEach-Object { "NCU$($_.NCU)/$($_.TCU)" }) -join ', ') } else { '' }))
-        $do = @(Sat-DispOperacion $filas 99.0)
+        Sat-Log 'D.1.1' ("Precision <=$tolPrec deg: {0} de {1} TCUs cumplen{2}" -f ($pr.Count - $malP.Count), $pr.Count, $(if ($malP.Count) { " - INCUMPLEN: " + (($malP | ForEach-Object { "NCU$($_.NCU)/$($_.TCU)" }) -join ', ') } else { '' }))
+        $do = @(Sat-DispOperacion $filas $minTcu)
         $malO = @($do | Where-Object { $_.Cumple -eq 'NO' })
         $do | Export-Csv (Join-Path $dir 'RESULTADO_D3.4.1_disp_operacion.csv') -NoTypeInformation -Encoding UTF8 -Delimiter ';'
-        Sat-Log 'D.3.4.1' ("Disponibilidad >=99%: {0} de {1} TCU-dia cumplen{2}" -f ($do.Count - $malO.Count), $do.Count, $(if ($malO.Count) { " - INCUMPLEN: " + (($malO | Select-Object -First 20 | ForEach-Object { "$($_.Dia) NCU$($_.NCU)/$($_.Equipo) $($_.Disponibilidad_pct)%" }) -join ', ') } else { '' }))
+        Sat-Log 'D.3.4.1' ("Disponibilidad >=$minTcu%: {0} de {1} TCU-dia cumplen{2}" -f ($do.Count - $malO.Count), $do.Count, $(if ($malO.Count) { " - INCUMPLEN: " + (($malO | Select-Object -First 20 | ForEach-Object { "$($_.Dia) NCU$($_.NCU)/$($_.Equipo) $($_.Disponibilidad_pct)%" }) -join ', ') } else { '' }))
     }
 
     $fe = @(Get-ChildItem (Join-Path $dir 'equipos_*.csv') -ErrorAction SilentlyContinue)
@@ -5497,16 +5517,16 @@ $btnSatAnal.Add_Click({ Lanzar {
         $rsu = @($fq | Where-Object { "$($_.equipo)" -like 'RSU*' })
         $ncu = @($fq | Where-Object { "$($_.equipo)" -eq 'NCU' })
         if ($rsu.Count) {
-            $dr = @(Sat-DispOperacion $rsu 99.5)
+            $dr = @(Sat-DispOperacion $rsu $minRsu)
             $malR = @($dr | Where-Object { $_.Cumple -eq 'NO' })
             $dr | Export-Csv (Join-Path $dir 'RESULTADO_D3.4.2_disp_RSU.csv') -NoTypeInformation -Encoding UTF8 -Delimiter ';'
-            Sat-Log 'D.3.4.2' ("RSU >=99,5%: {0} de {1} RSU-dia cumplen" -f ($dr.Count - $malR.Count), $dr.Count)
+            Sat-Log 'D.3.4.2' ("RSU >=$minRsu%: {0} de {1} RSU-dia cumplen" -f ($dr.Count - $malR.Count), $dr.Count)
         }
         if ($ncu.Count) {
-            $dn = @(Sat-DispOperacion $ncu 99.5)
+            $dn = @(Sat-DispOperacion $ncu $minRsu)
             $malN = @($dn | Where-Object { $_.Cumple -eq 'NO' })
             $dn | Export-Csv (Join-Path $dir 'RESULTADO_D3.4.3_disp_NCU.csv') -NoTypeInformation -Encoding UTF8 -Delimiter ';'
-            Sat-Log 'D.3.4.3' ("NCU >=99,5%: {0} de {1} NCU-dia cumplen" -f ($dn.Count - $malN.Count), $dn.Count)
+            Sat-Log 'D.3.4.3' ("NCU >=$minRsu%: {0} de {1} NCU-dia cumplen" -f ($dn.Count - $malN.Count), $dn.Count)
         }
     }
 
@@ -5518,10 +5538,10 @@ $btnSatAnal.Add_Click({ Lanzar {
         $fallos = @($ev | Where-Object { $_.evento -eq 'FALLO' } | ForEach-Object {
             [pscustomobject]@{dia=$_.fecha; ncu=$_.ncu; equipo=$_.equipo; ts=$_.ts} })
         Con "  D.4: $($ev.Count) eventos, $($fallos.Count) fallos brutos" ([System.Drawing.Color]::Gainsboro)
-        $dc = @(Sat-DispComms $fallos $intentos 98.5 120)
+        $dc = @(Sat-DispComms $fallos $intentos $minCTcu 120 $minCRsu)
         $malC = @($dc | Where-Object { $_.Cumple -eq 'NO' })
         $dc | Export-Csv (Join-Path $dir 'RESULTADO_D4_disp_comunicaciones.csv') -NoTypeInformation -Encoding UTF8 -Delimiter ';'
-        Sat-Log 'D.4' ("Comunicaciones >=98,5%: {0} de {1} equipo-dia cumplen{2}" -f ($dc.Count - $malC.Count), $dc.Count, $(if ($malC.Count) { " - INCUMPLEN: " + (($malC | Select-Object -First 20 | ForEach-Object { "$($_.Dia) NCU$($_.NCU)/$($_.Equipo) $($_.Disponibilidad_pct)%" }) -join ', ') } else { '' }))
+        Sat-Log 'D.4' ("Comunicaciones TCU >=$minCTcu% / RSU >=$minCRsu%: {0} de {1} equipo-dia cumplen{2}" -f ($dc.Count - $malC.Count), $dc.Count, $(if ($malC.Count) { " - INCUMPLEN: " + (($malC | Select-Object -First 20 | ForEach-Object { "$($_.Dia) NCU$($_.NCU)/$($_.Equipo) $($_.Disponibilidad_pct)%" }) -join ', ') } else { '' }))
     }
     Con "Resultados escritos en $dir (ficheros RESULTADO_*.csv)." ([System.Drawing.Color]::LightGreen)
 } })
@@ -5918,6 +5938,7 @@ function Config-Guardar {
             planta = "$($cbPlanta.SelectedItem)"; ip = $txtIp.Text.Trim(); puerto = $txtPort.Text.Trim()
             timeout = $txtTo.Text.Trim(); reintentos = $txtRet.Text.Trim(); hsu = $txtHSlave.Text.Trim()
             tema = $script:TemaNombre; rollback = $chkRoll.Checked
+            sat = @{tol=$txtSatTol.Text; dtcu=$txtSatDTcu.Text; drsu=$txtSatDRsu.Text; ctcu=$txtSatCTcu.Text; crsu=$txtSatCRsu.Text}
         }
         ConvertTo-Json $cfg | Set-Content $script:FichConfigLocal -Encoding UTF8
     } catch {}
@@ -5937,6 +5958,13 @@ function Config-Restaurar {
         if ("$($cfg.reintentos)") { $txtRet.Text = "$($cfg.reintentos)" }
         if ("$($cfg.hsu)") { $txtHSlave.Text = "$($cfg.hsu)" }
         if ($null -ne $cfg.rollback) { $chkRoll.Checked = [bool]$cfg.rollback }
+        if ($cfg.sat) {
+            if ("$($cfg.sat.tol)")  { $txtSatTol.Text  = "$($cfg.sat.tol)" }
+            if ("$($cfg.sat.dtcu)") { $txtSatDTcu.Text = "$($cfg.sat.dtcu)" }
+            if ("$($cfg.sat.drsu)") { $txtSatDRsu.Text = "$($cfg.sat.drsu)" }
+            if ("$($cfg.sat.ctcu)") { $txtSatCTcu.Text = "$($cfg.sat.ctcu)" }
+            if ("$($cfg.sat.crsu)") { $txtSatCRsu.Text = "$($cfg.sat.crsu)" }
+        }
         Con "Sesion anterior restaurada: planta '$($cbPlanta.SelectedItem)' (config_local.json)." ([System.Drawing.Color]::SteelBlue)
     } catch { Con "AVISO: config_local.json ilegible ($_) - ignorado" ([System.Drawing.Color]::Orange) }
 }
