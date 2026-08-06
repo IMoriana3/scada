@@ -70,6 +70,21 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**Panel y corriente de entrada (v11.1)** — el bloque compat de la NCU ya traía
+cuatro registros que no se leían: **tensión de panel** (offset 5), **corriente de
+entrada** (12, con signo) y las dos de **motor** (8 y 9). Salen gratis, en la
+misma lectura.
+
+Con ellos la auditoría de baterías separa dos cosas que antes eran un genérico
+*«NO CARGA»* y mandan a mirar sitios distintos: **el panel no da** (`PANEL SIN
+TENSIÓN`) y **el panel da pero no llega** (`NO ENTRA CORRIENTE`). Solo se miran
+con la batería a medias: de noche, o con la batería llena, un panel a 0 V es lo
+normal.
+
+Los cuatro van también al CSV del registrador. En el diagnóstico **directo**
+salen vacíos: el mapa de la TCU no los documenta donde el de la NCU sí, y antes
+que inventar direcciones se dejan en blanco.
+
 **Cada bloque con su tabla de bits (v11.0)** — el bloque compat de la NCU
 (30500+) lleva **su propio mapa**, no el de la TCU. Coinciden en casi todos los
 bits, pero no en todos, y se estaba decodificando con la tabla de la TCU: donde
@@ -221,6 +236,8 @@ mismo barrido. Saca una fila por problema, con su gravedad:
 | `CARGA BAJA` (AVISO) | SoC por debajo del 40 % — por debajo del mínimo del bootloader no se puede actualizar |
 | `NO CARGA` (AVISO) | corriente casi nula con la batería a medias: panel, fusible o cargador |
 | `TEMPERATURA` (AVISO) | por encima de 55 °C o por debajo de −20 °C |
+| `PANEL SIN TENSIÓN` (AVISO) | el panel está por debajo de 2 V con la batería a medias: panel, cableado o fusible |
+| `NO ENTRA CORRIENTE` (AVISO) | el panel da tensión pero entran menos de 30 mA: da y no llega |
 | `FUERA DE LA FLOTA` (AVISO) | está *dentro* de rango pero se sale de lo que tienen las demás (más de 3 V o 30 puntos de SoC por debajo de la mediana) |
 
 La última es la que encuentra lo que ningún umbral fijo ve: con 754 medidas del

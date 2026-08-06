@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.0'
+$VERSION_TOOLBOX = '11.1'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1235,6 +1235,11 @@ function Ncu-DiagCompat([int[]]$tcus) {
                 $tilt = (Palabras-A-F32 @($w[$b+6], $w[$b+7])) * 180.0 / [math]::PI
                 $targ = (Palabras-A-F32 @($w[$b+10], $w[$b+11])) * 180.0 / [math]::PI
                 $ibat = $w[$b+18]; if ($ibat -gt 32767) { $ibat -= 65536 }
+                # ya vienen en el mismo bloque, sin una lectura de mas: tension
+                # de panel (5), corriente de entrada (12, con signo) y las dos
+                # de motor (8 y 9). Con ellas se distingue "no le entra nada"
+                # de "la bateria esta baja".
+                $ient = $w[$b+12]; if ($ient -gt 32767) { $ient -= 65536 }
                 $dif = [math]::Abs($tilt - $targ)
                 $edad = -1
                 if ($reloj -gt 1000000000 -and $lastc[$tcu] -gt 1000000000) { $edad = $reloj - $lastc[$tcu] }
@@ -1264,6 +1269,8 @@ function Ncu-DiagCompat([int[]]$tcus) {
                     Edad_s = $(if ($edad -ge 0) { $edad } else { '' })
                     SoC = ($w[$b+13] -band 0xFF); SoH = ($w[$b+21] -band 0xFF)
                     Vbat_mV = $w[$b+16]; Ibat_mA = $ibat
+                    Vpanel_mV = $w[$b+5]; Ientrada_mA = $ient
+                    Imotor_mA = $w[$b+8]; ImotorPico_mA = $w[$b+9]
                     Tbat_C = [math]::Round(($w[$b+20] / 10.0) - 273.15, 1); Tpcb_C = [math]::Round(($w[$b+19] / 10.0) - 273.15, 1)
                     Alarmas = (($alarmas + $notas) -join '; ')
                     main_status = ("0x{0:X4}" -f $msr); alarmas_1 = ("0x{0:X4}" -f $al1); alarmas_2 = ("0x{0:X4}" -f $al2)
@@ -1321,7 +1328,7 @@ function Ncu-HsuCompat {
         if ($salud -eq 'OFFLINE') { $texto = $(if ($lastc -eq 0) { 'la NCU nunca ha leido esta HSU' } else { "sin datos en la NCU desde hace $edad s" }) }
         $lista += [pscustomobject]@{
             NCU=''; TCU=("HSU{0}" -f ($h + 1)); Salud=$salud; Modo='-'
-            Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''
+            Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Tbat_C=''; Tpcb_C=''
             Alarmas=$texto
             main_status=("0x{0:X4}" -f $msr); alarmas_1=("0x{0:X4}" -f $al1); alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
         }
@@ -4339,6 +4346,8 @@ $BAT = @{
   tbat_baja    = -20     # C
   desvio_vbat  = 3000    # mV respecto a la mediana de la flota
   desvio_soc   = 30      # puntos respecto a la mediana
+  vpanel_min   = 2000    # mV: por debajo, el panel no esta dando nada
+  ient_min     = 30      # mA: por debajo, no entra corriente
 }
 
 function Mediana($valores) {
@@ -4376,8 +4385,22 @@ function Bat-Auditar($diag, $cfg = $null) {
         elseif ($tieneV -and $v -lt $cfg.vbat_bajo) { & $add 'TENSION BAJA' "tension $v mV" 'AVISO' }
         if ($tieneSoh -and $soh -gt 0 -and $soh -lt $cfg.soh_bajo) { & $add 'SALUD BAJA' "SoH $soh %: la bateria ya no aguanta" 'AVISO' }
         if ($tieneSoc -and $soc -lt $cfg.soc_bajo) { & $add 'CARGA BAJA' "SoC $soc %" 'AVISO' }
+        # De donde viene la falta de carga. El bloque de la NCU trae la tension
+        # del panel y la corriente de entrada, asi que se puede separar "el
+        # panel no da" de "da pero no llega a la bateria", que mandan a mirar
+        # sitios distintos. Sin esos datos (modo directo) queda el aviso
+        # generico de siempre.
+        $vp = 0; $tieneVp = [int]::TryParse("$($f.Vpanel_mV)", [ref]$vp)
+        $ie = 0; $tieneIe = [int]::TryParse("$($f.Ientrada_mA)", [ref]$ie)
+        $flojo = ($tieneSoc -and $soc -lt $cfg.soc_sin_carga)
+        if ($flojo -and $tieneVp -and $vp -lt $cfg.vpanel_min) {
+            & $add 'PANEL SIN TENSION' "panel a $vp mV con SoC $soc %: mira el panel, el cableado o el fusible" 'AVISO'
+        }
+        elseif ($flojo -and $tieneIe -and $ie -lt $cfg.ient_min -and $tieneVp -and $vp -ge $cfg.vpanel_min) {
+            & $add 'NO ENTRA CORRIENTE' "panel a $vp mV pero solo $ie mA de entrada con SoC $soc %: el panel da y no llega" 'AVISO'
+        }
         # ni carga ni descarga con la bateria a medias: panel, fusible o cargador
-        if ($tieneI -and $tieneSoc -and [Math]::Abs($i) -lt $cfg.i_cero -and $soc -lt $cfg.soc_sin_carga) {
+        elseif ($tieneI -and $tieneSoc -and [Math]::Abs($i) -lt $cfg.i_cero -and $soc -lt $cfg.soc_sin_carga) {
             & $add 'NO CARGA' "corriente $i mA con SoC $soc %" 'AVISO'
         }
         if ($tieneTb -and $tb -gt $cfg.tbat_alta) { & $add 'TEMPERATURA' ("bateria a {0:0.#} C" -f $tb) 'AVISO' }
@@ -5273,6 +5296,9 @@ function Diag-LeerTcu([byte]$tcu) {
         Tilt = [math]::Round($tilt/10.0, 1); Objetivo = [math]::Round($targ/10.0, 1); Dif = [math]::Round($dif, 1)
         SoC = ($r2[2] -band 0xFF); SoH = (($r2[2] -shr 8) -band 0xFF)
         Vbat_mV = $r2[0]; Ibat_mA = $ibat
+        # el mapa de la TCU no documenta estos cuatro donde el de la NCU si:
+        # se dejan vacios en el modo directo antes que inventar direcciones
+        Vpanel_mV = ''; Ientrada_mA = ''; Imotor_mA = ''; ImotorPico_mA = ''
         Tbat_C = [math]::Round($tbat/10.0, 1); Tpcb_C = [math]::Round($tpcb/10.0, 1)
         Alarmas = (($alarmas + $notas) -join '; ')
         main_status = ("0x{0:X4}" -f $r1[0]); alarmas_1 = ("0x{0:X4}" -f $al1); alarmas_2 = ("0x{0:X4}" -f $al2)
@@ -5362,7 +5388,7 @@ function Diag-Correr {
         } catch { $nsErr = "$_"; Modbus-Cerrar }
         $dn = [pscustomobject]@{
             NCU="$($tr.ncu)"; TCU='NCU'; Salud=$(if ($ns) { $ns.salud } else { 'AVISO' }); Modo='-'
-            Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''
+            Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Tbat_C=''; Tpcb_C=''
             # El reloj salia SIEMPRE en la columna de alarmas y parecia un
             # problema. Solo se menciona si de verdad esta desviado.
             Alarmas=$(if ($ns) { ((@($ns.alarmas) + $(Reloj-Nota $ns)) -join '; ') } else { "NCU sin respuesta en ${PUERTO_NCU}: $nsErr" })
@@ -5421,7 +5447,7 @@ function Diag-Correr {
             if ($null -eq $d) {
                 $d = [pscustomobject]@{
                     TCU=[int]$tcu; Salud='OFFLINE'; Modo=''; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
-                    Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''; Alarmas='sin datos via NCU'
+                    Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Tbat_C=''; Tpcb_C=''; Alarmas='sin datos via NCU'
                     main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
                 }
             }
@@ -5470,7 +5496,7 @@ function Diag-Correr {
         if ($null -eq $d) {
             $d = [pscustomobject]@{
                 TCU=[int]$tcu; Salud='OFFLINE'; Modo=''; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
-                Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''; Alarmas=$err
+                Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Tbat_C=''; Tpcb_C=''; Alarmas=$err
                 main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
             }
         }
@@ -5579,7 +5605,7 @@ $btnGComm.Add_Click({ Lanzar {
         if ($null -eq $c) {
             $nNcuKo++
             $d = [pscustomobject]@{NCU=$et; TCU='NCU'; Salud='OFFLINE'; Modo='-'; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
-                Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''; Alarmas="NCU SIN RESPUESTA en $($tr.ip):${PUERTO_NCU} - $err"
+                Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Tbat_C=''; Tpcb_C=''; Alarmas="NCU SIN RESPUESTA en $($tr.ip):${PUERTO_NCU} - $err"
                 main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
             $script:UltimoDiag += $d
             $nOff += @($tr.tcus).Count
@@ -5588,12 +5614,12 @@ $btnGComm.Add_Click({ Lanzar {
         }
         $nNcuOk++
         $script:UltimoDiag += [pscustomobject]@{NCU=$et; TCU='NCU'; Salud='OK'; Modo='-'; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
-            Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''; Alarmas="NCU responde ($($tr.ip):$PUERTO_NCU)"
+            Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Tbat_C=''; Tpcb_C=''; Alarmas="NCU responde ($($tr.ip):$PUERTO_NCU)"
             main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
         foreach ($h in $c.hsus) {
             if ($h.comunica) { $nHsuOk++ } else { $nHsuKo++ }
             $script:UltimoDiag += [pscustomobject]@{NCU=$et; TCU=$h.hsu; Salud=$(if ($h.comunica) { 'OK' } else { 'OFFLINE' }); Modo='-'
-                Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''
+                Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Tbat_C=''; Tpcb_C=''
                 Alarmas=$(if ($h.comunica) { "comunica (hace $($h.edad) s)" } else { $(if ($h.lastcomm -eq 0) { 'la NCU nunca la ha leido' } else { "sin datos desde hace $($h.edad) s" }) })
                 main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
         }
@@ -5603,7 +5629,7 @@ $btnGComm.Add_Click({ Lanzar {
             $ok = ($null -ne $e -and $e.comunica)
             if ($ok) { $nOk++ } else { $nOff++; $mudas += $tcu }
             $script:UltimoDiag += [pscustomobject]@{NCU=$et; TCU=[int]$tcu; Salud=$(if ($ok) { 'OK' } else { 'OFFLINE' }); Modo='-'
-                Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''
+                Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Tbat_C=''; Tpcb_C=''
                 Alarmas=$(if ($ok) { "comunica (hace $($e.edad) s)" } elseif ($null -eq $e -or $e.lastcomm -eq 0) { 'la NCU nunca ha leido este TCU' } else { "sin datos desde hace $($e.edad) s" })
                 main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
         }
@@ -5675,6 +5701,7 @@ foreach ($k in @('OK','AVISO','ALARMA','OFFLINE')) {
 # (con fecha/hora y alarmas desglosadas) en informes/registro_<ts>.csv.
 # Se para con el boton CANCELAR.
 $COLS_REGISTRO = @('NCU','TCU','Salud','Modo','Tilt','Objetivo','Dif','SoC','SoH','Vbat_mV','Ibat_mA',
+                   'Vpanel_mV','Ientrada_mA','Imotor_mA','ImotorPico_mA',
                    'Tbat_C','Tpcb_C','Alarmas','main_status','alarmas_1','alarmas_2','alarmas_3','alarmas_4','system_status')
 $btnGBucle.Add_Click({ Lanzar {
     $cada = Val-Int $txtGCada.Text 'Registrador: minutos' 1 1440
