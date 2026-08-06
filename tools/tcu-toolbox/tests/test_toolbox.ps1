@@ -734,6 +734,7 @@ for ($i = 0; $i -lt 100; $i++) {
 }
 $do1 = @(Sat-DispOperacion $fo 99.0)
 Check 'D.3.4.1 sin alarmas = 100' $do1[0].Disponibilidad_pct 100
+Check 'D.3.4.1 equipo derivado del TCU' $do1[0].Equipo 'TCU1'
 Check 'D.3.4.1 cumple' $do1[0].Cumple 'SI'
 $fo[3].al_motor = 1; $fo[7].al_bat = 1
 $do2 = @(Sat-DispOperacion $fo 99.0)
@@ -771,6 +772,28 @@ $fuera = @(
   [pscustomobject]@{dia='2026-08-06'; ncu='1'; equipo='TCU5'; ts=1121}   # 121 s: fuera
 )
 Check 'D.4 a 121 s no cuenta' (@(Sat-DispComms $fuera $intentos 98.5 120))[0].Fallos_computados 0
+# el anexo pide 99,5% a las RSU y menos a las TCU: umbrales distintos
+$intentos2 = @{'2026-08-06' = 1000}
+$fallosRsu = @()
+for ($i = 0; $i -lt 8; $i++) { $fallosRsu += [pscustomobject]@{dia='2026-08-06'; ncu='1'; equipo='RSU1'; ts=(1000 + 15*$i)} }
+$dr = @(Sat-DispComms $fallosRsu $intentos2 98.5 120 99.5)
+Check 'D.4 RSU: 8 fallos de 1000' $dr[0].Disponibilidad_pct 99.2
+Check 'D.4 RSU exige 99,5 y no llega' $dr[0].Cumple 'NO'
+Check 'D.4 RSU umbral aplicado' $dr[0].Minimo_pct 99.5
+$fallosTcu = @()
+for ($i = 0; $i -lt 8; $i++) { $fallosTcu += [pscustomobject]@{dia='2026-08-06'; ncu='1'; equipo='TCU1'; ts=(1000 + 15*$i)} }
+$dt = @(Sat-DispComms $fallosTcu $intentos2 98.5 120 99.5)
+Check 'D.4 TCU con los mismos fallos si cumple' $dt[0].Cumple 'SI'
+Check 'D.4 TCU umbral aplicado' $dt[0].Minimo_pct 98.5
+
+# D.3.4.2 / D.3.4.3: RSU y NCU con su propio 99,5%
+$feq = @()
+for ($i = 0; $i -lt 200; $i++) { $feq += [pscustomobject]@{dia='2026-08-06'; ncu='1'; equipo='RSU1'; al_motor=0; al_bat=0; al_com=0} }
+$feq[5].al_com = 1; $feq[9].al_bat = 1
+$dq = @(Sat-DispOperacion $feq 99.5)
+Check 'D.3.4.2 dos de 200 = 99' $dq[0].Disponibilidad_pct 99
+Check 'D.3.4.2 no cumple 99,5' $dq[0].Cumple 'NO'
+Check 'D.3.4.2 equipo RSU' $dq[0].Equipo 'RSU1'
 
 # ---------- D.2 abanderamiento: cronologia ----------
 # El seguidor sigue al sol en 10 grados, llega la orden de abanderar a 0, va,

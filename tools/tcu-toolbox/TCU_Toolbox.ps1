@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '6.7'
+$VERSION_TOOLBOX = '6.8'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1551,18 +1551,19 @@ function Sat-Precision($filas, [double]$tol = 1.0, [int]$estables = 2) {
 # alarma de motor, bateria o comunicacion. Las meteorologicas no cuentan (lo
 # dice el anexo). Umbral 99% por TCU y dia.
 function Sat-DispOperacion($filas, [double]$minimo = 99.0) {
-    $porTcu = @{}
+    $porEq = @{}
     foreach ($f in $filas) {
-        $k = "$($f.dia)|$($f.ncu)|$($f.tcu)"
-        if (-not $porTcu.ContainsKey($k)) { $porTcu[$k] = @{n=0; mal=0} }
-        $porTcu[$k].n++
-        if ([int]$f.al_motor -or [int]$f.al_bat -or [int]$f.al_com) { $porTcu[$k].mal++ }
+        $eq = $(if ("$($f.equipo)") { "$($f.equipo)" } else { "TCU$($f.tcu)" })
+        $k = "$($f.dia)|$($f.ncu)|$eq"
+        if (-not $porEq.ContainsKey($k)) { $porEq[$k] = @{n=0; mal=0} }
+        $porEq[$k].n++
+        if ([int]$f.al_motor -or [int]$f.al_bat -or [int]$f.al_com) { $porEq[$k].mal++ }
     }
     $res = @()
-    foreach ($k in @($porTcu.Keys | Sort-Object)) {
-        $v = $porTcu[$k]; $p = $k -split '\|'
+    foreach ($k in @($porEq.Keys | Sort-Object)) {
+        $v = $porEq[$k]; $p = $k -split '\|'
         $pct = $(if ($v.n -gt 0) { [math]::Round(100.0 * ($v.n - $v.mal) / $v.n, 2) } else { 0 })
-        $res += [pscustomobject]@{Dia=$p[0]; NCU=$p[1]; TCU=[int]$p[2]; Registros=$v.n
+        $res += [pscustomobject]@{Dia=$p[0]; NCU=$p[1]; Equipo=$p[2]; Registros=$v.n
             Indisponibles=$v.mal; Disponibilidad_pct=$pct
             Cumple=$(if ($pct -ge $minimo) { 'SI' } else { 'NO' })}
     }
@@ -1572,7 +1573,7 @@ function Sat-DispOperacion($filas, [double]$minimo = 99.0) {
 # D.4 Disponibilidad de comunicaciones. Regla del anexo: un intento fallido
 # suelto NO cuenta si el siguiente se restablece, salvo que se repita dentro de
 # dos minutos; en ese caso cuentan todos los fallos.
-function Sat-DispComms($fallos, $intentosPorClave, [double]$minimo = 98.5, [int]$ventana = 120) {
+function Sat-DispComms($fallos, $intentosPorClave, [double]$minimo = 98.5, [int]$ventana = 120, [double]$minimoRsu = 99.5) {
     $porClave = @{}
     foreach ($f in $fallos) {
         $k = "$($f.dia)|$($f.ncu)|$($f.equipo)"
@@ -1592,9 +1593,11 @@ function Sat-DispComms($fallos, $intentosPorClave, [double]$minimo = 98.5, [int]
         $p = $k -split '\|'
         $n = [int]$intentosPorClave["$($p[0])"]
         $pct = $(if ($n -gt 0) { [math]::Round(100.0 * ($n - $cuenta) / $n, 2) } else { 0 })
+        # el anexo pide 99,5% a las RSU y menos a las TCU
+        $lim = $(if ("$($p[2])" -like 'RSU*') { $minimoRsu } else { $minimo })
         $res += [pscustomobject]@{Dia=$p[0]; NCU=$p[1]; Equipo=$p[2]; Intentos=$n
             Fallos_brutos=$ts.Count; Fallos_computados=$cuenta; Disponibilidad_pct=$pct
-            Cumple=$(if ($pct -ge $minimo) { 'SI' } else { 'NO' })}
+            Minimo_pct=$lim; Cumple=$(if ($pct -ge $lim) { 'SI' } else { 'NO' })}
     }
     return $res
 }
@@ -5166,7 +5169,9 @@ function Sat-PaseComms($trabajos) {
         }
         foreach ($h in @($cm.hsus)) {
             $nEq++
-            if (-not $h.comunica) { [void]$lineas.Add("$ts;$fecha;$($tr.ncu);$($h.hsu);FALLO"); $nMal++ }
+            # el anexo llama RSU a lo que el mapa Sunner llama HSU
+            $eq = "$($h.hsu)" -replace '^HSU', 'RSU'
+            if (-not $h.comunica) { [void]$lineas.Add("$ts;$fecha;$($tr.ncu);$eq;FALLO"); $nMal++ }
         }
     }
     [void]$lineas.Add("$ts;$fecha;*;PASE;$nEq")
@@ -5208,6 +5213,36 @@ function Sat-PaseTcu($trabajos) {
     return $n
 }
 
+# D.3.4.2 y D.3.4.3: disponibilidad de RSU y de NCU. Misma cadencia que las
+# TCUs; las alarmas meteorologicas no cuentan, como en el resto del anexo.
+function Sat-PaseEquipos($trabajos) {
+    $fich = Sat-Fichero 'equipos'
+    Sat-Cabecera $fich 'ts;dia;ncu;equipo;al_motor;al_bat;al_com'
+    $lineas = New-Object System.Collections.ArrayList
+    $ts = [int][double]::Parse((Get-Date -UFormat %s))
+    $dia = Get-Date -Format 'yyyy-MM-dd'
+    foreach ($tr in $trabajos) {
+        if (-not $script:SatOn) { break }
+        $hs = @(); $vivo = 0
+        try {
+            Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
+            $vivo = 1
+            try { $hs = @(Ncu-HsuCompat) } catch {}
+        } catch { }
+        Modbus-Cerrar
+        [void]$lineas.Add("$ts;$dia;$($tr.ncu);NCU;0;0;$(1 - $vivo)")
+        foreach ($h in $hs) {
+            $eq = "$($h.TCU)" -replace '^HSU', 'RSU'
+            $al = "$($h.Alarmas)"
+            # meteorologicas fuera: solo bateria y comunicacion
+            $bat = $(if ($al -match 'bateria|bat') { 1 } else { 0 })
+            $com = $(if ("$($h.Salud)" -eq 'OFFLINE') { 1 } else { 0 })
+            [void]$lineas.Add("$ts;$dia;$($tr.ncu);$eq;0;$bat;$com")
+        }
+    }
+    Add-Content -Path $fich -Value $lineas -Encoding UTF8
+}
+
 $tmrSat = New-Object System.Windows.Forms.Timer
 $tmrSat.Interval = 1000
 $tmrSat.Add_Tick({
@@ -5233,7 +5268,8 @@ $tmrSat.Add_Tick({
         if ($ahora -ge $script:SatProxTcu) {
             $script:SatProxTcu = $ahora.AddSeconds([double]$script:SatIntTcu)
             $n = Sat-PaseTcu $trabajos
-            Sat-Log 'D.1.1 / D.3.4' "$n TCUs registradas (pase $($script:SatPasesT))"
+            Sat-PaseEquipos $trabajos
+            Sat-Log 'D.1.1 / D.3.4' "$n TCUs + RSUs y NCUs registradas (pase $($script:SatPasesT))"
         }
     } catch {
         Sat-Log 'ERROR' "$_"
@@ -5451,7 +5487,27 @@ $btnSatAnal.Add_Click({ Lanzar {
         $do = @(Sat-DispOperacion $filas 99.0)
         $malO = @($do | Where-Object { $_.Cumple -eq 'NO' })
         $do | Export-Csv (Join-Path $dir 'RESULTADO_D3.4.1_disp_operacion.csv') -NoTypeInformation -Encoding UTF8 -Delimiter ';'
-        Sat-Log 'D.3.4.1' ("Disponibilidad >=99%: {0} de {1} TCU-dia cumplen{2}" -f ($do.Count - $malO.Count), $do.Count, $(if ($malO.Count) { " - INCUMPLEN: " + (($malO | Select-Object -First 20 | ForEach-Object { "$($_.Dia) NCU$($_.NCU)/$($_.TCU) $($_.Disponibilidad_pct)%" }) -join ', ') } else { '' }))
+        Sat-Log 'D.3.4.1' ("Disponibilidad >=99%: {0} de {1} TCU-dia cumplen{2}" -f ($do.Count - $malO.Count), $do.Count, $(if ($malO.Count) { " - INCUMPLEN: " + (($malO | Select-Object -First 20 | ForEach-Object { "$($_.Dia) NCU$($_.NCU)/$($_.Equipo) $($_.Disponibilidad_pct)%" }) -join ', ') } else { '' }))
+    }
+
+    $fe = @(Get-ChildItem (Join-Path $dir 'equipos_*.csv') -ErrorAction SilentlyContinue)
+    if ($fe.Count -gt 0) {
+        $fq = @()
+        foreach ($f in $fe) { $fq += @(Import-Csv $f.FullName -Delimiter ';') }
+        $rsu = @($fq | Where-Object { "$($_.equipo)" -like 'RSU*' })
+        $ncu = @($fq | Where-Object { "$($_.equipo)" -eq 'NCU' })
+        if ($rsu.Count) {
+            $dr = @(Sat-DispOperacion $rsu 99.5)
+            $malR = @($dr | Where-Object { $_.Cumple -eq 'NO' })
+            $dr | Export-Csv (Join-Path $dir 'RESULTADO_D3.4.2_disp_RSU.csv') -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+            Sat-Log 'D.3.4.2' ("RSU >=99,5%: {0} de {1} RSU-dia cumplen" -f ($dr.Count - $malR.Count), $dr.Count)
+        }
+        if ($ncu.Count) {
+            $dn = @(Sat-DispOperacion $ncu 99.5)
+            $malN = @($dn | Where-Object { $_.Cumple -eq 'NO' })
+            $dn | Export-Csv (Join-Path $dir 'RESULTADO_D3.4.3_disp_NCU.csv') -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+            Sat-Log 'D.3.4.3' ("NCU >=99,5%: {0} de {1} NCU-dia cumplen" -f ($dn.Count - $malN.Count), $dn.Count)
+        }
     }
 
     if ($fc.Count -gt 0) {
