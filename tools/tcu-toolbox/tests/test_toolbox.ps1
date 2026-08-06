@@ -1295,6 +1295,21 @@ Check 'indice: la 34 cuadra con el preset' (Aud-Igual '-10' $idx['9|34|41069 saf
 Check 'indice: la 35 no' (Aud-Igual '-10' $idx['9|35|41069 safe_pos_sign_threshold']) $false
 
 Write-Host ''
+Write-Host '== la edad del dato es una columna, no una nota =='
+# En modo via NCU no se lee al seguidor: se lee lo ultimo que la NCU le oyo, y
+# cada uno tiene su propio retardo. Sin verlo no hay forma de saber de cuando
+# es lo que se ve.
+Check 'edad: columna en la tabla' ($src.Contains("lvG.Columns.Add('Edad s'")) $true
+Check 'edad: la calcula el bloque compacto' ($src.Contains('Edad_s = $(if ($edad -ge 0)')) $true
+Check 'edad: en blanco si no se sabe' ([regex]::IsMatch($src, 'Edad_s = \$\(if \(\$edad -ge 0\) \{ \$edad \} else \{ '''' \}\)')) $true
+Check 'edad: la fila de la NCU no lleva' ($src.Contains("`$dn.SoC, '', `$dn.Alarmas")) $true
+# el bloque de TCUs ya no repite la edad en la nota (el de HSUs es otro sitio)
+$blqTcu = $src.Substring($src.IndexOf('function Ncu-DiagCompat'), 3000)
+Check 'edad: ya no se repite en la nota' ($blqTcu.Contains('datos de hace')) $false
+Check 'edad: pero avisa si es mucha' ($src.Contains('dato viejo')) $true
+Check 'edad: por encima de 5 min es OFFLINE' ($src.Contains('$edad -gt 300')) $true
+
+Write-Host ''
 Write-Host '== el reloj de la NCU solo se menciona si esta mal =='
 # Salia SIEMPRE en la columna de alarmas y parecia un problema.
 Check 'reloj: en hora no dice nada' (@(Reloj-Nota @{fecha='2026-08-06 12:04:37 UTC'; desvio=3}).Count) 0

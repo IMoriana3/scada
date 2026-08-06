@@ -60,6 +60,21 @@ cuántos valores salieron de la lectura sin tocar la planta.
 **Y la pestaña *Flota* pasa a llamarse *Auditoría*** — que es lo que se hace ahí.
 El inventario sigue dentro, y Ctrl+K lo encuentra por su nombre.
 
+**La edad del dato, a la vista (v9.4)** — en modo *via NCU* no se lee al
+seguidor: se lee **lo último que la NCU le oyó**, y cada TCU tiene su propio
+retardo según cómo le haya ido en la malla. Eso solo se veía como una nota
+cuando pasaba de 90 segundos, así que el resto del tiempo no había forma de
+saber de cuándo era lo que se estaba mirando.
+
+Ahora es una **columna, `Edad s`**: los segundos que hace que la NCU habló con
+esa TCU. Se puede ordenar por ella y sale en el CSV y en el JSON. Sigue habiendo
+aviso de `dato viejo` por encima de 90 s y `OFFLINE` por encima de 5 minutos,
+pero ya no hace falta llegar ahí para saber cuánto retardo llevas.
+
+Cuando hace falta la posición real al segundo —comprobar si un seguidor está
+llegando o está atascado— hay que desmarcar *via NCU*: eso pregunta a la TCU,
+sin caché de por medio.
+
 **Barra de avance (v9.3)** — las operaciones largas no decían por dónde iban.
 Ahora, abajo, una barra con **cuántas van, el porcentaje y lo que queda**
 (`1240/3770 33% ~4 min`), en *Leer variable*, *Escribir*, *CSV por TCU*,
