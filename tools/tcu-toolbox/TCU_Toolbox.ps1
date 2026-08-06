@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.3'
+$VERSION_TOOLBOX = '11.4'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1301,6 +1301,27 @@ function Reloj-Nota($ns) {
     $d = [double]$ns.desvio
     $txt = $(if ($d -lt 3600) { "{0:0} min" -f ($d / 60) } elseif ($d -lt 172800) { "{0:0.#} h" -f ($d / 3600) } else { "{0:0} dias" -f ($d / 86400) })
     return @("RELOJ NCU DESVIADO $txt (marca $($ns.fecha))")
+}
+
+# Offsets 21..31 del bloque de 50 por TCU: 11 registros por lectura, una TCU
+# por peticion. Solo se usa cuando se pide, no en cada diagnostico.
+function Ncu-CargaCompat([int[]]$tcus) {
+    $res = @{}
+    foreach ($tcu in $tcus) {
+        $w = $null
+        try { $w = FC03-Leer $UNIT_NCU (Dir-Trama (50000 + ($tcu - 1) * 50 + 21)) 11 } catch { continue }
+        if ($null -eq $w -or @($w).Count -lt 11) { continue }
+        $ip = $w[1]; if ($ip -gt 32767) { $ip -= 65536 }
+        $ib = $w[3]; if ($ib -gt 32767) { $ib -= 65536 }
+        $res[$tcu] = [pscustomobject]@{
+            Vpanel_mV = $w[0]; Ipanel_mA = $ip
+            Vbat_mV = $w[2]; Ibat_mA = $ib
+            SoC = ($w[4] -band 0xFF); SoH = (($w[4] -shr 8) -band 0xFF)
+            EstadoCarga = $w[8]; ChargerState = $w[9]; AlarmasCarga = $w[10]
+            Carga = (Carga-Texto ([int]$w[8]) ([int]$w[10]))
+        }
+    }
+    return $res
 }
 
 function Ncu-HsuCompat {
@@ -2637,7 +2658,7 @@ $tabB = New-Object System.Windows.Forms.TabPage
 $tabB.Text = 'Baterias'
 $tabs.TabPages.Add($tabB)
 
-$lblBInfo = LG $tabB 'Las baterias del ultimo diagnostico: no vuelve a leer nada. Haz un DIAGNOSTICAR y pulsa VER.' 10 890 16
+$lblBInfo = LG $tabB 'Las baterias del ultimo diagnostico: VER no lee nada. LEER CARGA si lee (estado del cargador, bloque largo de la NCU).' 10 890 16
 $lblBInfo.ForeColor = [System.Drawing.Color]::Gray
 
 $btnBVer = New-Object System.Windows.Forms.Button
@@ -2654,21 +2675,29 @@ $btnBAud.Location = New-Object System.Drawing.Point(158, 40)
 $btnBAud.Size = New-Object System.Drawing.Size(96, 28)
 $tabB.Controls.Add($btnBAud)
 
+# Unica lectura nueva de esta pestana: la seccion de carga del bloque largo
+# de la NCU, que el diagnostico no toca.
+$btnBCar = New-Object System.Windows.Forms.Button
+$btnBCar.Text = 'LEER CARGA'
+$btnBCar.Location = New-Object System.Drawing.Point(262, 40)
+$btnBCar.Size = New-Object System.Drawing.Size(120, 28)
+$tabB.Controls.Add($btnBCar)
+
 $btnBCsv = New-Object System.Windows.Forms.Button
 $btnBCsv.Text = 'CSV'
-$btnBCsv.Location = New-Object System.Drawing.Point(262, 40)
+$btnBCsv.Location = New-Object System.Drawing.Point(390, 40)
 $btnBCsv.Size = New-Object System.Drawing.Size(70, 28)
 $btnBCsv.Enabled = $false
 $tabB.Controls.Add($btnBCsv)
 
 $btnBJson = New-Object System.Windows.Forms.Button
 $btnBJson.Text = 'JSON'
-$btnBJson.Location = New-Object System.Drawing.Point(340, 40)
+$btnBJson.Location = New-Object System.Drawing.Point(468, 40)
 $btnBJson.Size = New-Object System.Drawing.Size(70, 28)
 $btnBJson.Enabled = $false
 $tabB.Controls.Add($btnBJson)
 
-$lblBRes = LG $tabB '' 420 488 46
+$lblBRes = LG $tabB '' 548 360 46
 $lblBRes.ForeColor = [System.Drawing.Color]::Gray
 
 $lvB = New-Object System.Windows.Forms.ListView
@@ -2686,7 +2715,8 @@ $lvB.View = 'Details'; $lvB.FullRowSelect = $true; $lvB.GridLines = $true
 [void]$lvB.Columns.Add('Tbat C', 56)
 [void]$lvB.Columns.Add('Tpcb C', 56)
 [void]$lvB.Columns.Add('Dia', 40)
-[void]$lvB.Columns.Add('Estado', 268)
+[void]$lvB.Columns.Add('Carga', 170)
+[void]$lvB.Columns.Add('Estado', 210)
 $tabB.Controls.Add($lvB)
 
 $tabF = New-Object System.Windows.Forms.TabPage
@@ -3702,7 +3732,7 @@ function Con([string]$t, $color) {
 
 $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $btnDiag, $btnSync, $btnIdent,
                     $btnPresetSave, $btnPresetLoad, $btnLPreset, $btnCargarBackup, $btnLCsv, $btnDCsv, $btnBackupJson,
-                    $btnComparar, $btnGCsv, $btnGJson, $btnGWa, $btnGBat, $btnBVer, $btnBAud, $btnBCsv, $btnBJson, $btnICsv,
+                    $btnComparar, $btnGCsv, $btnGJson, $btnGWa, $btnGBat, $btnBVer, $btnBAud, $btnBCar, $btnBCsv, $btnBJson, $btnICsv,
                     $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnAudEscr, $btnInvF, $btnInvFCsv,
                     $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm, $btnHEsclavo,
                     $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComis, $btnPComisSet, $btnPCsv,
@@ -4426,7 +4456,49 @@ function Mediana($valores) {
 # Una fila por TCU con lo que trae el diagnostico de su bateria. Pura: no lee
 # nada, solo ordena lo que ya hay. El estado sale de la auditoria, para no tener
 # dos criterios distintos diciendo si una bateria esta bien.
-function Bat-Tabla($diag, $hallazgos = $null) {
+# Seccion de carga: la NCU expone un bloque de 50 registros por TCU
+# (50000 + (TCU-1)*50) con lo que el bloque compacto de 22 no trae. De ahi solo
+# interesan los offsets 21..31: panel, corriente de panel, el estado del
+# cargador y sus alarmas. Con esto el equipo DICE si esta cargando, en vez de
+# tener que deducirlo de las corrientes.
+$BITS_CARGA_ST = @{   # 50029 ChargingStatus
+  0='BQ inicializado'; 1='hay energia para cargar'; 2='mosfet ON'; 3='cargador habilitado'
+  4='Jeita activo'; 5='bateria llena'; 6='PIC reiniciado'; 7='proteccion de fabrica'
+  8='BQ flash comprobada'; 9='BQ flash OK'
+}
+$BITS_CARGA_AL = @{   # 50031 PowerSectionAlarmRegister
+  0='sobrecorriente de motor (HW)'; 1='sobrecorriente de motor (SW)'; 2='fallo del driver de motor'
+  3='fallo de com con el BQ'; 4='fallo de com con el DAC'
+  8='SOBRECORRIENTE DE CARGA'; 9='TIMEOUT DE CARGA'; 10='TIMEOUT DE CARGA (tension constante)'
+}
+# lo que de verdad hay que leer de esos dos registros, en una linea. Pura.
+function Carga-Texto([int]$estado, [int]$alarmas) {
+    $al = @(Bits-Texto $alarmas $BITS_CARGA_AL)
+    if ($al.Count -gt 0) { return ($al -join '; ') }
+    $t = @()
+    if (($estado -band (1 -shl 5)) -ne 0) { $t += 'bateria llena' }
+    if (($estado -band (1 -shl 3)) -eq 0) { $t += 'cargador NO habilitado' }
+    if (($estado -band (1 -shl 1)) -eq 0) { $t += 'sin energia para cargar' }
+    if ($t.Count -eq 0) { return 'cargando' }
+    return ($t -join '; ')
+}
+
+# Que TCUs hay que pedir y a que NCU, a partir de la tabla ya pintada: asi la
+# lectura de carga cubre exactamente lo que se ve, ni una TCU mas. Pura.
+function Carga-Pedidos($tabla) {
+    $m = @{}
+    foreach ($f in @($tabla)) {
+        if ("$($f.TCU)" -notmatch '^\d+$') { continue }
+        $k = "$($f.NCU)"
+        if (-not $m.ContainsKey($k)) { $m[$k] = @() }
+        $m[$k] += [int]$f.TCU
+    }
+    $r = @{}
+    foreach ($k in @($m.Keys)) { $r[$k] = @($m[$k] | Sort-Object -Unique) }
+    return $r
+}
+
+function Bat-Tabla($diag, $hallazgos = $null, $carga = $null) {
     $porTcu = @{}
     foreach ($h in @($hallazgos)) { 
         $k = "$($h.NCU)|$($h.TCU)"
@@ -4444,6 +4516,9 @@ function Bat-Tabla($diag, $hallazgos = $null) {
             Vpanel_mV = "$($f.Vpanel_mV)"; Ientrada_mA = "$($f.Ientrada_mA)"
             Tbat_C = "$($f.Tbat_C)"; Tpcb_C = "$($f.Tpcb_C)"
             Dia = $(if ("$($f.Dia)" -eq '1') { 'si' } elseif ("$($f.Dia)" -eq '0') { 'no' } else { '' })
+            # vacia mientras no se pulse LEER CARGA: son registros que el
+            # diagnostico no lee
+            Carga = $(if ($null -ne $carga -and $carga.ContainsKey($k)) { "$($carga[$k].Carga)" } else { '' })
             Estado = $(if ($porTcu.ContainsKey($k)) { ($porTcu[$k] -join '; ') }
                        elseif ("$($f.Salud)" -eq 'OFFLINE') { 'sin datos' } else { 'OK' })
         }
@@ -5428,6 +5503,7 @@ function Diag-LeerTcu([byte]$tcu) {
 function Diag-Correr {
     $cx = Params-Conexion
     $lvG.Items.Clear(); $script:UltimoDiag = @(); $lblGResumen.Text = ''
+    $script:UltimaCarga = @{}   # lo leido de carga era de la lectura anterior
     # trabajos: una entrada por NCU (planta completa) o una sola (modo normal)
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     if ($cx.multi) {
@@ -5707,6 +5783,7 @@ $btnGComm.Add_Click({ Lanzar {
     $trabajos = @(Trabajos-Planta $cx $tcus $(if ($cx.multi) { $txtGNcus.Text } else { '' }))
     if ($trabajos.Count -eq 0) { Con 'El filtro de NCUs no coincide con ninguna NCU de la planta.' ([System.Drawing.Color]::Orange); return }
     $lvG.Items.Clear(); $script:UltimoDiag = @(); $lblGResumen.Text = ''
+    $script:UltimaCarga = @{}   # lo leido de carga era de la lectura anterior
     $script:UltimoEsComm = $true
     $reloj0 = Get-Date
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
@@ -5777,18 +5854,21 @@ $cbGVerNcu.Add_SelectedIndexChanged({ if (-not $script:Ocupado) { Diag-Refrescar
 # Trabaja sobre el ultimo diagnostico: la tension, la corriente, el SoH y las
 # temperaturas ya se leyeron ahi. Cero lecturas nuevas.
 $script:UltimaBatTabla = @()
+# "ncu|tcu" -> lo leido en la seccion de carga. Vacio hasta que se pulsa LEER
+# CARGA, y se vacia con cada diagnostico nuevo para no mezclar dos momentos.
+$script:UltimaCarga = @{}
 
 function Bat-Pintar {
     if (@($script:UltimoDiag).Count -eq 0) {
         [void][System.Windows.Forms.MessageBox]::Show('Haz primero un DIAGNOSTICAR: estas son sus baterias, no se lee nada nuevo.','Falta el diagnostico'); return $false
     }
     $script:UltimaBat = @(Bat-Auditar $script:UltimoDiag)
-    $script:UltimaBatTabla = @(Bat-Tabla $script:UltimoDiag $script:UltimaBat)
+    $script:UltimaBatTabla = @(Bat-Tabla $script:UltimoDiag $script:UltimaBat $script:UltimaCarga)
     $lvB.BeginUpdate(); $lvB.Items.Clear()
     foreach ($f in $script:UltimaBatTabla) {
         $item = New-Object System.Windows.Forms.ListViewItem("$($f.NCU)")
         foreach ($c in @($f.TCU, $f.SoC, $f.SoH, $f.Vbat_mV, $f.Ibat_mA, $f.Vpanel_mV, $f.Ientrada_mA,
-                         $f.Tbat_C, $f.Tpcb_C, $f.Dia, $f.Estado)) { [void]$item.SubItems.Add("$c") }
+                         $f.Tbat_C, $f.Tpcb_C, $f.Dia, $f.Carga, $f.Estado)) { [void]$item.SubItems.Add("$c") }
         $item.ForeColor = $(if ($f.Estado -eq 'OK') { [System.Drawing.Color]::DarkGreen }
                             elseif ($f.Estado -eq 'sin datos') { [System.Drawing.Color]::Gray }
                             elseif ($f.Estado -like '*SIN BATERIA*' -or $f.Estado -like '*SOBRETENSION*') { [System.Drawing.Color]::Firebrick }
@@ -5807,6 +5887,57 @@ function Bat-Pintar {
 $btnBVer.Add_Click({ if (Bat-Pintar) { Con "Baterias: $($script:UltimaBatTabla.Count) TCUs del ultimo diagnostico." ([System.Drawing.Color]::SteelBlue) } })
 $btnBAud.Add_Click({ if (Bat-Pintar) { $btnGBat.PerformClick() } })
 
+# El bloque compacto de 22 registros por TCU no trae el estado del cargador:
+# eso vive en el bloque largo (50000 + (TCU-1)*50), offsets 21..31. Una peticion
+# corta por TCU, y solo cuando se pide: con esto el equipo DICE si esta
+# cargando, en vez de deducirlo de la corriente.
+$btnBCar.Add_Click({ Lanzar {
+    if (@($script:UltimaBatTabla).Count -eq 0) {
+        [void][System.Windows.Forms.MessageBox]::Show('Pulsa antes VER BATERIAS: la carga se lee para las TCUs de esa tabla.','Falta la tabla'); return
+    }
+    $cx = Params-Conexion
+    $ped = Carga-Pedidos $script:UltimaBatTabla
+    $trabajos = @(Trabajos-Planta $cx $null '')
+    $tot = 0; foreach ($k in @($ped.Keys)) { $tot += @($ped[$k]).Count }
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "CARGA: $tot TCUs, bloque largo de la NCU (50000 + (TCU-1)*50, offsets 21..31) por el puerto $PUERTO_NCU" ([System.Drawing.Color]::SteelBlue)
+    Prog-Iniciar $tot
+    $nOk = 0; $nKo = 0
+    foreach ($tr in $trabajos) {
+        if ($script:Cancelar) { break }
+        $et = "$($tr.ncu)"
+        $script:NcuLog = $et
+        # ojo: $ped[$et] de una clave que no existe es $null, y @($null) tiene
+        # UN elemento en PS 5.1. Sin el ContainsKey se pediria una TCU vacia.
+        if (-not $ped.ContainsKey($et)) { continue }
+        $mias = @($ped[$et])
+        if ($mias.Count -eq 0) { continue }
+        try { Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to }
+        catch {
+            $nKo += $mias.Count; Prog-Paso $mias.Count
+            Con ("NCU{0,-3} {1,-15} SIN RESPUESTA: {2}" -f $et, $tr.ip, $_) ([System.Drawing.Color]::Salmon)
+            continue
+        }
+        foreach ($tcu in $mias) {
+            if ($script:Cancelar) { break }
+            $c = Ncu-CargaCompat @($tcu)
+            if ($c.ContainsKey([int]$tcu)) { $script:UltimaCarga["$et|$tcu"] = $c[[int]$tcu]; $nOk++ }
+            else { $nKo++ }
+            Prog-Paso
+            [System.Windows.Forms.Application]::DoEvents()
+        }
+        Modbus-Cerrar
+        Con ("NCU{0,-3} {1,-15} carga leida de {2} TCUs" -f $et, $tr.ip, $mias.Count) ([System.Drawing.Color]::LightGreen)
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    [void](Bat-Pintar)
+    Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "CARGA: $nOk TCUs con estado de cargador, $nKo sin respuesta." $(if ($nKo) { [System.Drawing.Color]::Orange } else { [System.Drawing.Color]::SteelBlue })
+    if ($nOk -eq 0) {
+        Con "Ninguna respondio: puede que esta NCU no sirva el bloque largo (esta en el mapa R7.1, pero no todas las versiones lo exponen)." ([System.Drawing.Color]::Orange)
+    }
+} })
+
 $btnBCsv.Add_Click({
     if (@($script:UltimaBatTabla).Count -eq 0) { return }
     $dlg = New-Object System.Windows.Forms.SaveFileDialog
@@ -5824,8 +5955,11 @@ $btnBJson.Add_Click({
     $dlg.Filter = 'JSON (*.json)|*.json'
     $dlg.FileName = 'baterias_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.json'
     if ($dlg.ShowDialog() -eq 'OK') {
+        # la carga cruda va aparte: en la tabla solo cabe el texto, y para
+        # discutir con fabrica hacen falta los registros tal cual
         $o = @{tipo='baterias_tcu'; planta=(Nombre-Planta); fecha=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-               toolbox=$VERSION_TOOLBOX; tecnico=$script:Usuario; tcus=@($script:UltimaBatTabla)}
+               toolbox=$VERSION_TOOLBOX; tecnico=$script:Usuario; tcus=@($script:UltimaBatTabla)
+               carga=$script:UltimaCarga}
         ConvertTo-Json $o -Depth 5 | Set-Content $dlg.FileName -Encoding UTF8
         Con "Baterias en JSON: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
     }
@@ -5836,7 +5970,7 @@ $btnGBat.Add_Click({
         [void][System.Windows.Forms.MessageBox]::Show('Haz primero un DIAGNOSTICAR: la auditoria de baterias se hace con esos datos, sin volver a leer.','Falta el diagnostico'); return
     }
     $script:UltimaBat = @(Bat-Auditar $script:UltimoDiag)
-    $script:UltimaBatTabla = @(Bat-Tabla $script:UltimoDiag $script:UltimaBat)
+    $script:UltimaBatTabla = @(Bat-Tabla $script:UltimoDiag $script:UltimaBat $script:UltimaCarga)
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     $vistos = @($script:UltimoDiag | Where-Object { "$($_.TCU)" -match '^\d+$' -and "$($_.Salud)" -ne 'OFFLINE' }).Count
     if ($script:UltimaBat.Count -eq 0) {
