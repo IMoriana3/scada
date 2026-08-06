@@ -132,6 +132,25 @@ valor del preset— dice ahora explícitamente que **no está en la tabla ni cue
 como desviación**, porque salía justo encima de las desviaciones de otra TCU y
 se leía como si se estuviera desdiciendo de ellas.
 
+**De la auditoría a escribir (v10.8)** — la auditoría deja una lista de TCUs con
+desviaciones, que son **exactamente** las que hay que reescribir; pero había que
+apuntarlas a mano y teclear el rango en *Escribir*. El botón **Escribir…** lo
+prepara: el preset de referencia en la tabla y el rango de las que fallaron, y
+te lleva allí. Como el resto, **prepara y no escribe**: pulsas tú.
+
+Dos avisos que da al preparar, porque el rango va de la primera a la última:
+
+- si dentro caen TCUs que estaban bien, lo dice — reescribirles el mismo preset
+  no las rompe, pero conviene saberlo; para tocar solo las malas está
+  **CSV por TCU…**
+- si son de **varias NCUs**, el rango no vale para todas: una NCU cada vez, o
+  CSV con columna NCU
+
+**Ojo, no confundir con *Cierre*:** ahí solo entran las TCUs que se han
+**actualizado de firmware**, y la auditoría lo único que hace es marcarles los
+parámetros como OK o NOK. Una TCU con desviaciones que no se ha actualizado no
+tiene por qué estar en esa lista.
+
 **Auditar sin volver a leer (v9.1)** — la auditoría hacía **siempre** su propia
 pasada, así que venir de un barrido y auditar era recorrer la planta dos veces
 para los mismos datos. Con la casilla **Usar la última lectura**, lo que ya se
