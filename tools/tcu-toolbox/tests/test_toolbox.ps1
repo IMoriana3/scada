@@ -1490,6 +1490,23 @@ Check 'alta: un rango' ((Parse-ListaNums '11-14') -join ',') '11,12,13,14'
 Check 'alta: mezcla' ((Parse-ListaNums '11-13,20') -join ',') '11,12,13,20'
 Check 'alta: repetidas una vez' ((Parse-ListaNums '26,26') -join ',') '26'
 Check 'alta: vacio no da lista' ($null -eq (Parse-ListaNums '   ')) $true
+# La lista guardada vacia volvia como una fila fantasma: NCU en blanco, TCU 0 y
+# "falta parametros, NVM, modo AUTO", que ademas no se podia cerrar nunca. En
+# PowerShell 5.1 -el del PC de planta- ConvertFrom-Json '[]' devuelve $null, y
+# @($null) tiene UN elemento. Es la misma trampa del recuadro de la portada.
+Check 'cierre: una lista vacia no inventa filas' ((Cierre-DeJson $null).Count) 0
+Check 'cierre: ni una lista con nulos' ((Cierre-DeJson @($null, $null)).Count) 0
+Check 'cierre: la TCU 0 no entra' ((Cierre-DeJson @([pscustomobject]@{ncu='9'; tcu=0})).Count) 0
+Check 'cierre: ni una TCU que no es numero' ((Cierre-DeJson @([pscustomobject]@{ncu='9'; tcu='NCU'})).Count) 0
+$cj = Cierre-DeJson @([pscustomobject]@{ncu='9'; tcu=34; fw='v1.6.0'; params='OK'; nvm=''; modo=''; desde='2026-08-06 10:00'})
+Check 'cierre: la buena si entra' ($cj.Count) 1
+Check 'cierre: con su clave' ($cj.ContainsKey('9|34')) $true
+Check 'cierre: y sus marcas' ($cj['9|34'].params) 'OK'
+Check 'cierre: la TCU como numero' ($cj['9|34'].tcu -is [int]) $true
+# y el alta tampoco deja crear la TCU 0 desde ningun sitio
+$antes = $script:Cierre.Count
+Cierre-Marcar '9' 0 '' '' 'v1.6.0'
+Check 'cierre: marcar la 0 no hace nada' ($script:Cierre.Count) $antes
 Check 'cierre: guarda el FW' ($script:Cierre['9|34'].fw) 'v1.6.0 (map 1)'
 Check 'cierre: recien actualizada no esta cerrada' (Cierre-Estado $script:Cierre['9|34']) 'falta parametros, NVM, modo AUTO'
 Cierre-Marcar '9' 34 'params' 'OK'
