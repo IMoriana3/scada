@@ -73,10 +73,26 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
         except ValueError:
             sys.exit(f"La hoja '{hoja}' no tiene la columna '{nombre}'")
 
+    def col_opcional(*nombres):
+        """Igual que col() pero devuelve None si no esta: para columnas que
+        todavia no existen en todos los Excel."""
+        for n in nombres:
+            if n in head:
+                return head.index(n)
+        return None
+
     i_num, i_proy, i_ncu = col("Nº"), col("Proyecto"), col("NCU")
     i_ip = col("IP NCU")
     i_esc1 = col("Esclavos")
     i_esc2 = col("Esclavos", col("IP GW 2"))   # segundo 'Esclavos', tras IP GW 2
+    # El numero de esclavo Modbus de la HSU (estacion meteo) de cada NCU. La
+    # hoja no lo trae todavia: en cuanto exista una columna 'HSU' (o
+    # 'HSU esclavo'), con el numero por fila de NCU, sale solo en el JSON y la
+    # toolbox lo preselecciona en vez de tirar del 185 por defecto.
+    i_hsu = col_opcional("HSU", "HSU esclavo", "Esclavo HSU")
+    if i_hsu is None:
+        print(f"aviso: la hoja '{hoja}' no tiene columna HSU; "
+              "las entradas saldran sin hsu_esclavo (la toolbox usara 185 y BUSCAR ESCLAVO)")
 
     plantas = {}
     actual = None
@@ -92,6 +108,13 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
             plantas.setdefault(actual, [])
         if not actual:
             continue
+        # El Excel solo pone el nombre en la PRIMERA fila de cada planta, asi
+        # que usar el de la fila dejaba " NCU2", " NCU3"... sin nombre. Y la
+        # toolbox agrupa la entrada "(Planta completa)" por ese prefijo: con
+        # los nombres partidos salian dos grupos, uno con la NCU1 sola (que se
+        # descarta por tener menos de dos) y otro con el resto. Ayora se
+        # quedaba con 15 de 16 NCUs.
+        proy = actual[1]
         ip = v(i_ip)
         if not re.match(r"^\d+\.\d+\.\d+\.\d+$", ip):
             continue
@@ -102,15 +125,22 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
         gws = [(puertos[k], r) for k, r in enumerate(rangos) if r and k < len(puertos)]
         if not gws:
             continue
+        hsu = re.sub(r"\.0$", "", v(i_hsu)) if i_hsu is not None else ""
         for gidx, (puerto, (ini, fin)) in enumerate(gws, start=1):
             sufijo = f" GW{gidx}" if len(gws) > 1 else ""
-            plantas[actual].append({
+            entrada = {
                 "nombre": f"{proy} NCU{n}{sufijo}",
                 "ip": ip,
                 "puerto": puerto,
                 "tcu_ini": ini,
                 "tcu_fin": fin,
-            })
+            }
+            # La HSU cuelga de UN gateway, no de los dos, pero cual es no lo
+            # dice el Excel: se pone en las entradas de la NCU y la toolbox ya
+            # avisa de cambiar el puerto si no responde por ese.
+            if re.match(r"^\d+$", hsu):
+                entrada["hsu_esclavo"] = int(hsu)
+            plantas[actual].append(entrada)
 
     ficheros = []
     for (num, proy), entradas in sorted(plantas.items()):

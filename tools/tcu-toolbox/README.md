@@ -51,6 +51,25 @@ además es un termómetro del enlace. La comparación normaliza lo que no es
 diferencia real: mayúsculas del hexadecimal (`0x0A00` = `0x0a00`) y coma o punto
 decimal (`6,5` = `6.5`).
 
+**La topología del repo tenía las plantas sin nombre (v10.4)** — el Excel
+maestro solo pone el nombre del proyecto en la **primera fila** de cada planta,
+y `make_plantas.py --excel` usaba el de cada fila: salían `Ayora NCU1`,
+` NCU2`, ` NCU3`… La entrada **(Planta completa)** se agrupa por el prefijo
+`<Planta> NCU<n>`, así que con los nombres partidos salían dos grupos —uno con
+la NCU 1 sola, que se descarta por tener menos de dos— y la planta completa se
+quedaba con **15 de 16** NCUs. Solo afectaba a los ficheros generados desde el
+Excel: los exportados desde la página **IPs** de la plataforma siempre han
+llevado el nombre en cada fila y por eso allí salían las 16.
+
+Regenerados los ficheros de `plantas/`, y una comprobación nueva rechaza
+cualquier entrada cuyo nombre empiece por espacio o por `NCU`.
+
+**El generador ya sabe leer la HSU (v10.4)** — si la hoja *Direcciones IP* llega
+a tener una columna **HSU** (o *HSU esclavo*) con el número de esclavo Modbus por
+fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
+preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
+él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
+
 **El resumen de la auditoría mezclaba unidades (v10.3)** — decía
 `0 con desviaciones. 5 filas listadas.` y parecía contradecirse. No lo era: lo
 primero son **TCUs** y lo segundo **variables**, y esas cinco filas eran de
