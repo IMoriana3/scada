@@ -1142,6 +1142,49 @@ Check 'motor: sentido invertido' $vInv.estado 'FALLA'
 Check 'motor: nombra la polaridad' ($vInv.detalle.Contains('INVERTIDO')) $true
 
 Write-Host ''
+Write-Host '== los usuarios se guardan de verdad =='
+# El fallo de la v7.4: el alta creaba el usuario, no lo guardaba, y al reabrir
+# lo volvia a pedir. Aqui se hace el viaje entero: crear, guardar, releer del
+# disco y entrar con esa contrasena.
+if (Test-Path $FICH_USUARIOS) { Remove-Item $FICH_USUARIOS -Force }
+Check 'usuarios: se parte sin fichero' (@(Usuarios-Cargar).Count) 0
+$admin = Usuario-Nuevo 'jefe' 'Jefe de planta' 'admin' 'clave-larga-1'
+Usuarios-Guardar @($admin)
+Check 'usuarios: el fichero existe' (Test-Path $FICH_USUARIOS) $true
+$releidos = @(Usuarios-Cargar)
+Check 'usuarios: se relee uno' $releidos.Count 1
+Check 'usuarios: con su rol' $releidos[0].rol 'admin'
+Check 'usuarios: entra con su clave tras releer' ((Usuario-Validar $releidos 'jefe' 'clave-larga-1').nombre) 'Jefe de planta'
+Check 'usuarios: y no con otra' (Usuario-Validar $releidos 'jefe' 'clave-larga-2') $null
+Check 'usuarios: el fichero no lleva la clave en claro' ((Get-Content $FICH_USUARIOS -Raw).Contains('clave-larga-1')) $false
+# alta de un segundo usuario sobre la lista releida
+Usuarios-Guardar (@($releidos) + (Usuario-Nuevo 'tec' 'Tecnico' 'tecnico' 'otra-clave'))
+$dos = @(Usuarios-Cargar)
+Check 'usuarios: ahora hay dos' $dos.Count 2
+Check 'usuarios: el primero sigue entrando' ((Usuario-Validar $dos 'jefe' 'clave-larga-1') -ne $null) $true
+Check 'usuarios: y el segundo tambien' ((Usuario-Validar $dos 'tec' 'otra-clave').rol) 'tecnico'
+Remove-Item $FICH_USUARIOS -Force
+
+Write-Host ''
+Write-Host '== la trampa de GetNewClosure =='
+# Por que fallaba: dentro de un .GetNewClosure() el ambito "script:" es el del
+# modulo que crea el propio closure, no el del script. Escribir ahi no se ve
+# desde fuera. Mutar un objeto capturado si funciona, y es lo que se usa ahora.
+function Prueba-Closure {
+    $caja = @{ v = $null }
+    $sb = { $script:NoSeVe = 'perdido'; $caja.v = 'llega' }.GetNewClosure()
+    & $sb
+    return @{ porObjeto = $caja.v; porScript = $script:NoSeVe }
+}
+$pc = Prueba-Closure
+Check 'closure: por objeto capturado llega' $pc.porObjeto 'llega'
+Check 'closure: por $script: se pierde' $pc.porScript $null
+Check 'closure: el codigo ya no usa $script:UsrNuevo' ($src.Contains('$script:UsrNuevo')) $false
+Check 'closure: ni $script:UsrLogin' ($src.Contains('$script:UsrLogin')) $false
+Check 'closure: el alta devuelve la hashtable' ($src.Contains('return $sal.usuario')) $true
+Check 'arranque: comprueba que se guardo' ($src.Contains('no se ha podido guardar')) $true
+
+Write-Host ''
 Write-Host '== una tabla vacia tiene que decir por que =='
 # La auditoria solo lista desviaciones: sin ninguna, la tabla se queda vacia y
 # parece que no ha hecho nada. Tiene que dejar dicho ahi mismo que fue bien.

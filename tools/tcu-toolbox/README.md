@@ -37,6 +37,29 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
 
+**El alta de usuarios no guardaba nada (v8.0)** — fallo de la v7.4, y de los
+buenos: creabas el administrador, la ventana se cerraba y no pasaba nada; al
+volver a abrir, te lo pedía otra vez.
+
+La causa es una trampa de PowerShell: **`.GetNewClosure()` mete el bloque en un
+módulo propio**, así que el `$script:UsrNuevo = ...` que escribía el botón *Crear*
+no era el mismo que leía la función. Devolvía `$null`, el arranque hacía `return`
+sin decir nada y nunca se llegaba a guardar. Lo mismo le pasaba al diálogo de
+gestión: cada botón tenía **su propia copia** de la lista de usuarios, así que dar
+de alta y luego dar de baja no veía lo anterior.
+
+Ahora el resultado viaja en una hashtable capturada — un objeto, y mutarlo
+funciona en cualquier ámbito. Y por si acaso, tras crear el administrador se
+**vuelve a leer el fichero del disco**: si la carpeta no deja escribir (Archivos
+de programa, unidad de red de solo lectura) lo dice con la ruta y qué hacer, en
+vez de fallar en silencio.
+
+Hay pruebas del viaje completo (crear → guardar → releer del disco → entrar con
+esa contraseña) y del propio comportamiento de `GetNewClosure`, para que la
+trampa no vuelva a colarse.
+
+Y las contraseñas se escriben con **ñ**.
+
 **Una tabla vacía tiene que decir por qué (v7.9)** — la auditoría de Flota lista
 solo las desviaciones, así que cuando todo está bien la tabla se queda vacía y
 parece que no ha hecho nada. Ahora deja una fila diciéndolo: *«Sin desviaciones:
