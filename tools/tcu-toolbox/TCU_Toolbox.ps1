@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '6.5'
+$VERSION_TOOLBOX = '6.6'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1506,6 +1506,100 @@ function Leer-Decodificado([byte]$unit, [hashtable]$vdef) {
 }
 
 # ---------------------------------------------------------------------------
+#  Ensayos SAT (Anexo 4): analisis de los registros de 7 dias
+#  Funciones puras: reciben las filas ya leidas y devuelven el veredicto. Van
+#  aparte del registrador para poder probarlas, que en un ensayo contractual
+#  el numero que sale de aqui es el que se firma.
+# ---------------------------------------------------------------------------
+
+# D.1.1 Precision de seguimiento. Una muestra solo cuenta si el objetivo lleva
+# $estables muestras sin cambiar: asi se descartan los transitorios en los que
+# el seguidor aun va de camino, y las activaciones de posicion de seguridad,
+# que es justo lo que pide el anexo.
+function Sat-Precision($filas, [double]$tol = 1.0, [int]$estables = 2) {
+    $porTcu = @{}
+    foreach ($f in $filas) {
+        $k = "$($f.ncu)|$($f.tcu)"
+        if (-not $porTcu.ContainsKey($k)) { $porTcu[$k] = New-Object System.Collections.ArrayList }
+        [void]$porTcu[$k].Add($f)
+    }
+    $res = @()
+    foreach ($k in @($porTcu.Keys | Sort-Object)) {
+        $ms = @($porTcu[$k])
+        $objPrev = $null; $seguidas = 0
+        $val = 0; $dentro = 0; $peor = 0.0
+        foreach ($m in $ms) {
+            $o = [double]$m.obj
+            if ($null -ne $objPrev -and [math]::Abs($o - $objPrev) -lt 0.05) { $seguidas++ } else { $seguidas = 0 }
+            $objPrev = $o
+            if ($seguidas -lt $estables) { continue }      # aun llegando: no cuenta
+            $val++
+            $d = [math]::Abs([double]$m.desv)
+            if ($d -gt $peor) { $peor = $d }
+            if ($d -le $tol) { $dentro++ }
+        }
+        $pct = $(if ($val -gt 0) { [math]::Round(100.0 * $dentro / $val, 2) } else { 0 })
+        $p = $k -split '\|'
+        $res += [pscustomobject]@{NCU=$p[0]; TCU=[int]$p[1]; Muestras=@($ms).Count; Validas=$val
+            Dentro=$dentro; Fuera=($val - $dentro); Peor_deg=[math]::Round($peor,2)
+            Precision_pct=$pct; Cumple=$(if ($val -gt 0 -and $dentro -eq $val) { 'SI' } else { 'NO' })}
+    }
+    return $res
+}
+
+# D.3.4.1 Disponibilidad de operacion: se cuenta indisponible cada registro con
+# alarma de motor, bateria o comunicacion. Las meteorologicas no cuentan (lo
+# dice el anexo). Umbral 99% por TCU y dia.
+function Sat-DispOperacion($filas, [double]$minimo = 99.0) {
+    $porTcu = @{}
+    foreach ($f in $filas) {
+        $k = "$($f.dia)|$($f.ncu)|$($f.tcu)"
+        if (-not $porTcu.ContainsKey($k)) { $porTcu[$k] = @{n=0; mal=0} }
+        $porTcu[$k].n++
+        if ([int]$f.al_motor -or [int]$f.al_bat -or [int]$f.al_com) { $porTcu[$k].mal++ }
+    }
+    $res = @()
+    foreach ($k in @($porTcu.Keys | Sort-Object)) {
+        $v = $porTcu[$k]; $p = $k -split '\|'
+        $pct = $(if ($v.n -gt 0) { [math]::Round(100.0 * ($v.n - $v.mal) / $v.n, 2) } else { 0 })
+        $res += [pscustomobject]@{Dia=$p[0]; NCU=$p[1]; TCU=[int]$p[2]; Registros=$v.n
+            Indisponibles=$v.mal; Disponibilidad_pct=$pct
+            Cumple=$(if ($pct -ge $minimo) { 'SI' } else { 'NO' })}
+    }
+    return $res
+}
+
+# D.4 Disponibilidad de comunicaciones. Regla del anexo: un intento fallido
+# suelto NO cuenta si el siguiente se restablece, salvo que se repita dentro de
+# dos minutos; en ese caso cuentan todos los fallos.
+function Sat-DispComms($fallos, $intentosPorClave, [double]$minimo = 98.5, [int]$ventana = 120) {
+    $porClave = @{}
+    foreach ($f in $fallos) {
+        $k = "$($f.dia)|$($f.ncu)|$($f.equipo)"
+        if (-not $porClave.ContainsKey($k)) { $porClave[$k] = New-Object System.Collections.ArrayList }
+        [void]$porClave[$k].Add([long]$f.ts)
+    }
+    $res = @()
+    foreach ($k in @($porClave.Keys | Sort-Object)) {
+        $ts = @($porClave[$k] | Sort-Object)
+        $cuenta = 0
+        for ($i = 0; $i -lt $ts.Count; $i++) {
+            $acompanado = $false
+            if ($i -gt 0 -and ($ts[$i] - $ts[$i-1]) -le $ventana) { $acompanado = $true }
+            if (-not $acompanado -and $i -lt ($ts.Count - 1) -and ($ts[$i+1] - $ts[$i]) -le $ventana) { $acompanado = $true }
+            if ($acompanado) { $cuenta++ }
+        }
+        $p = $k -split '\|'
+        $n = [int]$intentosPorClave["$($p[0])"]
+        $pct = $(if ($n -gt 0) { [math]::Round(100.0 * ($n - $cuenta) / $n, 2) } else { 0 })
+        $res += [pscustomobject]@{Dia=$p[0]; NCU=$p[1]; Equipo=$p[2]; Intentos=$n
+            Fallos_brutos=$ts.Count; Fallos_computados=$cuenta; Disponibilidad_pct=$pct
+            Cumple=$(if ($pct -ge $minimo) { 'SI' } else { 'NO' })}
+    }
+    return $res
+}
+
+# ---------------------------------------------------------------------------
 #  Interfaz
 # ---------------------------------------------------------------------------
 $form = New-Object System.Windows.Forms.Form
@@ -2339,6 +2433,53 @@ $lvFW.View = 'Details'; $lvFW.FullRowSelect = $true; $lvFW.GridLines = $true
 [void]$lvFW.Columns.Add('TCUs', 55)
 [void]$lvFW.Columns.Add('Estado / nota', 470)
 $tabFW.Controls.Add($lvFW)
+
+# ============================ TAB SAT ============================
+$tabSAT = New-Object System.Windows.Forms.TabPage
+$tabSAT.Text = 'SAT'
+$tabs.TabPages.Add($tabSAT)
+
+[void](LG $tabSAT 'Muestreo TCU s' 10 86)
+$txtSatInt = TG $tabSAT '60' 100 22 42
+[void](LG $tabSAT 'Comms s' 150 52)
+$txtSatCom = TG $tabSAT '15' 206 22 38
+[void](LG $tabSAT 'Dias' 252 30)
+$txtSatDias = TG $tabSAT '7' 286 22 32
+
+$btnSatIni = New-Object System.Windows.Forms.Button
+$btnSatIni.Text = 'INICIAR REGISTRO'
+$btnSatIni.Location = New-Object System.Drawing.Point(330, 18)
+$btnSatIni.Size = New-Object System.Drawing.Size(160, 28)
+$btnSatIni.BackColor = [System.Drawing.Color]::FromArgb(0,120,60)
+$btnSatIni.ForeColor = [System.Drawing.Color]::White
+$tabSAT.Controls.Add($btnSatIni)
+
+$btnSatFin = New-Object System.Windows.Forms.Button
+$btnSatFin.Text = 'PARAR'
+$btnSatFin.Location = New-Object System.Drawing.Point(498, 18)
+$btnSatFin.Size = New-Object System.Drawing.Size(90, 28)
+$btnSatFin.Enabled = $false
+$tabSAT.Controls.Add($btnSatFin)
+
+$btnSatAnal = New-Object System.Windows.Forms.Button
+$btnSatAnal.Text = 'ANALIZAR Y EMITIR'
+$btnSatAnal.Location = New-Object System.Drawing.Point(596, 18)
+$btnSatAnal.Size = New-Object System.Drawing.Size(170, 28)
+$btnSatAnal.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnSatAnal.ForeColor = [System.Drawing.Color]::White
+$tabSAT.Controls.Add($btnSatAnal)
+
+$lblSat = LG $tabSAT 'Anexo 4: D.1.1 precision, D.3.4 disponibilidad de operacion y D.4 de comunicaciones. Deja la ventana abierta los dias que dure el ensayo.' 10 890 56
+$lblSat.ForeColor = [System.Drawing.Color]::Gray
+
+$lvSat = New-Object System.Windows.Forms.ListView
+$lvSat.Location = New-Object System.Drawing.Point(10, 82)
+$lvSat.Size = New-Object System.Drawing.Size(898, 278)
+$lvSat.View = 'Details'; $lvSat.FullRowSelect = $true; $lvSat.GridLines = $true
+[void]$lvSat.Columns.Add('Hora', 130)
+[void]$lvSat.Columns.Add('Ensayo', 110)
+[void]$lvSat.Columns.Add('Detalle', 640)
+$tabSAT.Controls.Add($lvSat)
 
 # ============================ TAB HSU (METEO) ============================
 $tabH = New-Object System.Windows.Forms.TabPage
@@ -4901,6 +5042,213 @@ $btnFwCsv.Add_Click({
 # cada NCU cachea (30200+, puerto 502). Rellena la lista y el desplegable.
 $script:HsusPlanta = @()
 $script:HsuSel = $null
+# ---------------------------------------------------------------------------
+#  Ensayos SAT: registrador continuo
+#  Dos cadencias sobre el bloque compacto de la NCU (puerto 502, sin Zigbee):
+#  el pase de comunicaciones es barato (4 lecturas/NCU) y va cada 15 s; el de
+#  precision y alarmas cuesta mas (18/NCU) y va cada minuto. Se escribe a disco
+#  en cada pase, sin acumular en memoria: si el PC se reinicia a los cuatro
+#  dias, lo registrado hasta entonces esta a salvo y el ensayo continua al
+#  volver a arrancar (los ficheros son diarios y se abren en modo anadir).
+# ---------------------------------------------------------------------------
+$script:SatOn = $false
+$script:SatDir = ''
+$script:SatHasta = $null
+$script:SatProxTcu = [datetime]::MinValue
+$script:SatProxCom = [datetime]::MinValue
+$script:SatPasesT = 0; $script:SatPasesC = 0; $script:SatFallos = 0
+
+function Sat-Log([string]$ensayo, [string]$detalle) {
+    $item = New-Object System.Windows.Forms.ListViewItem((Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+    [void]$item.SubItems.Add($ensayo); [void]$item.SubItems.Add($detalle)
+    $lvSat.Items.Insert(0, $item) | Out-Null
+    while ($lvSat.Items.Count -gt 500) { $lvSat.Items.RemoveAt($lvSat.Items.Count - 1) }
+}
+
+function Sat-Fichero([string]$base) {
+    return (Join-Path $script:SatDir ("{0}_{1}.csv" -f $base, (Get-Date -Format 'yyyy-MM-dd')))
+}
+
+function Sat-Cabecera([string]$fich, [string]$cab) {
+    if (-not (Test-Path $fich)) { Set-Content -Path $fich -Value $cab -Encoding UTF8 }
+}
+
+# Un pase de comunicaciones: quien contesta y quien no, TCUs y HSUs.
+function Sat-PaseComms($trabajos) {
+    $fich = Sat-Fichero 'comm'
+    Sat-Cabecera $fich 'ts;fecha;ncu;equipo;evento'
+    $lineas = New-Object System.Collections.ArrayList
+    $ts = [int][double]::Parse((Get-Date -UFormat %s))
+    $fecha = Get-Date -Format 'yyyy-MM-dd'
+    $nEq = 0; $nMal = 0
+    foreach ($tr in $trabajos) {
+        if (-not $script:SatOn) { break }
+        $cm = $null
+        try { Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to; $cm = Ncu-Comm $tr.tcus }
+        catch { [void]$lineas.Add("$ts;$fecha;$($tr.ncu);NCU;SIN_NCU"); $nMal++ }
+        Modbus-Cerrar
+        if ($null -eq $cm) { continue }
+        $nEq++      # la propia NCU cuenta como equipo
+        foreach ($t in @($cm.tcus.Keys)) {
+            $nEq++
+            if (-not $cm.tcus[$t].comunica) { [void]$lineas.Add("$ts;$fecha;$($tr.ncu);TCU$t;FALLO"); $nMal++ }
+        }
+        foreach ($h in @($cm.hsus)) {
+            $nEq++
+            if (-not $h.comunica) { [void]$lineas.Add("$ts;$fecha;$($tr.ncu);$($h.hsu);FALLO"); $nMal++ }
+        }
+    }
+    [void]$lineas.Add("$ts;$fecha;*;PASE;$nEq")
+    Add-Content -Path $fich -Value $lineas -Encoding UTF8
+    $script:SatPasesC++
+    $script:SatFallos += $nMal
+    return @{equipos=$nEq; fallos=$nMal}
+}
+
+# Un pase de precision y alarmas: posicion real, objetivo, desviacion y las
+# tres familias de alarma que cuentan para la disponibilidad de operacion.
+function Sat-PaseTcu($trabajos) {
+    $fich = Sat-Fichero 'precision'
+    Sat-Cabecera $fich 'ts;dia;ncu;tcu;real;obj;desv;modo;al_motor;al_bat;al_com'
+    $lineas = New-Object System.Collections.ArrayList
+    $ts = [int][double]::Parse((Get-Date -UFormat %s))
+    $dia = Get-Date -Format 'yyyy-MM-dd'
+    $n = 0
+    foreach ($tr in $trabajos) {
+        if (-not $script:SatOn) { break }
+        $dm = $null
+        try { Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to; $dm = Ncu-DiagCompat $tr.tcus }
+        catch { }
+        Modbus-Cerrar
+        if ($null -eq $dm) { continue }
+        foreach ($t in @($dm.Keys | Sort-Object)) {
+            $d = $dm[$t]
+            $al = "$($d.Alarmas)"
+            $mot = $(if ($al -match 'eje|motor|sobrecorriente|corto|driver') { 1 } else { 0 })
+            $bat = $(if ($al -match 'bateria|SoC|bat') { 1 } else { 0 })
+            $com = $(if ("$($d.Salud)" -eq 'OFFLINE') { 1 } else { 0 })
+            [void]$lineas.Add(("{0};{1};{2};{3};{4};{5};{6};{7};{8};{9};{10}" -f `
+                $ts, $dia, $tr.ncu, $t, $d.Tilt, $d.Objetivo, $d.Dif, $d.Modo, $mot, $bat, $com))
+            $n++
+        }
+    }
+    Add-Content -Path $fich -Value $lineas -Encoding UTF8
+    $script:SatPasesT++
+    return $n
+}
+
+$tmrSat = New-Object System.Windows.Forms.Timer
+$tmrSat.Interval = 1000
+$tmrSat.Add_Tick({
+    if (-not $script:SatOn) { return }
+    if ($script:Ocupado) { return }        # hay otra operacion en marcha: este pase se salta
+    $ahora = Get-Date
+    if ($script:SatHasta -and $ahora -gt $script:SatHasta) {
+        $script:SatOn = $false; $tmrSat.Stop()
+        $btnSatIni.Enabled = $true; $btnSatFin.Enabled = $false
+        Sat-Log 'FIN' 'Ensayo terminado: se ha cumplido el plazo. Pulsa ANALIZAR Y EMITIR.'
+        Con 'Registro SAT terminado.' ([System.Drawing.Color]::SteelBlue)
+        return
+    }
+    $script:Ocupado = $true
+    try {
+        $cx = Params-Conexion
+        $trabajos = @(Trabajos-Planta $cx $null)
+        if ($ahora -ge $script:SatProxCom) {
+            $script:SatProxCom = $ahora.AddSeconds([double]$script:SatIntCom)
+            $r = Sat-PaseComms $trabajos
+            if ($r.fallos -gt 0) { Sat-Log 'D.4 comms' "$($r.equipos) equipos, $($r.fallos) sin responder" }
+        }
+        if ($ahora -ge $script:SatProxTcu) {
+            $script:SatProxTcu = $ahora.AddSeconds([double]$script:SatIntTcu)
+            $n = Sat-PaseTcu $trabajos
+            Sat-Log 'D.1.1 / D.3.4' "$n TCUs registradas (pase $($script:SatPasesT))"
+        }
+    } catch {
+        Sat-Log 'ERROR' "$_"
+    } finally {
+        $script:Ocupado = $false
+        Modbus-Cerrar
+    }
+})
+
+$btnSatIni.Add_Click({
+    try {
+        $script:SatIntTcu = Val-Int $txtSatInt.Text 'Muestreo TCU' 15 3600
+        $script:SatIntCom = Val-Int $txtSatCom.Text 'Muestreo comms' 5 3600
+        $dias = Val-Int $txtSatDias.Text 'Dias' 1 30
+        $cx = Params-Conexion
+        if (-not $cx.multi) {
+            $r0 = [System.Windows.Forms.MessageBox]::Show(
+                "El anexo pide el 100% de la planta y ahora mismo hay una NCU suelta seleccionada.`r`n`r`nContinuar de todas formas?",
+                'Alcance del ensayo', 'YesNo', 'Warning')
+            if ($r0 -ne 'Yes') { return }
+        }
+        $script:SatDir = Join-Path (Join-Path $PSScriptRoot 'informes') ('sat_' + ((Nombre-Planta) -replace '[^\w\-]', '_'))
+        if (-not (Test-Path $script:SatDir)) { New-Item -ItemType Directory -Path $script:SatDir -Force | Out-Null }
+        $script:SatHasta = (Get-Date).AddDays($dias)
+        $script:SatProxTcu = [datetime]::MinValue; $script:SatProxCom = [datetime]::MinValue
+        $script:SatPasesT = 0; $script:SatPasesC = 0; $script:SatFallos = 0
+        $script:SatOn = $true
+        $btnSatIni.Enabled = $false; $btnSatFin.Enabled = $true
+        $tmrSat.Start()
+        Sat-Log 'INICIO' "Cada $($script:SatIntTcu)s (TCU) y $($script:SatIntCom)s (comms) hasta $($script:SatHasta.ToString('yyyy-MM-dd HH:mm')). Carpeta: $script:SatDir"
+        Con "Registro SAT iniciado. NO CIERRES ESTA VENTANA hasta que termine el ensayo. Carpeta: $script:SatDir" ([System.Drawing.Color]::Orange)
+    } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon) }
+})
+
+$btnSatFin.Add_Click({
+    $script:SatOn = $false; $tmrSat.Stop()
+    $btnSatIni.Enabled = $true; $btnSatFin.Enabled = $false
+    Sat-Log 'PARADA' "Detenido a mano. Pases TCU: $($script:SatPasesT), pases comms: $($script:SatPasesC)."
+    Con 'Registro SAT detenido.' ([System.Drawing.Color]::Orange)
+})
+
+$btnSatAnal.Add_Click({ Lanzar {
+    $dir = $script:SatDir
+    if (-not $dir -or -not (Test-Path $dir)) {
+        $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+        $dlg.Description = 'Carpeta con los CSV del ensayo SAT'
+        if ($dlg.ShowDialog() -ne 'OK') { return }
+        $dir = $dlg.SelectedPath
+    }
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Analizando ensayos SAT en $dir" ([System.Drawing.Color]::SteelBlue)
+    $fp = @(Get-ChildItem (Join-Path $dir 'precision_*.csv') -ErrorAction SilentlyContinue)
+    $fc = @(Get-ChildItem (Join-Path $dir 'comm_*.csv') -ErrorAction SilentlyContinue)
+    if ($fp.Count -eq 0 -and $fc.Count -eq 0) { Con 'No hay ficheros de registro en esa carpeta.' ([System.Drawing.Color]::Orange); return }
+    $lvSat.Items.Clear()
+
+    if ($fp.Count -gt 0) {
+        $filas = @()
+        foreach ($f in $fp) { $filas += @(Import-Csv $f.FullName -Delimiter ';') }
+        Con "  D.1.1 / D.3.4: $($filas.Count) registros de $($fp.Count) dia(s)" ([System.Drawing.Color]::Gainsboro)
+        $pr = @(Sat-Precision $filas 1.0 2)
+        $malP = @($pr | Where-Object { $_.Cumple -eq 'NO' })
+        $pr | Export-Csv (Join-Path $dir 'RESULTADO_D1.1_precision.csv') -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+        Sat-Log 'D.1.1' ("Precision <=1 deg: {0} de {1} TCUs cumplen{2}" -f ($pr.Count - $malP.Count), $pr.Count, $(if ($malP.Count) { " - INCUMPLEN: " + (($malP | ForEach-Object { "NCU$($_.NCU)/$($_.TCU)" }) -join ', ') } else { '' }))
+        $do = @(Sat-DispOperacion $filas 99.0)
+        $malO = @($do | Where-Object { $_.Cumple -eq 'NO' })
+        $do | Export-Csv (Join-Path $dir 'RESULTADO_D3.4.1_disp_operacion.csv') -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+        Sat-Log 'D.3.4.1' ("Disponibilidad >=99%: {0} de {1} TCU-dia cumplen{2}" -f ($do.Count - $malO.Count), $do.Count, $(if ($malO.Count) { " - INCUMPLEN: " + (($malO | Select-Object -First 20 | ForEach-Object { "$($_.Dia) NCU$($_.NCU)/$($_.TCU) $($_.Disponibilidad_pct)%" }) -join ', ') } else { '' }))
+    }
+
+    if ($fc.Count -gt 0) {
+        $ev = @()
+        foreach ($f in $fc) { $ev += @(Import-Csv $f.FullName -Delimiter ';') }
+        $intentos = @{}
+        foreach ($e in $ev) { if ($e.equipo -eq 'PASE') { $intentos["$($e.fecha)"] = [int]$intentos["$($e.fecha)"] + [int]$e.evento } }
+        $fallos = @($ev | Where-Object { $_.evento -eq 'FALLO' } | ForEach-Object {
+            [pscustomobject]@{dia=$_.fecha; ncu=$_.ncu; equipo=$_.equipo; ts=$_.ts} })
+        Con "  D.4: $($ev.Count) eventos, $($fallos.Count) fallos brutos" ([System.Drawing.Color]::Gainsboro)
+        $dc = @(Sat-DispComms $fallos $intentos 98.5 120)
+        $malC = @($dc | Where-Object { $_.Cumple -eq 'NO' })
+        $dc | Export-Csv (Join-Path $dir 'RESULTADO_D4_disp_comunicaciones.csv') -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+        Sat-Log 'D.4' ("Comunicaciones >=98,5%: {0} de {1} equipo-dia cumplen{2}" -f ($dc.Count - $malC.Count), $dc.Count, $(if ($malC.Count) { " - INCUMPLEN: " + (($malC | Select-Object -First 20 | ForEach-Object { "$($_.Dia) NCU$($_.NCU)/$($_.Equipo) $($_.Disponibilidad_pct)%" }) -join ', ') } else { '' }))
+    }
+    Con "Resultados escritos en $dir (ficheros RESULTADO_*.csv)." ([System.Drawing.Color]::LightGreen)
+} })
+
 $btnHBuscar.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $p = $null; if ($cbPlanta.SelectedItem) { $p = $PLANTAS[$cbPlanta.SelectedItem] }
