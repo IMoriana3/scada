@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '10.8'
+$VERSION_TOOLBOX = '10.9'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -6053,12 +6053,16 @@ function Aud-Igual([string]$esperado, [string]$leido) {
 # ninguna desviacion (las de "sin respuesta" tambien se listan). Leido seguido
 # parece que se contradice: "0 con desviaciones. 5 filas listadas."
 # Aqui se dice de que son las filas. Pura: se prueba sin planta.
-function Aud-Resumen($filas, [int]$tcusOk, [int]$tcusDesv, [int]$tcusErr) {
+function Aud-Resumen($filas, [int]$tcusOk, [int]$tcusDesv, [int]$tcusErr, [int]$tcusMixtas = 0) {
     $todas = @($filas)
     $nDesv = @($todas | Where-Object { "$($_.Nota)" -like 'DESVIACION*' }).Count
     $nSin  = @($todas | Where-Object { "$($_.Nota)" -eq 'sin respuesta' }).Count
     $eq = { param($n) $(if ($n -eq 1) { 'TCU' } else { 'TCUs' }) }
-    $t = "Auditoria: $tcusOk $(& $eq $tcusOk) conformes | $tcusDesv $(& $eq $tcusDesv) con desviaciones | $tcusErr $(& $eq $tcusErr) sin respuesta."
+    $t = "Auditoria: $tcusOk $(& $eq $tcusOk) conformes | $tcusDesv $(& $eq $tcusDesv) con desviaciones | $tcusErr $(& $eq $tcusErr) sin respuesta"
+    # las tres cuentas son de TCUs distintas; las mixtas van en "sin
+    # respuesta" y sin decirlo no cuadraban con las desviaciones de la tabla
+    if ($tcusMixtas -gt 0) { $t += " (de esas, $tcusMixtas con desviaciones ademas)" }
+    $t += "."
     if ($todas.Count -eq 0) { return $t }
     $partes = @()
     if ($nDesv -gt 0) { $partes += "$nDesv $(if ($nDesv -eq 1) { 'desviacion' } else { 'desviaciones' })" }
@@ -6301,7 +6305,7 @@ $btnAud.Add_Click({ Lanzar {
     } else {
         Con "Auditoria de $(Eti-Rango $tcus) contra '$($script:PresetRefNombre)' ($($script:PresetRef.Count) variables)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     }
-    $nOk = 0; $nTcusOk = 0; $nDesv = 0; $nErr = 0; $nFalsas = 0; $nCache = 0
+    $nOk = 0; $nTcusOk = 0; $nDesv = 0; $nErr = 0; $nFalsas = 0; $nCache = 0; $nMixtas = 0
     $nAudTot = 0; foreach ($tr in $trabajos) { $nAudTot += @($tr.tcus).Count }
     Prog-Iniciar ($nAudTot * @($script:PresetRef).Count)
     # Lo ya leido en esta sesion no se vuelve a pedir: antes, venir de un
@@ -6386,9 +6390,17 @@ $btnAud.Add_Click({ Lanzar {
                 }
             }
             if ($errTcu -eq 0) { Cierre-MarcarSiEsta $etNcu ([int]$tcu) 'params' $(if ($desvTcu -eq 0) { 'OK' } else { 'NOK' }) }
-            if ($errTcu -gt 0) { $nErr++ }
-            elseif ($desvTcu -gt 0) { $nDesv++; Con ("{0}TCU {1,3}  {2} desviaciones" -f $(if ($etNcu) { "NCU$etNcu " } else { '' }), $tcu, $desvTcu) ([System.Drawing.Color]::Orange) }
+            # Una TCU puede tener desviaciones Y variables sin respuesta a la vez.
+            # Antes contaba solo como "sin respuesta" y su linea no se imprimia,
+            # pero sus filas de DESVIACION si estaban en la tabla: el resumen
+            # decia "3 TCUs con desviaciones" con 6 desviaciones listadas.
+            if ($errTcu -gt 0) { $nErr++; if ($desvTcu -gt 0) { $nMixtas++ } }
+            elseif ($desvTcu -gt 0) { $nDesv++ }
             else { $nTcusOk++ }
+            if ($desvTcu -gt 0) {
+                Con ("{0}TCU {1,3}  {2} desviaciones{3}" -f $(if ($etNcu) { "NCU$etNcu " } else { '' }), $tcu, $desvTcu,
+                     $(if ($errTcu -gt 0) { " (y $errTcu variables sin respuesta)" } else { '' })) ([System.Drawing.Color]::Orange)
+            }
             Prog-Paso @($script:PresetRef).Count
             # alimenta la tarea "Configuracion TCU" del seguimiento PEM
             $script:SegAud["$etNcu|$tcu"] = @{ncu=$etNcu; tcu=[int]$tcu
@@ -6401,7 +6413,7 @@ $btnAud.Add_Click({ Lanzar {
     Modbus-Cerrar
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Cierre-Guardar (Nombre-Planta); Cierre-Pintar
-    Con (Aud-Resumen $script:UltimaAud $nTcusOk $nDesv $nErr) ([System.Drawing.Color]::SteelBlue)
+    Con (Aud-Resumen $script:UltimaAud $nTcusOk $nDesv $nErr $nMixtas) ([System.Drawing.Color]::SteelBlue)
     if ($nCache -gt 0) { Con "  $nCache valores salieron de la ultima lectura, sin volver a preguntar a la planta." ([System.Drawing.Color]::Gainsboro) }
     if ($nFalsas -gt 0) { Con "  $nFalsas comparaciones fallaron y al releer daban el valor bueno: eran respuestas descolocadas de la NCU, no desviaciones. NO estan en la tabla ni cuentan como desviacion: la TCU que sale arriba en esas lineas quedo conforme." ([System.Drawing.Color]::Orange) }
     $btnAudEscr.Enabled = (@(Aud-ConDesviacion $script:UltimaAud).Count -gt 0)

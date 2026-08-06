@@ -1825,6 +1825,18 @@ Check 'resumen: mezcla las dos clases' ((Aud-Resumen $fMix 60 1 1).Contains('10 
 
 Check 'resumen: la nota con motivo tambien cuenta' ((Aud-Resumen @([pscustomobject]@{Nota='DESVIACION - fuera de rango'}) 1 1 0).Contains('1 desviacion')) $true
 Check 'resumen: sin filas no habla de la tabla' ((Aud-Resumen @() 70 0 0).Contains('En la tabla')) $false
+# Una TCU puede tener desviaciones Y variables mudas: contaba solo como "sin
+# respuesta" y su linea no salia, pero sus filas SI estaban en la tabla. De ahi
+# "3 TCUs con desviaciones" con 6 desviaciones listadas.
+$fMix2 = @(1..6 | ForEach-Object { [pscustomobject]@{Nota='DESVIACION'} }) + @(1..28 | ForEach-Object { [pscustomobject]@{Nota='sin respuesta'} })
+$rMix = Aud-Resumen $fMix2 42 3 8 2
+Check 'resumen: dice cuantas mudas tienen ademas desviaciones' ($rMix.Contains('(de esas, 2 con desviaciones ademas)')) $true
+Check 'resumen: y las cuentas siguen sumando el total' ($rMix.Contains('42 TCUs conformes | 3 TCUs con desviaciones | 8 TCUs sin respuesta')) $true
+Check 'resumen: con la tabla completa' ($rMix.Contains('34 filas (6 desviaciones y 28 sin respuesta)')) $true
+Check 'resumen: sin mixtas no lo menciona' ((Aud-Resumen $fMix2 42 5 6 0).Contains('ademas')) $false
+# y la linea por TCU tiene que salir aunque la TCU ademas tenga variables mudas
+Check 'auditoria: la linea sale aunque haya mudas' ($src.Contains('y $errTcu variables sin respuesta')) $true
+Check 'auditoria: cuenta las mixtas' ($src.Contains('if ($desvTcu -gt 0) { $nMixtas++ }')) $true
 # y la linea de descolocacion tiene que decir que NO esta en la tabla
 Check 'resumen: la descolocacion se explica' ($src.Contains('NO estan en la tabla ni cuentan como desviacion')) $true
 
