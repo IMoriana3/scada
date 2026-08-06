@@ -37,6 +37,13 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
 
+**Una tabla vacía tiene que decir por qué (v7.9)** — la auditoría de Flota lista
+solo las desviaciones, así que cuando todo está bien la tabla se queda vacía y
+parece que no ha hecho nada. Ahora deja una fila diciéndolo: *«Sin desviaciones:
+3 TCUs conformes — las 5 variables de preset_tcu.json coinciden en todas»*, y si
+se canceló antes de leer nada, lo dice también en vez de fingir conformidad. La
+fila es informativa: no entra en el CSV ni en el JSON de la auditoría.
+
 **Botón Limpiar en la consola (v7.8)** — vaciar la consola estaba solo en el menú
 del botón derecho, que no se ve, así que en la práctica no existía. Ahora hay un
 botón al lado de *Guardar log*. **No toca el log de fichero**: ahí sigue todo, que
