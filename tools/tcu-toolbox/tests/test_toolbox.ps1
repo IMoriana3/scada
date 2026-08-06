@@ -849,9 +849,11 @@ Check 'rango: east_pitch en radianes' ((Rango-Sospechoso '41106 east_pitch [m]' 
 Check 'rango: east_pitch en radianes avisa del rango' ((Rango-Sospechoso '41106 east_pitch [m]' '-0,7854').Contains('fuera de rango')) $true
 Check 'rango: coma o punto dan igual' ((Rango-Sospechoso '41106 east_pitch [m]' '-0.7854') -ne '') $true
 Check 'rango: max_tilt bueno' (Rango-Sospechoso '41111 max_tilt_west_r1 [deg]' '55') ''
-Check 'rango: max_tilt negativo es imposible' ((Rango-Sospechoso '41111 max_tilt_west_r1 [deg]' '-45') -ne '') $true
-Check 'rango: min_tilt bueno' (Rango-Sospechoso '41125 min_tilt_east_r1 [deg]' '-45') ''
-Check 'rango: min_tilt con el valor de max_tilt' ((Rango-Sospechoso '41125 min_tilt_east_r1 [deg]' '55') -ne '') $true
+# el limite este NO tiene por que ser negativo: en Ayora la config buena es +30
+Check 'rango: min_tilt negativo vale' (Rango-Sospechoso '41125 min_tilt_east_r1 [deg]' '-45') ''
+Check 'rango: min_tilt positivo tambien vale' (Rango-Sospechoso '41125 min_tilt_east_r1 [deg]' '30') ''
+Check 'rango: max_tilt negativo vale' (Rango-Sospechoso '41111 max_tilt_west_r1 [deg]' '-45') ''
+Check 'rango: tilt de 120 grados no' ((Rango-Sospechoso '41125 min_tilt_east_r1 [deg]' '120') -ne '') $true
 Check 'rango: los 7 rangos de tilt estan' ($RANGOS.Contains('41137 min_tilt_east_r7 [deg]')) $true
 Check 'rango: max_tilt_west_r7 esta' ($RANGOS.Contains('41123 max_tilt_west_r7 [deg]')) $true
 Check 'rango: variable sin rango no molesta' (Rango-Sospechoso '40022 timeout_com_NCU [min]' '99999') ''
@@ -877,6 +879,7 @@ $filasSosp = @(
 )
 $sos = @(Sospechas-Lectura $filasSosp)
 Check 'sospechas: tres celdas malas' $sos.Count 3
+Check 'sospechas: la TCU 34 por el par de limites' ((@($sos | Where-Object { $_.TCU -eq 34 -and $_.Motivo.Contains('sin recorrido') }).Count)) 1
 Check 'sospechas: la TCU muda no cuenta' (@($sos | Where-Object { $_.TCU -eq 20 }).Count) 0
 Check 'sospechas: TCU 34 con dos' (@($sos | Where-Object { $_.TCU -eq 34 }).Count) 2
 Check 'sospechas: TCU 19 con una' (@($sos | Where-Object { $_.TCU -eq 19 }).Count) 1
@@ -1081,6 +1084,31 @@ $trab = Trabajos-Planta $cxUnaNcu @(16)
 Check 'ncu: el trabajo la lleva' $trab.ncu 3
 $cxSinNombre = @{ip='192.168.4.30'; puerto=503; gws=$null; multi=$null; etiqueta='503'; to=8000; reint=1; nombre='IP suelta'}
 Check 'ncu: sin nombre reconocible, vacia' ((Trabajos-Planta $cxSinNombre @(16)).ncu) $null
+
+# --------------------------------------------------------------------------
+#  Relacion entre el limite este y el oeste
+# --------------------------------------------------------------------------
+Write-Host ''
+Write-Host '== limite este contra limite oeste =='
+function FilaTilt($mx, $mn) { return ,@([pscustomobject]@{NCU='9'; TCU=1; '41111 max_tilt_west_r1 [deg]'=$mx; '41125 min_tilt_east_r1 [deg]'=$mn; Estado='OK'}) }
+Check 'par: -45 por debajo de 55, bien' (@(Sospechas-Lectura (FilaTilt '55' '-45')).Count) 0
+Check 'par: +30 por debajo de 55, tambien bien' (@(Sospechas-Lectura (FilaTilt '55' '30')).Count) 0
+Check 'par: los dos a 55, sin recorrido' (@(Sospechas-Lectura (FilaTilt '55' '55')).Count) 1
+Check 'par: este por encima del oeste' (@(Sospechas-Lectura (FilaTilt '30' '55')).Count) 1
+Check 'par: dice cual es el otro valor' ((@(Sospechas-Lectura (FilaTilt '55' '55'))[0].Motivo).Contains('55')) $true
+Check 'par: marca el limite este, que es el que se corrige' ((@(Sospechas-Lectura (FilaTilt '55' '55'))[0].Variable).Contains('min_tilt')) $true
+# sin una de las dos columnas no se puede comparar y no se inventa nada
+$soloUna = @([pscustomobject]@{NCU='9'; TCU=1; '41125 min_tilt_east_r1 [deg]'='55'; Estado='OK'})
+Check 'par: con una sola columna no dice nada' (@(Sospechas-Lectura $soloUna).Count) 0
+# y la correccion propone la mayoria para la que el par ha marcado
+$mezcla = @()
+foreach ($t in 1..10) { $mezcla += [pscustomobject]@{NCU='9'; TCU=$t
+  '41111 max_tilt_west_r1 [deg]'='55'
+  '41125 min_tilt_east_r1 [deg]'=$(if ($t -eq 3) { '55' } else { '30' }); Estado='OK'} }
+$cp = Correccion-DeLectura $mezcla
+Check 'par: la correccion la recoge' (@($cp.filas).Count) 1
+Check 'par: y propone la mayoria' (@($cp.filas)[0].Valor) '30'
+Check 'par: sobre la TCU marcada' (@($cp.filas)[0].TCU) 3
 
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }

@@ -37,6 +37,20 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
 
+**Los límites de inclinación no tienen signo fijo (v7.6)** — el rango de cordura
+de `min_tilt_east` estaba puesto como -90..0 dando por hecho que el límite este
+tenía que ser negativo. No es así: en Ayora la configuración buena lleva
+`min_tilt_east = +30`, o sea que el seguidor trabaja entre +30 y +55. Con aquel
+rango, una planta entera salía como «valor imposible». Ahora los dos límites
+admiten -90..90.
+
+Lo que sí es una regla de verdad es la **relación entre los dos**: el límite este
+tiene que quedar **por debajo** del oeste, o el seguidor no tiene recorrido. Eso
+es lo que caza ahora el corrimiento de registros — una TCU con `min_tilt = 55`
+pasa cualquier rango por separado, pero tener el mismo valor en los dos límites
+no se sostiene. El CSV de corrección recoge también estas, proponiendo el valor
+mayoritario de la planta.
+
 **Rótulos que dicen la verdad (v7.5)** — tres cosas que despistaban al trabajar
 contra una sola NCU o una sola TCU:
 
