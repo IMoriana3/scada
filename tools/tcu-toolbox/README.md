@@ -37,6 +37,43 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
 
+## v9.0 — seis cosas de golpe
+
+**Buscador de acciones (Ctrl+K, o el botón *Buscar*)** — hay 80 acciones en 10
+pestañas y la herramienta tiene más capacidad que superficie: se preguntaba por
+botones que ya existían. Escribe dos palabras («csv flota», «nvm», «caja negra»),
+sin acentos si quieres, y te lleva a la pestaña con el botón marcado. **No lo
+pulsa**: la mitad escriben en equipos, y un buscador que dispara acciones por
+accidente es peor que no tenerlo.
+
+**Barridos de planta en paralelo** — un diagnóstico de 754 TCUs por el bloque
+compacto tardaba cerca de una hora, y sin embargo cada NCU es una conexión TCP
+independiente que no compite con las demás. Ahora van **hasta 8 a la vez** y esa
+hora son minutos. Cada hilo se lleva una copia de la lógica del script y con ella
+**su propio estado de conexión** — compartirlo sería volver a mezclar respuestas,
+que es justo el fallo que costó una noche entera. Se desmarca *en paralelo* y
+vuelve al modo de siempre.
+
+**SIMULAR antes de escribir** — cruza lo que vas a escribir con la última lectura
+y dice, sin tocar nada, cuántas TCUs cambiarían de verdad y **qué valores hay
+ahora mismo**: `min_tilt = 30 -> cambian 4, ya lo tienen 6 · ahora mismo: 30 en 6 |
+-45 en 4`. Es lo que saca a la luz que media planta tiene otra configuración *a
+propósito* antes de escribir 342 seguidores, no después.
+
+**Historial local** — cada *Leer variable* deja constancia en `historial/`, un
+fichero por planta y mes. El botón **HISTORIAL LOCAL** de Utilidades enseña solo
+los **cambios**: `2026-08-03 NCU9 TCU 34 east_pitch: 6 -> -0,7854`. Contesta
+«¿desde cuándo?» sin depender de nada online.
+
+**La topología aprende** — cuando BUSCAR ESCLAVO encuentra las HSUs, ofrece
+guardar el número de esclavo en el JSON de la planta y deja puestos el esclavo y
+el gateway. No hay que volver a barrer ni editar ficheros a mano.
+
+**Portada del informe** — recuadros de estado arriba del todo: seguidores
+operativos, cuántos con alarma o sin comunicación, versiones de firmware en la
+flota, TCUs con configuración desviada y valores imposibles. Se calcula con lo
+que haya en la sesión; lo que no se haya hecho no sale, en vez de salir en blanco.
+
 **VERIFICAR TRAS ACTUALIZAR dice cuál, y no se calla lo que no mira (v8.4)** —
 tenía dos problemas, y el segundo era el grave:
 

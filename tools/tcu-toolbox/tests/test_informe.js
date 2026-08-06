@@ -74,6 +74,12 @@ const { chromium } = require('playwright');
   await p.waitForTimeout(120);
   chk('sigue ordenando', (await tDiag.locator('thead tr:first-child th').nth(1).textContent()).includes('▲'), true);
 
+  // portada: los recuadros de estado de planta
+  chk('portada presente', await p.locator('.portada .tile').count() > 0, 'true');
+  const port = await p.locator('.portada').textContent();
+  chk('portada habla de operativos', port.includes('operativos'), 'true');
+  chk('portada colorea por gravedad', await p.locator('.portada .tile.mal').count() > 0, 'true');
+
   // el aviso de "sin JavaScript no hay filtros" tiene que haberse borrado solo
   chk('aviso de JS bloqueado retirado', await p.locator('#avisojs').count(), 0);
   // ...pero tiene que estar en el HTML, que es lo que ve quien no ejecuta JS
