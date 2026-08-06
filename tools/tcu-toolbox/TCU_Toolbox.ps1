@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '8.2'
+$VERSION_TOOLBOX = '8.3'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -989,9 +989,21 @@ function Seguimiento-Filas {
 # las expresa como tramos "desde-hasta", que es justo lo que pide el TCU
 # Updater de Sunner ("Add from ... to ..."). Las TCUs sin respuesta en el
 # inventario salen aparte: no se puede planificar lo que no comunica.
-function Plan-Firmware([array]$inv, [string]$objetivo, [hashtable]$gwsPorNcu) {
+# SoC por debajo del cual el bootloader puede negarse a instalar. El umbral de
+# verdad es el de cada TCU (42005 byte alto, soc_min_bootloader), que no se lee
+# aqui; esto es el aviso conservador para no gastar la ventana en balde.
+$SOC_MIN_OTA = 50
+
+function Plan-Firmware([array]$inv, [string]$objetivo, [hashtable]$gwsPorNcu, [array]$diag = @()) {
     $obj = "$objetivo".Trim()
     if (-not $obj) { throw 'indica la version de firmware objetivo (p. ej. v1.6.0)' }
+    # SoC del ultimo diagnostico, indexado por NCU|TCU. Sin diagnostico, vacio.
+    $soc = @{}
+    foreach ($d in @($diag)) {
+        $v = "$($d.SoC)".Trim() -replace '\s*%$', ''
+        if ($v -eq '') { continue }
+        $soc["$($d.NCU)|$($d.TCU)"] = $v
+    }
     $pend = @{}; $mudas = @(); $alDia = 0; $detalle = @()
     foreach ($f in $inv) {
         $tcu = 0
@@ -1009,7 +1021,12 @@ function Plan-Firmware([array]$inv, [string]$objetivo, [hashtable]$gwsPorNcu) {
         $pend[$k] += $tcu
         # el tramo sirve para pegarlo en el updater, pero para saber QUE equipos
         # faltan y en que version estan hace falta la lista TCU a TCU
-        $detalle += [pscustomobject]@{NCU=$ncu; TCU=$tcu; Puerto=$puerto; FW=$fw; Objetivo=$obj}
+        $sc = ''
+        if ($soc.ContainsKey("$ncu|$tcu")) { $sc = $soc["$ncu|$tcu"] }
+        $bajo = $false
+        $nsc = 0
+        if ($sc -ne '' -and [int]::TryParse($sc, [ref]$nsc)) { $bajo = ($nsc -lt $SOC_MIN_OTA) }
+        $detalle += [pscustomobject]@{NCU=$ncu; TCU=$tcu; Puerto=$puerto; FW=$fw; Objetivo=$obj; SoC=$sc; SoC_bajo=$bajo}
     }
     $filas = @()
     foreach ($k in @($pend.Keys | Sort-Object { [int]("0" + ($_ -split '\|')[0]) }, { $_ })) {
@@ -1023,7 +1040,9 @@ function Plan-Firmware([array]$inv, [string]$objetivo, [hashtable]$gwsPorNcu) {
     }
     $totalPend = 0; foreach ($k in $pend.Keys) { $totalPend += @($pend[$k]).Count }
     $detalle = @($detalle | Sort-Object { [int]("0" + "$($_.NCU)") }, { [int]$_.TCU })
-    return @{tramos=$filas; pendientes=$totalPend; al_dia=$alDia; sin_respuesta=$mudas; detalle=$detalle}
+    $sinSoc = @($detalle | Where-Object { "$($_.SoC)" -eq '' }).Count
+    return @{tramos=$filas; pendientes=$totalPend; al_dia=$alDia; sin_respuesta=$mudas; detalle=$detalle
+             con_soc_bajo=@($detalle | Where-Object { $_.SoC_bajo }).Count; sin_soc=$sinSoc}
 }
 
 # Tramos consecutivos de una lista ordenada de TCUs: @(1,2,3,5) -> (1-3),(5-5)
@@ -5734,7 +5753,7 @@ $btnFwPlan.Add_Click({ Lanzar {
         $ips[$k] = $tr.ip
         $gws[$k] = $(if ($tr.cx.gws) { $tr.cx.gws } else { @(@{puerto=$tr.cx.puerto; ini=1; fin=247}) })
     }
-    $plan = Plan-Firmware $script:UltimoInv $txtFwObj.Text $gws
+    $plan = Plan-Firmware $script:UltimoInv $txtFwObj.Text $gws $script:UltimoDiag
     $script:PlanFw = @($plan.tramos)
     $script:PlanFwDetalle = @($plan.detalle)
     $lvFW.Items.Clear()
@@ -5747,11 +5766,19 @@ $btnFwPlan.Add_Click({ Lanzar {
         $k = "$($t.NCU)|$($t.Puerto)"
         $carga[$k] = [int]$carga[$k] + [int]$t.TCUs
     }
+    # cuantas del carril no van a instalar por bateria: se ve en el propio tramo
+    $bajasCarril = @{}
+    foreach ($d in @($plan.detalle)) {
+        if (-not $d.SoC_bajo) { continue }
+        $kk = "$($d.NCU)|$($d.Puerto)"
+        $bajasCarril[$kk] = 1 + [int]$bajasCarril[$kk]
+    }
     foreach ($t in $script:PlanFw) {
         $k = "$($t.NCU)|$($t.Puerto)"
         $h = [math]::Round(($carga[$k] * $minTcu) / 60.0, 1)
+        $colaB = $(if ([int]$bajasCarril[$k] -gt 0) { "  -  $($bajasCarril[$k]) con bateria baja" } else { '' })
         $item = New-Object System.Windows.Forms.ListViewItem("$($t.NCU)")
-        foreach ($c in @($ips["$($t.NCU)"], $t.Puerto, $t.Desde, $t.Hasta, $t.TCUs, "carril NCU$($t.NCU)/GW$($t.Puerto): $($carga[$k]) TCUs ~ $h h")) { [void]$item.SubItems.Add("$c") }
+        foreach ($c in @($ips["$($t.NCU)"], $t.Puerto, $t.Desde, $t.Hasta, $t.TCUs, "carril NCU$($t.NCU)/GW$($t.Puerto): $($carga[$k]) TCUs ~ $h h$colaB")) { [void]$item.SubItems.Add("$c") }
         $item.ForeColor = [System.Drawing.Color]::DarkOrange
         $lvFW.Items.Add($item) | Out-Null
         Con ("  NCU{0,-3} {1,-15} GW {2}   TCUs {3}-{4}  ({5})" -f $t.NCU, $ips["$($t.NCU)"], $t.Puerto, $t.Desde, $t.Hasta, $t.TCUs) ([System.Drawing.Color]::Gainsboro)
@@ -5765,11 +5792,19 @@ $btnFwPlan.Add_Click({ Lanzar {
         foreach ($d in $detalle) { $porVer["$($d.FW)"] = 1 + [int]$porVer["$($d.FW)"] }
         Con ("TCUs que NO estan en $($txtFwObj.Text.Trim()): " + (@($porVer.Keys | Sort-Object | ForEach-Object { "$($porVer[$_]) en $_" }) -join ' | ')) ([System.Drawing.Color]::Orange)
         foreach ($d in $detalle) {
-            Con ("  NCU{0,-3} TCU {1,3}   {2}  ->  {3}" -f $d.NCU, $d.TCU, $d.FW, $d.Objetivo) ([System.Drawing.Color]::Orange)
+            $eSoc = $(if ("$($d.SoC)" -ne '') { ", SoC $($d.SoC) %" } else { ', SoC desconocido' })
+            $aviso = $(if ($d.SoC_bajo) { " - BATERIA BAJA: por debajo del $SOC_MIN_OTA % el bootloader puede no instalarlo" } else { '' })
+            Con ("  NCU{0,-3} TCU {1,3}   {2}  ->  {3}{4}{5}" -f $d.NCU, $d.TCU, $d.FW, $d.Objetivo, $eSoc, $aviso) $(if ($d.SoC_bajo) { [System.Drawing.Color]::Salmon } else { [System.Drawing.Color]::Orange })
             $itemD = New-Object System.Windows.Forms.ListViewItem("$($d.NCU)")
-            foreach ($c in @($ips["$($d.NCU)"], $d.Puerto, $d.TCU, $d.TCU, 1, "pendiente: tiene $($d.FW), objetivo $($d.Objetivo)")) { [void]$itemD.SubItems.Add("$c") }
-            $itemD.ForeColor = [System.Drawing.Color]::Firebrick
+            foreach ($c in @($ips["$($d.NCU)"], $d.Puerto, $d.TCU, $d.TCU, 1, "pendiente: tiene $($d.FW), objetivo $($d.Objetivo)$eSoc$aviso")) { [void]$itemD.SubItems.Add("$c") }
+            $itemD.ForeColor = $(if ($d.SoC_bajo) { [System.Drawing.Color]::Firebrick } else { [System.Drawing.Color]::DarkOrange })
             $lvFW.Items.Add($itemD) | Out-Null
+        }
+        if ($plan.con_soc_bajo -gt 0) {
+            Con "ATENCION: $($plan.con_soc_bajo) de las pendientes estan por debajo del $SOC_MIN_OTA % de bateria. El bootloader solo instala si supera su umbral (42005 soc_min_bootloader y 42006 vbat_min_bootloader), asi que esas se van a quedar como estan aunque el updater diga que ha enviado el firmware. Dejalas cargar y actualizalas en otra pasada." ([System.Drawing.Color]::Salmon)
+        }
+        if ($plan.sin_soc -gt 0) {
+            Con "$($plan.sin_soc) pendientes sin SoC conocido: el plan cruza con el ULTIMO DIAGNOSTICO de esta sesion. Lanza un DIAGNOSTICAR (via NCU es rapido) y vuelve a pulsar PLAN para verlo." ([System.Drawing.Color]::Orange)
         }
     }
     if ($plan.pendientes -gt 0) {
