@@ -167,6 +167,16 @@ $ltNcu2 = @($ltNcu2 | Sort-Object -Unique)
 Check 'planta ncu2 tcus (107+109, sin 108)' "$($ltNcu2.Count)/$($ltNcu2[-1])" '108/109'
 try { $null = Plan-Segmentos @(1..3) @{multi=$pc.ncus; ip='(planta)'; to=1000; reint=1}; Check 'multi en Plan-Segmentos lanza' 'no-lanzo' 'lanza' }
 catch { Check 'multi en Plan-Segmentos lanza' 'lanza' 'lanza' }
+# Las entradas de las plantas de verdad tienen que llevar el nombre completo:
+# la agrupacion de "(Planta completa)" sale del prefijo "<Planta> NCU<n>", y con
+# " NCU2", " NCU3"... salian dos grupos y Ayora se quedaba con 15 de 16 NCUs.
+foreach ($fp in @(Get-ChildItem (Join-Path $raizTb 'plantas') -Filter *.json)) {
+    $sinNombre = @()
+    foreach ($e in (Get-Content $fp.FullName -Raw | ConvertFrom-Json).plantas) {
+        if ("$($e.nombre)" -match '^\s' -or "$($e.nombre)" -match '^NCU\d') { $sinNombre += "$($e.nombre)" }
+    }
+    Check "topologia $($fp.Name): ninguna entrada sin planta" ($sinNombre -join ',') ''
+}
 Check 'lista ncus 1,3-5' (@(Parse-ListaNums '1,3-5') -join ',') '1,3,4,5'
 Check 'lista ncus vacia = null' ($null -eq (Parse-ListaNums '  ')) 'True'
 try { $null = Parse-ListaNums '1,x'; Check 'lista ncus invalida lanza' 'no-lanzo' 'lanza' }
