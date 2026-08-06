@@ -1142,6 +1142,16 @@ Check 'motor: sentido invertido' $vInv.estado 'FALLA'
 Check 'motor: nombra la polaridad' ($vInv.detalle.Contains('INVERTIDO')) $true
 
 Write-Host ''
+Write-Host '== una tabla vacia tiene que decir por que =='
+# La auditoria solo lista desviaciones: sin ninguna, la tabla se queda vacia y
+# parece que no ha hecho nada. Tiene que dejar dicho ahi mismo que fue bien.
+Check 'auditoria: fila cuando no hay desviaciones' ($src.Contains('Sin desviaciones: $nOk TCUs conformes')) $true
+Check 'auditoria: y se anade a la tabla' ($src.Contains('$lvA.Items.Add($vacio)')) $true
+Check 'auditoria: distingue cancelado de conforme' ($src.Contains('cancelado antes de leer nada')) $true
+# la fila informativa no puede colarse en las exportaciones
+Check 'auditoria: no ensucia el CSV' ($src.Contains('$script:UltimaAud += [pscustomobject]@{NCU=$etNcu; TCU=[int]$tcu; Variable=$vacio')) $false
+
+Write-Host ''
 Write-Host '== botones que existen y estan enganchados =='
 # la familia de fallos "ese boton estaba y ha desaparecido" / "existe pero no
 # hace nada": se comprueba en el texto, porque sin ventana no son invocables

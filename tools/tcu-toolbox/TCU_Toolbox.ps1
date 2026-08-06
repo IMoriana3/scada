@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '7.8'
+$VERSION_TOOLBOX = '7.9'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -5118,7 +5118,20 @@ $btnAud.Add_Click({ Lanzar {
     Modbus-Cerrar
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Auditoria: $nOk TCUs conformes | $nDesv con desviaciones | $nErr sin respuesta. $($script:UltimaAud.Count) filas listadas." ([System.Drawing.Color]::SteelBlue)
-    if ($script:UltimaAud.Count -eq 0) { Con 'Toda la flota coincide con el preset de referencia.' ([System.Drawing.Color]::LightGreen) }
+    if ($script:UltimaAud.Count -eq 0) {
+        Con 'Toda la flota coincide con el preset de referencia.' ([System.Drawing.Color]::LightGreen)
+        # La tabla solo lista desviaciones, asi que sin ninguna se queda vacia y
+        # parece que la auditoria no ha hecho nada. Se deja dicho ahi mismo.
+        $vacio = New-Object System.Windows.Forms.ListViewItem('')
+        [void]$vacio.SubItems.Add('')
+        [void]$vacio.SubItems.Add($(if ($nOk -gt 0) { "Sin desviaciones: $nOk TCUs conformes" } else { 'No se ha auditado ninguna TCU' }))
+        [void]$vacio.SubItems.Add('')
+        [void]$vacio.SubItems.Add('')
+        [void]$vacio.SubItems.Add($(if ($nOk -gt 0) { "las $($script:PresetRef.Count) variables de '$($script:PresetRefNombre)' coinciden en todas" }
+                                    elseif ($script:Cancelar) { 'cancelado antes de leer nada' } else { 'sin respuesta' }))
+        $vacio.ForeColor = $(if ($nOk -gt 0) { [System.Drawing.Color]::DarkGreen } else { [System.Drawing.Color]::Gray })
+        $lvA.Items.Add($vacio) | Out-Null
+    }
     Marcar-Bloque 'aud'
 } })
 
