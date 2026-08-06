@@ -1142,6 +1142,24 @@ Check 'motor: sentido invertido' $vInv.estado 'FALLA'
 Check 'motor: nombra la polaridad' ($vInv.detalle.Contains('INVERTIDO')) $true
 
 Write-Host ''
+Write-Host '== las cabeceras se ven pulsables =='
+# El filtro esta desde la v7.4 pero nadie lo encontraba: no habia nada que
+# dijera que la cabecera se pulsa. Ahora todas llevan una flechita.
+Check 'cabecera: marca de pulsable' ($src.Contains("[char]0x25BE")) $true
+Check 'cabecera: el asterisco marca el filtro activo' ($src.Contains('esta columna filtra')) $true
+Check 'cabecera: se marcan al enganchar la tabla' ($src.Contains('# marca las cabeceras desde el principio')) $true
+# las diez tablas de resultados tienen que estar enganchadas
+$engancha = [regex]::Match($src, 'foreach \(\$tabla in @\(([^)]*)\)\) \{ Lv-Filtrable')
+Check 'cabecera: hay linea que engancha las tablas' $engancha.Success $true
+foreach ($t in @('lvL','lvD','lvG','lvA','lvV','lvP','lvFW','lvSat','lvH','lvI')) {
+    Check "cabecera: ${t} filtrable" ($engancha.Groups[1].Value.Contains("`$$t")) $true
+}
+# y no puede quedarse ninguna fuera: si se crea una tabla nueva hay que anadirla
+$todas = @([regex]::Matches($src, '\$(lv\w+) = New-Object System\.Windows\.Forms\.ListView') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+$sueltas = @($todas | Where-Object { -not $engancha.Groups[1].Value.Contains("`$$_") })
+Check 'cabecera: ninguna tabla sin filtro' ($sueltas -join ',') ''
+
+Write-Host ''
 Write-Host '== parte de averias para WhatsApp =='
 $diagWa = @(
   [pscustomobject]@{NCU='1'; TCU='NCU'; Salud='AVISO';   Alarmas='reloj NCU: 2026-08-06 04:10'}

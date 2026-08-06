@@ -37,6 +37,12 @@ Consola común con colores, botón **CANCELAR** para abortar operaciones largas,
 
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
 
+**Las cabeceras se ven pulsables (v8.2)** — el filtro por columna está desde la
+v7.4, pero nadie lo encontraba: nada decía que la cabecera se pulsara. Ahora
+todas llevan una **▾**, y un **▾\*** cuando esa columna está filtrando. Una prueba
+comprueba además que **ninguna** de las tablas se queda sin enganchar, para que
+una tabla nueva no nazca sin filtro.
+
 **Parte de averías para WhatsApp (v8.2)** — los técnicos de campo no leen un CSV
 en el móvil. El botón **COPIAR NO-OK** del diagnóstico deja en el portapapeles un
 listado en texto plano, agrupado por NCU y con solo lo que no está OK:

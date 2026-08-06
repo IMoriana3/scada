@@ -3067,8 +3067,8 @@ function Lv-Sincronizar($lv) {
     $e.filtros = @{}
     $e.orig = @($lv.Items)
     $e.dejadas = $lv.Items.Count
-    if (@($e.cab).Count -eq 0) { $e.cab = @($lv.Columns | ForEach-Object { $_.Text }) }
-    else { for ($i = 0; $i -lt $lv.Columns.Count -and $i -lt @($e.cab).Count; $i++) { $lv.Columns[$i].Text = $e.cab[$i] } }
+    if (@($e.cab).Count -eq 0) { $e.cab = @($lv.Columns | ForEach-Object { ($_.Text -replace ' \u25BE\*?$', '') }) }
+    for ($i = 0; $i -lt $lv.Columns.Count -and $i -lt @($e.cab).Count; $i++) { $lv.Columns[$i].Text = $e.cab[$i] + [char]0x25BE }
 }
 
 function Lv-Aplicar($lv) {
@@ -3080,8 +3080,9 @@ function Lv-Aplicar($lv) {
     $lv.EndUpdate()
     $e.dejadas = $lv.Items.Count
     # marca en la cabecera que columnas filtran, y cuanto queda a la vista
+    # la flechita dice "esto se pulsa"; el asterisco, "esta columna filtra"
     for ($i = 0; $i -lt $lv.Columns.Count -and $i -lt @($e.cab).Count; $i++) {
-        $lv.Columns[$i].Text = $e.cab[$i] + $(if ($e.filtros.ContainsKey("$i")) { ' *' } else { '' })
+        $lv.Columns[$i].Text = $e.cab[$i] + [char]0x25BE + $(if ($e.filtros.ContainsKey("$i")) { '*' } else { '' })
     }
     if ($e.filtros.Count -gt 0) {
         Con ("Filtro en la tabla: {0} de {1} filas a la vista. Pulsa la cabecera para quitarlo." -f $vis.Count, @($e.orig).Count) ([System.Drawing.Color]::SteelBlue)
@@ -3152,7 +3153,7 @@ function Lv-Menu($lv, [int]$col) {
     $mQuitar.Add_Click({ $est = Lv-Estado $lv; $est.filtros = @{}; Lv-Aplicar $lv }.GetNewClosure())
     $mCopiar = $m.Items.Add('Copiar lo que se ve (TSV)')
     $mCopiar.Add_Click({
-        $lin = @((@($lv.Columns | ForEach-Object { $_.Text -replace ' \*$', '' })) -join [char]9)
+        $lin = @((@($lv.Columns | ForEach-Object { $_.Text -replace '\u25BE\*?$', '' })) -join [char]9)
         foreach ($it in $lv.Items) { $lin += (@($it.SubItems | ForEach-Object { $_.Text }) -join [char]9) }
         try { [System.Windows.Forms.Clipboard]::SetText($lin -join "`r`n") } catch {}
     }.GetNewClosure())
@@ -3160,7 +3161,10 @@ function Lv-Menu($lv, [int]$col) {
 }
 
 function Lv-Filtrable($lv) {
-    [void](Lv-Estado $lv)
+    $e = Lv-Estado $lv
+    # marca las cabeceras desde el principio, sin esperar a que haya datos
+    if (@($e.cab).Count -eq 0) { $e.cab = @($lv.Columns | ForEach-Object { $_.Text }) }
+    for ($i = 0; $i -lt $lv.Columns.Count; $i++) { $lv.Columns[$i].Text = $e.cab[$i] + [char]0x25BE }
     $lv.Add_ColumnClick({
         param($s3, $e3)
         try { (Lv-Menu $s3 $e3.Column).Show([System.Windows.Forms.Control]::MousePosition) }
