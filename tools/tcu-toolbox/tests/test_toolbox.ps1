@@ -1478,6 +1478,38 @@ Check 'bat: las OFFLINE no entran' (@($rF | Where-Object { $_.TCU -eq 27 }).Coun
 $rG = @(Bat-Auditar (@($flota) + @([pscustomobject]@{NCU='9'; TCU='NCU'; Salud='ALARMA'; Vbat_mV=0; Ibat_mA=0; SoC=0; SoH=0; Tbat_C=0; Alarmas=''})))
 Check 'bat: la fila de la NCU no entra' (@($rG | Where-Object { "$($_.TCU)" -eq 'NCU' }).Count) 0
 Check 'bat: diagnostico vacio no revienta' (@(Bat-Auditar @()).Count) 0
+# El bloque de la NCU trae tension de panel y corriente de entrada: con ellas se
+# separa "el panel no da" de "da pero no llega", que mandan a sitios distintos.
+function BatPanel($tcu, $vp, $ie, $soc, $ibat = 5) {
+    return [pscustomobject]@{NCU='9'; TCU=$tcu; Salud='OK'; Alarmas=''; SoC=$soc; SoH=95
+        Vbat_mV=24000; Ibat_mA=$ibat; Tbat_C='22,0'; Vpanel_mV=$vp; Ientrada_mA=$ie}
+}
+$rP = @(Bat-Auditar (@($flota) + @(BatPanel 30 0 0 60)))
+Check 'bat: panel sin tension' (@($rP | Where-Object { $_.Tipo -eq 'PANEL SIN TENSION' }).Count) 1
+Check 'bat: y manda mirar el fusible' ((@($rP | Where-Object { $_.Tipo -eq 'PANEL SIN TENSION' })[0]).Detalle.Contains('fusible')) $true
+$rE = @(Bat-Auditar (@($flota) + @(BatPanel 31 18000 0 60)))
+Check 'bat: el panel da pero no llega' (@($rE | Where-Object { $_.Tipo -eq 'NO ENTRA CORRIENTE' }).Count) 1
+# panel dando, corriente entrando y bateria cargando: no hay nada que decir
+$rB = @(Bat-Auditar (@($flota) + @(BatPanel 32 18000 800 60 700)))
+Check 'bat: cargando de verdad no da ningun aviso' (@($rB | Where-Object { $_.TCU -eq 32 }).Count) 0
+# pero si entra corriente y la bateria no la coge, eso si es raro
+$rN = @(Bat-Auditar (@($flota) + @(BatPanel 35 18000 800 60 5)))
+Check 'bat: entra corriente pero la bateria no carga' ((@($rN | Where-Object { $_.TCU -eq 35 })[0]).Tipo) 'NO CARGA'
+# con la bateria llena no mira el panel: de noche o a plena carga es normal
+$rL = @(Bat-Auditar (@($flota) + @(BatPanel 33 0 0 100)))
+Check 'bat: con la bateria llena el panel a 0 es normal' (@($rL | Where-Object { $_.TCU -eq 33 }).Count) 0
+# sin esos datos (modo directo) sigue el aviso generico de siempre
+$rG = @(Bat-Auditar (@($flota) + @([pscustomobject]@{NCU='9'; TCU=34; Salud='OK'; Alarmas=''; SoC=60; SoH=95
+    Vbat_mV=24000; Ibat_mA=5; Tbat_C='22,0'; Vpanel_mV=''; Ientrada_mA=''})))
+Check 'bat: sin panel ni entrada, el aviso de antes' (@($rG | Where-Object { $_.Tipo -eq 'NO CARGA' }).Count) 1
+# y los cuatro registros salen del bloque compat, no de direcciones inventadas
+$iC2 = $src.IndexOf('function Ncu-DiagCompat'); $fC2 = $src.IndexOf('function Ncu-HsuCompat')
+$com2 = $src.Substring($iC2, $fC2 - $iC2)
+Check 'bat: panel del offset 5' ($com2.Contains('Vpanel_mV = $w[$b+5]')) $true
+Check 'bat: entrada del offset 12 con signo' ($com2.Contains('$ient = $w[$b+12]; if ($ient -gt 32767)')) $true
+Check 'bat: motor de los offsets 8 y 9' ($com2.Contains('Imotor_mA = $w[$b+8]; ImotorPico_mA = $w[$b+9]')) $true
+Check 'bat: en directo se dejan vacios' ($src.Contains("Vpanel_mV = ''; Ientrada_mA = ''; Imotor_mA = ''; ImotorPico_mA = ''")) $true
+Check 'bat: y van al CSV del registrador' ($src.Contains("'Vpanel_mV','Ientrada_mA','Imotor_mA','ImotorPico_mA'")) $true
 
 Write-Host ''
 Write-Host '== modo y comisionado salen del mismo registro =='
