@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '2.3'
+$VERSION_AGENTE = '2.4'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -51,7 +51,8 @@ $i5 = Ancla-Toolbox $src 'function Sat-Fichero';     $f5 = Ancla-Toolbox $src '$
 $i6 = Ancla-Toolbox $src '$BAT = @{';                $f6 = Ancla-Toolbox $src 'function Sospechas-Lectura'           # umbrales y tabla de baterias
 $i7 = Ancla-Toolbox $src 'function Cierre-DeJson';   $f7 = Ancla-Toolbox $src '$script:LogicaCache'                  # cierre y trabajos guardados
 $i8 = Ancla-Toolbox $src 'function Ident-Leer';      $f8 = Ancla-Toolbox $src '$btnIdent.Add_Click'                  # identidad y numero de serie
-foreach ($p in @(@($i3,$f3), @($i4,$f4), @($i5,$f5), @($i6,$f6), @($i7,$f7), @($i8,$f8))) {
+$i9 = Ancla-Toolbox $src 'function Sospechas-Lectura'; $f9 = Ancla-Toolbox $src '$btnLeer.Add_Click'                  # presets y CSV por TCU
+foreach ($p in @(@($i3,$f3), @($i4,$f4), @($i5,$f5), @($i6,$f6), @($i7,$f7), @($i8,$f8), @($i9,$f9))) {
     $logica += "`n" + $src.Substring($p[0], $p[1] - $p[0]).Replace('$PSScriptRoot', '$dirToolbox')
 }
 Invoke-Expression $logica
@@ -185,6 +186,85 @@ function Leer-Planta($nombresTxt, $ncuPedida, $tcusTxt) {
     }
     return [ordered]@{planta = $cfg.planta; fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         variables = @($defs | ForEach-Object { $_.nombre }); tcus = $filas}
+}
+
+# --- HSUs: meteo, config y caja negra ---
+# La HSU cuelga de un gateway concreto y responde a su propio esclavo Modbus.
+function Hsu-Cx($n) {
+    $esc = $(if ($n.hsu) { [byte]$n.hsu } else { [byte]185 })
+    $pto = $(if ($n.gws -and @($n.gws).Count -gt 0) { [int]@($n.gws)[0].puerto } else { 503 })
+    return @{ip = $n.ip; puerto = $pto; unit = $esc}
+}
+function Hsus-Detalle([string]$que) {
+    $filas = @()
+    foreach ($n in (Ncus-DePlanta)) {
+        $c = Hsu-Cx $n
+        try { Modbus-Conectar $c.ip $c.puerto $timeoutMs } catch { continue }
+        try {
+            $campos = $(if ($que -eq 'config') { Hsu-LeerConfig ([byte]$c.unit) } else { Hsu-LeerMeteo ([byte]$c.unit) })
+            foreach ($f in @($campos)) { $filas += [pscustomobject]@{NCU = "$($n.ncu)"; Esclavo = $c.unit; Campo = "$($f.Campo)"; Valor = "$($f.Valor)"} }
+        } catch { $filas += [pscustomobject]@{NCU = "$($n.ncu)"; Esclavo = $c.unit; Campo = 'ERROR'; Valor = "$_"} }
+        Modbus-Cerrar
+    }
+    return [ordered]@{planta = $cfg.planta; que = $que; fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); filas = $filas}
+}
+# La caja negra son 24 h minuto a minuto: 5760 registros de una HSU concreta.
+function Hsu-CajaNegra($ncuPedida) {
+    $n = @(Ncus-DePlanta | Where-Object { -not $ncuPedida -or "$($_.ncu)" -eq "$ncuPedida" })[0]
+    if (-not $n) { throw "no encuentro la NCU '$ncuPedida' en la planta" }
+    $c = Hsu-Cx $n
+    Modbus-Conectar $c.ip $c.puerto $timeoutMs
+    $palabras = New-Object System.Collections.Generic.List[int]
+    try {
+        $regsTot = 1440 * 4; $off = 0
+        while ($off -lt $regsTot) {
+            $k = [math]::Min(100, $regsTot - $off)
+            $trozo = FC03-Leer ([byte]$c.unit) (31000 + $off) $k
+            if ($null -eq $trozo) { break }
+            $palabras.AddRange([int[]]$trozo); $off += $k
+        }
+    } finally { Modbus-Cerrar }
+    $min = [math]::Floor($palabras.Count / 4)
+    $filas = @()
+    for ($m = 0; $m -lt $min; $m++) { $filas += Hsu-CajaFila @($palabras[$m*4], $palabras[$m*4+1], $palabras[$m*4+2], $palabras[$m*4+3]) $m }
+    return [ordered]@{planta = $cfg.planta; ncu = "$($n.ncu)"; esclavo = $c.unit; minutos = $min
+        completa = ($min -ge 1440); fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); filas = $filas}
+}
+
+# --- Auditoria contra un preset que llega en el cuerpo ---
+# No escribe nada: lee las variables del preset y lista SOLO las desviaciones,
+# igual que la pestana Flota. El preset viaja en la peticion, asi que se puede
+# auditar con el mismo fichero que se usa en local.
+function Auditar-Preset($body) {
+    $pares = @()
+    foreach ($e in @($body.preset)) {
+        if ($null -eq $e) { continue }
+        $nom = "$($e.variable)"
+        if ($nom -eq '' -or -not $VARIABLES.Contains($nom)) { continue }
+        $pares += @{nombre = $nom; texto = "$($e.valor)"}
+    }
+    if ($pares.Count -eq 0) { throw 'el preset no trae ninguna variable conocida (formato: [{"variable":"41010 longitud [deg]","valor":"-1.685"}])' }
+    $lec = Leer-Planta (($pares | ForEach-Object { $_.nombre }) -join ',') "$($body.ncu)" "$($body.tcus)"
+    $desv = @(); $ok = 0; $mudas = 0
+    foreach ($f in @($lec.tcus)) {
+        if ("$($f.Estado)" -ne 'OK') { $mudas++; continue }
+        $malas = 0
+        foreach ($p in $pares) {
+            $leido = "$($f.($p.nombre))"
+            if ($leido -eq $p.texto) { continue }
+            $malas++
+            $sosp = Rango-Sospechoso $p.nombre $leido
+            $desv += [pscustomobject]@{NCU = $f.NCU; TCU = $f.TCU; Variable = $p.nombre
+                Esperado = $p.texto; Leido = $leido
+                Nota = $(if ($sosp) { "DESVIACION - $sosp" } else { 'DESVIACION' })}
+        }
+        if ($malas -eq 0) { $ok++ }
+    }
+    return [ordered]@{tipo = 'auditoria_tcu'; planta = $cfg.planta; toolbox = $VERSION_TOOLBOX
+        fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        variables = @($pares | ForEach-Object { $_.nombre })
+        tcus_auditadas = @($lec.tcus).Count; conformes = $ok; sin_respuesta = $mudas
+        desviaciones = $desv}
 }
 
 # ---------------------------------------------------------------------------
@@ -353,7 +433,11 @@ function Tcus-DeNcu($n) {
 
 function Fila-Vacia([string]$ncu, $tcu, [string]$salud, [string]$alarmas) {
     return [pscustomobject]@{
-        NCU=$ncu; TCU=$tcu; Salud=$salud; Modo=''
+        # GW va aqui tambien: la toolbox lo anadio en la v11.6 y sin el la web
+        # no puede decir de que gateway cuelga cada TCU. Ademas Export-Csv se
+        # queda con las columnas de la PRIMERA fila: si falta en esta, falta en
+        # todo el fichero.
+        NCU=$ncu; TCU=$tcu; GW=''; Salud=$salud; Modo=''
         Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''
         Alarmas=$alarmas
         main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
@@ -383,12 +467,20 @@ function Diag-Planta {
             $f.Modo = '-'
             $filas += $f
         }
-        foreach ($h in $hsus) { $h.NCU = $et; $filas += $h }
+        foreach ($h in $hsus) {
+            $h | Add-Member -NotePropertyName NCU -NotePropertyValue $et -Force
+            $h | Add-Member -NotePropertyName GW -NotePropertyValue '' -Force
+            $filas += $h
+        }
         foreach ($tcu in (Tcus-DeNcu $n)) {
             $d = $null
             if ($dm) { $d = $dm[[int]$tcu] }
             if ($null -eq $d) { $filas += Fila-Vacia $et $tcu 'OFFLINE' 'sin datos via NCU' }
-            else { $d | Add-Member -NotePropertyName NCU -NotePropertyValue $et -Force; $filas += $d }
+            else {
+                $d | Add-Member -NotePropertyName NCU -NotePropertyValue $et -Force
+                $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcu $n.gws ([int]$tcu)) -Force
+                $filas += $d
+            }
         }
     }
     return [ordered]@{
@@ -571,7 +663,46 @@ function Tcus-DeCuerpo($body) {
     return [int[]]$lista
 }
 
+# CSV por TCU: "NCU;TCU;variable;valor" (o sin NCU). Cada TCU lleva lo suyo y
+# puede cruzar NCUs, que es justo lo que un rango no sabe hacer.
+function Escribir-Csv($body) {
+    $lineas = @("$($body.csv)" -split "`r?`n")
+    $r = Parse-CsvPorTcu $lineas
+    if (@($r.jobs).Count -eq 0) { throw ("el CSV no trae ninguna linea valida" + $(if (@($r.errores).Count) { ": " + (@($r.errores) -join '; ') } else { '' })) }
+    $porNcu = @{}
+    foreach ($j in @($r.jobs)) {
+        $k = "$($j.ncu)"
+        if (-not $porNcu.ContainsKey($k)) { $porNcu[$k] = @() }
+        $porNcu[$k] += ,$j
+    }
+    $filas = @()
+    foreach ($n in (Ncus-DePlanta)) {
+        $k = "$($n.ncu)"
+        $mios = @()
+        if ($porNcu.ContainsKey($k)) { $mios = @($porNcu[$k]) }
+        elseif ($porNcu.ContainsKey('') -and @(Ncus-DePlanta).Count -eq 1) { $mios = @($porNcu['']) }
+        if ($mios.Count -eq 0) { continue }
+        $cx = @{ip = $n.ip; puerto = $null; gws = $n.gws; multi = $null; etiqueta = 'auto'; to = $timeoutMs; reint = 2}
+        foreach ($seg in @(Plan-Segmentos @($mios | ForEach-Object { [int]$_.tcu } | Sort-Object -Unique) $cx)) {
+            try { Modbus-Conectar $n.ip $seg.puerto $timeoutMs } catch { continue }
+            foreach ($tcu in $seg.tcus) {
+                foreach ($j in @($mios | Where-Object { [int]$_.tcu -eq [int]$tcu })) {
+                    try {
+                        if ($j.esc.modo -eq 'fc16') { FC16-Escribir ([byte]$tcu) $j.esc.addr $j.esc.palabras }
+                        else { FC22-Mascara ([byte]$tcu) $j.esc.addr $j.esc.and $j.esc.or }
+                        $cmp = Comparar-Escritura ([byte]$tcu) $j.esc
+                        $filas += @{ncu = $k; tcu = [int]$tcu; ok = $cmp.ok; detalle = $(if ($cmp.ok) { "$($j.nombre) = $($j.texto)" } else { "$($j.nombre): verificacion, leido $($cmp.leidoRaw)" })}
+                    } catch { $filas += @{ncu = $k; tcu = [int]$tcu; ok = $false; detalle = "$($j.nombre): $_"} }
+                }
+            }
+            Modbus-Cerrar
+        }
+    }
+    return $filas
+}
+
 function Op-Escritura([string]$op, $body) {
+    if ($op -eq 'escribir-csv') { return Escribir-Csv $body }
     $ncu = [int]$body.ncu
     switch ($op) {
         'modo' {
@@ -650,6 +781,37 @@ function Op-Escritura([string]$op, $body) {
                 @{tcu = [int]$t; ok = $true; detalle = 'NVM guardado'}
             }
         }
+        'escribir-lote' {
+            # varias variables de una pasada, como la tabla de Escribir. La
+            # identidad de red no entra: dos TCUs con el mismo esclavo hacen
+            # desaparecer a una de las dos de la Zigbee.
+            $vars = @()
+            foreach ($v in @($body.valores)) {
+                $nom = Resolver-Variable "$($v.variable)"
+                $vd = $VARIABLES[$nom]
+                if ($ADDR_COMANDO -contains $vd.addr) { throw "'$nom' es un registro de COMANDO: usa su endpoint (modo/stow/reloj/nvm/comisionado)" }
+                if ($ADDR_IDENTIDAD -contains $vd.addr) { throw "'$nom' es identidad de red (esclavo/PAN ID/clave): no se escribe en remoto ni en lote" }
+                $vars += @{nombre = $nom; vdef = $vd; texto = "$($v.valor)"; esc = (Valor-A-Escritura $vd "$($v.valor)")}
+            }
+            if ($vars.Count -eq 0) { throw 'falta "valores": [{"variable":"41010","valor":"-1.685"}, ...]' }
+            return Ejecutar-PorRango $ncu (Tcus-DeCuerpo $body) {
+                param($t)
+                $hechas = @(); $fallo = ''
+                foreach ($v in $vars) {
+                    try {
+                        $previo = '?'
+                        try { $previo = Leer-Decodificado $t $v.vdef } catch {}
+                        if ($v.esc.modo -eq 'fc16') { FC16-Escribir $t $v.esc.addr $v.esc.palabras }
+                        else { FC22-Mascara $t $v.esc.addr $v.esc.and $v.esc.or }
+                        $cmp = Comparar-Escritura $t $v.esc
+                        if (-not $cmp.ok) { $fallo = "$($v.nombre): verificacion, leido $($cmp.leidoRaw)"; break }
+                        $hechas += "$($v.nombre) : $previo -> $($v.texto)"
+                    } catch { $fallo = "$($v.nombre): $_"; break }
+                }
+                if ($fallo -ne '') { @{tcu = [int]$t; ok = $false; detalle = $fallo} }
+                else { @{tcu = [int]$t; ok = $true; detalle = ($hechas -join ' | ')} }
+            }.GetNewClosure()
+        }
         'escribir' {
             $nombre = Resolver-Variable "$($body.variable)"
             $vdef = $VARIABLES[$nombre]
@@ -674,15 +836,19 @@ function Op-Escritura([string]$op, $body) {
 $puerto = if ($cfg.puerto) { [int]$cfg.puerto } else { 8585 }
 $escritura = [bool]$cfg.permitir_escritura
 $intervaloVig = if ($null -ne $cfg.intervalo_vigilancia_min) { [int]$cfg.intervalo_vigilancia_min } else { 5 }
-$OPS_POST = @('modo', 'limpiar-alarmas', 'stow', 'unstow', 'comisionado', 'reloj', 'nvm', 'escribir')
+$OPS_POST = @('modo', 'limpiar-alarmas', 'stow', 'unstow', 'comisionado', 'reloj', 'nvm', 'escribir', 'escribir-lote', 'escribir-csv')
 # El SAT no toca los seguidores: arranca y para un registro que se graba aqui.
 # Por eso no va detras de 'permitir_escritura' ni pide doble confirmacion.
 $OPS_SAT = @('sat/iniciar', 'sat/parar')
+# La auditoria va en POST solo porque el preset viaja en el cuerpo: no escribe
+# nada, asi que no depende de permitir_escritura ni pide doble confirmacion.
+$OPS_LECTURA_POST = @('auditoria')
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://localhost:$puerto/")
 $listener.Start()
 Write-Host "TCU Agente v$VERSION_AGENTE - planta '$($cfg.planta)' - http://localhost:$puerto  (toolbox v$VERSION_TOOLBOX)"
-Write-Host "Lectura (GET, X-Token): /ping /diagnostico /comisionado /hsus /baterias /inventario /cierre /trabajos /plan-firmware /leer /sincronizar /sat /sat/descargar"
+Write-Host "Lectura (GET, X-Token): /ping /diagnostico /comisionado /hsus /hsus/meteo /hsus/config /hsus/cajanegra /baterias /inventario /cierre /trabajos /plan-firmware /leer /sincronizar /sat /sat/descargar"
+Write-Host ("Lectura (POST, el preset va en el cuerpo): {0}" -f ($OPS_LECTURA_POST -join ' '))
 Write-Host ("SAT (POST): {0}  - se graba en {1}" -f ($OPS_SAT -join ' '), $script:SatDir)
 Write-Host ("Escritura (POST, X-Token + confirmar): {0}  [{1}]" -f ($OPS_POST -join ' '), $(if ($escritura) { 'HABILITADA' } else { 'DESHABILITADA (permitir_escritura=false)' }))
 Write-Host ("Vigilante de alarmas: {0}" -f $(if ($intervaloVig -gt 0) { "cada $intervaloVig min" } else { 'apagado' }))
@@ -726,6 +892,9 @@ while ($true) {
                 '/trabajos'     { $out = @{planta = $cfg.planta; trabajos = @(Trabajos-Lista)} }
                 '/plan-firmware' { $out = Plan-Fw "$($req.QueryString['objetivo'])" $null "$($req.QueryString['min_tcu'])" }
                 '/leer'         { $out = Leer-Planta "$($req.QueryString['vars'])" "$($req.QueryString['ncu'])" "$($req.QueryString['tcus'])" }
+                '/hsus/meteo'   { $out = Hsus-Detalle 'meteo' }
+                '/hsus/config'  { $out = Hsus-Detalle 'config' }
+                '/hsus/cajanegra' { $out = Hsu-CajaNegra "$($req.QueryString['ncu'])" }
                 '/sat'          { $out = Sat-Estado }
                 '/sat/descargar' {
                     $nom = "$($req.QueryString['f'])"
@@ -739,6 +908,14 @@ while ($true) {
                 }
                 default         { $code = 404; $out = @{error = 'ruta desconocida'} }
             }
+        }
+        elseif ($req.HttpMethod -eq 'POST' -and $OPS_LECTURA_POST -contains $req.Url.AbsolutePath.TrimStart('/')) {
+            $body = $null
+            if ($req.HasEntityBody) {
+                $sr = New-Object IO.StreamReader($req.InputStream, $req.ContentEncoding)
+                $body = $sr.ReadToEnd() | ConvertFrom-Json
+            }
+            $out = Auditar-Preset $body
         }
         elseif ($req.HttpMethod -eq 'POST' -and $OPS_SAT -contains $req.Url.AbsolutePath.TrimStart('/')) {
             $body = $null

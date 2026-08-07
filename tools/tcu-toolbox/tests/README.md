@@ -7,7 +7,16 @@ planta** extrae de este fichero: si se renombra una, falla aquí y no en planta.
 ```bash
 python3 mb_server.py &        # simulador en 127.0.0.1:15020
 pwsh -NoProfile -File test_toolbox.ps1
+pwsh -NoProfile -File test_agente.ps1     # 33 comprobaciones del TCU Agente
 ```
+
+`test_agente.ps1` monta una **instalación de campo en miniatura** en una carpeta
+temporal (las dos carpetas al lado, con una planta de dos NCUs apuntando al
+simulador), **arranca el agente de verdad** y le pide todas las rutas: lecturas,
+auditoría con preset, las tres escrituras, y el SAT de principio a fin
+—comprobando que graba los tres CSV del anexo con su cabecera—. Es la única forma
+de saber que el agente sigue vivo después de tocar la toolbox, porque no tiene
+copia de la lógica: la extrae del `.ps1` por nombre de función.
 
 Sale `TODAS LAS PRUEBAS OK` y código 0, o la lista de fallos y código 1.
 Necesita **PowerShell 7** (`pwsh`) y Python 3; en Windows vale el `pwsh` normal.

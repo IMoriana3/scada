@@ -70,6 +70,38 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**El agente, probado de punta a punta (v11.12)** — `tests/test_agente.ps1`
+monta una **instalación de campo en miniatura** (las dos carpetas, una planta de
+dos NCUs contra el simulador), **arranca el agente de verdad** y le pide todas
+las rutas: lecturas, auditoría con preset, las tres escrituras y el SAT completo,
+comprobando que graba los tres CSV del anexo con su cabecera. 33 comprobaciones.
+
+Nada más escribirlo encontró un fallo real: **el diagnóstico del agente no
+llevaba la columna `GW`** que esta herramienta añadió en la v11.6. Y como
+`Export-Csv` se queda con las columnas de la primera fila, faltaba en todo el
+fichero.
+
+El agente (v2.4) completa además la réplica de lo que se puede hacer sin mover
+un seguidor: `/hsus/meteo`, `/hsus/config`, `/hsus/cajanegra`, `/auditoria`
+(el preset viaja en el cuerpo), `/escribir-lote` y `/escribir-csv`. El lote
+**bloquea la identidad de red**, igual que aquí.
+
+**El agente, probado de punta a punta (v11.12)** — `tests/test_agente.ps1` monta
+una **instalación de campo en miniatura** (las dos carpetas, una planta de dos
+NCUs contra el simulador), **arranca el agente de verdad** y le pide todas las
+rutas: lecturas, auditoría con preset, las tres escrituras y el SAT completo,
+comprobando que graba los tres CSV del anexo con su cabecera. 33 comprobaciones.
+
+Nada más escribirlo encontró un fallo real: **el diagnóstico del agente no
+llevaba la columna `GW`** que esta herramienta añadió en la v11.6. Y como
+`Export-Csv` se queda con las columnas de la primera fila, faltaba en todo el
+fichero.
+
+El agente (v2.4) completa además la réplica de lo que se puede hacer sin mover un
+seguidor: `/hsus/meteo`, `/hsus/config`, `/hsus/cajanegra`, `/auditoria` (el
+preset viaja en el cuerpo), `/escribir-lote` y `/escribir-csv`. El lote
+**bloquea la identidad de red**, igual que aquí.
+
 **Lo que solo lee, también en remoto (v11.11)** — el [agente](../tcu-agente/)
 (v2.3) expone ahora `/baterias`, `/inventario`, `/plan-firmware`, `/leer`,
 `/cierre` y `/trabajos`, **reutilizando estas mismas funciones** (`Bat-Tabla`,
