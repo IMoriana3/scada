@@ -84,6 +84,18 @@ try {
     Check 'leer: resuelve el prefijo' (@($l.variables)[0].StartsWith('41010')) 'True'
     Check 'leer: dos TCUs por NCU' (@($l.tcus).Count) 4
 
+    # la misma gramatica que la toolbox, tambien al leer, y con filtro de gateway
+    $l2 = Pedir '/leer?vars=41010&tcus=1/1,2/2'
+    Check 'leer: la seleccion puede cruzar NCUs' (@($l2.tcus).Count) 2
+    Check 'leer: y dice de que NCU es cada una' ((@($l2.tcus | ForEach-Object { $_.NCU } | Sort-Object -Unique)) -join ',') '1,2'
+    Check 'leer: lleva la columna GW' ($null -ne @($l2.tcus)[0].PSObject.Properties['GW']) 'True'
+    $l3 = Pedir '/leer?vars=41010&gw=15020'
+    Check 'leer: el filtro de gateway deja pasar el suyo' (@($l3.tcus).Count -gt 0) 'True'
+    $l4 = Pedir '/leer?vars=41010&gw=9999'
+    Check 'leer: y con un gateway que no existe, nada' (@($l4.tcus).Count) 0
+    Check 'baterias: tambien lleva GW' ($null -ne @($b.tcus)[0].PSObject.Properties['GW']) 'True'
+    Check 'inventario: tambien lleva GW' ($null -ne @($inv.tcus)[0].PSObject.Properties['GW']) 'True'
+
     $c = Pedir '/cierre'
     Check 'cierre: responde aunque este vacio' ($null -ne $c.total) 'True'
     $t = Pedir '/trabajos'

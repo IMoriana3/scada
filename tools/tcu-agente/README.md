@@ -35,7 +35,7 @@ planta, la versión del agente y la de la toolbox, y las dos tienen que ser de l
 1. Copia las carpetas `tcu-toolbox` y `tcu-agente` al PC de planta (las de la release).
 2. En `tcu-agente`, copia `agente_config.ejemplo.json` → `agente_config.json` y rellena: `planta` ("Ayora"), y un `token` largo aleatorio (es la llave: trátalo como una contraseña).
 3. Primera vez en ese PC (una sola vez, como administrador): `netsh http add urlacl url=http://localhost:8585/ user=Todos`
-4. Doble clic en `TCU_Agente.bat` — debe decir "TCU Agente v2.5 - planta 'Ayora'".
+4. Doble clic en `TCU_Agente.bat` — debe decir "TCU Agente v2.6 - planta 'Ayora'".
 5. Túnel: instala [cloudflared](https://github.com/cloudflare/cloudflared/releases/latest) (un solo .exe) y en otra ventana:
    `cloudflared tunnel --url http://localhost:8585`
    Te dará una URL `https://xxxx.trycloudflare.com` (cambia en cada arranque; para URL fija hace falta un túnel con nombre y un dominio en Cloudflare — fase 2).
@@ -53,9 +53,9 @@ Lectura (GET, siempre disponibles):
 | `/hsus` | HSUs de cada NCU con salud y viento/nieve |
 | `/sincronizar` | lee toda la planta y **sube él mismo el diagnóstico al Histórico** (requiere credenciales Supabase en la config) |
 | `/baterias` | SoC, SoH, tensiones, corrientes y temperaturas de toda la planta, con la auditoría — **del diagnóstico, sin lecturas extra** |
-| `/inventario` | FW, nº de serie, MAC, HW y fecha de fabricación. ⚠️ **Lenta**: va TCU a TCU por Zigbee, minutos en una planta entera |
+| `/inventario?tcus=&gw=` | FW, nº de serie, MAC, HW y fecha de fabricación. ⚠️ **Lenta**: va TCU a TCU por Zigbee, minutos en una planta entera. Acotarla con `tcus` o `gw` la hace usable |
 | `/plan-firmware?objetivo=v1.6.0` | el plan por ventanas del updater (qué abrir, qué pegar, cuánto tarda) — hace el inventario primero, así que hereda su lentitud |
-| `/leer?vars=41010,41111&ncu=1&tcus=1-20` | leer variables en un rango, como la pestaña *Leer variable*. `vars` admite el prefijo (`41010`) |
+| `/leer?vars=41010,41111&tcus=1-20&gw=504` | leer variables, como la pestaña *Leer variable*. `vars` admite el prefijo (`41010`); `tcus` admite `12/10, 15/5-12`; `gw` filtra por gateway |
 | `/cierre` | las TCUs actualizadas que aún no están cerradas, leído del disco de **este** PC |
 | `/trabajos` | los trabajos guardados en `trabajos/` de este PC |
 | `/sat` | estado del ensayo SAT: si está registrando, hasta cuándo, cuántos pases lleva y los ficheros de la carpeta |

@@ -7,7 +7,7 @@ planta** extrae de este fichero: si se renombra una, falla aquí y no en planta.
 ```bash
 python3 mb_server.py &        # simulador en 127.0.0.1:15020
 pwsh -NoProfile -File test_toolbox.ps1
-pwsh -NoProfile -File test_agente.ps1     # 36 comprobaciones del TCU Agente
+pwsh -NoProfile -File test_agente.ps1     # 43 comprobaciones del TCU Agente
 ```
 
 `test_agente.ps1` monta una **instalación de campo en miniatura** en una carpeta

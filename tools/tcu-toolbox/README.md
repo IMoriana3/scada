@@ -70,6 +70,15 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**El gateway, también en remoto (v11.16 / agente v2.6)** — la web enseñaba el
+diagnóstico sin la columna `GW` aunque el agente ya la mandaba, y no tenía el
+cuadro **GW** que aquí existe desde la v11.6.
+
+Ahora `/leer` e `/inventario` aceptan `gw=504` y la gramática completa de `tcus`
+(`12/10, 15/5-12`), y `/leer`, `/inventario` y `/baterias` traen la columna `GW`.
+El filtro se resuelve **en el agente**, así que además no se lee lo que no
+interesa — que en un inventario de 754 TCUs es la diferencia entre usable y no.
+
 **En la web, las NCUs se escriben (v11.15 / agente v2.5)** — el campo de NCU de
 la *Toolbox web* era un **desplegable**, así que no se podía escribir en él, y
 solo dejaba **una** NCU. Aquí, desde la v11.6, se puede decir

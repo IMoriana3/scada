@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '2.5'
+$VERSION_AGENTE = '2.6'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -71,20 +71,30 @@ $script:Cancelar = $false
 function Baterias-Planta {
     $diag = @((Diag-Planta).tcus)
     $hall = @(Bat-Auditar $diag)
+    # Bat-Tabla no lleva GW (en la pestana no cabe otra columna), pero aqui si
+    # interesa: la web filtra por gateway
+    $gwDe = @{}
+    foreach ($d in $diag) { $gwDe["$($d.NCU)|$($d.TCU)"] = "$($d.GW)" }
+    $tabla = @(Bat-Tabla $diag $hall | ForEach-Object {
+        $o = [ordered]@{NCU = $_.NCU; TCU = $_.TCU; GW = "$($gwDe[""$($_.NCU)|$($_.TCU)""])"}
+        foreach ($pr in $_.PSObject.Properties) { if ($pr.Name -notin @('NCU','TCU')) { $o[$pr.Name] = $pr.Value } }
+        [pscustomobject]$o })
     return [ordered]@{tipo = 'baterias_tcu'; planta = $cfg.planta; toolbox = $VERSION_TOOLBOX
         fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         hallazgos = $hall
-        tcus = @(Bat-Tabla $diag $hall)}
+        tcus = $tabla}
 }
 
 # Inventario: FW, serie y MAC. Esta va por Zigbee TCU a TCU, asi que es LENTA
 # (una planta entera son minutos, no segundos). Se avisa en la respuesta.
-function Inventario-Planta {
+function Inventario-Planta([string]$tcusTxt = '', [string]$gw = '') {
     $filas = @()
     foreach ($n in (Ncus-DePlanta)) {
         $et = "$($n.ncu)"
-        $cx = @{ip = $n.ip; puerto = $null; gws = $n.gws; multi = $null; etiqueta = 'auto'; to = $timeoutMs; reint = 2}
-        foreach ($seg in @(Plan-Segmentos (Tcus-DeNcu $n) $cx)) {
+        $pedidas = @(Tcus-Pedidas $n "$tcusTxt" "$gw")
+        if ($pedidas.Count -eq 0) { continue }
+        $cx = @{ip = $n.ip; puerto = $null; gws = @(Gws-Filtrados $n.gws "$gw"); multi = $null; etiqueta = 'auto'; to = $timeoutMs; reint = 2}
+        foreach ($seg in @(Plan-Segmentos $pedidas $cx)) {
             try { Modbus-Conectar $n.ip $seg.puerto $timeoutMs } catch { continue }
             foreach ($tcu in $seg.tcus) {
                 # Ident-Leer devuelve una lista Campo/Valor, no un diccionario:
@@ -96,11 +106,11 @@ function Inventario-Planta {
                     foreach ($c in @($campos)) { $h[$c.Campo] = $c.Valor }
                 } catch { $h = $null }
                 if ($h) {
-                    $filas += [pscustomobject]@{NCU = $et; TCU = [int]$tcu; Serie = $h['Numero de serie']; MAC = $h['MAC Xbee']
+                    $filas += [pscustomobject]@{NCU = $et; TCU = [int]$tcu; GW = (Gw-DeTcu $n.gws ([int]$tcu)); Serie = $h['Numero de serie']; MAC = $h['MAC Xbee']
                         FW = $h['FW principal']; FW_fabrica = $h['FW de fabrica']; HW = $h['HW PCBA']
                         Fecha_fab = $h['Fecha de fabricacion']; Nota = 'OK'}
                 } else {
-                    $filas += [pscustomobject]@{NCU = $et; TCU = [int]$tcu; Serie = ''; MAC = ''; FW = ''
+                    $filas += [pscustomobject]@{NCU = $et; TCU = [int]$tcu; GW = (Gw-DeTcu $n.gws ([int]$tcu)); Serie = ''; MAC = ''; FW = ''
                         FW_fabrica = ''; HW = ''; Fecha_fab = ''; Nota = 'sin respuesta'}
                 }
             }
@@ -152,7 +162,7 @@ function Trabajos-Lista {
 }
 
 # Leer variables en un rango, como la pestana Leer variable.
-function Leer-Planta($nombresTxt, $ncuPedida, $tcusTxt) {
+function Leer-Planta($nombresTxt, $ncuPedida, $tcusTxt, $gw = '') {
     $nombres = @("$nombresTxt".Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     if ($nombres.Count -eq 0) { throw 'falta "vars" (nombres separados por comas; vale el prefijo, p. ej. 41010)' }
     $defs = @($nombres | ForEach-Object { @{nombre = (Resolver-Variable $_); vdef = $null} })
@@ -160,17 +170,13 @@ function Leer-Planta($nombresTxt, $ncuPedida, $tcusTxt) {
     $filas = @()
     foreach ($n in (Ncus-DePlanta)) {
         if ($ncuPedida -and "$($n.ncu)" -ne "$ncuPedida") { continue }
-        $todas = Tcus-DeNcu $n
-        $pedidas = $todas
-        if ("$tcusTxt" -ne '') {
-            $l = Parse-ListaNums "$tcusTxt"
-            $pedidas = @($l | Where-Object { $todas -contains [int]$_ })
-        }
-        $cx = @{ip = $n.ip; puerto = $null; gws = $n.gws; multi = $null; etiqueta = 'auto'; to = $timeoutMs; reint = 2}
+        $pedidas = @(Tcus-Pedidas $n "$tcusTxt" "$gw")
+        if ($pedidas.Count -eq 0) { continue }
+        $cx = @{ip = $n.ip; puerto = $null; gws = @(Gws-Filtrados $n.gws "$gw"); multi = $null; etiqueta = 'auto'; to = $timeoutMs; reint = 2}
         foreach ($seg in @(Plan-Segmentos $pedidas $cx)) {
             try { Modbus-Conectar $n.ip $seg.puerto $timeoutMs } catch { continue }
             foreach ($tcu in $seg.tcus) {
-                $o = [ordered]@{NCU = "$($n.ncu)"; TCU = [int]$tcu}
+                $o = [ordered]@{NCU = "$($n.ncu)"; TCU = [int]$tcu; GW = (Gw-DeTcu $n.gws ([int]$tcu))}
                 $mudo = $true
                 foreach ($d in $defs) {
                     $v = ''
@@ -423,6 +429,17 @@ function Ncus-DePlanta {
         if ($e.ip) { return @(@{ncu = 1; ip = $e.ip; gws = @(@{puerto=$e.puerto; ini=$e.ini; fin=$e.fin}); hsu = $e.hsu}) }
     }
     throw "planta '$($cfg.planta)' no encontrada en $dirToolbox\plantas"
+}
+
+# Las TCUs de una NCU que entran en la seleccion y en el filtro de gateway. Es
+# lo mismo que hace la toolbox en su cuadro TCUs y su cuadro GW, con sus mismas
+# funciones: aqui solo se atan.
+function Tcus-Pedidas($n, [string]$tcusTxt, [string]$gw) {
+    $gws = @(Gws-Filtrados $n.gws $gw)
+    if ($gws.Count -eq 0) { return @() }
+    $sel = $null
+    if ("$tcusTxt".Trim() -ne '') { $sel = Parse-Seleccion "$tcusTxt" 'TCUs' }
+    return @(Sel-TcusDe $sel $gws "$($n.ncu)")
 }
 
 function Tcus-DeNcu($n) {
@@ -926,11 +943,11 @@ while ($true) {
                 '/hsus'         { $out = Hsus-Planta }
                 '/sincronizar'  { $out = Sincronizar }
                 '/baterias'     { $out = Baterias-Planta }
-                '/inventario'   { $out = Inventario-Planta }
+                '/inventario'   { $out = Inventario-Planta "$($req.QueryString['tcus'])" "$($req.QueryString['gw'])" }
                 '/cierre'       { $out = Cierre-Planta }
                 '/trabajos'     { $out = @{planta = $cfg.planta; trabajos = @(Trabajos-Lista)} }
                 '/plan-firmware' { $out = Plan-Fw "$($req.QueryString['objetivo'])" $null "$($req.QueryString['min_tcu'])" }
-                '/leer'         { $out = Leer-Planta "$($req.QueryString['vars'])" "$($req.QueryString['ncu'])" "$($req.QueryString['tcus'])" }
+                '/leer'         { $out = Leer-Planta "$($req.QueryString['vars'])" "$($req.QueryString['ncu'])" "$($req.QueryString['tcus'])" "$($req.QueryString['gw'])" }
                 '/hsus/meteo'   { $out = Hsus-Detalle 'meteo' }
                 '/hsus/config'  { $out = Hsus-Detalle 'config' }
                 '/hsus/cajanegra' { $out = Hsu-CajaNegra "$($req.QueryString['ncu'])" }
