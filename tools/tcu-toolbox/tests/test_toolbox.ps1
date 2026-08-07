@@ -2055,6 +2055,17 @@ Check 'plan: fila de TCU etiquetada' ($src.Contains("@('TCU', `$ips[`"`$(`$d.NCU
 Check 'plan: y las que no responden' ($src.Contains("@('SIN RESPUESTA', `$ips[`"`$(`$m.ncu)`"]")) $true
 # con un solo rango la fila de la ventana YA lo lleva: repetirlo era el ruido
 Check 'plan: los rangos solo si hay mas de uno' ($src.Contains('if (@($v.Tramos).Count -gt 1) {')) $true
+# Desde-Hasta con huecos dibujaba un rango que no existe: con 10-16 y 18-22
+# ponia "de 10 a 22", la TCU 17 parecia estar dentro y abajo no tenia fila
+# porque no esta pendiente. Y el 12 de la columna TCUs no cuadraba con 13.
+Check 'plan: con huecos no inventa un rango seguido' ($src.Contains("`$unTramo = (@(`$v.Tramos).Count -eq 1)")) $true
+Check 'plan: y lo dice en las columnas' ($src.Contains("`$(if (`$unTramo) { `$v.Tramos[0].Desde } else { '(varios)' })")) $true
+# la ventana con hueco sigue diciendo los rangos de verdad en su nota
+$vHueco = @(Plan-Ventanas @([pscustomobject]@{NCU='10'; Puerto='503'; Desde=10; Hasta=16; TCUs=7},
+                            [pscustomobject]@{NCU='10'; Puerto='503'; Desde=18; Hasta=22; TCUs=5}) $ipsFw 20)[0]
+Check 'plan: los dos tramos, sin el hueco' ($vHueco.Rangos) '10-16 + 18-22'
+Check 'plan: y cuenta 12, no 13' ($vHueco.TCUs) 12
+Check 'plan: con dos tramos hay filas PEGAR' (@($vHueco.Tramos).Count) 2
 # y las TCUs van debajo de SU ventana, no en un bloque suelto al final
 Check 'plan: cada TCU bajo su ventana' ($src.Contains('foreach ($d in @($detPorV[$k] | Sort-Object { [int]$_.TCU })) {')) $true
 # el plan tambien en texto, para leerlo mientras se teclea en el updater
