@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '2.0'
+$VERSION_AGENTE = '2.1'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -31,9 +31,22 @@ function Con([string]$t, $color = $null) { Write-Host $t }   # shim de consola p
 $logica = $src.Substring($ini, $fin - $ini).Replace('$PSScriptRoot', '$dirToolbox')
 # funciones de la seccion de handlers que tambien necesitamos (mismos
 # marcadores que la suite de pruebas de la toolbox)
-$i3 = $src.IndexOf('function Params-Conexion'); $f3 = $src.IndexOf('function Rango-Tcus')       # Plan-Segmentos, Trabajos-Planta
-$i4 = $src.IndexOf('function Fijar-Modo');      $f4 = $src.IndexOf('function Guardia-Viento')   # cambio de modo verificado
-if ($i3 -lt 0 -or $f3 -lt 0 -or $i4 -lt 0 -or $f4 -lt 0) { throw 'No se pudieron extraer las funciones de handlers de la toolbox' }
+# OJO: si en la toolbox se renombra o se borra una de estas funciones, el
+# agente deja de arrancar. Paso por 'Anclas-Toolbox' para que el error diga
+# CUAL falta en vez de un "no se pudieron extraer" que no lleva a ningun sitio,
+# y la suite de la toolbox comprueba que las seis siguen estando.
+function Ancla-Toolbox([string]$src, [string]$marca) {
+    $i = $src.IndexOf($marca)
+    if ($i -lt 0) {
+        $v = '?'
+        $m = [regex]::Match($src, "VERSION_TOOLBOX = '([0-9.]+)'")
+        if ($m.Success) { $v = $m.Groups[1].Value }
+        throw "La toolbox v$v ya no tiene '$marca'. El agente se ha quedado atras: las dos carpetas van juntas, baja la misma release."
+    }
+    return $i
+}
+$i3 = Ancla-Toolbox $src 'function Params-Conexion'; $f3 = Ancla-Toolbox $src 'function Refrescar-ComboPlantas'   # Plan-Segmentos, Trabajos-Planta, Parse-Seleccion
+$i4 = Ancla-Toolbox $src 'function Fijar-Modo';      $f4 = Ancla-Toolbox $src 'function Guardia-Viento'           # cambio de modo verificado
 $logica += "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4)
 Invoke-Expression $logica
 if ($cfg.puerto_ncu) { $PUERTO_NCU = [int]$cfg.puerto_ncu }   # solo para pruebas con simulador

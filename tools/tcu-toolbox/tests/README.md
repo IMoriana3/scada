@@ -1,7 +1,8 @@
 # Pruebas de la TCU Toolbox
 
-1121 comprobaciones de la lógica no-GUI de `TCU_Toolbox.ps1` contra un simulador
-Modbus TCP, sin tocar una planta.
+1135 comprobaciones de la lógica no-GUI de `TCU_Toolbox.ps1` contra un simulador
+Modbus TCP, sin tocar una planta. Incluye las marcas que el **agente del PC de
+planta** extrae de este fichero: si se renombra una, falla aquí y no en planta.
 
 ```bash
 python3 mb_server.py &        # simulador en 127.0.0.1:15020
