@@ -70,6 +70,17 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**Las que no contestan, con su NCU (v11.14)** — las filas `SIN RESPUESTA` del
+plan de firmware se pintaban **todas juntas al final** de la tabla. Una TCU que
+estaba reiniciándose con el firmware nuevo sale muda —lo cual es normal—, pero su
+fila caía cincuenta líneas más abajo, detrás de las otras quince NCUs. Buscarla
+allí es no verla.
+
+Ahora van **debajo de su propia ventana**, junto a las TCUs pendientes de esa
+misma NCU, y la fila de la ventana avisa de cuántas hay. Las de NCUs que no
+tienen ninguna ventana —todo lo suyo al día, o mudo— siguen al final, que es
+donde les toca.
+
 **La ventana con huecos dibujaba un rango que no existe (v11.13)** — en el plan
 de firmware, la fila **VENTANA** ponía en `Desde` y `Hasta` el primero y el
 último de sus tramos. Con la NCU10 pendiente de la `10-16` y la `18-22` salía
