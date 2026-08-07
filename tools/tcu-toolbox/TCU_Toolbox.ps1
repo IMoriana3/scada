@@ -23,9 +23,10 @@
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.6'
+$VERSION_TOOLBOX = '11.7'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -3184,6 +3185,64 @@ $tabC = New-Object System.Windows.Forms.TabPage
 $tabC.Text = 'Cierre'
 $tabs.TabPages.Add($tabC)
 
+# ============================ TAB TRABAJOS ============================
+# Lo que se ha hecho en campo, guardado y recuperable. Cada operacion que
+# termina deja aqui su copia sola: si en medio de una campana de firmware haces
+# un diagnostico, lo de antes sigue estando.
+$tabT = New-Object System.Windows.Forms.TabPage
+$tabT.Text = 'Trabajos'
+$tabs.TabPages.Add($tabT)
+
+$lblTInfo = LG $tabT 'Cada diagnostico, inventario, auditoria, lectura y tabla de baterias se guarda solo en trabajos/. Elige uno y CARGAR lo devuelve a su pestana.' 10 890 16
+$lblTInfo.ForeColor = [System.Drawing.Color]::Gray
+
+$btnTRef = New-Object System.Windows.Forms.Button
+$btnTRef.Text = 'ACTUALIZAR'
+$btnTRef.Location = New-Object System.Drawing.Point(10, 40)
+$btnTRef.Size = New-Object System.Drawing.Size(110, 28)
+$tabT.Controls.Add($btnTRef)
+
+$btnTCargar = New-Object System.Windows.Forms.Button
+$btnTCargar.Text = 'CARGAR'
+$btnTCargar.Location = New-Object System.Drawing.Point(128, 40)
+$btnTCargar.Size = New-Object System.Drawing.Size(110, 28)
+$btnTCargar.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnTCargar.ForeColor = [System.Drawing.Color]::White
+$tabT.Controls.Add($btnTCargar)
+
+$btnTGuardar = New-Object System.Windows.Forms.Button
+$btnTGuardar.Text = 'GUARDAR LO DE AHORA'
+$btnTGuardar.Location = New-Object System.Drawing.Point(246, 40)
+$btnTGuardar.Size = New-Object System.Drawing.Size(160, 28)
+$tabT.Controls.Add($btnTGuardar)
+
+$btnTBorrar = New-Object System.Windows.Forms.Button
+$btnTBorrar.Text = 'Borrar'
+$btnTBorrar.Location = New-Object System.Drawing.Point(414, 40)
+$btnTBorrar.Size = New-Object System.Drawing.Size(80, 28)
+$tabT.Controls.Add($btnTBorrar)
+
+$btnTCarpeta = New-Object System.Windows.Forms.Button
+$btnTCarpeta.Text = 'Abrir carpeta'
+$btnTCarpeta.Location = New-Object System.Drawing.Point(502, 40)
+$btnTCarpeta.Size = New-Object System.Drawing.Size(110, 28)
+$tabT.Controls.Add($btnTCarpeta)
+
+$lblTRes = LG $tabT '' 622 286 46
+$lblTRes.ForeColor = [System.Drawing.Color]::Gray
+
+$lvT = New-Object System.Windows.Forms.ListView
+$lvT.Location = New-Object System.Drawing.Point(10, 76)
+$lvT.Size = New-Object System.Drawing.Size(898, 284)
+$lvT.View = 'Details'; $lvT.FullRowSelect = $true; $lvT.GridLines = $true
+[void]$lvT.Columns.Add('Fecha', 140)
+[void]$lvT.Columns.Add('Tipo', 100)
+[void]$lvT.Columns.Add('Planta', 200)
+[void]$lvT.Columns.Add('Filas', 55)
+[void]$lvT.Columns.Add('Tecnico', 90)
+[void]$lvT.Columns.Add('Nota', 300)
+$tabT.Controls.Add($lvT)
+
 $lblCInfo = LG $tabC 'Cada TCU actualizada entra aqui hasta tener parametros, NVM y modo AUTO. Se rellena sola al verificar, auditar, guardar en NVM y diagnosticar.' 10 890 16
 $lblCInfo.ForeColor = [System.Drawing.Color]::Gray
 
@@ -3860,7 +3919,7 @@ function Con([string]$t, $color) {
 
 $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $btnDiag, $btnSync, $btnIdent,
                     $btnPresetSave, $btnPresetLoad, $btnLPreset, $btnCargarBackup, $btnLCsv, $btnDCsv, $btnBackupJson,
-                    $btnComparar, $btnGCsv, $btnGJson, $btnGWa, $btnGBat, $btnBVer, $btnBAud, $btnBCar, $btnBCsv, $btnBJson, $btnICsv,
+                    $btnComparar, $btnGCsv, $btnGJson, $btnGWa, $btnGBat, $btnBVer, $btnBAud, $btnBCar, $btnBCsv, $btnBJson, $btnICsv, $btnTCargar, $btnTGuardar, $btnTBorrar,
                     $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnAudEscr, $btnInvF, $btnInvFCsv,
                     $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm, $btnHEsclavo,
                     $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComis, $btnPComisSet, $btnPCsv,
@@ -5086,6 +5145,7 @@ $btnLeer.Add_Click({ Lanzar {
         }
     }
     Marcar-Bloque 'lectura'
+    [void](Trabajo-Guardar 'lectura' $script:UltimaLectura "$(@($defs).Count) variables en $(@($script:UltimaLectura).Count) TCUs")
 } })
 
 $btnLCsv.Add_Click({
@@ -5136,6 +5196,98 @@ function Cierre-DeJson($datos) {
     }
     return $r
 }
+# ---------------------------------------------------------------------------
+#  Trabajos guardados
+# ---------------------------------------------------------------------------
+# El diagnostico, el inventario, la auditoria, la lectura y las baterias vivian
+# solo en memoria: lanzar lo siguiente pisaba lo anterior. En una campana eso es
+# lo normal -auditas el firmware, y mientras el updater trabaja quieres
+# diagnosticar-, y al volver ya no estaba lo de antes. Ahora cada operacion que
+# termina se guarda sola en trabajos/, y desde su pestana se vuelve a cargar.
+#
+# (El cierre no entra aqui: ese ya se guardaba por planta en cierre/.)
+# 'cols' son las propiedades que van a la tabla de esa pestana, en su orden.
+$TRABAJO_TIPOS = @{
+  diag       = @{titulo='Diagnostico'; var='UltimoDiag'
+                 cols=@('NCU','TCU','GW','Salud','Modo','Tilt','Objetivo','Dif','SoC','Edad_s','Alarmas')}
+  comm       = @{titulo='Test comm';   var='UltimoDiag'
+                 cols=@('NCU','TCU','GW','Salud','Modo','Tilt','Objetivo','Dif','SoC','Edad_s','Alarmas')}
+  inventario = @{titulo='Inventario';  var='UltimoInv'
+                 cols=@('NCU','TCU','Serie','MAC','FW','FW_fabrica','HW','Fecha_fab','Nota')}
+  auditoria  = @{titulo='Auditoria';   var='UltimaAud'
+                 cols=@('NCU','TCU','Variable','Esperado','Leido','Nota')}
+  lectura    = @{titulo='Lectura';     var='UltimaLectura'; cols=@()}
+  baterias   = @{titulo='Baterias';    var='UltimaBatTabla'
+                 cols=@('NCU','TCU','SoC','SoH','Vbat_mV','Ibat_mA','Vpanel_mV','Ientrada_mA','Tbat_C','Tpcb_C','Dia','Carga','Estado')}
+}
+$TRABAJOS_MAX = 20        # por tipo y planta: lo viejo se va solo
+
+# Nombre de fichero de un trabajo. La planta va dentro para poder tener varias
+# a la vez sin mezclarlas, y el sello ordena solo. Pura.
+function Trabajo-Fichero([string]$tipo, [string]$planta, [string]$sello) {
+    $p = ("$planta" -replace '[^\w\-]', '_')
+    if ($p -eq '') { $p = 'sin_planta' }
+    return "$tipo`__${p}__$sello.json"
+}
+# Una linea de la lista a partir de lo que trae el JSON. Pura.
+function Trabajo-Resumen($obj, [string]$fichero = '') {
+    $tipo = "$($obj.tipo)"
+    $t = $TRABAJO_TIPOS[$tipo]
+    return [pscustomobject]@{
+        Fecha   = "$($obj.fecha)"
+        Tipo    = $(if ($t) { $t.titulo } else { $tipo })
+        Planta  = "$($obj.planta)"
+        # @($null).Count es 1 en PS 5.1: un trabajo sin filas diria que tiene una
+        Filas   = $(if ($null -eq $obj.filas) { 0 } else { @($obj.filas).Count })
+        Nota    = "$($obj.nota)"
+        Tecnico = "$($obj.tecnico)"
+        tipoRaw = $tipo
+        fichero = $fichero
+    }
+}
+# Lo mas reciente primero: en campo interesa lo de hace un rato, no lo de ayer.
+# Pura.
+function Trabajos-Ordenar($lista) {
+    return @(@($lista) | Sort-Object -Property @{Expression={"$($_.Fecha)"}; Descending=$true}, @{Expression={"$($_.Tipo)"}})
+}
+# Que ficheros sobran de un tipo: se guardan los $max mas nuevos. Sin esto, una
+# semana de campana llena la carpeta de diagnosticos de 754 filas. Pura.
+function Trabajos-Podar($ficheros, [int]$max = 20) {
+    $l = @(@($ficheros) | Sort-Object -Descending)
+    if ($l.Count -le $max) { return @() }
+    return @($l[$max..($l.Count - 1)])
+}
+
+function Trabajos-Dir {
+    $dir = Join-Path $PSScriptRoot 'trabajos'
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+    return $dir
+}
+# Guarda lo que acaba de terminar. Nunca revienta la operacion que lo llama: si
+# el disco falla, se avisa y ya.
+function Trabajo-Guardar([string]$tipo, $filas, [string]$nota = '') {
+    if (@($filas).Count -eq 0) { return '' }
+    try {
+        $dir = Trabajos-Dir
+        $sello = Get-Date -Format 'yyyyMMdd_HHmmss'
+        $planta = Nombre-Planta
+        $f = Join-Path $dir (Trabajo-Fichero $tipo $planta $sello)
+        $o = @{tipo=$tipo; planta=$planta; fecha=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+               toolbox=$VERSION_TOOLBOX; tecnico=$script:Usuario.usuario; nota=$nota; filas=@($filas)}
+        ConvertTo-Json $o -Depth 6 | Set-Content $f -Encoding UTF8
+        # y a limpiar lo viejo de ESE tipo y ESA planta
+        $pref = ("$tipo`__" + ("$planta" -replace '[^\w\-]', '_') + '__')
+        $mios = @(Get-ChildItem $dir -Filter "$pref*.json" -File | ForEach-Object { $_.Name })
+        foreach ($v in @(Trabajos-Podar $mios $TRABAJOS_MAX)) {
+            try { Remove-Item (Join-Path $dir $v) -Force } catch {}
+        }
+        return $f
+    } catch {
+        Con "AVISO: no se ha podido guardar el trabajo ($_). Lo de pantalla sigue estando." ([System.Drawing.Color]::Orange)
+        return ''
+    }
+}
+
 function Cierre-Cargar([string]$planta) {
     $script:Cierre = @{}
     try {
@@ -5943,6 +6095,8 @@ function Diag-Correr {
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Diagnostico: OK $nOk | AVISO $nAviso | ALARMA $nAlarma | OFFLINE $nOff" ([System.Drawing.Color]::SteelBlue)
     Marcar-Bloque 'diag'
+    # copia a disco: si luego lanzas otra cosa, esto no se pierde
+    [void](Trabajo-Guardar 'diag' $script:UltimoDiag "OK $nOk | AVISO $nAviso | ALARMA $nAlarma | OFFLINE $nOff")
     # resumen general por NCU (planta completa) y refresco de los filtros de vista
     if ($cx.multi) {
         foreach ($g in @($script:UltimoDiag | Where-Object { $_.NCU } | Group-Object NCU)) {
@@ -6056,6 +6210,7 @@ $btnGComm.Add_Click({ Lanzar {
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "TEST COMM en $seg s: NCUs $nNcuOk OK / $nNcuKo sin respuesta | TCUs $nOk comunican / $nOff sin comunicacion | HSUs $nHsuOk OK / $nHsuKo sin comunicacion" ([System.Drawing.Color]::SteelBlue)
     Marcar-Bloque 'diag'
+    [void](Trabajo-Guardar 'comm' $script:UltimoDiag "$nNcuOk NCUs, $nOk de $($nOk + $nOff) TCUs comunican")
     Con "Es solo una prueba de comunicacion (lastComm): para alarmas, modo y posiciones usa DIAGNOSTICAR." ([System.Drawing.Color]::Gainsboro)
     $selV = $cbGVerNcu.SelectedItem
     $cbGVerNcu.Items.Clear()
@@ -6099,6 +6254,126 @@ function Bat-Pintar {
     $btnBJson.Enabled = $btnBCsv.Enabled
     return $true
 }
+
+# ------------------------- TRABAJOS GUARDADOS (interfaz) -------------------------
+$script:Trabajos = @()
+
+function Trabajos-Pintar {
+    $script:Trabajos = @()
+    try {
+        $dir = Trabajos-Dir
+        foreach ($f in @(Get-ChildItem $dir -Filter '*.json' -File)) {
+            try {
+                $o = Get-Content $f.FullName -Raw | ConvertFrom-Json
+                $script:Trabajos += ,(Trabajo-Resumen $o $f.FullName)
+            } catch {}
+        }
+    } catch {}
+    $script:Trabajos = @(Trabajos-Ordenar $script:Trabajos)
+    $lvT.BeginUpdate(); $lvT.Items.Clear()
+    foreach ($t in $script:Trabajos) {
+        $item = New-Object System.Windows.Forms.ListViewItem("$($t.Fecha)")
+        foreach ($c in @($t.Tipo, $t.Planta, $t.Filas, $t.Tecnico, $t.Nota)) { [void]$item.SubItems.Add("$c") }
+        $lvT.Items.Add($item) | Out-Null
+    }
+    $lvT.EndUpdate()
+    $lblTRes.Text = "$($script:Trabajos.Count) trabajos guardados"
+    $btnTCargar.Enabled = ($script:Trabajos.Count -gt 0)
+    $btnTBorrar.Enabled = $btnTCargar.Enabled
+}
+
+# Pinta en una tabla las filas de un trabajo, usando las columnas que ese tipo
+# declara. Asi no hay una copia del pintado por pestana.
+function Trabajo-AtabLa($lv, $filas, $cols) {
+    $lv.BeginUpdate(); $lv.Items.Clear()
+    foreach ($f in @($filas)) {
+        $item = New-Object System.Windows.Forms.ListViewItem("$($f.($cols[0]))")
+        foreach ($c in @($cols[1..($cols.Count - 1)])) { [void]$item.SubItems.Add("$($f.$c)") }
+        $lv.Items.Add($item) | Out-Null
+    }
+    $lv.EndUpdate()
+}
+
+$btnTRef.Add_Click({ Trabajos-Pintar; Con "Trabajos guardados: $($script:Trabajos.Count)." ([System.Drawing.Color]::SteelBlue) })
+
+$btnTCarpeta.Add_Click({ try { Start-Process (Trabajos-Dir) } catch { Con "No se ha podido abrir la carpeta: $_" ([System.Drawing.Color]::Orange) } })
+
+$btnTBorrar.Add_Click({
+    $i = $lvT.SelectedIndices
+    if ($i.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('Elige un trabajo de la lista.','Trabajos'); return }
+    $n = 0
+    foreach ($k in @($i)) {
+        $t = $script:Trabajos[$k]
+        try { Remove-Item $t.fichero -Force; $n++ } catch {}
+    }
+    Trabajos-Pintar
+    Con "Borrados $n trabajos." ([System.Drawing.Color]::SteelBlue)
+})
+
+# Guarda a mano lo que haya en memoria ahora mismo, con una nota. El guardado
+# automatico ya deja copia de cada operacion; esto sirve para marcar un momento
+# ("antes de tocar la NCU 12").
+$btnTGuardar.Add_Click({
+    $nota = [Microsoft.VisualBasic.Interaction]::InputBox('Nota para este trabajo (opcional):', 'Guardar lo de ahora', '')
+    $n = 0
+    foreach ($tipo in @('diag','inventario','auditoria','lectura','baterias')) {
+        $var = $TRABAJO_TIPOS[$tipo].var
+        $filas = @(Get-Variable -Name $var -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+        if (@($filas).Count -eq 0) { continue }
+        $t = $(if ($tipo -eq 'diag' -and $script:UltimoEsComm) { 'comm' } else { $tipo })
+        if ((Trabajo-Guardar $t $filas $nota) -ne '') { $n++ }
+    }
+    Trabajos-Pintar
+    if ($n -eq 0) { Con 'No hay nada en memoria que guardar: haz antes un diagnostico, un inventario, una auditoria...' ([System.Drawing.Color]::Orange) }
+    else { Con "Guardados $n trabajos de esta sesion." ([System.Drawing.Color]::LightGreen) }
+})
+
+function Trabajo-Cargar {
+    $i = $lvT.SelectedIndices
+    if ($i.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('Elige un trabajo de la lista.','Trabajos'); return }
+    $t = $script:Trabajos[$i[0]]
+    $o = $null
+    try { $o = Get-Content $t.fichero -Raw | ConvertFrom-Json }
+    catch { Con "No se ha podido leer el trabajo: $_" ([System.Drawing.Color]::Salmon); return }
+    $filas = @($o.filas)
+    $def = $TRABAJO_TIPOS["$($o.tipo)"]
+    if (-not $def) { Con "Tipo de trabajo desconocido: $($o.tipo)" ([System.Drawing.Color]::Orange); return }
+    Set-Variable -Name $def.var -Scope Script -Value $filas
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Cargado: $($def.titulo) de $($o.fecha) - $($o.planta) - $(@($filas).Count) filas$(if ("$($o.nota)" -ne '') { "  ($($o.nota))" })" ([System.Drawing.Color]::LightGreen)
+    switch ("$($o.tipo)") {
+        'diag' {
+            $script:UltimoEsComm = $false
+            Trabajos-ComboNcus
+            Diag-Refrescar; $tabs.SelectedTab = $tabG
+        }
+        'comm' {
+            $script:UltimoEsComm = $true
+            Trabajos-ComboNcus
+            Diag-Refrescar; $tabs.SelectedTab = $tabG
+        }
+        'inventario' { Trabajo-AtabLa $lvV $filas $def.cols; $tabs.SelectedTab = $tabF }
+        'auditoria'  { Trabajo-AtabLa $lvA $filas $def.cols; $tabs.SelectedTab = $tabF }
+        'baterias'   { Trabajo-AtabLa $lvB $filas $def.cols; $tabs.SelectedTab = $tabB }
+        'lectura'    {
+            $tabs.SelectedTab = $tabF
+            Con "  La lectura vuelve a estar en memoria: ve a Auditoria con 'Usar la ultima lectura' marcado y audita contra ella sin tocar la planta." ([System.Drawing.Color]::Gainsboro)
+        }
+    }
+    Con "  Es una copia de disco: no se ha leido nada de la planta." ([System.Drawing.Color]::Gainsboro)
+}
+
+# El desplegable de NCUs del diagnostico se rellena con lo que haya cargado
+function Trabajos-ComboNcus {
+    $selV = $cbGVerNcu.SelectedItem
+    $cbGVerNcu.Items.Clear()
+    [void]$cbGVerNcu.Items.Add('NCU - todas')
+    foreach ($nv in @($script:UltimoDiag | ForEach-Object { "$($_.NCU)" } | Where-Object { $_ } | Sort-Object {[int]$_} -Unique)) { [void]$cbGVerNcu.Items.Add("NCU$nv") }
+    if ($selV -and $cbGVerNcu.Items.Contains($selV)) { $cbGVerNcu.SelectedItem = $selV } else { $cbGVerNcu.SelectedIndex = 0 }
+}
+
+$btnTCargar.Add_Click({ Trabajo-Cargar })
+$lvT.Add_DoubleClick({ Trabajo-Cargar })
 
 $btnBVer.Add_Click({ if (Bat-Pintar) { Con "Baterias: $($script:UltimaBatTabla.Count) TCUs del ultimo diagnostico." ([System.Drawing.Color]::SteelBlue) } })
 $btnBAud.Add_Click({ if (Bat-Pintar) { $btnGBat.PerformClick() } })
@@ -6208,6 +6483,7 @@ $btnGBat.Add_Click({
     Con "Las de FUERA DE LA FLOTA no estan fuera de rango: se salen de lo que tienen las demas, que con 754 medidas es la mejor referencia que hay." ([System.Drawing.Color]::Gainsboro)
     Con "La tabla con todas las variables de bateria esta en la pestana Baterias." ([System.Drawing.Color]::Gainsboro)
     Marcar-Bloque 'bat'
+    [void](Trabajo-Guardar 'baterias' $script:UltimaBatTabla "$afectadas TCUs con algo que mirar")
 })
 
 $btnGWa.Add_Click({
@@ -7024,6 +7300,7 @@ $btnAud.Add_Click({ Lanzar {
         $lvA.Items.Add($vacio) | Out-Null
     }
     Marcar-Bloque 'aud'
+    [void](Trabajo-Guardar 'auditoria' $script:UltimaAud "contra '$($script:PresetRefNombre)': $nDesv desviaciones en $nTcusOk TCUs")
 } })
 
 $btnAudCsv.Add_Click({
@@ -7138,6 +7415,7 @@ $btnInvF.Add_Click({ Lanzar {
     }
     Con "Inventario terminado: $ok leidas, $ko sin respuesta" ([System.Drawing.Color]::SteelBlue)
     Marcar-Bloque 'inv'
+    [void](Trabajo-Guardar 'inventario' $script:UltimoInv "$ok leidas, $ko sin respuesta")
 } })
 
 $btnInvFCsv.Add_Click({
@@ -9378,7 +9656,7 @@ $form.Add_KeyDown({
 })
 
 # Todas las tablas de resultados filtran y ordenan al pulsar su cabecera.
-foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvSat, $lvH, $lvI, $lvC, $lvB)) { Lv-Filtrable $tabla }
+foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvSat, $lvH, $lvI, $lvC, $lvB, $lvT)) { Lv-Filtrable $tabla }
 
 $form.Add_Shown({
     try {
@@ -9604,5 +9882,6 @@ Auditar 'SESION' '' '' "entra $($script:Usuario.usuario)"
 Cierre-Cargar (Nombre-Planta)
 Cierre-Pintar
 Cierre-Avisar
+Trabajos-Pintar
 [void]$form.ShowDialog()
 Modbus-Cerrar
