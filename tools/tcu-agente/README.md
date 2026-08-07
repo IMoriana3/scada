@@ -43,12 +43,26 @@ planta, la versión del agente y la de la toolbox, y las dos tienen que ser de l
 
 ## Endpoints
 
+**Selección (v2.7): `?ncus=`, `?tcus=` y `?gw=` valen en *todas* las rutas que
+recorren la planta**, no solo en `/leer` y `/inventario`. Se aplican en el punto
+por donde pasan todas — la lista de NCUs y la de TCUs de cada una — así que
+ninguna ruta se los salta:
+
+| Parámetro | Ejemplo | Qué acota |
+|---|---|---|
+| `ncus` | `1,3-5` | sobre qué NCUs se trabaja. Vacío = todas. Una NCU que no existe da error, no "todas" |
+| `tcus` | `10,22,30-40` · `12/10, 15/5-12` | qué TCUs de cada NCU. Con prefijo, cada tramo lleva la suya |
+| `gw`   | `504` | solo las TCUs de ese gateway |
+
+El filtro dura **lo que dura la petición**: el vigilante de alarmas y el
+registro SAT corren entre peticiones y siguen viendo la planta entera.
+
 Lectura (GET, siempre disponibles):
 
 | Ruta | Qué devuelve |
 |---|---|
-| `/ping` | planta, versiones, hora del PC, lista de NCUs con sus rangos y si la escritura está habilitada |
-| `/diagnostico` | diagnóstico de la planta completa vía NCU, **mismo formato que el JSON de la toolbox** — subible al Histórico tal cual |
+| `/ping` | planta, versiones, hora del PC, lista de NCUs con sus rangos, **los gateways que existen** (para ofrecerlos en un desplegable) y si la escritura está habilitada |
+| `/diagnostico` | diagnóstico de la planta completa vía NCU, **mismo formato que el JSON de la toolbox** — subible al Histórico tal cual. Columnas **NCU · GW · TCU** |
 | `/comisionado` | estado de comisionado (bits 4:3 del bloque compacto) por TCU |
 | `/hsus` | HSUs de cada NCU con salud y viento/nieve |
 | `/sincronizar` | lee toda la planta y **sube él mismo el diagnóstico al Histórico** (requiere credenciales Supabase en la config) |

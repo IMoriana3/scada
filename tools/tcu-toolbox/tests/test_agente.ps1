@@ -70,6 +70,28 @@ try {
     Check 'diagnostico: trae filas' (@($d.tcus).Count -gt 0) 'True'
     Check 'diagnostico: con la columna GW' ($null -ne @($d.tcus)[0].PSObject.Properties['GW']) 'True'
 
+    # --- NCUs, TCUs y GW: la web los manda en la query y valen para TODA ruta
+    # que recorra la planta, no solo para /leer y /inventario ---
+    Check 'ping: dice los gateways que hay' (@($ping.gws) -contains '15020') 'True'
+    $d1 = Pedir '/diagnostico?ncus=1'
+    Check 'sel: ncus=1 deja solo esa NCU' (@($d1.tcus | ForEach-Object { "$($_.NCU)" } | Sort-Object -Unique) -join ',') '1'
+    $d2 = Pedir '/diagnostico?tcus=2-3'
+    Check 'sel: tcus=2-3 acota tambien el diagnostico' (@($d2.tcus | Where-Object { "$($_.TCU)" -eq '1' }).Count) 0
+    # ojo: el diagnostico lleva ademas la fila de salud de la NCU y la de su HSU
+    $d3 = Pedir '/diagnostico?ncus=2&tcus=2'
+    $d3t = @($d3.tcus | Where-Object { "$($_.TCU)" -match '^\d+$' })
+    Check 'sel: y se combinan' ($d3t.Count) 1
+    Check 'sel: con la NCU pedida' "$($d3t[0].NCU)" '2'
+    Check 'sel: y la TCU pedida' "$($d3t[0].TCU)" '2'
+    $d4 = Pedir "/diagnostico?gw=15020"
+    Check 'sel: el gateway tambien filtra aqui' (@($d4.tcus).Count -gt 0) 'True'
+    # una NCU que no existe no puede pasar por "todas": eso seria leer de mas
+    try { $null = Pedir '/diagnostico?ncus=99'; Check 'sel: NCU inexistente avisa' 'pasa' 'no pasa' }
+    catch { Check 'sel: NCU inexistente avisa' 'no pasa' 'no pasa' }
+    # y el filtro no se queda pegado para la siguiente peticion ni para el SAT
+    $d5 = Pedir '/diagnostico'
+    Check 'sel: el filtro no se queda pegado' (@($d5.tcus | ForEach-Object { "$($_.NCU)" } | Sort-Object -Unique).Count) 2
+
     $b = Pedir '/baterias'
     Check 'baterias: tipo correcto' $b.tipo 'baterias_tcu'
     Check 'baterias: una fila por TCU' (@($b.tcus).Count) 5
