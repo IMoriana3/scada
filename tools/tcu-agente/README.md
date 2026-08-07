@@ -35,7 +35,7 @@ planta, la versión del agente y la de la toolbox, y las dos tienen que ser de l
 1. Copia las carpetas `tcu-toolbox` y `tcu-agente` al PC de planta (las de la release).
 2. En `tcu-agente`, copia `agente_config.ejemplo.json` → `agente_config.json` y rellena: `planta` ("Ayora"), y un `token` largo aleatorio (es la llave: trátalo como una contraseña).
 3. Primera vez en ese PC (una sola vez, como administrador): `netsh http add urlacl url=http://localhost:8585/ user=Todos`
-4. Doble clic en `TCU_Agente.bat` — debe decir "TCU Agente v2.4 - planta 'Ayora'".
+4. Doble clic en `TCU_Agente.bat` — debe decir "TCU Agente v2.5 - planta 'Ayora'".
 5. Túnel: instala [cloudflared](https://github.com/cloudflare/cloudflared/releases/latest) (un solo .exe) y en otra ventana:
    `cloudflared tunnel --url http://localhost:8585`
    Te dará una URL `https://xxxx.trycloudflare.com` (cambia en cada arranque; para URL fija hace falta un túnel con nombre y un dominio en Cloudflare — fase 2).
@@ -72,7 +72,9 @@ Lectura (GET, siempre disponibles):
 | El veredicto | Se emite con **ANALIZAR Y EMITIR** en la toolbox de este PC, sobre esos mismos ficheros. Desde la web se pueden descargar, pero el análisis (D.1.1, D.3.4, D.4) no está en remoto. |
 | Cuerpo de `/sat/iniciar` | `{"duracion":7,"unidad":"dias","int_tcu":60,"int_comms":15}` — `unidad` admite `dias`, `horas` o `minutos`. |
 
-Escritura (POST, solo con `"permitir_escritura": true`; el cuerpo debe llevar `"confirmar": true`, `ncu` y `tcus`):
+Escritura (POST, solo con `"permitir_escritura": true`; el cuerpo debe llevar `"confirmar": true` y `tcus`):
+
+`tcus` admite **la misma gramática que la toolbox**: `1-75`, `10,22,30-40` o `12/10, 15/5-12` — con la NCU delante de cada tramo, y entonces el campo `ncu` sobra porque lo dice la propia selección. Cada fila de la respuesta lleva su `ncu`.
 
 | Ruta | Qué hace |
 |---|---|

@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '2.4'
+$VERSION_AGENTE = '2.5'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -634,21 +634,25 @@ function Auditar([string]$usuario, [string]$op, $params, $res) {
 }
 
 # Ejecuta un scriptblock por TCU sobre los gateways de una NCU concreta
-function Ejecutar-PorRango([int]$ncu, [int[]]$tcus, [scriptblock]$porTcu) {
-    $n = @(Ncus-DePlanta) | Where-Object { [int]$_.ncu -eq $ncu } | Select-Object -First 1
-    if (-not $n) { throw "NCU $ncu no existe en la planta '$($cfg.planta)'" }
+# Una NCU y sus TCUs. Lo que llega del cuerpo puede ser de VARIAS NCUs
+# ("12/10, 15/5-12"), y entonces esto se llama una vez por cada una.
+function Ejecutar-EnNcu($n, [int[]]$tcus, [scriptblock]$porTcu) {
     $cx = @{ip = $n.ip; puerto = $null; gws = $n.gws; multi = $null; etiqueta = 'auto'; to = $timeoutMs; reint = 2}
     $res = @()
     foreach ($seg in @(Plan-Segmentos $tcus $cx)) {
         try { Modbus-Conectar $n.ip $seg.puerto $timeoutMs }
         catch {
-            foreach ($t in $seg.tcus) { $res += @{tcu = [int]$t; ok = $false; detalle = "sin conexion ($($n.ip):$($seg.puerto))"} }
+            foreach ($t in $seg.tcus) { $res += @{ncu = "$($n.ncu)"; tcu = [int]$t; ok = $false; detalle = "sin conexion ($($n.ip):$($seg.puerto))"} }
             continue
         }
         foreach ($t in $seg.tcus) {
-            try { $res += & $porTcu ([byte]$t) }
+            try {
+                $f = & $porTcu ([byte]$t)
+                $f['ncu'] = "$($n.ncu)"
+                $res += $f
+            }
             catch {
-                $res += @{tcu = [int]$t; ok = $false; detalle = "$_"}
+                $res += @{ncu = "$($n.ncu)"; tcu = [int]$t; ok = $false; detalle = "$_"}
                 if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
             }
         }
@@ -657,9 +661,42 @@ function Ejecutar-PorRango([int]$ncu, [int[]]$tcus, [scriptblock]$porTcu) {
     return @($res)
 }
 
+# El mismo cuadro que la toolbox offline: "1-44", "10,22,30-40" o
+# "12/10, 15/5-12" para cruzar NCUs. Con prefijo, el campo ncu del cuerpo sobra.
+$script:SelActual = $null
+function Ejecutar-PorRango($ncu, $tcus, [scriptblock]$porTcu, $sel = $null) {
+    if ($null -eq $sel) { $sel = $script:SelActual }
+    if ($null -ne $sel -and $sel.porNcu.Count -gt 0) {
+        $res = @()
+        foreach ($k in @($sel.porNcu.Keys | Sort-Object { [int]("0" + "$_") })) {
+            $n = @(Ncus-DePlanta) | Where-Object { "$($_.ncu)" -eq "$k" } | Select-Object -First 1
+            if (-not $n) { throw "la NCU $k no existe en la planta '$($cfg.planta)'" }
+            $lista = @(Sel-TcusDe $sel (Gws-Filtrados $n.gws '') "$k")
+            if ($lista.Count -eq 0) { continue }
+            $res += @(Ejecutar-EnNcu $n $lista $porTcu)
+        }
+        return @($res)
+    }
+    $n = @(Ncus-DePlanta) | Where-Object { [int]$_.ncu -eq [int]$ncu } | Select-Object -First 1
+    if (-not $n) { throw "NCU $ncu no existe en la planta '$($cfg.planta)'" }
+    return @(Ejecutar-EnNcu $n $tcus $porTcu)
+}
+
+# La seleccion del cuerpo, con la gramatica de la toolbox. Si trae prefijos de
+# NCU, el rango se resuelve por NCU y el campo "ncu" no hace falta.
+function Sel-DeCuerpo($body) {
+    $t = "$($body.tcus)".Trim()
+    if ($t -eq '') { return $null }
+    $sel = Parse-Seleccion $t 'TCUs'
+    if ($sel.porNcu.Count -eq 0) { return $null }
+    return $sel
+}
+
 function Tcus-DeCuerpo($body) {
+    # con prefijos de NCU manda la seleccion; esta lista no se usa
+    if ($null -ne $script:SelActual) { return [int[]]@() }
     $lista = Parse-ListaNums "$($body.tcus)"
-    if (-not $lista) { throw 'falta "tcus" (p. ej. "1-75" o "3,5,9")' }
+    if (-not $lista) { throw 'falta "tcus" (p. ej. "1-75", "3,5,9" o "12/10, 15/5-12")' }
     return [int[]]$lista
 }
 
@@ -703,6 +740,8 @@ function Escribir-Csv($body) {
 
 function Op-Escritura([string]$op, $body) {
     if ($op -eq 'escribir-csv') { return Escribir-Csv $body }
+    # "12/10, 15/5-12": las NCUs las dice la propia seleccion y el campo ncu sobra
+    $script:SelActual = Sel-DeCuerpo $body
     $ncu = [int]$body.ncu
     switch ($op) {
         'modo' {

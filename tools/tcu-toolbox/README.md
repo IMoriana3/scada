@@ -70,6 +70,15 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**En la web, las NCUs se escriben (v11.15 / agente v2.5)** — el campo de NCU de
+la *Toolbox web* era un **desplegable**, así que no se podía escribir en él, y
+solo dejaba **una** NCU. Aquí, desde la v11.6, se puede decir
+`12/10, 15/5-12` y cruzarlas.
+
+El agente acepta ahora esa misma gramática en todas las escrituras: con la NCU
+delante de cada tramo, el campo `ncu` sobra y cada fila de la respuesta dice de
+cuál es. El desplegable de la web se queda, pero solo **rellena** el cuadro.
+
 **Las que no contestan, con su NCU (v11.14)** — las filas `SIN RESPUESTA` del
 plan de firmware se pintaban **todas juntas al final** de la tabla. Una TCU que
 estaba reiniciándose con el firmware nuevo sale muda —lo cual es normal—, pero su
