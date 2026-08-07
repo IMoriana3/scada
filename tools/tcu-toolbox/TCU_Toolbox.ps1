@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.12'
+$VERSION_TOOLBOX = '11.13'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -7804,8 +7804,17 @@ $btnFwPlan.Add_Click({ Lanzar {
         $k = "$($v.NCU)|$($v.Puerto)"
         $colaB = $(if ([int]$bajasV[$k] -gt 0) { "  -  $($bajasV[$k]) con bateria baja" } else { '' })
         $marca = $(if ($ventanas.Count -gt 1 -and $v.Orden -eq 1) { ' Es la mas larga: es la que marca el total, arrancala primero.' } else { '' })
+        # Desde-Hasta solo si la ventana es UN tramo seguido. Con huecos, poner
+        # el primero y el ultimo dibuja un rango que no existe: en la NCU10 con
+        # 10-16 y 18-22 salia "de 10 a 22", la TCU 17 parecia estar dentro y
+        # abajo no tenia fila porque no esta pendiente. Y ademas el 12 de la
+        # columna TCUs no cuadraba con las 13 que van del 10 al 22. Los rangos
+        # de verdad van en las filas PEGAR, que con mas de un tramo si salen.
+        $unTramo = (@($v.Tramos).Count -eq 1)
         $item = New-Object System.Windows.Forms.ListViewItem("$($v.NCU)")
-        foreach ($c in @('VENTANA', $v.IP, $v.Puerto, $v.Tramos[0].Desde, $v.Tramos[-1].Hasta, $v.TCUs,
+        foreach ($c in @('VENTANA', $v.IP, $v.Puerto,
+                         $(if ($unTramo) { $v.Tramos[0].Desde } else { '(varios)' }),
+                         $(if ($unTramo) { $v.Tramos[-1].Hasta } else { '(varios)' }), $v.TCUs,
                          ("Ventana $($v.Orden) de $($ventanas.Count): abrela con esta IP y este puerto. Add from...to: $($v.Rangos). $($v.TCUs) TCUs, ~$(Horas-Texto ([double]$v.Horas)).$marca$colaB"))) { [void]$item.SubItems.Add("$c") }
         $item.ForeColor = [System.Drawing.Color]::DarkOrange
         $lvFW.Items.Add($item) | Out-Null
