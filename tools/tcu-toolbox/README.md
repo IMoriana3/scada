@@ -70,6 +70,24 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**Dos cosas mal en la tabla de Leer variable (v11.17)**
+
+**Las cabeceras salían las de la lectura anterior.** Se guardan en memoria para
+poder marcarlas con la flechita del filtro, y esa copia solo se hacía **una vez**.
+*Leer variable* rehace las columnas en cada lectura —una por variable—, así que
+la copia vieja se escribía encima: con cinco variables, los tres primeros
+nombres salían `TCU`, `Valor` y `Estado` en vez de `NCU`, `TCU` y la primera
+variable. Es decir, **la columna rotulada `Valor` era en realidad el número de
+TCU**. Ahora se recachean cuando cambia el número de columnas, y los filtros
+guardados —que van por número de columna— se tiran con ellas.
+
+**Y `Estado` no quería decir lo que parecía.** Con un preset cargado, un `OK` en
+esa columna se lee como *«coincide»*, y no lo es: esta pestaña **lee, no
+compara**. `OK` significa que la TCU contestó. Quien compara contra el preset es
+la **Auditoría**. La columna pasa a llamarse **`Respuesta`**, y al terminar una
+lectura se dice en la consola. El nombre de la propiedad no cambia (`Estado`),
+porque el CSV y la auditoría van por él.
+
 **El gateway, también en remoto (v11.16 / agente v2.6)** — la web enseñaba el
 diagnóstico sin la columna `GW` aunque el agente ya la mandaba, y no tenía el
 cuadro **GW** que aquí existe desde la v11.6.
