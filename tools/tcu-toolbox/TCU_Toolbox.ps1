@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.13'
+$VERSION_TOOLBOX = '11.14'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -7794,6 +7794,16 @@ $btnFwPlan.Add_Click({ Lanzar {
     $detalle = @($plan.detalle)
     # cuantas de la ventana no van a instalar por bateria, y que TCUs son
     $bajasV = @{}; $detPorV = @{}
+    # las que no contestaron al inventario, por NCU: van con SU ventana, no en un
+    # bloque al final. Una TCU reiniciandose con el FW nuevo sale muda, y buscarla
+    # cincuenta filas mas abajo -detras de las otras quince NCUs- es no verla.
+    $mudasPorNcu = @{}
+    foreach ($m in @($plan.sin_respuesta)) {
+        $k = "$($m.ncu)"
+        if (-not $mudasPorNcu.ContainsKey($k)) { $mudasPorNcu[$k] = @() }
+        $mudasPorNcu[$k] += ,$m
+    }
+    $mudasPuestas = @{}
     foreach ($d in $detalle) {
         $kk = "$($d.NCU)|$($d.Puerto)"
         if (-not $detPorV.ContainsKey($kk)) { $detPorV[$kk] = @() }
@@ -7815,7 +7825,7 @@ $btnFwPlan.Add_Click({ Lanzar {
         foreach ($c in @('VENTANA', $v.IP, $v.Puerto,
                          $(if ($unTramo) { $v.Tramos[0].Desde } else { '(varios)' }),
                          $(if ($unTramo) { $v.Tramos[-1].Hasta } else { '(varios)' }), $v.TCUs,
-                         ("Ventana $($v.Orden) de $($ventanas.Count): abrela con esta IP y este puerto. Add from...to: $($v.Rangos). $($v.TCUs) TCUs, ~$(Horas-Texto ([double]$v.Horas)).$marca$colaB"))) { [void]$item.SubItems.Add("$c") }
+                         ("Ventana $($v.Orden) de $($ventanas.Count): abrela con esta IP y este puerto. Add from...to: $($v.Rangos). $($v.TCUs) TCUs, ~$(Horas-Texto ([double]$v.Horas)).$marca$colaB$(if (@($mudasPorNcu["$($v.NCU)"]).Count -gt 0 -and $mudasPorNcu.ContainsKey("$($v.NCU)")) { "  -  $(@($mudasPorNcu[""$($v.NCU)""]).Count) sin respuesta, debajo" } else { '' })"))) { [void]$item.SubItems.Add("$c") }
         $item.ForeColor = [System.Drawing.Color]::DarkOrange
         $lvFW.Items.Add($item) | Out-Null
         # los rangos, uno por fila, solo cuando hay mas de uno: con uno solo la
@@ -7836,6 +7846,11 @@ $btnFwPlan.Add_Click({ Lanzar {
             foreach ($c in @('TCU', $ips["$($d.NCU)"], $d.Puerto, $d.TCU, $d.TCU, 1, "pendiente: tiene $($d.FW), objetivo $($d.Objetivo)$eSoc$aviso")) { [void]$itemD.SubItems.Add("$c") }
             $itemD.ForeColor = $(if ($d.SoC_bajo) { [System.Drawing.Color]::Firebrick } else { [System.Drawing.Color]::DarkOrange })
             $lvFW.Items.Add($itemD) | Out-Null
+        }
+        # y las mudas de ESA NCU, aqui mismo
+        if ($mudasPorNcu.ContainsKey("$($v.NCU)") -and -not $mudasPuestas.ContainsKey("$($v.NCU)")) {
+            $mudasPuestas["$($v.NCU)"] = 1
+            foreach ($m in @($mudasPorNcu["$($v.NCU)"])) { $lvFW.Items.Add((Fw-FilaMuda $m $ips)) | Out-Null }
         }
     }
     foreach ($linea in @(Plan-Texto $ventanas $minTcu)) {
@@ -7860,11 +7875,10 @@ $btnFwPlan.Add_Click({ Lanzar {
             Con "$($plan.sin_soc) pendientes sin SoC conocido: el plan cruza con el ULTIMO DIAGNOSTICO de esta sesion. Lanza un DIAGNOSTICAR (via NCU es rapido) y vuelve a pulsar PLAN para verlo." ([System.Drawing.Color]::Orange)
         }
     }
-    foreach ($m in @($plan.sin_respuesta)) {
-        $item = New-Object System.Windows.Forms.ListViewItem("$($m.ncu)")
-        foreach ($c in @('SIN RESPUESTA', $ips["$($m.ncu)"], '-', $m.tcu, $m.tcu, 1, "sin respuesta en el inventario: $($m.nota)")) { [void]$item.SubItems.Add("$c") }
-        $item.ForeColor = [System.Drawing.Color]::Gray
-        $lvFW.Items.Add($item) | Out-Null
+    # las de NCUs que no tienen ninguna ventana (todo lo suyo al dia, o mudo)
+    foreach ($k in @($mudasPorNcu.Keys | Sort-Object { [int]("0" + "$_") })) {
+        if ($mudasPuestas.ContainsKey($k)) { continue }
+        foreach ($m in @($mudasPorNcu[$k])) { $lvFW.Items.Add((Fw-FilaMuda $m $ips)) | Out-Null }
     }
     $lblFw.Text = $(if ($ventanas.Count -gt 0) { "$($ventanas.Count) ventana(s) | " } else { '' }) +
                   "$($plan.pendientes) pendientes | $($plan.al_dia) al dia | $(@($plan.sin_respuesta).Count) sin respuesta"
@@ -7873,6 +7887,15 @@ $btnFwPlan.Add_Click({ Lanzar {
     $btnFwCsv.Enabled = ($lvFW.Items.Count -gt 0)
     $btnFwVerif.Enabled = ($script:PlanFw.Count -gt 0)
 } })
+
+# Una TCU que no contesto al inventario. No se puede actualizar lo que no
+# comunica, pero tiene que verse -y al lado de su NCU-.
+function Fw-FilaMuda($m, $ips) {
+    $item = New-Object System.Windows.Forms.ListViewItem("$($m.ncu)")
+    foreach ($c in @('SIN RESPUESTA', $ips["$($m.ncu)"], '-', $m.tcu, $m.tcu, 1, "sin respuesta en el inventario: $($m.nota)")) { [void]$item.SubItems.Add("$c") }
+    $item.ForeColor = [System.Drawing.Color]::Gray
+    return $item
+}
 
 # Repinta en la tabla del plan la fila (o filas) de una TCU concreta. Hay que
 # tocar tambien las guardadas por el filtro de columnas: si el usuario tiene una

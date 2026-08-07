@@ -2068,6 +2068,14 @@ Check 'plan: y cuenta 12, no 13' ($vHueco.TCUs) 12
 Check 'plan: con dos tramos hay filas PEGAR' (@($vHueco.Tramos).Count) 2
 # y las TCUs van debajo de SU ventana, no en un bloque suelto al final
 Check 'plan: cada TCU bajo su ventana' ($src.Contains('foreach ($d in @($detPorV[$k] | Sort-Object { [int]$_.TCU })) {')) $true
+# y las mudas tambien: una TCU reiniciandose con el FW nuevo salia muda y su
+# fila caia al final de la tabla, detras de las otras quince NCUs
+Check 'plan: las mudas van por NCU' ($src.Contains('$mudasPorNcu = @{}')) $true
+Check 'plan: y se pintan con su ventana' ($src.Contains('foreach ($m in @($mudasPorNcu["$($v.NCU)"])) { $lvFW.Items.Add((Fw-FilaMuda $m $ips)) | Out-Null }')) $true
+Check 'plan: una sola vez por NCU' ($src.Contains('$mudasPuestas["$($v.NCU)"] = 1')) $true
+Check 'plan: las de NCUs sin ventana, al final' ($src.Contains('if ($mudasPuestas.ContainsKey($k)) { continue }')) $true
+Check 'plan: la fila muda sale de un solo sitio' ($src.Contains('function Fw-FilaMuda')) $true
+Check 'plan: la ventana avisa de cuantas hay' ($src.Contains('sin respuesta, debajo')) $true
 # el plan tambien en texto, para leerlo mientras se teclea en el updater
 Check 'plan: lo escribe en la consola' ($src.Contains('foreach ($linea in @(Plan-Texto $ventanas $minTcu))')) $true
 # y el CSV que te llevas es el de ventanas, no los tramos sueltos
