@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '2.1'
+$VERSION_AGENTE = '2.2'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -47,11 +47,152 @@ function Ancla-Toolbox([string]$src, [string]$marca) {
 }
 $i3 = Ancla-Toolbox $src 'function Params-Conexion'; $f3 = Ancla-Toolbox $src 'function Refrescar-ComboPlantas'   # Plan-Segmentos, Trabajos-Planta, Parse-Seleccion
 $i4 = Ancla-Toolbox $src 'function Fijar-Modo';      $f4 = Ancla-Toolbox $src 'function Guardia-Viento'           # cambio de modo verificado
-$logica += "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4)
+$i5 = Ancla-Toolbox $src 'function Sat-Fichero';     $f5 = Ancla-Toolbox $src '$tmrSat = New-Object'                # los tres pases del SAT
+$logica += "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5)
 Invoke-Expression $logica
 if ($cfg.puerto_ncu) { $PUERTO_NCU = [int]$cfg.puerto_ncu }   # solo para pruebas con simulador
 
 $script:Cancelar = $false
+
+# ---------------------------------------------------------------------------
+#  SAT: se activa en remoto, se graba en ESTE PC
+# ---------------------------------------------------------------------------
+# El ensayo son dias de registro continuo. Mandarlo por HTTP no tiene sentido -si
+# se cae el tunel se pierde el ensayo-, asi que aqui solo se arranca y se para: los
+# CSV se escriben en la misma carpeta y con el mismo formato que los de la toolbox,
+# para que ANALIZAR Y EMITIR los lea tal cual.
+$script:SatOn = $false
+$script:SatHasta = $null
+$script:SatProxTcu = [datetime]::MinValue
+$script:SatProxCom = [datetime]::MinValue
+$script:SatIntTcu = 60; $script:SatIntCom = 15
+$script:SatPasesT = 0; $script:SatPasesC = 0; $script:SatFallos = 0
+$script:SatError = ''
+$script:SatDir = Join-Path (Join-Path $dirToolbox 'informes') ('sat_' + ("$($cfg.planta)" -replace '[^\w\-]', '_'))
+$satEstado = Join-Path $script:SatDir 'sat_estado.json'
+
+# la toolbox lo pinta en su lista; aqui va a un fichero al lado de los CSV
+function Sat-Log([string]$ensayo, [string]$detalle) {
+    try {
+        if (-not (Test-Path $script:SatDir)) { New-Item -ItemType Directory -Path $script:SatDir -Force | Out-Null }
+        Add-Content -Path (Join-Path $script:SatDir 'sat_agente.log') -Encoding UTF8 `
+            -Value ("{0};{1};{2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $ensayo, ($detalle -replace '[\r\n]', ' '))
+    } catch {}
+    Write-Host "SAT $ensayo : $detalle"
+}
+
+function Sat-Estado {
+    return [ordered]@{
+        activo    = $script:SatOn
+        planta    = $cfg.planta
+        hasta     = $(if ($script:SatHasta) { $script:SatHasta.ToString('yyyy-MM-dd HH:mm:ss') } else { '' })
+        int_tcu   = $script:SatIntTcu
+        int_comms = $script:SatIntCom
+        pases_tcu = $script:SatPasesT
+        pases_comm= $script:SatPasesC
+        fallos    = $script:SatFallos
+        carpeta   = $script:SatDir
+        error     = $script:SatError
+        ficheros  = @(Sat-Ficheros)
+    }
+}
+function Sat-Ficheros {
+    if (-not (Test-Path $script:SatDir)) { return @() }
+    return @(Get-ChildItem $script:SatDir -File | Sort-Object Name | ForEach-Object {
+        @{nombre = $_.Name; bytes = $_.Length; fecha = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')} })
+}
+# el estado va a disco en cada pase: si el agente se reinicia a los cuatro dias,
+# el ensayo continua solo
+function Sat-Guardar {
+    try {
+        if (-not (Test-Path $script:SatDir)) { New-Item -ItemType Directory -Path $script:SatDir -Force | Out-Null }
+        $e = Sat-Estado; $e.Remove('ficheros')
+        ConvertTo-Json $e -Depth 4 | Set-Content $satEstado -Encoding UTF8
+    } catch {}
+}
+function Sat-Restaurar {
+    if (-not (Test-Path $satEstado)) { return }
+    try {
+        $e = Get-Content $satEstado -Raw | ConvertFrom-Json
+        if (-not $e.activo -or -not $e.hasta) { return }
+        $h = [datetime]::ParseExact("$($e.hasta)", 'yyyy-MM-dd HH:mm:ss', $null)
+        if ($h -le (Get-Date)) { return }        # el plazo ya paso: nada que reanudar
+        $script:SatOn = $true; $script:SatHasta = $h
+        $script:SatIntTcu = [int]$e.int_tcu; $script:SatIntCom = [int]$e.int_comms
+        $script:SatPasesT = [int]$e.pases_tcu; $script:SatPasesC = [int]$e.pases_comm
+        $script:SatFallos = [int]$e.fallos
+        Sat-Log 'REANUDA' "el agente se ha reiniciado y el ensayo sigue hasta $($e.hasta)"
+    } catch {}
+}
+
+function Sat-Trabajos {
+    return @(Ncus-DePlanta | ForEach-Object {
+        @{ncu = $_.ncu; ip = $_.ip; tcus = (Tcus-DeNcu $_); cx = @{to = $timeoutMs; gws = $_.gws}} })
+}
+
+# Un tick: lo llama el bucle principal, que ya se despierta cada segundo. Un pase
+# tarda unos segundos y durante ese rato el agente no atiende peticiones, igual
+# que la toolbox no deja hacer otra cosa mientras registra.
+function Sat-Tick {
+    if (-not $script:SatOn) { return }
+    $ahora = Get-Date
+    if ($script:SatHasta -and $ahora -gt $script:SatHasta) {
+        $script:SatOn = $false; Sat-Guardar
+        Sat-Log 'FIN' 'plazo cumplido. Analiza con ANALIZAR Y EMITIR en la toolbox del PC.'
+        return
+    }
+    if ($ahora -lt $script:SatProxCom -and $ahora -lt $script:SatProxTcu) { return }
+    try {
+        $trabajos = Sat-Trabajos
+        if ($ahora -ge $script:SatProxCom) {
+            $script:SatProxCom = $ahora.AddSeconds([double]$script:SatIntCom)
+            $r = Sat-PaseComms $trabajos
+            if ($r.fallos -gt 0) { Sat-Log 'D.4 comms' "$($r.equipos) equipos, $($r.fallos) sin responder" }
+        }
+        if ($ahora -ge $script:SatProxTcu) {
+            $script:SatProxTcu = $ahora.AddSeconds([double]$script:SatIntTcu)
+            $n = Sat-PaseTcu $trabajos
+            Sat-PaseEquipos $trabajos
+            Sat-Log 'D.1.1 / D.3.4' "$n TCUs + RSUs y NCUs (pase $($script:SatPasesT))"
+        }
+        $script:SatError = ''
+    } catch {
+        $script:SatError = "$_"
+        Sat-Log 'ERROR' "$_"
+    } finally {
+        Modbus-Cerrar
+        Sat-Guardar
+    }
+}
+
+function Sat-Iniciar($body) {
+    if ($script:SatOn) { throw 'ya hay un ensayo en marcha: paralo antes de empezar otro' }
+    $dur = [int]$body.duracion; if ($dur -le 0) { $dur = 7 }
+    $unid = "$($body.unidad)"; if (-not $unid) { $unid = 'dias' }
+    $script:SatIntTcu = $(if ($body.int_tcu) { [int]$body.int_tcu } else { 60 })
+    $script:SatIntCom = $(if ($body.int_comms) { [int]$body.int_comms } else { 15 })
+    if ($script:SatIntTcu -lt 15 -or $script:SatIntTcu -gt 3600) { throw 'int_tcu fuera de 15..3600 s' }
+    if ($script:SatIntCom -lt 5  -or $script:SatIntCom -gt 3600) { throw 'int_comms fuera de 5..3600 s' }
+    $ahora = Get-Date
+    $script:SatHasta = switch ($unid) {
+        'minutos' { $ahora.AddMinutes($dur) }
+        'horas'   { $ahora.AddHours($dur) }
+        default   { $ahora.AddDays($dur) }
+    }
+    if (-not (Test-Path $script:SatDir)) { New-Item -ItemType Directory -Path $script:SatDir -Force | Out-Null }
+    $script:SatPasesT = 0; $script:SatPasesC = 0; $script:SatFallos = 0; $script:SatError = ''
+    $script:SatProxTcu = $ahora; $script:SatProxCom = $ahora
+    $script:SatOn = $true
+    Sat-Guardar
+    Sat-Log 'INICIO' "$dur $unid, cada $($script:SatIntTcu)s (TCU) y $($script:SatIntCom)s (comms), hasta $($script:SatHasta.ToString('yyyy-MM-dd HH:mm')). Carpeta: $script:SatDir"
+    return Sat-Estado
+}
+function Sat-Parar {
+    if (-not $script:SatOn) { throw 'no hay ningun ensayo en marcha' }
+    $script:SatOn = $false; Sat-Guardar
+    Sat-Log 'PARADA' "parado a mano desde la web tras $($script:SatPasesT) pases de TCU y $($script:SatPasesC) de comms"
+    return Sat-Estado
+}
 $timeoutMs = if ($cfg.timeout_ms) { [int]$cfg.timeout_ms } else { 8000 }
 
 function Ncus-DePlanta {
@@ -401,15 +542,20 @@ $puerto = if ($cfg.puerto) { [int]$cfg.puerto } else { 8585 }
 $escritura = [bool]$cfg.permitir_escritura
 $intervaloVig = if ($null -ne $cfg.intervalo_vigilancia_min) { [int]$cfg.intervalo_vigilancia_min } else { 5 }
 $OPS_POST = @('modo', 'limpiar-alarmas', 'stow', 'unstow', 'comisionado', 'reloj', 'nvm', 'escribir')
+# El SAT no toca los seguidores: arranca y para un registro que se graba aqui.
+# Por eso no va detras de 'permitir_escritura' ni pide doble confirmacion.
+$OPS_SAT = @('sat/iniciar', 'sat/parar')
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://localhost:$puerto/")
 $listener.Start()
 Write-Host "TCU Agente v$VERSION_AGENTE - planta '$($cfg.planta)' - http://localhost:$puerto  (toolbox v$VERSION_TOOLBOX)"
-Write-Host "Lectura (GET, X-Token): /ping /diagnostico /comisionado /hsus /sincronizar"
+Write-Host "Lectura (GET, X-Token): /ping /diagnostico /comisionado /hsus /sincronizar /sat /sat/descargar"
+Write-Host ("SAT (POST): {0}  - se graba en {1}" -f ($OPS_SAT -join ' '), $script:SatDir)
 Write-Host ("Escritura (POST, X-Token + confirmar): {0}  [{1}]" -f ($OPS_POST -join ' '), $(if ($escritura) { 'HABILITADA' } else { 'DESHABILITADA (permitir_escritura=false)' }))
 Write-Host ("Vigilante de alarmas: {0}" -f $(if ($intervaloVig -gt 0) { "cada $intervaloVig min" } else { 'apagado' }))
 Write-Host "Expon el puerto con: cloudflared tunnel --url http://localhost:$puerto"
 
+Sat-Restaurar
 $proxVig = Get-Date
 $tarea = $listener.GetContextAsync()
 while ($true) {
@@ -417,6 +563,7 @@ while ($true) {
         try { Vigilar } catch { Write-Host "vigilante: $_" }
         $proxVig = (Get-Date).AddMinutes($intervaloVig)
     }
+    try { Sat-Tick } catch { Write-Host "SAT: $_" }
     if (-not $tarea.Wait(1000)) { continue }
     $ctx = $tarea.Result
     $tarea = $listener.GetContextAsync()
@@ -425,7 +572,7 @@ while ($true) {
     $res.Headers.Add('Access-Control-Allow-Headers', 'X-Token,X-Usuario,Content-Type')
     $res.Headers.Add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
     if ($req.HttpMethod -eq 'OPTIONS') { $res.StatusCode = 204; $res.Close(); continue }
-    $out = $null; $code = 200
+    $out = $null; $code = 200; $descarga = ''
     $t0 = Get-Date
     try {
         if ($req.Headers['X-Token'] -ne $cfg.token) { $code = 401; $out = @{error = 'token invalido'} }
@@ -440,8 +587,29 @@ while ($true) {
                 '/comisionado'  { $out = Comis-Planta }
                 '/hsus'         { $out = Hsus-Planta }
                 '/sincronizar'  { $out = Sincronizar }
+                '/sat'          { $out = Sat-Estado }
+                '/sat/descargar' {
+                    $nom = "$($req.QueryString['f'])"
+                    # solo un nombre de fichero de ESA carpeta: nada de rutas
+                    if ($nom -ne [System.IO.Path]::GetFileName($nom) -or $nom -eq '') { $code = 400; $out = @{error = 'nombre de fichero invalido'} }
+                    else {
+                        $ruta = Join-Path $script:SatDir $nom
+                        if (-not (Test-Path $ruta)) { $code = 404; $out = @{error = "no existe '$nom'"} }
+                        else { $descarga = $ruta }
+                    }
+                }
                 default         { $code = 404; $out = @{error = 'ruta desconocida'} }
             }
+        }
+        elseif ($req.HttpMethod -eq 'POST' -and $OPS_SAT -contains $req.Url.AbsolutePath.TrimStart('/')) {
+            $body = $null
+            if ($req.HasEntityBody) {
+                $sr = New-Object IO.StreamReader($req.InputStream, $req.ContentEncoding)
+                $body = $sr.ReadToEnd() | ConvertFrom-Json
+            }
+            $usuario = "$($req.Headers['X-Usuario'])"; if (-not $usuario) { $usuario = '(desconocido)' }
+            if ($req.Url.AbsolutePath -eq '/sat/iniciar') { $out = Sat-Iniciar $body; Auditar $usuario 'sat/iniciar' @{duracion = "$($body.duracion) $($body.unidad)"} @() }
+            else { $out = Sat-Parar; Auditar $usuario 'sat/parar' @{} @() }
         }
         elseif ($req.HttpMethod -eq 'POST') {
             $op = $req.Url.AbsolutePath.TrimStart('/')
@@ -466,13 +634,23 @@ while ($true) {
             }
         }
         else { $code = 405; $out = @{error = 'metodo no soportado'} }
-    } catch { $code = 500; $out = @{error = "$_"} }
-    $json = ConvertTo-Json $out -Depth 7
-    $buf = [Text.Encoding]::UTF8.GetBytes($json)
-    $res.StatusCode = $code
-    $res.ContentType = 'application/json; charset=utf-8'
-    $res.OutputStream.Write($buf, 0, $buf.Length)
-    $res.Close()
+    } catch { $code = 500; $out = @{error = "$_"}; $descarga = '' }
+    if ($descarga -ne '') {
+        # un CSV del ensayo: se manda tal cual, para que el navegador lo guarde
+        $buf = [IO.File]::ReadAllBytes($descarga)
+        $res.StatusCode = 200
+        $res.ContentType = 'text/csv; charset=utf-8'
+        $res.Headers.Add('Content-Disposition', 'attachment; filename="' + [IO.Path]::GetFileName($descarga) + '"')
+        $res.OutputStream.Write($buf, 0, $buf.Length)
+        $res.Close()
+    } else {
+        $json = ConvertTo-Json $out -Depth 7
+        $buf = [Text.Encoding]::UTF8.GetBytes($json)
+        $res.StatusCode = $code
+        $res.ContentType = 'application/json; charset=utf-8'
+        $res.OutputStream.Write($buf, 0, $buf.Length)
+        $res.Close()
+    }
     $ms = [int]((Get-Date) - $t0).TotalMilliseconds
     Write-Host ("{0}  {1} {2} -> {3}  ({4} ms)" -f (Get-Date -Format 'HH:mm:ss'), $req.HttpMethod, $req.Url.AbsolutePath, $code, $ms)
 }

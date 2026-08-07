@@ -6,6 +6,7 @@
 
 - PowerShell puro (`TCU_Agente.ps1` + `TCU_Agente.bat`), sin instalar nada — igual que la toolbox.
 - **Reutiliza la lógica de `TCU_Toolbox.ps1`** (cliente Modbus, mapas, bloque compacto de la NCU): un único origen de verdad. Debe estar la carpeta `tcu-toolbox` al lado (o apuntar `toolbox` en la config a su ruta), con los JSON de la planta en `plantas/`.
+- Mientras el SAT registra, cada pase ocupa unos segundos y en ese rato el agente **no atiende peticiones** — igual que la toolbox no deja hacer otra cosa mientras registra.
 - ⚠️ **Las dos carpetas van juntas.** El agente no copia la lógica: la extrae del `.ps1` de la toolbox buscando nombres de función. Si mezclas un agente viejo con una toolbox nueva (o al revés), no arranca — y te dirá exactamente qué le falta. Copia siempre las dos de la **misma release**. La suite de la toolbox comprueba en cada cambio que esas marcas siguen existiendo, así que el desajuste se detecta antes de publicar (pasó una vez: la v11.8 eliminó `Rango-Tcus` y el agente v2.0 dejó de arrancar).
 - Lecturas **vía NCU** (puerto 502, bloque compacto): diagnóstico de la planta completa en segundos, sin Zigbee.
 - Escucha en `http://localhost:8585` y exige el **token** en la cabecera `X-Token` en todas las rutas.
@@ -15,7 +16,7 @@
 1. Copia las carpetas `tcu-toolbox` y `tcu-agente` al PC de planta (las de la release).
 2. En `tcu-agente`, copia `agente_config.ejemplo.json` → `agente_config.json` y rellena: `planta` ("Ayora"), y un `token` largo aleatorio (es la llave: trátalo como una contraseña).
 3. Primera vez en ese PC (una sola vez, como administrador): `netsh http add urlacl url=http://localhost:8585/ user=Todos`
-4. Doble clic en `TCU_Agente.bat` — debe decir "TCU Agente v2.1 - planta 'Ayora'".
+4. Doble clic en `TCU_Agente.bat` — debe decir "TCU Agente v2.2 - planta 'Ayora'".
 5. Túnel: instala [cloudflared](https://github.com/cloudflare/cloudflared/releases/latest) (un solo .exe) y en otra ventana:
    `cloudflared tunnel --url http://localhost:8585`
    Te dará una URL `https://xxxx.trycloudflare.com` (cambia en cada arranque; para URL fija hace falta un túnel con nombre y un dominio en Cloudflare — fase 2).
@@ -32,6 +33,17 @@ Lectura (GET, siempre disponibles):
 | `/comisionado` | estado de comisionado (bits 4:3 del bloque compacto) por TCU |
 | `/hsus` | HSUs de cada NCU con salud y viento/nieve |
 | `/sincronizar` | lee toda la planta y **sube él mismo el diagnóstico al Histórico** (requiere credenciales Supabase en la config) |
+| `/sat` | estado del ensayo SAT: si está registrando, hasta cuándo, cuántos pases lleva y los ficheros de la carpeta |
+| `/sat/descargar?f=` | un fichero del ensayo, tal cual (solo nombres de esa carpeta: no admite rutas) |
+
+**SAT (POST, no depende de `permitir_escritura`)**: `/sat/iniciar` y `/sat/parar`. No tocan los seguidores — arrancan y paran un registro que se graba **en este PC**.
+
+| | |
+|---|---|
+| Por qué aquí y no en la nube | El ensayo son **días** de muestreo continuo. Si se cae el túnel o se cierra el navegador, el registro sigue. Escribe a disco en cada pase y en ficheros diarios: si el PC se reinicia al cuarto día, lo registrado sigue ahí y el agente **reanuda solo** el ensayo al volver a arrancar. |
+| Dónde | `informes/sat_<planta>/` de la carpeta de la toolbox — la **misma** que usa el botón INICIAR REGISTRO de la pestaña SAT, con el mismo formato de CSV. |
+| El veredicto | Se emite con **ANALIZAR Y EMITIR** en la toolbox de este PC, sobre esos mismos ficheros. Desde la web se pueden descargar, pero el análisis (D.1.1, D.3.4, D.4) no está en remoto. |
+| Cuerpo de `/sat/iniciar` | `{"duracion":7,"unidad":"dias","int_tcu":60,"int_comms":15}` — `unidad` admite `dias`, `horas` o `minutos`. |
 
 Escritura (POST, solo con `"permitir_escritura": true`; el cuerpo debe llevar `"confirmar": true`, `ncu` y `tcus`):
 

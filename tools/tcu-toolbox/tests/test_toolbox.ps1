@@ -2311,6 +2311,20 @@ foreach ($f in @('Ncu-DiagCompat', 'Ncu-HsuCompat', 'Plan-Segmentos', 'Modo-De',
 # si falta una marca, el error tiene que decir cual
 Check 'agente: el error dice que falta' ($srcAg.Contains('ya no tiene')) $true
 Check 'agente: y que van juntas' ($srcAg.Contains('baja la misma release')) $true
+# el SAT se activa en remoto pero graba aqui: el agente reutiliza los tres pases
+# de esta misma pestana, asi que si se renombran se queda sin ensayo
+foreach ($f in @('Sat-Fichero', 'Sat-Cabecera', 'Sat-PaseComms', 'Sat-PaseTcu', 'Sat-PaseEquipos')) {
+    Check "agente SAT: la toolbox tiene $f" ($src.Contains("function $f")) $true
+}
+Check 'agente SAT: y la marca de fin del bloque' ($src.Contains('$tmrSat = New-Object')) $true
+Check 'agente SAT: el agente lo extrae' ($srcAg.Contains("Ancla-Toolbox `$src 'function Sat-Fichero'")) $true
+Check 'agente SAT: graba en la carpeta de la toolbox' ($srcAg.Contains("'sat_' + (`"`$(`$cfg.planta)`" -replace")) $true
+Check 'agente SAT: y reanuda si se reinicia' ($srcAg.Contains('function Sat-Restaurar')) $true
+Check 'agente SAT: se llama al arrancar' ($srcAg.Contains("Sat-Restaurar`r`n`$proxVig") -or $srcAg.Contains("Sat-Restaurar`n`$proxVig")) $true
+# la descarga no puede salirse de su carpeta
+Check 'agente SAT: la descarga no admite rutas' ($srcAg.Contains('[System.IO.Path]::GetFileName($nom)')) $true
+# arrancar un ensayo NO es escribir en los seguidores: va por su lista aparte
+Check 'agente SAT: no va con las de escritura' ($srcAg.Contains("`$OPS_SAT = @('sat/iniciar', 'sat/parar')")) $true
 Check 'sel: el cuadro GW vive en Conexion' ($src.Contains("`$txtGw = TG `$gbCon")) $true
 Check 'sel: con su ayuda al pasar el raton' ($src.Contains('$ttW.SetToolTip($txtWTcus, $AYUDA_TCUS)')) $true
 # y las cuatro operaciones la usan, con el filtro de gateway
