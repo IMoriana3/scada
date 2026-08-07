@@ -70,21 +70,19 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
-**El agente, probado de punta a punta (v11.12)** — `tests/test_agente.ps1`
-monta una **instalación de campo en miniatura** (las dos carpetas, una planta de
-dos NCUs contra el simulador), **arranca el agente de verdad** y le pide todas
-las rutas: lecturas, auditoría con preset, las tres escrituras y el SAT completo,
-comprobando que graba los tres CSV del anexo con su cabecera. 33 comprobaciones.
+**La ventana con huecos dibujaba un rango que no existe (v11.13)** — en el plan
+de firmware, la fila **VENTANA** ponía en `Desde` y `Hasta` el primero y el
+último de sus tramos. Con la NCU10 pendiente de la `10-16` y la `18-22` salía
+**«de 10 a 22»**, y entonces:
 
-Nada más escribirlo encontró un fallo real: **el diagnóstico del agente no
-llevaba la columna `GW`** que esta herramienta añadió en la v11.6. Y como
-`Export-Csv` se queda con las columnas de la primera fila, faltaba en todo el
-fichero.
+- la **TCU 17** parecía estar dentro del rango de arriba y **no tenía fila
+  abajo**, porque no está pendiente;
+- y la columna `TCUs` decía **12** cuando del 10 al 22 hay **13**.
 
-El agente (v2.4) completa además la réplica de lo que se puede hacer sin mover
-un seguidor: `/hsus/meteo`, `/hsus/config`, `/hsus/cajanegra`, `/auditoria`
-(el preset viaja en el cuerpo), `/escribir-lote` y `/escribir-csv`. El lote
-**bloquea la identidad de red**, igual que aquí.
+Quien leyera las columnas en vez de la nota pegaría `Add from 10 to 22` en el
+updater y flashearía una TCU que ya estaba al día. Ahora, cuando la ventana tiene
+más de un tramo, esas dos columnas dicen `(varios)` y los rangos de verdad están
+donde deben: en las filas **PEGAR**, que con más de un tramo siempre salen.
 
 **El agente, probado de punta a punta (v11.12)** — `tests/test_agente.ps1` monta
 una **instalación de campo en miniatura** (las dos carpetas, una planta de dos
