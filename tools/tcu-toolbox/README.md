@@ -70,6 +70,28 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**Una sola forma de hacer cada cosa (v11.8)** — repaso de duplicidades entre
+pestañas. Lo que había:
+
+- **Dos maneras de decir qué equipos.** Cuatro pestañas tenían el cuadro `TCUs`
+  de la v11.6 y otras cuatro seguían con «TCU de \[ \] a \[ \]»: PEM, Inventario,
+  Backup NCU y Sincronizar reloj. Ahora **las ocho** llevan el mismo cuadro, con
+  la misma sintaxis y el mismo globo de ayuda, y `Rango-Tcus` desaparece. El
+  botón *PREPARAR MODO AUTO* del Cierre también manda las TCUs exactas en vez de
+  un rango.
+- **Diecinueve diálogos de guardar copiados**, cada uno con su sello de fecha,
+  su aviso en consola y su `try`. Ahora hay `Exportar-Csv` y `Exportar-Json`, y
+  solo quedan sueltos los tres que de verdad son distintos (el preset, que lleva
+  nombre fijo; el backup, que añade `_INCOMPLETO`; y el log en texto).
+- **Y con eso, un fallo que se arrastraba**: siete de los CSV salían con **coma**
+  en vez de punto y coma, así que en un Excel en español se abrían en una sola
+  columna — lectura, identidad, volcado, auditoría, inventario, PEM y
+  diagnóstico. Ahora todos van con `;`.
+- El nombre de planta para ficheros estaba con su expresión regular copiada en
+  cinco sitios: ahora es `Planta-Fichero`.
+
+Son ~60 líneas menos y, sobre todo, un sitio donde tocar cuando algo cambie.
+
 **Los trabajos ya no se pisan (v11.7)** — el diagnóstico, el inventario, la
 auditoría, la lectura y la tabla de baterías vivían **solo en memoria**: lanzar
 lo siguiente borraba lo anterior. Y eso es justo lo que pasa en una campaña —

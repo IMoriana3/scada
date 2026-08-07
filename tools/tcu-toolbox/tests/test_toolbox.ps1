@@ -20,7 +20,7 @@ Copy-Item (Join-Path $raizTb 'plantas/elburgo.json') (Join-Path $PSScriptRootFak
 # simulacion de escritura, el parte de WhatsApp, el veredicto de motor y Ident-Leer
 $i1 = $src.IndexOf('$script:Cierre = @{}'); $f1 = $src.IndexOf('$btnIdent.Add_Click')
 $i2 = $src.IndexOf('function Diag-LeerTcu'); $f2 = $src.IndexOf('$btnDiag.Add_Click')
-$i3 = $src.IndexOf('function Params-Conexion'); $f3 = $src.IndexOf('function Rango-Tcus')
+$i3 = $src.IndexOf('function Params-Conexion'); $f3 = $src.IndexOf('function Refrescar-ComboPlantas')
 $i4 = $src.IndexOf('function Nombres-Legibles'); $f4 = $src.IndexOf('function Refrescar-FiltroLeer')
 $i5 = $src.IndexOf('function Hsu-Recorrer'); $f5 = $src.IndexOf('function Hsu-Mostrar')
 $i6 = $src.IndexOf('function Anclaje-Para'); $f6 = $src.IndexOf('# Anclar contra un contenedor')
@@ -2060,7 +2060,7 @@ Check 'plan: cada TCU bajo su ventana' ($src.Contains('foreach ($d in @($detPorV
 # el plan tambien en texto, para leerlo mientras se teclea en el updater
 Check 'plan: lo escribe en la consola' ($src.Contains('foreach ($linea in @(Plan-Texto $ventanas $minTcu))')) $true
 # y el CSV que te llevas es el de ventanas, no los tramos sueltos
-Check 'plan: el CSV exporta las ventanas' ($src.Contains('$vv | Export-Csv $dlg.FileName')) $true
+Check 'plan: el CSV exporta las ventanas' ($src.Contains("Exportar-Csv `$(if (`$vv.Count -gt 0) { `$vv } else { `$script:PlanFw }) 'plan_firmware'")) $true
 # verificar solo puede repintar filas de TCU: la del carril habla del tramo
 Check 'verif: no toca la fila del carril' ($src.Contains("if (`"`$(`$it.SubItems[1].Text)`" -ne 'TCU') { continue }")) $true
 Check 'verif: nota en la columna nueva' ($src.Contains('$it.SubItems[7].Text = $nota')) $true
@@ -2264,10 +2264,27 @@ Check 'trab: la carpeta esta ignorada por git' ((Get-Content (Join-Path $raizTb 
 # --- la seleccion, enganchada en las cuatro pestanas ---
 # Un cuadro por pestana, y los de/a fuera: si quedara uno suelto seguiria
 # mandando un rango a alguna operacion.
-foreach ($t in @('W', 'L', 'G', 'A')) {
+# las OCHO: tener la mitad con "de/a" y la otra mitad con el cuadro nuevo era
+# dos formas de decir lo mismo segun la pestana
+foreach ($t in @('W', 'L', 'G', 'A', 'S', 'V', 'B', 'P')) {
     Check "sel: cuadro TCUs en $t" ($src.Contains("`$txt${t}Tcus = TG ")) $true
     Check "sel: sin de/a en $t" (($src.Contains("`$txt${t}Ini")) -or ($src.Contains("`$txt${t}Fin"))) $false
 }
+Check 'sel: ya no queda Rango-Tcus' ($src.Contains('function Rango-Tcus')) $false
+
+# --- un solo exportador ---
+# El mismo dialogo, el mismo sello de fecha y el mismo aviso estaban copiados en
+# diecinueve sitios, y siete CSV salian con coma: en un Excel en espanol se
+# abren en una sola columna.
+Check 'exp: hay un exportador de CSV' ($src.Contains('function Exportar-Csv')) $true
+Check 'exp: y uno de JSON' ($src.Contains('function Exportar-Json')) $true
+Check 'exp: siempre con punto y coma' ($src.Contains("Export-Csv `$f -NoTypeInformation -Encoding UTF8 -Delimiter ';'")) $true
+Check 'exp: ningun CSV se escapa con coma' ($src -match "Export-Csv \`$dlg\.FileName") $false
+# quedan solo los tres que de verdad son distintos: el propio Guardar-Como, el
+# backup (lleva sufijo INCOMPLETO), el preset (nombre fijo) y el log en txt
+Check 'exp: casi no quedan dialogos sueltos' (([regex]::Matches($src, 'New-Object System\.Windows\.Forms\.SaveFileDialog')).Count -le 4) $true
+Check 'exp: el nombre de planta sale de un sitio' ($src.Contains('function Planta-Fichero')) $true
+Check 'exp: y los exportadores lo usan' (([regex]::Matches($src, 'Planta-Fichero')).Count -ge 5) $true
 Check 'sel: el cuadro GW vive en Conexion' ($src.Contains("`$txtGw = TG `$gbCon")) $true
 Check 'sel: con su ayuda al pasar el raton' ($src.Contains('$ttW.SetToolTip($txtWTcus, $AYUDA_TCUS)')) $true
 # y las cuatro operaciones la usan, con el filtro de gateway
