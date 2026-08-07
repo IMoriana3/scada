@@ -70,6 +70,41 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**Las NCUs se eligen una vez, el GW baja a cada pestaña (v11.18 / agente v2.7)**
+
+Faltaba lo más básico: **no había dónde decir "estas NCUs"** salvo en
+Diagnóstico. Para leer, escribir, auditar o inventariar varias NCUs había que ir
+una a una por el desplegable de Conexión, que solo admite **una** entrada.
+
+Ahora, en **Conexión**, junto al desplegable de planta, un cuadro **`NCUs`**:
+
+| se escribe | qué hace |
+|---|---|
+| vacío | todas las de la entrada elegida |
+| `1,3-5` | solo la 1, la 3, la 4 y la 5 |
+| `12` | solo la 12 |
+
+Se elige **una vez** y vale para **todas las pestañas** — Escribir, Leer,
+Diagnóstico, Auditoría, Inventario, Sincronizar reloj, PEM, NVM, Backup NCU,
+Cierre, Baterías y Trabajos. Con una entrada de **una sola NCU** el cuadro se
+apaga: esa es la única que se toca y el filtro no pinta nada. Y si en el cuadro
+**TCUs** se escribe `12/10, 15/5-12`, mandan esas: la selección ya dice sus NCUs.
+
+El cuadro **`GW`** hace el camino contrario: **sale de Conexión y baja a cada
+pestaña**, al lado de su cuadro TCUs — que es donde se mira cuando se está
+eligiendo sobre qué se actúa. Está en las ocho: Escribir, Leer variable,
+Diagnóstico, Auditoría, Inventario, Sincronizar, PEM y Backup NCU.
+
+Y el diagnóstico ordena las columnas **NCU · GW · TCU**, que es el orden en que
+se llega a un seguidor en planta.
+
+En **remoto** va lo mismo: el agente v2.7 acepta `ncus`, `tcus` y `gw` en la
+query y los aplica **en el punto por donde pasan todas sus rutas**, no solo en
+`/leer` y `/inventario` como hasta ahora — antes esos cuadros de la web no
+hacían nada en el diagnóstico, las baterías ni el comisionado. `/ping` dice
+además qué gateways existen, para que la web los ofrezca en un desplegable en
+vez de hacer teclear el número de puerto.
+
 **Dos cosas mal en la tabla de Leer variable (v11.17)**
 
 **Las cabeceras salían las de la lectura anterior.** Se guardan en memoria para
@@ -251,9 +286,11 @@ Diagnóstico y Auditoría:
 | `12/*` | todas las de la NCU 12 |
 | vacío o `NA` | todas las de la selección |
 
-Y en **Conexión**, un cuadro **`GW`**: con `504` se trabaja sobre **todas las
-TCUs de ese gateway** de cada NCU, que antes obligaba a ir NCU por NCU con el
-rango a mano. Vacío = todos.
+Y en **cada pestaña**, al lado de su cuadro TCUs, un cuadro **`GW`**: con `504`
+se trabaja sobre **todas las TCUs de ese gateway** de cada NCU, que antes
+obligaba a ir NCU por NCU con el rango a mano. Vacío = todos. (Hasta la v11.17
+vivía en Conexión; desde la v11.18 está en las ocho pestañas que seleccionan
+TCUs.)
 
 Con eso, **la auditoría y el cierre mandan a Escribir las TCUs exactas**. Antes,
 con TCUs de tres NCUs distintas (`NCU8/29`, `NCU13/14`, `NCU15/3`) el botón

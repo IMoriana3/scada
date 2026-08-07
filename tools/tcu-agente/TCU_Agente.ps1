@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '2.6'
+$VERSION_AGENTE = '2.7'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -414,7 +414,23 @@ function Sat-Parar {
 }
 $timeoutMs = if ($cfg.timeout_ms) { [int]$cfg.timeout_ms } else { 8000 }
 
+# Sobre que NCUs va ESTA peticion ("1,3-5"). Se fija al entrar y se aplica en
+# Ncus-DePlanta, que es por donde pasan todas las rutas: asi ninguna se lo
+# salta y no hay que acordarse de filtrar en cada una.
+$script:NcusPedidas = ''
 function Ncus-DePlanta {
+    $todas = @(Ncus-Todas)
+    # sin filtro no se parsea: @($null) tiene UN elemento en PS 5.1 y dejaba
+    # la lista vacia con la peticion mas normal, la que no pide NCUs
+    if ("$($script:NcusPedidas)".Trim() -eq '') { return $todas }
+    $nums = @(Parse-ListaNums $script:NcusPedidas | Where-Object { $null -ne $_ })
+    if ($nums.Count -eq 0) { return $todas }
+    $r = @($todas | Where-Object { $nums -contains [int]$_.ncu })
+    if ($r.Count -eq 0) { throw "ninguna NCU de la planta encaja con '$($script:NcusPedidas)'" }
+    return $r
+}
+
+function Ncus-Todas {
     $p = $PLANTAS["$($cfg.planta) (Planta completa)"]
     if ($p -and $p.ncus) { return @($p.ncus) }
     # planta de una sola NCU: usar su entrada (auto) o su unica entrada
@@ -442,10 +458,19 @@ function Tcus-Pedidas($n, [string]$tcusTxt, [string]$gw) {
     return @(Sel-TcusDe $sel $gws "$($n.ncu)")
 }
 
+# Que TCUs y que gateway pide ESTA peticion. Igual que con las NCUs: se aplica
+# en Tcus-DeNcu, que es por donde pasan TODAS las rutas que recorren la planta.
+# Antes solo /leer y /inventario miraban 'tcus' y 'gw', asi que en la web esos
+# cuadros no hacian nada en el diagnostico, las baterias ni el comisionado.
+$script:TcusPedidas = ''
+$script:GwPedido = ''
 function Tcus-DeNcu($n) {
-    $lt = @()
-    foreach ($g in $n.gws) { $lt += @([int]$g.ini..[int]$g.fin) }
-    return @($lt | Sort-Object -Unique)
+    if ("$($script:TcusPedidas)".Trim() -eq '' -and "$($script:GwPedido)".Trim() -eq '') {
+        $lt = @()
+        foreach ($g in $n.gws) { $lt += @([int]$g.ini..[int]$g.fin) }
+        return @($lt | Sort-Object -Unique)
+    }
+    return @(Tcus-Pedidas $n $script:TcusPedidas $script:GwPedido)
 }
 
 function Fila-Vacia([string]$ncu, $tcu, [string]$salud, [string]$alarmas) {
@@ -454,7 +479,7 @@ function Fila-Vacia([string]$ncu, $tcu, [string]$salud, [string]$alarmas) {
         # no puede decir de que gateway cuelga cada TCU. Ademas Export-Csv se
         # queda con las columnas de la PRIMERA fila: si falta en esta, falta en
         # todo el fichero.
-        NCU=$ncu; TCU=$tcu; GW=''; Salud=$salud; Modo=''
+        NCU=$ncu; GW=''; TCU=$tcu; Salud=$salud; Modo=''
         Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Tbat_C=''; Tpcb_C=''
         Alarmas=$alarmas
         main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
@@ -928,6 +953,11 @@ while ($true) {
     $res.Headers.Add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
     if ($req.HttpMethod -eq 'OPTIONS') { $res.StatusCode = 204; $res.Close(); continue }
     $out = $null; $code = 200; $descarga = ''
+    # el filtro de NCUs viaja en la query tambien en los POST: el cuerpo se lee
+    # mas abajo y para entonces ya se han llamado rutas que miran Ncus-DePlanta
+    $script:NcusPedidas = "$($req.QueryString['ncus'])"
+    $script:TcusPedidas = "$($req.QueryString['tcus'])"
+    $script:GwPedido    = "$($req.QueryString['gw'])"
     $t0 = Get-Date
     try {
         if ($req.Headers['X-Token'] -ne $cfg.token) { $code = 401; $out = @{error = 'token invalido'} }
@@ -935,8 +965,12 @@ while ($true) {
             switch ($req.Url.AbsolutePath) {
                 '/ping' {
                     $ncusInfo = @(Ncus-DePlanta | ForEach-Object { @{ncu = [int]$_.ncu; tcus = "$(@(Tcus-DeNcu $_)[0])-$(@(Tcus-DeNcu $_)[-1])"} })
+                    # los gateways que existen, para que la web los ofrezca en un
+                    # desplegable en vez de hacer teclear el numero de puerto
+                    $gwsInfo = @(Ncus-DePlanta | ForEach-Object { $_.gws } | ForEach-Object { "$($_.puerto)" } |
+                                 Where-Object { $_ -and $_ -ne '' } | Sort-Object -Unique)
                     $out = @{ok=$true; planta=$cfg.planta; agente=$VERSION_AGENTE; toolbox=$VERSION_TOOLBOX; mapa=$VERSION_MAPA
-                             hora=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); escritura=$escritura; ncus=$ncusInfo}
+                             hora=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); escritura=$escritura; ncus=$ncusInfo; gws=$gwsInfo}
                 }
                 '/diagnostico'  { $out = Diag-Planta }
                 '/comisionado'  { $out = Comis-Planta }
@@ -1023,6 +1057,9 @@ while ($true) {
         $res.OutputStream.Write($buf, 0, $buf.Length)
         $res.Close()
     }
+    # fuera el filtro: el vigilante de alarmas y el SAT corren entre peticiones
+    # y se habrian quedado muestreando solo lo que pidio la ultima ventana web
+    $script:NcusPedidas = ''; $script:TcusPedidas = ''; $script:GwPedido = ''
     $ms = [int]((Get-Date) - $t0).TotalMilliseconds
     Write-Host ("{0}  {1} {2} -> {3}  ({4} ms)" -f (Get-Date -Format 'HH:mm:ss'), $req.HttpMethod, $req.Url.AbsolutePath, $code, $ms)
 }

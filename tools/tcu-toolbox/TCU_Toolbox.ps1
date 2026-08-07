@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.17'
+$VERSION_TOOLBOX = '11.18'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2178,6 +2178,24 @@ $AYUDA_TCUS = @"
 vacio o NA          todas las de la seleccion
 "@
 
+$AYUDA_GW = @"
+vacio    todos los gateways de esa NCU
+503      solo el GW1
+504      solo el GW2 (todas sus TCUs, sin saberse el rango)
+"@
+
+$AYUDA_NCUS = @"
+Sobre que NCUs se trabaja. Vale para TODAS las pestanas.
+
+vacio     todas las de la entrada elegida
+1,3-5     solo la 1, la 3, la 4 y la 5
+12        solo la 12
+
+Solo pinta con una entrada de planta completa: si arriba hay
+elegida una NCU sola, esa es la unica que se toca y esto se ignora.
+Si en el cuadro TCUs se escribe "12/10, 15/5-12", mandan esas.
+"@
+
 function TG($p, [string]$t, [int]$x, [int]$y, [int]$w) {
     $c = New-Object System.Windows.Forms.TextBox
     $c.Text = $t; $c.Location = New-Object System.Drawing.Point($x, $y)
@@ -2206,11 +2224,17 @@ $txtPort = TG $gbCon '503' 446 22 45
 $txtTo = TG $gbCon '8000' 552 22 46
 [void](LG $gbCon 'Reint.' 606 42)
 $txtRet = TG $gbCon '3' 650 22 28
-# Filtro de gateway: vacio = todos. Con "(Planta completa)" y 504 aqui se
-# trabaja sobre TODAS las TCUs del GW2 de cada NCU, que antes obligaba a ir
-# NCU por NCU con su rango a mano.
-[void](LG $gbCon 'GW' 688 24)
-$txtGw = TG $gbCon '' 714 22 46
+# Que NCUs. Aqui y no en cada pestana: se elige una vez y vale para escribir,
+# leer, diagnosticar, auditar, inventariar, sincronizar y PEM. Antes solo lo
+# tenia Diagnostico y para lo demas habia que ir NCU por NCU con el desplegable.
+[void](LG $gbCon 'NCUs' 684 40)
+$txtNcus = TG $gbCon '' 726 22 68
+$txtNcus.Add_MouseHover({ $ttW.SetToolTip($txtNcus, $AYUDA_NCUS) })
+
+# Lo que hay escrito en NCUs. Aparte para que todas las pestanas lean el mismo
+# cuadro y para no meter un control de la ventana dentro de Trabajos-Planta,
+# que es una de las funciones que el agente de planta reutiliza tal cual.
+function Ncus-Filtro { return "$($txtNcus.Text)" }
 
 $btnCancelar = New-Object System.Windows.Forms.Button
 $btnCancelar.Text = 'CANCELAR'
@@ -2236,29 +2260,32 @@ $tabs.TabPages.Add($tabW)
 # ir tres veces o pasar por un CSV.
 [void](LG $tabW 'TCUs' 10 40)
 $txtWTcus = TG $tabW '1-44' 52 22 150
+[void](LG $tabW 'GW' 208 24 25)
+$txtWGw = TG $tabW '' 234 22 46
+$txtWGw.Add_MouseHover({ $ttW.SetToolTip($txtWGw, $AYUDA_GW) })
 $txtWTcus.Add_MouseHover({ $ttW.SetToolTip($txtWTcus, $AYUDA_TCUS) })
 
-[void](LG $tabW 'Filtro' 212 42)
-$txtWFiltro = TG $tabW '' 256 22 150
-$lblWFiltro = LG $tabW '' 412 104
+[void](LG $tabW 'Filtro' 290 42)
+$txtWFiltro = TG $tabW '' 334 22 120
+$lblWFiltro = LG $tabW '' 460 84
 $lblWFiltro.ForeColor = [System.Drawing.Color]::Gray
 
 $btnWQuitar = New-Object System.Windows.Forms.Button
 $btnWQuitar.Text = 'Quitar'
-$btnWQuitar.Location = New-Object System.Drawing.Point(524, 18)
+$btnWQuitar.Location = New-Object System.Drawing.Point(552, 18)
 $btnWQuitar.Size = New-Object System.Drawing.Size(78, 28)
 $tabW.Controls.Add($btnWQuitar)
 
 $btnPresetSave = New-Object System.Windows.Forms.Button
 $btnPresetSave.Text = 'Guardar preset'
-$btnPresetSave.Location = New-Object System.Drawing.Point(610, 18)
-$btnPresetSave.Size = New-Object System.Drawing.Size(140, 28)
+$btnPresetSave.Location = New-Object System.Drawing.Point(638, 18)
+$btnPresetSave.Size = New-Object System.Drawing.Size(124, 28)
 $tabW.Controls.Add($btnPresetSave)
 
 $btnPresetLoad = New-Object System.Windows.Forms.Button
 $btnPresetLoad.Text = 'Cargar preset'
-$btnPresetLoad.Location = New-Object System.Drawing.Point(756, 18)
-$btnPresetLoad.Size = New-Object System.Drawing.Size(140, 28)
+$btnPresetLoad.Location = New-Object System.Drawing.Point(768, 18)
+$btnPresetLoad.Size = New-Object System.Drawing.Size(124, 28)
 $tabW.Controls.Add($btnPresetLoad)
 
 $dgv = New-Object System.Windows.Forms.DataGridView
@@ -2391,11 +2418,14 @@ $tabs.TabPages.Add($tabL)
 
 [void](LG $tabL 'TCUs' 10 40)
 $txtLTcus = TG $tabL '1-44' 52 22 150
+[void](LG $tabL 'GW' 208 24 25)
+$txtLGw = TG $tabL '' 234 22 46
+$txtLGw.Add_MouseHover({ $ttW.SetToolTip($txtLGw, $AYUDA_GW) })
 $txtLTcus.Add_MouseHover({ $ttW.SetToolTip($txtLTcus, $AYUDA_TCUS) })
 
-[void](LG $tabL 'Filtro' 212 42)
-$txtLFiltro = TG $tabL '' 256 22 150
-$lblLFiltro = LG $tabL '' 412 86
+[void](LG $tabL 'Filtro' 286 42)
+$txtLFiltro = TG $tabL '' 330 22 100
+$lblLFiltro = LG $tabL '' 436 74
 $lblLFiltro.ForeColor = [System.Drawing.Color]::Gray
 
 # El preset ya dice que variables importan: teclearlas otra vez aqui sobra. Con
@@ -2619,12 +2649,15 @@ $btnComparar.Enabled = $false
 $tabD.Controls.Add($btnComparar)
 
 [void](LG $tabD 'Backup NCU, TCUs' 250 110 340)
-$txtBTcus = TG $tabD '1-44' 362 337 84
+$txtBTcus = TG $tabD '1-44' 362 337 70
+[void](LG $tabD 'GW' 436 24 340)
+$txtBGw = TG $tabD '' 462 337 40
+$txtBGw.Add_MouseHover({ $ttW.SetToolTip($txtBGw, $AYUDA_GW) })
 $txtBTcus.Add_MouseHover({ $ttW.SetToolTip($txtBTcus, $AYUDA_TCUS) })
 
 $btnBackupNcu = New-Object System.Windows.Forms.Button
 $btnBackupNcu.Text = 'BACKUP NCU (un JSON por TCU)...'
-$btnBackupNcu.Location = New-Object System.Drawing.Point(458, 335)
+$btnBackupNcu.Location = New-Object System.Drawing.Point(512, 335)
 $btnBackupNcu.Size = New-Object System.Drawing.Size(230, 28)
 $tabD.Controls.Add($btnBackupNcu)
 
@@ -2634,12 +2667,15 @@ $tabG.Text = 'Diagnostico'
 $tabs.TabPages.Add($tabG)
 
 [void](LG $tabG 'TCUs' 10 40)
-$txtGTcus = TG $tabG '1-44' 52 22 130
+$txtGTcus = TG $tabG '1-44' 52 22 106
+[void](LG $tabG 'GW' 162 24 25)
+$txtGGw = TG $tabG '' 188 22 42
+$txtGGw.Add_MouseHover({ $ttW.SetToolTip($txtGGw, $AYUDA_GW) })
 $txtGTcus.Add_MouseHover({ $ttW.SetToolTip($txtGTcus, $AYUDA_TCUS) })
 
 $btnDiag = New-Object System.Windows.Forms.Button
 $btnDiag.Text = 'DIAGNOSTICAR'
-$btnDiag.Location = New-Object System.Drawing.Point(200, 18)
+$btnDiag.Location = New-Object System.Drawing.Point(240, 18)
 $btnDiag.Size = New-Object System.Drawing.Size(120, 28)
 $btnDiag.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
 $btnDiag.ForeColor = [System.Drawing.Color]::White
@@ -2655,13 +2691,9 @@ $tabG.Controls.Add($chkGPar)
 $chkGNcu = New-Object System.Windows.Forms.CheckBox
 $chkGNcu.Text = 'via NCU'
 $chkGNcu.Checked = $true
-$chkGNcu.Location = New-Object System.Drawing.Point(328, 21)
+$chkGNcu.Location = New-Object System.Drawing.Point(368, 21)
 $chkGNcu.Size = New-Object System.Drawing.Size(92, 22)
 $tabG.Controls.Add($chkGNcu)
-
-[void](LG $tabG 'NCUs' 425 40)
-$txtGNcus = TG $tabG '' 467 22 62
-$txtGNcus.Text = ''
 
 $lblGResumen = New-Object System.Windows.Forms.Label
 $lblGResumen.Text = ''
@@ -2757,12 +2789,13 @@ $lvG = New-Object System.Windows.Forms.ListView
 $lvG.Location = New-Object System.Drawing.Point(10, 116)
 $lvG.Size = New-Object System.Drawing.Size(898, 244)
 $lvG.View = 'Details'; $lvG.FullRowSelect = $true; $lvG.GridLines = $true
-[void]$lvG.Columns.Add('NCU', 45)
-[void]$lvG.Columns.Add('TCU', 45)
-# De que gateway cuelga cada TCU: en modo via NCU todo se lee por el 502, pero
+# NCU - GW - TCU: es el orden en que se llega a un seguidor en planta. De que
+# gateway cuelga cada TCU importa aunque en modo via NCU todo se lea por el 502:
 # el equipo sigue estando en su GW y hay que saberlo para el updater y para
 # saber a que red Zigbee pertenece.
+[void]$lvG.Columns.Add('NCU', 45)
 [void]$lvG.Columns.Add('GW', 48)
+[void]$lvG.Columns.Add('TCU', 45)
 [void]$lvG.Columns.Add('Salud', 65)
 [void]$lvG.Columns.Add('Modo', 65)
 [void]$lvG.Columns.Add('Tilt real', 58)
@@ -2858,12 +2891,15 @@ $gbAud.Size = New-Object System.Drawing.Size(898, 182)
 $tabF.Controls.Add($gbAud)
 
 [void](LG $gbAud 'TCUs' 10 40)
-$txtATcus = TG $gbAud '1-44' 52 22 110
+$txtATcus = TG $gbAud '1-44' 52 22 86
+[void](LG $gbAud 'GW' 142 24 25)
+$txtAGw = TG $gbAud '' 168 22 40
+$txtAGw.Add_MouseHover({ $ttW.SetToolTip($txtAGw, $AYUDA_GW) })
 $txtATcus.Add_MouseHover({ $ttW.SetToolTip($txtATcus, $AYUDA_TCUS) })
 
 $btnPresetRef = New-Object System.Windows.Forms.Button
 $btnPresetRef.Text = 'Preset ref...'
-$btnPresetRef.Location = New-Object System.Drawing.Point(168, 19)
+$btnPresetRef.Location = New-Object System.Drawing.Point(214, 19)
 $btnPresetRef.Size = New-Object System.Drawing.Size(96, 26)
 $gbAud.Controls.Add($btnPresetRef)
 
@@ -2873,11 +2909,11 @@ $gbAud.Controls.Add($btnPresetRef)
 $chkAudLec = New-Object System.Windows.Forms.CheckBox
 $chkAudLec.Text = 'Usar la ultima lectura'
 $chkAudLec.Checked = $true
-$chkAudLec.Location = New-Object System.Drawing.Point(270, 21)
-$chkAudLec.Size = New-Object System.Drawing.Size(142, 22)
+$chkAudLec.Location = New-Object System.Drawing.Point(314, 21)
+$chkAudLec.Size = New-Object System.Drawing.Size(140, 22)
 $gbAud.Controls.Add($chkAudLec)
 
-$lblPresetRef = LG $gbAud '(sin preset)' 416 92
+$lblPresetRef = LG $gbAud '(sin preset)' 458 74
 
 # La auditoria puede leer por su cuenta, pero leer en 'Leer variable' da la
 # segunda lectura de valores anomalos, el resumen de discrepancias y el
@@ -2885,8 +2921,8 @@ $lblPresetRef = LG $gbAud '(sin preset)' 416 92
 # se audita contra esa lectura sin volver a tocar la planta.
 $btnAudLeer = New-Object System.Windows.Forms.Button
 $btnAudLeer.Text = 'Leer variables'
-$btnAudLeer.Location = New-Object System.Drawing.Point(512, 19)
-$btnAudLeer.Size = New-Object System.Drawing.Size(96, 26)
+$btnAudLeer.Location = New-Object System.Drawing.Point(536, 19)
+$btnAudLeer.Size = New-Object System.Drawing.Size(92, 26)
 $gbAud.Controls.Add($btnAudLeer)
 $lblPresetRef.ForeColor = [System.Drawing.Color]::Gray
 
@@ -2896,30 +2932,30 @@ $lblPresetRef.ForeColor = [System.Drawing.Color]::Gray
 # como el resto: deja cargado y lleva alli.
 $btnAudEscr = New-Object System.Windows.Forms.Button
 $btnAudEscr.Text = 'Escribir...'
-$btnAudEscr.Location = New-Object System.Drawing.Point(612, 19)
-$btnAudEscr.Size = New-Object System.Drawing.Size(90, 26)
+$btnAudEscr.Location = New-Object System.Drawing.Point(632, 19)
+$btnAudEscr.Size = New-Object System.Drawing.Size(82, 26)
 $btnAudEscr.Enabled = $false
 $gbAud.Controls.Add($btnAudEscr)
 
 $btnAud = New-Object System.Windows.Forms.Button
 $btnAud.Text = 'AUDITAR'
-$btnAud.Location = New-Object System.Drawing.Point(706, 18)
-$btnAud.Size = New-Object System.Drawing.Size(82, 28)
+$btnAud.Location = New-Object System.Drawing.Point(718, 18)
+$btnAud.Size = New-Object System.Drawing.Size(74, 28)
 $btnAud.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
 $btnAud.ForeColor = [System.Drawing.Color]::White
 $gbAud.Controls.Add($btnAud)
 
 $btnAudCsv = New-Object System.Windows.Forms.Button
 $btnAudCsv.Text = 'CSV'
-$btnAudCsv.Location = New-Object System.Drawing.Point(792, 18)
-$btnAudCsv.Size = New-Object System.Drawing.Size(48, 28)
+$btnAudCsv.Location = New-Object System.Drawing.Point(796, 18)
+$btnAudCsv.Size = New-Object System.Drawing.Size(42, 28)
 $btnAudCsv.Enabled = $false
 $gbAud.Controls.Add($btnAudCsv)
 
 $btnAudJson = New-Object System.Windows.Forms.Button
 $btnAudJson.Text = 'JSON'
-$btnAudJson.Location = New-Object System.Drawing.Point(844, 18)
-$btnAudJson.Size = New-Object System.Drawing.Size(48, 28)
+$btnAudJson.Location = New-Object System.Drawing.Point(842, 18)
+$btnAudJson.Size = New-Object System.Drawing.Size(42, 28)
 $btnAudJson.Enabled = $false
 $gbAud.Controls.Add($btnAudJson)
 
@@ -2942,18 +2978,21 @@ $gbInvF.Size = New-Object System.Drawing.Size(898, 168)
 $tabF.Controls.Add($gbInvF)
 
 [void](LG $gbInvF 'TCUs' 10 40)
-$txtVTcus = TG $gbInvF '1-44' 52 22 110
+$txtVTcus = TG $gbInvF '1-44' 52 22 86
+[void](LG $gbInvF 'GW' 142 24 25)
+$txtVGw = TG $gbInvF '' 168 22 40
+$txtVGw.Add_MouseHover({ $ttW.SetToolTip($txtVGw, $AYUDA_GW) })
 $txtVTcus.Add_MouseHover({ $ttW.SetToolTip($txtVTcus, $AYUDA_TCUS) })
 
 $btnInvF = New-Object System.Windows.Forms.Button
 $btnInvF.Text = 'INVENTARIO'
-$btnInvF.Location = New-Object System.Drawing.Point(172, 18)
+$btnInvF.Location = New-Object System.Drawing.Point(214, 18)
 $btnInvF.Size = New-Object System.Drawing.Size(125, 28)
 $btnInvF.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
 $btnInvF.ForeColor = [System.Drawing.Color]::White
 $gbInvF.Controls.Add($btnInvF)
 
-$lblInvF = LG $gbInvF '' 310 320
+$lblInvF = LG $gbInvF '' 348 400
 $lblInvF.ForeColor = [System.Drawing.Color]::Gray
 
 $btnInvFCsv = New-Object System.Windows.Forms.Button
@@ -2991,36 +3030,39 @@ $tabP.Text = 'PEM'
 $tabs.TabPages.Add($tabP)
 
 [void](LG $tabP 'TCUs' 10 38 18)
-$txtPTcus = TG $tabP '1-5' 50 14 112
+$txtPTcus = TG $tabP '1-5' 50 14 100
+[void](LG $tabP 'GW' 154 24 17)
+$txtPGw = TG $tabP '' 180 14 40
+$txtPGw.Add_MouseHover({ $ttW.SetToolTip($txtPGw, $AYUDA_GW) })
 $txtPTcus.Add_MouseHover({ $ttW.SetToolTip($txtPTcus, $AYUDA_TCUS) })
-[void](LG $tabP 'Pulso s' 172 46 18)
-$txtPPulso = TG $tabP '5' 220 14 34
-[void](LG $tabP 'Umbral deg' 262 68 18)
-$txtPUmbral = TG $tabP '0.5' 332 14 38
+[void](LG $tabP 'Pulso s' 226 46 18)
+$txtPPulso = TG $tabP '5' 274 14 34
+[void](LG $tabP 'Umbral deg' 314 68 18)
+$txtPUmbral = TG $tabP '0.5' 384 14 38
 
 $chkPViento = New-Object System.Windows.Forms.CheckBox
 $chkPViento.Text = 'guardia viento'
 $chkPViento.Checked = $true
-$chkPViento.Location = New-Object System.Drawing.Point(380, 13)
+$chkPViento.Location = New-Object System.Drawing.Point(428, 13)
 $chkPViento.Size = New-Object System.Drawing.Size(105, 22)
 $tabP.Controls.Add($chkPViento)
 
 $btnPMotor = New-Object System.Windows.Forms.Button
 $btnPMotor.Text = 'TEST DE MOTOR'
-$btnPMotor.Location = New-Object System.Drawing.Point(492, 11)
-$btnPMotor.Size = New-Object System.Drawing.Size(130, 26)
+$btnPMotor.Location = New-Object System.Drawing.Point(538, 11)
+$btnPMotor.Size = New-Object System.Drawing.Size(126, 26)
 $btnPMotor.BackColor = [System.Drawing.Color]::FromArgb(0,120,60)
 $btnPMotor.ForeColor = [System.Drawing.Color]::White
 $tabP.Controls.Add($btnPMotor)
 
 $btnPCsv = New-Object System.Windows.Forms.Button
 $btnPCsv.Text = 'CSV'
-$btnPCsv.Location = New-Object System.Drawing.Point(630, 11)
-$btnPCsv.Size = New-Object System.Drawing.Size(64, 26)
+$btnPCsv.Location = New-Object System.Drawing.Point(670, 11)
+$btnPCsv.Size = New-Object System.Drawing.Size(56, 26)
 $btnPCsv.Enabled = $false
 $tabP.Controls.Add($btnPCsv)
 
-$lblPResumen = LG $tabP '' 704 200 18
+$lblPResumen = LG $tabP '' 732 174 18
 $lblPResumen.ForeColor = [System.Drawing.Color]::Gray
 
 [void](LG $tabP 'Modo' 10 38 50)
@@ -3528,12 +3570,15 @@ $gbSync.Size = New-Object System.Drawing.Size(898, 62)
 $tabU.Controls.Add($gbSync)
 
 [void](LG $gbSync 'TCUs' 10 40)
-$txtSTcus = TG $gbSync '1-44' 52 22 124
+$txtSTcus = TG $gbSync '1-44' 52 22 100
+[void](LG $gbSync 'GW' 156 24 25)
+$txtSGw = TG $gbSync '' 182 22 40
+$txtSGw.Add_MouseHover({ $ttW.SetToolTip($txtSGw, $AYUDA_GW) })
 $txtSTcus.Add_MouseHover({ $ttW.SetToolTip($txtSTcus, $AYUDA_TCUS) })
 
 $chkSVerif = New-Object System.Windows.Forms.CheckBox
 $chkSVerif.Text = 'Verificar reloj tras sincronizar (lee 30079)'
-$chkSVerif.Location = New-Object System.Drawing.Point(200, 22)
+$chkSVerif.Location = New-Object System.Drawing.Point(232, 22)
 $chkSVerif.Size = New-Object System.Drawing.Size(280, 22)
 $chkSVerif.Checked = $true
 $gbSync.Controls.Add($chkSVerif)
@@ -4283,9 +4328,12 @@ $cbPlanta.Add_SelectedIndexChanged({
         $txtIp.Text = 'NA'; $txtPort.Text = 'auto'
         $txtGTcus.Text = 'NA'; $txtATcus.Text = 'NA'; $txtLTcus.Text = 'NA'; $txtWTcus.Text = 'NA'
         $txtVTcus.Text = 'NA'
-        Con "Planta completa seleccionada ($(@($p.ncus).Count) NCUs): rangos automaticos por NCU. El cuadro TCUs admite '10,22,30-40' y '12/10, 15/5-12' (vacio o NA = todas), y el cuadro GW de Conexion deja trabajar solo sobre un gateway." ([System.Drawing.Color]::SteelBlue)
+        $txtNcus.Enabled = $true
+        Con "Planta completa seleccionada ($(@($p.ncus).Count) NCUs): rangos automaticos por NCU. Arriba, el cuadro NCUs acota sobre cuales se trabaja ('1,3-5', vacio = todas) y vale para todas las pestanas. El cuadro TCUs admite '10,22,30-40' y '12/10, 15/5-12' (vacio o NA = todas), y el GW de cada pestana deja trabajar solo sobre un gateway." ([System.Drawing.Color]::SteelBlue)
         return
     }
+    # una sola NCU: el cuadro NCUs no pinta nada, se apaga para que se vea
+    $txtNcus.Enabled = $false
     if ($p) {
         $txtIp.Text = $p.ip
         if ($p.gws) { $txtPort.Text = 'auto' } else { $txtPort.Text = "$($p.puerto)" }
@@ -4351,7 +4399,7 @@ function Escribir-EnTcus($tcus) {
         }
         $trabajos = @($lista)
     } else {
-        $trabajos = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtWTcus.Text 'Escribir') $txtGw.Text)
+        $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtWTcus.Text 'Escribir') $txtWGw.Text)
     }
     if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna TCU (mira los cuadros TCUs y GW).' ([System.Drawing.Color]::Orange); return }
     $nTcus = 0; foreach ($tr in $trabajos) { $nTcus += @($tr.tcus).Count }
@@ -4551,7 +4599,7 @@ $btnNvm.Add_Click({ Lanzar {
         if ($r -ne 'Yes') { return }
     }
     $cx = Params-Conexion
-    $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtWTcus.Text 'NVM') $txtGw.Text).tcus
+    $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtWTcus.Text 'NVM') $txtWGw.Text).tcus
     if (@($tcus).Count -eq 0) { throw 'la seleccion no deja ninguna TCU' }
     $r = [System.Windows.Forms.MessageBox]::Show(
         "Guardar configuracion en NVM (40007 bit 15) en $(Eti-Rango $tcus) de $($cx.ip):$($cx.etiqueta)?",
@@ -4989,7 +5037,7 @@ $btnLeer.Add_Click({ Lanzar {
     if ($nombres.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('Elige al menos una variable en la tabla.','Aviso'); return }
     $defs = @($nombres | ForEach-Object { @{nombre=[string]$_; vdef=(Def-DeLectura $_)} })
     $cx = Params-Conexion
-    $trabajos = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtLTcus.Text 'Leer') $txtGw.Text)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtLTcus.Text 'Leer') $txtLGw.Text)
     if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
     $lvL.Items.Clear(); $lvL.Columns.Clear(); $script:UltimaLectura = @()
     $script:ReconfIntentos = 0; $script:ReconfConfirmados = 0; $script:ReconfCambios = 0; $script:ReconfSinAcuerdo = 0
@@ -5901,7 +5949,7 @@ function Diag-Correr {
     $script:UltimaCarga = @{}   # lo leido de carga era de la lectura anterior
     # trabajos: una entrada por NCU (planta completa) o una sola (modo normal)
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    $trabajos = @(Trabajos-Planta $cx $null $(if ($cx.multi) { $txtGNcus.Text } else { '' }) (Parse-Seleccion $txtGTcus.Text 'Diagnostico') $txtGw.Text)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtGTcus.Text 'Diagnostico') $txtGGw.Text)
     if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna TCU (mira los cuadros NCUs, TCUs y GW).' ([System.Drawing.Color]::Orange); return }
     if ($cx.multi) {
         $totTcus = 0; foreach ($tr in $trabajos) { $totTcus += @($tr.tcus).Count }
@@ -5946,7 +5994,7 @@ function Diag-Correr {
                     $d | Add-Member -NotePropertyName NCU -NotePropertyValue $eti -Force
                     $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcu $r.tarea.gws ([int]"$($d.TCU)")) -Force
                     $item = New-Object System.Windows.Forms.ListViewItem($eti)
-                    foreach ($c in @($d.TCU, $d.GW, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
+                    foreach ($c in @($d.GW, $d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
                     switch ("$($d.Salud)") {
                         'OK'      { $item.ForeColor = [System.Drawing.Color]::DarkGreen;  $nOk++ }
                         'AVISO'   { $item.ForeColor = [System.Drawing.Color]::DarkOrange; $nAviso++ }
@@ -5976,7 +6024,7 @@ function Diag-Correr {
             Modbus-Cerrar
         } catch { $nsErr = "$_"; Modbus-Cerrar }
         $dn = [pscustomobject]@{
-            NCU="$($tr.ncu)"; TCU='NCU'; GW=''; Salud=$(if ($ns) { $ns.salud } else { 'AVISO' }); Modo='-'
+            NCU="$($tr.ncu)"; GW=''; TCU='NCU'; Salud=$(if ($ns) { $ns.salud } else { 'AVISO' }); Modo='-'
             Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''
             # El reloj salia SIEMPRE en la columna de alarmas y parecia un
             # problema. Solo se menciona si de verdad esta desviado.
@@ -6035,7 +6083,7 @@ function Diag-Correr {
             if ($dm) { $d = $dm[[int]$tcu] }
             if ($null -eq $d) {
                 $d = [pscustomobject]@{
-                    TCU=[int]$tcu; GW=''; Salud='OFFLINE'; Modo=''; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
+                    GW=''; TCU=[int]$tcu; Salud='OFFLINE'; Modo=''; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
                     Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''; Alarmas='sin datos via NCU'
                     main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
                 }
@@ -6046,7 +6094,7 @@ function Diag-Correr {
             $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcu $tr.cx.gws ([int]"$($d.TCU)")) -Force
         $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcu $tr.cx.gws ([int]"$($d.TCU)")) -Force
             $item = New-Object System.Windows.Forms.ListViewItem($etiquetaNcu)
-            foreach ($c in @($d.TCU, $d.GW, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
+            foreach ($c in @($d.GW, $d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
             switch ($d.Salud) {
                 'OK'      { $item.ForeColor = [System.Drawing.Color]::DarkGreen;  $nOk++ }
                 'AVISO'   { $item.ForeColor = [System.Drawing.Color]::DarkOrange; $nAviso++ }
@@ -6086,7 +6134,7 @@ function Diag-Correr {
         }
         if ($null -eq $d) {
             $d = [pscustomobject]@{
-                TCU=[int]$tcu; GW=''; Salud='OFFLINE'; Modo=''; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
+                GW=''; TCU=[int]$tcu; Salud='OFFLINE'; Modo=''; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
                 Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''; Alarmas=$err
                 main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
             }
@@ -6096,7 +6144,7 @@ function Diag-Correr {
         $d | Add-Member -NotePropertyName NCU -NotePropertyValue $etiquetaNcu -Force
         $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcu $tr.cx.gws ([int]"$($d.TCU)")) -Force
         $item = New-Object System.Windows.Forms.ListViewItem($etiquetaNcu)
-        foreach ($c in @($d.TCU, $d.GW, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) {
+        foreach ($c in @($d.GW, $d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) {
             [void]$item.SubItems.Add("$c")
         }
         switch ($d.Salud) {
@@ -6155,7 +6203,7 @@ function Diag-Refrescar {
         if ($fNcu -ne 'NCU - todas' -and ("NCU$($d.NCU)") -ne $fNcu) { continue }
         if ($sal.Count -gt 0 -and $sal -notcontains "$($d.Salud)") { continue }
         $item = New-Object System.Windows.Forms.ListViewItem("$($d.NCU)")
-        foreach ($c in @($d.TCU, $d.GW, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
+        foreach ($c in @($d.GW, $d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
         switch ("$($d.Salud)") {
             'OK'      { $item.ForeColor = [System.Drawing.Color]::DarkGreen }
             'AVISO'   { $item.ForeColor = [System.Drawing.Color]::DarkOrange }
@@ -6177,7 +6225,7 @@ $btnDiag.Add_Click({ Lanzar { $script:UltimoEsComm = $false; Diag-Correr } })
 # (2 regs por TCU) + la salud de cada NCU: ni bloque compacto ni Zigbee.
 $btnGComm.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    $trabajos = @(Trabajos-Planta $cx $null $(if ($cx.multi) { $txtGNcus.Text } else { '' }) (Parse-Seleccion $txtGTcus.Text 'Test comm') $txtGw.Text)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtGTcus.Text 'Test comm') $txtGGw.Text)
     if ($trabajos.Count -eq 0) { Con 'El filtro de NCUs no coincide con ninguna NCU de la planta.' ([System.Drawing.Color]::Orange); return }
     $lvG.Items.Clear(); $script:UltimoDiag = @(); $lblGResumen.Text = ''
     $script:UltimaCarga = @{}   # lo leido de carga era de la lectura anterior
@@ -6197,7 +6245,7 @@ $btnGComm.Add_Click({ Lanzar {
         Modbus-Cerrar
         if ($null -eq $c) {
             $nNcuKo++
-            $d = [pscustomobject]@{NCU=$et; TCU='NCU'; GW=''; Salud='OFFLINE'; Modo='-'; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
+            $d = [pscustomobject]@{NCU=$et; GW=''; TCU='NCU'; Salud='OFFLINE'; Modo='-'; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
                 Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''; Alarmas="NCU SIN RESPUESTA en $($tr.ip):${PUERTO_NCU} - $err"
                 main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
             $script:UltimoDiag += $d
@@ -6206,12 +6254,12 @@ $btnGComm.Add_Click({ Lanzar {
             continue
         }
         $nNcuOk++
-        $script:UltimoDiag += [pscustomobject]@{NCU=$et; TCU='NCU'; GW=''; Salud='OK'; Modo='-'; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
+        $script:UltimoDiag += [pscustomobject]@{NCU=$et; GW=''; TCU='NCU'; Salud='OK'; Modo='-'; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
             Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''; Alarmas="NCU responde ($($tr.ip):$PUERTO_NCU)"
             main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
         foreach ($h in $c.hsus) {
             if ($h.comunica) { $nHsuOk++ } else { $nHsuKo++ }
-            $script:UltimoDiag += [pscustomobject]@{NCU=$et; TCU=$h.hsu; GW=''; Salud=$(if ($h.comunica) { 'OK' } else { 'OFFLINE' }); Modo='-'
+            $script:UltimoDiag += [pscustomobject]@{NCU=$et; GW=''; TCU=$h.hsu; Salud=$(if ($h.comunica) { 'OK' } else { 'OFFLINE' }); Modo='-'
                 Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''
                 Alarmas=$(if ($h.comunica) { "comunica (hace $($h.edad) s)" } else { $(if ($h.lastcomm -eq 0) { 'la NCU nunca la ha leido' } else { "sin datos desde hace $($h.edad) s" }) })
                 main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
@@ -6221,7 +6269,7 @@ $btnGComm.Add_Click({ Lanzar {
             $e = $c.tcus[[int]$tcu]
             $ok = ($null -ne $e -and $e.comunica)
             if ($ok) { $nOk++ } else { $nOff++; $mudas += $tcu }
-            $script:UltimoDiag += [pscustomobject]@{NCU=$et; TCU=[int]$tcu; GW=(Gw-DeTcu $tr.cx.gws ([int]$tcu)); Salud=$(if ($ok) { 'OK' } else { 'OFFLINE' }); Modo='-'
+            $script:UltimoDiag += [pscustomobject]@{NCU=$et; GW=(Gw-DeTcu $tr.cx.gws ([int]$tcu)); TCU=[int]$tcu; Salud=$(if ($ok) { 'OK' } else { 'OFFLINE' }); Modo='-'
                 Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''
                 Alarmas=$(if ($ok) { "comunica (hace $($e.edad) s)" } elseif ($null -eq $e -or $e.lastcomm -eq 0) { 'la NCU nunca ha leido este TCU' } else { "sin datos desde hace $($e.edad) s" })
                 main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
@@ -6415,7 +6463,7 @@ $btnBCar.Add_Click({ Lanzar {
     }
     $cx = Params-Conexion
     $ped = Carga-Pedidos $script:UltimaBatTabla
-    $trabajos = @(Trabajos-Planta $cx $null '')
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
     $tot = 0; foreach ($k in @($ped.Keys)) { $tot += @($ped[$k]).Count }
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "CARGA: $tot TCUs, bloque largo de la NCU (50000 + (TCU-1)*50, offsets 21..31) por el puerto $PUERTO_NCU" ([System.Drawing.Color]::SteelBlue)
@@ -6595,7 +6643,7 @@ $btnGJson.Add_Click({
 # ------------------------- SINCRONIZAR RELOJ -------------------------
 $btnSync.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtSTcus.Text 'Sincronizar') $txtGw.Text).tcus
+    $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtSTcus.Text 'Sincronizar') $txtSGw.Text).tcus
     $r = [System.Windows.Forms.MessageBox]::Show(
         "Sincronizar fecha/hora de $($tcus.Count) TCUs ($($tcus[0])-$($tcus[-1])) con la hora de este PC?`r`n`r`nSecuencia por TCU: 40007 bit0 (permitir) -> 40001..40006 -> 40007 bit1 (aplicar).",
         'Confirmar sincronizacion', 'YesNo', 'Question')
@@ -6774,7 +6822,7 @@ $btnCsvTcu.Add_Click({ Lanzar {
 # ------------------------- BACKUP MASIVO DE NCU -------------------------
 $btnBackupNcu.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtBTcus.Text 'Backup NCU') $txtGw.Text).tcus
+    $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtBTcus.Text 'Backup NCU') $txtBGw.Text).tcus
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
     $dlg.Description = "Carpeta donde guardar los backups JSON (uno por TCU, $($tcus.Count) ficheros)"
     if ($dlg.ShowDialog() -ne 'OK') { return }
@@ -7162,7 +7210,7 @@ $btnAudEscr.Add_Click({
 $btnAud.Add_Click({ Lanzar {
     if (-not $script:PresetRef) { [void][System.Windows.Forms.MessageBox]::Show('Carga primero un preset de referencia (o un backup completo).','Aviso'); return }
     $cx = Params-Conexion
-    $trabajos = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtATcus.Text 'Auditoria') $txtGw.Text)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtATcus.Text 'Auditoria') $txtAGw.Text)
     if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
     $lvA.Items.Clear(); $script:UltimaAud = @()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
@@ -7331,8 +7379,8 @@ $btnAudJson.Add_Click({
 $btnInvF.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $tcus = $null
-    if (-not $cx.multi) { $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtVTcus.Text 'Inventario') $txtGw.Text).tcus }
-    $trabajos = @(Trabajos-Planta $cx $tcus)
+    if (-not $cx.multi) { $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtVTcus.Text 'Inventario') $txtVGw.Text).tcus }
+    $trabajos = @(Trabajos-Planta $cx $tcus (Ncus-Filtro))
     if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
     $lvV.Items.Clear(); $script:UltimoInv = @(); $lblInvF.Text = ''
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
@@ -7482,7 +7530,7 @@ function Guardia-Viento([hashtable]$cx) {
 $btnPMotor.Add_Click({ Lanzar {
     $cx = Params-Conexion
     if ($cx.multi) { throw 'el test de motor va por NCU: elige una entrada (auto)/GW, no Planta completa' }
-    $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtPTcus.Text 'Test motor') $txtGw.Text).tcus
+    $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Test motor') $txtPGw.Text).tcus
     $pulso = Val-Int $txtPPulso.Text 'Pulso' 1 30
     $umbral = Parse-RealFinito $txtPUmbral.Text
     if ($umbral -le 0 -or $umbral -gt 10) { throw 'umbral fuera de rango (0-10 deg)' }
@@ -7559,7 +7607,7 @@ $btnPMotor.Add_Click({ Lanzar {
 $btnPModo.Add_Click({ Lanzar {
     $cx = Params-Conexion
     if ($cx.multi) { throw 'el cambio de modo va por NCU: elige una entrada (auto)/GW' }
-    $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtPTcus.Text 'Modo') $txtGw.Text).tcus
+    $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Modo') $txtPGw.Text).tcus
     $modo = @{'OFF'=0; 'MANUAL'=1; 'AUTO'=2}[[string]$cbPModo.SelectedItem]
     $r = [System.Windows.Forms.MessageBox]::Show(
         "Pasar $($tcus.Count) TCUs a modo $($cbPModo.SelectedItem)?", 'Cambio de modo', 'YesNo', 'Warning')
@@ -7586,7 +7634,7 @@ $btnPModo.Add_Click({ Lanzar {
 $btnPClear.Add_Click({ Lanzar {
     $cx = Params-Conexion
     if ($cx.multi) { throw 'elige una entrada (auto)/GW' }
-    $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtPTcus.Text 'Clear') $txtGw.Text).tcus
+    $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Clear') $txtPGw.Text).tcus
     $r = [System.Windows.Forms.MessageBox]::Show(
         "Desenclavar alarmas de motor (40007 bit 13) en $($tcus.Count) TCUs?", 'Clear alarmas', 'YesNo', 'Question')
     if ($r -ne 'Yes') { return }
@@ -7615,7 +7663,7 @@ $btnPClear.Add_Click({ Lanzar {
 function Stow-Aplicar([int]$n) {
     $cx = Params-Conexion
     if ($cx.multi) { throw 'el stow va por NCU: elige una entrada (auto)/GW' }
-    $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtPTcus.Text 'Stow') $txtGw.Text).tcus
+    $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Stow') $txtPGw.Text).tcus
     $txtAccion = $(if ($n -gt 0) { "ACTIVAR safe position $n" } else { 'QUITAR el stow' })
     $r = [System.Windows.Forms.MessageBox]::Show(
         "$txtAccion en $($tcus.Count) TCUs? Los seguidores se moveran.", 'Stow', 'YesNo', 'Warning')
@@ -7659,7 +7707,7 @@ $btnPComis.Add_Click({ Lanzar {
         # Planta completa: el estado de comisionado viaja en los bits 4:3 del
         # registro de estado que la NCU cachea (bloque compacto, puerto 502)
         # - toda la planta en segundos, sin rondas Zigbee
-        $trabajos = @(Trabajos-Planta $cx $null)
+        $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
         Con "Comisionado de Planta completa via NCU: $($trabajos.Count) NCUs (bloque compacto, sin Zigbee)" ([System.Drawing.Color]::SteelBlue)
         foreach ($tr in $trabajos) {
             $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
@@ -7686,7 +7734,7 @@ $btnPComis.Add_Click({ Lanzar {
             }
         }
     } else {
-        $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtPTcus.Text 'Comisionado') $txtGw.Text).tcus
+        $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Comisionado') $txtPGw.Text).tcus
         Con "Estado de comisionado (30001 bits 4:3) y modo (bits 9:8) en $(Eti-Rango $tcus)" ([System.Drawing.Color]::SteelBlue)
         $segs = @(Plan-Segmentos $tcus $cx)
         foreach ($seg in $segs) {
@@ -7721,7 +7769,7 @@ $btnPComis.Add_Click({ Lanzar {
 $btnPComisSet.Add_Click({ Lanzar {
     $cx = Params-Conexion
     if ($cx.multi) { throw 'elige una entrada (auto)/GW' }
-    $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtPTcus.Text 'Comisionado') $txtGw.Text).tcus
+    $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Comisionado') $txtPGw.Text).tcus
     $obj = [int]([string]$cbPComis.SelectedItem).Split(' ')[0]
     $r = [System.Windows.Forms.MessageBox]::Show(
         "Fijar estado de comisionado '$($ESTADOS_COMIS[$obj])' ($obj) en $($tcus.Count) TCUs?`r`nRecuerda GUARDAR EN NVM despues.",
@@ -7790,7 +7838,7 @@ $btnFwPlan.Add_Click({ Lanzar {
         return
     }
     $cx = Params-Conexion
-    $trabajos = @(Trabajos-Planta $cx $null)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
     $gws = @{}; $ips = @{}
     foreach ($tr in $trabajos) {
         $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
@@ -7949,7 +7997,7 @@ $btnFwVerif.Add_Click({ Lanzar {
     if ($script:PlanFw.Count -eq 0) { return }
     $cx = Params-Conexion
     $obj = $txtFwObj.Text.Trim()
-    $trabajos = @(Trabajos-Planta $cx $null)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
     $porNcu = @{}
     foreach ($tr in $trabajos) { $porNcu[$(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })] = $tr }
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
@@ -8016,7 +8064,7 @@ $btnFwPrep.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $nNcu = "$($txtFwNcu.Text)".Trim()
     $tcu = Val-Int $txtFwTcu.Text 'TCU' 1 247
-    $trabajos = @(Trabajos-Planta $cx $null)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
     $tr = $trabajos | Where-Object { "$($_.ncu)" -eq $nNcu } | Select-Object -First 1
     if (-not $tr) { $tr = $trabajos[0] }
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
@@ -8249,7 +8297,7 @@ $tmrSat.Add_Tick({
     $script:Ocupado = $true
     try {
         $cx = Params-Conexion
-        $trabajos = @(Trabajos-Planta $cx $null)
+        $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
         if ($ahora -ge $script:SatProxCom) {
             $script:SatProxCom = $ahora.AddSeconds([double]$script:SatIntCom)
             $r = Sat-PaseComms $trabajos
@@ -8333,7 +8381,7 @@ $tmrCron.Add_Tick({
     try {
         $cx = Params-Conexion
         $ts = [int][double]::Parse((Get-Date -UFormat %s))
-        foreach ($tr in @(Trabajos-Planta $cx $null)) {
+        foreach ($tr in @(Trabajos-Planta $cx $null (Ncus-Filtro))) {
             if (-not $script:CronOn) { break }
             $dm = $null; $hs = @()
             try {
@@ -8437,7 +8485,7 @@ $btnSatHoja.Add_Click({ Lanzar {
     $filas = @()
     $ts = [int][double]::Parse((Get-Date -UFormat %s))
     $utc = [DateTimeOffset]::FromUnixTimeSeconds($ts).UtcDateTime.ToString('yyyy-MM-dd HH:mm:ss')
-    foreach ($tr in @(Trabajos-Planta $cx $null)) {
+    foreach ($tr in @(Trabajos-Planta $cx $null (Ncus-Filtro))) {
         if (Chequear-Cancelado) { break }
         $dm = $null
         try { Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to; $dm = Ncu-DiagCompat $tr.tcus } catch {}

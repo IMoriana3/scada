@@ -2371,20 +2371,37 @@ foreach ($f in @('Bat-Tabla', 'Bat-Auditar', 'Cierre-Estado', 'Cierre-Cargar', '
 }
 # Ident-Leer devuelve una lista Campo/Valor: indexarla por nombre da null en todo
 Check 'agente web: el inventario la convierte a diccionario' ($srcAg.Contains('foreach ($c in @($campos)) { $h[$c.Campo] = $c.Valor }')) $true
-Check 'sel: el cuadro GW vive en Conexion' ($src.Contains("`$txtGw = TG `$gbCon")) $true
 Check 'sel: con su ayuda al pasar el raton' ($src.Contains('$ttW.SetToolTip($txtWTcus, $AYUDA_TCUS)')) $true
-# y las cuatro operaciones la usan, con el filtro de gateway
-foreach ($e in @(@{n='Escribir'; t='W'}, @{n='Leer'; t='L'}, @{n='Diagnostico'; t='G'}, @{n='Auditoria'; t='A'})) {
-    Check "sel: $($e.n) la usa" ($src.Contains("(Parse-Seleccion `$txt$($e.t)Tcus.Text '$($e.n)') `$txtGw.Text")) $true
+# el GW ya no vive en Conexion: cada pestana tiene el suyo, al lado de sus TCUs
+Check 'gw: fuera de Conexion' ($src.Contains("`$txtGw = TG `$gbCon")) $false
+foreach ($t in @('W','L','G','A','V','S','P','B')) {
+    Check "gw: la pestana $t tiene su cuadro" ($src -match "\`$txt${t}Gw = TG ") $true
+    Check "gw: la pestana $t lo explica" ($src.Contains("`$ttW.SetToolTip(`$txt${t}Gw, `$AYUDA_GW)")) $true
 }
-Check 'sel: y el test comm tambien' ($src.Contains("(Parse-Seleccion `$txtGTcus.Text 'Test comm') `$txtGw.Text")) $true
-Check 'sel: el NVM tambien, que escribe' ($src.Contains("(Parse-Seleccion `$txtWTcus.Text 'NVM') `$txtGw.Text")) $true
+# y las cuatro operaciones la usan, con el filtro de gateway de SU pestana
+foreach ($e in @(@{n='Escribir'; t='W'}, @{n='Leer'; t='L'}, @{n='Diagnostico'; t='G'}, @{n='Auditoria'; t='A'})) {
+    Check "sel: $($e.n) la usa" ($src.Contains("(Parse-Seleccion `$txt$($e.t)Tcus.Text '$($e.n)') `$txt$($e.t)Gw.Text")) $true
+}
+Check 'sel: y el test comm tambien' ($src.Contains("(Parse-Seleccion `$txtGTcus.Text 'Test comm') `$txtGGw.Text")) $true
+Check 'sel: el NVM tambien, que escribe' ($src.Contains("(Parse-Seleccion `$txtWTcus.Text 'NVM') `$txtWGw.Text")) $true
+# el cuadro de NCUs: uno solo, en Conexion, y lo miran TODAS las operaciones
+Check 'ncus: el cuadro vive en Conexion' ($src.Contains("`$txtNcus = TG `$gbCon")) $true
+Check 'ncus: con su ayuda al pasar el raton' ($src.Contains('$ttW.SetToolTip($txtNcus, $AYUDA_NCUS)')) $true
+Check 'ncus: no lo lee Trabajos-Planta, que reusa el agente' ($src -match '(?s)function Trabajos-Planta.*?\n\}' -and $Matches[0].Contains('$txtNcus')) $false
+Check 'ncus: Diagnostico ya no tiene el suyo aparte' ($src.Contains('$txtGNcus')) $false
+Check 'ncus: con una sola NCU se apaga' ($src.Contains('$txtNcus.Enabled = $false')) $true
+# ninguna llamada se queda sin el filtro: si una lo olvida, esa pestana ignora las NCUs
+Check 'ncus: todas las llamadas lo pasan' (([regex]::Matches($src, [regex]::Escape('Trabajos-Planta $cx')).Count) -eq ([regex]::Matches($src, [regex]::Escape('(Ncus-Filtro)')).Count)) $true
 # la planta completa ya no ignora el cuadro: antes solo miraba el filtro de NCUs
-Check 'sel: planta completa mira la seleccion' ($src.Contains("Trabajos-Planta `$cx `$null `$(if (`$cx.multi) { `$txtGNcus.Text } else { '' }) (Parse-Seleccion `$txtGTcus.Text 'Diagnostico')")) $true
+Check 'sel: planta completa mira la seleccion' ($src.Contains("Trabajos-Planta `$cx `$null (Ncus-Filtro) (Parse-Seleccion `$txtGTcus.Text 'Diagnostico')")) $true
 # de que gateway cuelga cada TCU, en la tabla y en los exports
 Check 'gw: columna en el diagnostico' ($src.Contains("lvG.Columns.Add('GW'")) $true
+# NCU - GW - TCU: como se llega a un seguidor en planta
+Check 'gw: y va delante de la TCU' ($src.IndexOf("lvG.Columns.Add('GW'") -lt $src.IndexOf("lvG.Columns.Add('TCU'")) $true
+Check 'gw: las filas siguen ese orden' ([regex]::Matches($src, [regex]::Escape('$d.GW, $d.TCU, $d.Salud')).Count) 4
+Check 'gw: y ninguna se quedo al reves' ($src.Contains('$d.TCU, $d.GW, $d.Salud')) $false
 Check 'gw: se calcula por fila' ($src.Contains('Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcu')) $true
-Check 'gw: y las filas de NCU/HSU lo llevan vacio' ($src.Contains("TCU='NCU'; GW=''")) $true
+Check 'gw: y las filas de NCU/HSU lo llevan vacio' ($src.Contains("GW=''; TCU='NCU'")) $true
 # los ceros de una TCU que la NCU nunca ha leido no son medidas
 Check 'muda: no publica sus ceros' ($src.Contains('$vacio = ($lastc[$tcu] -eq 0)')) $true
 Check 'muda: ni su SoC' ($src.Contains("SoC = `$(if (`$vacio) { '' }")) $true
