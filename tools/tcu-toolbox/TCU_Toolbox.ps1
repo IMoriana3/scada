@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.7'
+$VERSION_TOOLBOX = '11.8'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2618,10 +2618,9 @@ $btnComparar.Size = New-Object System.Drawing.Size(210, 28)
 $btnComparar.Enabled = $false
 $tabD.Controls.Add($btnComparar)
 
-[void](LG $tabD 'Backup NCU de' 250 95 340)
-$txtBIni = TG $tabD '1' 348 337 40
-[void](LG $tabD 'a' 394 10 340)
-$txtBFin = TG $tabD '44' 406 337 40
+[void](LG $tabD 'Backup NCU, TCUs' 250 110 340)
+$txtBTcus = TG $tabD '1-44' 362 337 84
+$txtBTcus.Add_MouseHover({ $ttW.SetToolTip($txtBTcus, $AYUDA_TCUS) })
 
 $btnBackupNcu = New-Object System.Windows.Forms.Button
 $btnBackupNcu.Text = 'BACKUP NCU (un JSON por TCU)...'
@@ -2942,10 +2941,9 @@ $gbInvF.Location = New-Object System.Drawing.Point(10, 194)
 $gbInvF.Size = New-Object System.Drawing.Size(898, 168)
 $tabF.Controls.Add($gbInvF)
 
-[void](LG $gbInvF 'TCU de' 10 52)
-$txtVIni = TG $gbInvF '1' 62 22 40
-[void](LG $gbInvF 'a' 108 10)
-$txtVFin = TG $gbInvF '44' 120 22 40
+[void](LG $gbInvF 'TCUs' 10 40)
+$txtVTcus = TG $gbInvF '1-44' 52 22 110
+$txtVTcus.Add_MouseHover({ $ttW.SetToolTip($txtVTcus, $AYUDA_TCUS) })
 
 $btnInvF = New-Object System.Windows.Forms.Button
 $btnInvF.Text = 'INVENTARIO'
@@ -2992,10 +2990,9 @@ $tabP = New-Object System.Windows.Forms.TabPage
 $tabP.Text = 'PEM'
 $tabs.TabPages.Add($tabP)
 
-[void](LG $tabP 'TCU de' 10 50 18)
-$txtPIni = TG $tabP '1' 60 14 42
-[void](LG $tabP 'a' 108 10 18)
-$txtPFin = TG $tabP '5' 120 14 42
+[void](LG $tabP 'TCUs' 10 38 18)
+$txtPTcus = TG $tabP '1-5' 50 14 112
+$txtPTcus.Add_MouseHover({ $ttW.SetToolTip($txtPTcus, $AYUDA_TCUS) })
 [void](LG $tabP 'Pulso s' 172 46 18)
 $txtPPulso = TG $tabP '5' 220 14 34
 [void](LG $tabP 'Umbral deg' 262 68 18)
@@ -3530,10 +3527,9 @@ $gbSync.Location = New-Object System.Drawing.Point(10, 12)
 $gbSync.Size = New-Object System.Drawing.Size(898, 62)
 $tabU.Controls.Add($gbSync)
 
-[void](LG $gbSync 'TCU de' 10 52)
-$txtSIni = TG $gbSync '1' 62 22 45
-[void](LG $gbSync 'a' 116 12)
-$txtSFin = TG $gbSync '44' 131 22 45
+[void](LG $gbSync 'TCUs' 10 40)
+$txtSTcus = TG $gbSync '1-44' 52 22 124
+$txtSTcus.Add_MouseHover({ $ttW.SetToolTip($txtSTcus, $AYUDA_TCUS) })
 
 $chkSVerif = New-Object System.Windows.Forms.CheckBox
 $chkSVerif.Text = 'Verificar reloj tras sincronizar (lee 30079)'
@@ -4215,13 +4211,6 @@ function Trabajos-Planta([hashtable]$cx, [int[]]$tcus, [string]$filtro = '', $se
     return $lista
 }
 
-function Rango-Tcus([string]$tIni, [string]$tFin, [string]$etiqueta) {
-    $ini = Val-Int $tIni "$etiqueta TCU inicial" 1 247
-    $fin = Val-Int $tFin "$etiqueta TCU final" 1 247
-    if ($fin -lt $ini) { throw "$etiqueta : el TCU final ($fin) es menor que el inicial ($ini)" }
-    return @($ini..$fin)
-}
-
 function Refrescar-ComboPlantas {
     $sel = $cbPlanta.SelectedItem
     $cbPlanta.Items.Clear()
@@ -4275,7 +4264,7 @@ $cbPlanta.Add_SelectedIndexChanged({
         # (los campos se ignoran y se muestran como NA)
         $txtIp.Text = 'NA'; $txtPort.Text = 'auto'
         $txtGTcus.Text = 'NA'; $txtATcus.Text = 'NA'; $txtLTcus.Text = 'NA'; $txtWTcus.Text = 'NA'
-        $txtVIni.Text = 'NA'; $txtVFin.Text = 'NA'
+        $txtVTcus.Text = 'NA'
         Con "Planta completa seleccionada ($(@($p.ncus).Count) NCUs): rangos automaticos por NCU. El cuadro TCUs admite '10,22,30-40' y '12/10, 15/5-12' (vacio o NA = todas), y el cuadro GW de Conexion deja trabajar solo sobre un gateway." ([System.Drawing.Color]::SteelBlue)
         return
     }
@@ -4284,10 +4273,7 @@ $cbPlanta.Add_SelectedIndexChanged({
         if ($p.gws) { $txtPort.Text = 'auto' } else { $txtPort.Text = "$($p.puerto)" }
         $rango = "$($p.ini)-$($p.fin)"
         $txtWTcus.Text = $rango; $txtLTcus.Text = $rango; $txtGTcus.Text = $rango; $txtATcus.Text = $rango
-        $txtSIni.Text = "$($p.ini)"; $txtSFin.Text = "$($p.fin)"
-        $txtVIni.Text = "$($p.ini)"; $txtVFin.Text = "$($p.fin)"
-        $txtBIni.Text = "$($p.ini)"; $txtBFin.Text = "$($p.fin)"
-        $txtPIni.Text = "$($p.ini)"; $txtPFin.Text = "$($p.fin)"
+        $txtSTcus.Text = $rango; $txtVTcus.Text = $rango; $txtBTcus.Text = $rango; $txtPTcus.Text = $rango
         if ($p.hsu) { $txtHSlave.Text = "$($p.hsu)" }
     }
 })
@@ -5135,7 +5121,7 @@ $btnLeer.Add_Click({ Lanzar {
             try {
                 $dirC = Join-Path $PSScriptRoot 'correcciones'
                 if (-not (Test-Path $dirC)) { New-Item -ItemType Directory -Path $dirC | Out-Null }
-                $fC = Join-Path $dirC ('correccion_' + ((Nombre-Planta) -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.csv')
+                $fC = Join-Path $dirC ('correccion_' + (Planta-Fichero) + '_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.csv')
                 $lin = @('NCU;TCU;variable;valor')
                 foreach ($f in $corr.filas) { $lin += "$($f.NCU);$($f.TCU);$($f.Variable);$($f.Valor)" }
                 Set-Content -Path $fC -Value $lin -Encoding UTF8
@@ -5149,13 +5135,7 @@ $btnLeer.Add_Click({ Lanzar {
 } })
 
 $btnLCsv.Add_Click({
-    $dlg = New-Object System.Windows.Forms.SaveFileDialog
-    $dlg.Filter = 'CSV (*.csv)|*.csv'
-    $dlg.FileName = 'lectura_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
-    if ($dlg.ShowDialog() -eq 'OK') {
-        $script:UltimaLectura | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8
-        Con "CSV exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
-    }
+    [void](Exportar-Csv $script:UltimaLectura 'lectura')
 })
 
 # ---------------------------------------------------------------------------
@@ -5256,6 +5236,42 @@ function Trabajos-Podar($ficheros, [int]$max = 20) {
     $l = @(@($ficheros) | Sort-Object -Descending)
     if ($l.Count -le $max) { return @() }
     return @($l[$max..($l.Count - 1)])
+}
+
+# Guardar a fichero: el mismo dialogo, el mismo sello de fecha y el mismo aviso
+# en consola, que estaban copiados en diecinueve sitios. Y el MISMO separador:
+# siete de los CSV salian con coma y en un Excel en espanol se abren en una sola
+# columna. Devuelve la ruta, o '' si se cancela.
+# El nombre de la planta, apto para un nombre de fichero. Estaba copiado con su
+# expresion regular en cinco exportadores. Pura.
+function Planta-Fichero { return ((Nombre-Planta) -replace '[^\w\-\.]', '_') }
+
+function Guardar-Como([string]$pref, [string]$ext, [string]$etiqueta = '') {
+    $dlg = New-Object System.Windows.Forms.SaveFileDialog
+    $dlg.Filter = $(if ($ext -eq 'csv') { 'CSV (*.csv)|*.csv' } else { "$(if ($etiqueta) { $etiqueta } else { 'JSON' }) (*.$ext)|*.$ext" })
+    $dlg.FileName = $pref + '_' + (Get-Date -Format 'yyyyMMdd_HHmm') + ".$ext"
+    if ($dlg.ShowDialog() -ne 'OK') { return '' }
+    return $dlg.FileName
+}
+function Exportar-Csv($filas, [string]$pref, [string]$que = 'CSV') {
+    if (@($filas).Count -eq 0) { Con "No hay nada que exportar." ([System.Drawing.Color]::Orange); return '' }
+    $f = Guardar-Como $pref 'csv'
+    if ($f -eq '') { return '' }
+    try {
+        # ';' siempre: es lo que espera el Excel de los portatiles de campo
+        $filas | Export-Csv $f -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+        Con "$que exportado: $f  ($(@($filas).Count) filas)" ([System.Drawing.Color]::SteelBlue)
+        return $f
+    } catch { Con "No se ha podido escribir el CSV: $_" ([System.Drawing.Color]::Salmon); return '' }
+}
+function Exportar-Json($obj, [string]$pref, [string]$que = 'JSON', [int]$prof = 5) {
+    $f = Guardar-Como $pref 'json'
+    if ($f -eq '') { return '' }
+    try {
+        ConvertTo-Json $obj -Depth $prof | Set-Content $f -Encoding UTF8
+        Con "$que exportado: $f" ([System.Drawing.Color]::SteelBlue)
+        return $f
+    } catch { Con "No se ha podido escribir el JSON: $_" ([System.Drawing.Color]::Salmon); return '' }
 }
 
 function Trabajos-Dir {
@@ -5662,13 +5678,7 @@ $btnIdent.Add_Click({ Lanzar {
 } })
 
 $btnICsv.Add_Click({
-    $dlg = New-Object System.Windows.Forms.SaveFileDialog
-    $dlg.Filter = 'CSV (*.csv)|*.csv'
-    $dlg.FileName = 'identidad_tcu' + $txtITcu.Text + '_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
-    if ($dlg.ShowDialog() -eq 'OK') {
-        $script:UltimaIdent | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8
-        Con "CSV exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
-    }
+    [void](Exportar-Csv $script:UltimaIdent ('identidad_tcu' + $txtITcu.Text))
 })
 
 # ------------------------- logica VOLCAR TCU -------------------------
@@ -5742,13 +5752,7 @@ $btnVolcar.Add_Click({ Lanzar {
 } })
 
 $btnDCsv.Add_Click({
-    $dlg = New-Object System.Windows.Forms.SaveFileDialog
-    $dlg.Filter = 'CSV (*.csv)|*.csv'
-    $dlg.FileName = 'volcado_tcu' + $txtDTcu.Text + '_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
-    if ($dlg.ShowDialog() -eq 'OK') {
-        $script:UltimoVolcado | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8
-        Con "CSV exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
-    }
+    [void](Exportar-Csv $script:UltimoVolcado ('volcado_tcu' + $txtDTcu.Text))
 })
 
 $btnBackupJson.Add_Click({
@@ -6431,29 +6435,17 @@ $btnBCar.Add_Click({ Lanzar {
 
 $btnBCsv.Add_Click({
     if (@($script:UltimaBatTabla).Count -eq 0) { return }
-    $dlg = New-Object System.Windows.Forms.SaveFileDialog
-    $dlg.Filter = 'CSV (*.csv)|*.csv'
-    $dlg.FileName = 'baterias_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
-    if ($dlg.ShowDialog() -eq 'OK') {
-        $script:UltimaBatTabla | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8 -Delimiter ';'
-        Con "Baterias exportadas: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
-    }
+    [void](Exportar-Csv $script:UltimaBatTabla 'baterias' 'Baterias')
 })
 
 $btnBJson.Add_Click({
     if (@($script:UltimaBatTabla).Count -eq 0) { return }
-    $dlg = New-Object System.Windows.Forms.SaveFileDialog
-    $dlg.Filter = 'JSON (*.json)|*.json'
-    $dlg.FileName = 'baterias_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.json'
-    if ($dlg.ShowDialog() -eq 'OK') {
-        # la carga cruda va aparte: en la tabla solo cabe el texto, y para
-        # discutir con fabrica hacen falta los registros tal cual
-        $o = @{tipo='baterias_tcu'; planta=(Nombre-Planta); fecha=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-               toolbox=$VERSION_TOOLBOX; tecnico=$script:Usuario; tcus=@($script:UltimaBatTabla)
-               carga=$script:UltimaCarga}
-        ConvertTo-Json $o -Depth 5 | Set-Content $dlg.FileName -Encoding UTF8
-        Con "Baterias en JSON: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
-    }
+    # la carga cruda va aparte: en la tabla solo cabe el texto, y para
+    # discutir con fabrica hacen falta los registros tal cual
+    $o = @{tipo='baterias_tcu'; planta=(Nombre-Planta); fecha=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+           toolbox=$VERSION_TOOLBOX; tecnico=$script:Usuario; tcus=@($script:UltimaBatTabla)
+           carga=$script:UltimaCarga}
+    [void](Exportar-Json $o 'baterias' 'Baterias en JSON')
 })
 
 $btnGBat.Add_Click({
@@ -6546,21 +6538,15 @@ $btnGBucle.Add_Click({ Lanzar {
 } })
 
 $btnGCsv.Add_Click({
-    $dlg = New-Object System.Windows.Forms.SaveFileDialog
-    $dlg.Filter = 'CSV (*.csv)|*.csv'
-    $dlg.FileName = 'diagnostico_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
-    if ($dlg.ShowDialog() -eq 'OK') {
-        # con las alarmas desglosadas en columnas 0/1 (filtrables en Excel)
-        $filas = foreach ($d in $script:UltimoDiag) {
-            $o = [ordered]@{}
-            foreach ($pr in $d.PSObject.Properties) { $o[$pr.Name] = $pr.Value }
-            $des = Alarmas-Desglose "$($d.alarmas_1)" "$($d.alarmas_2)"
-            foreach ($k in $des.Keys) { $o[$k] = $des[$k] }
-            [pscustomobject]$o
-        }
-        $filas | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8
-        Con "CSV exportado con alarmas desglosadas: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
+    # con las alarmas desglosadas en columnas 0/1 (filtrables en Excel)
+    $filas = foreach ($d in $script:UltimoDiag) {
+        $o = [ordered]@{}
+        foreach ($pr in $d.PSObject.Properties) { $o[$pr.Name] = $pr.Value }
+        $des = Alarmas-Desglose "$($d.alarmas_1)" "$($d.alarmas_2)"
+        foreach ($k in $des.Keys) { $o[$k] = $des[$k] }
+        [pscustomobject]$o
     }
+    [void](Exportar-Csv $filas 'diagnostico' 'CSV con alarmas desglosadas')
 })
 
 $btnGJson.Add_Click({
@@ -6570,10 +6556,6 @@ $btnGJson.Add_Click({
             'Test de comunicacion', 'YesNo', 'Warning')
         if ($r -ne 'Yes') { return }
     }
-    $dlg = New-Object System.Windows.Forms.SaveFileDialog
-    $dlg.Filter = 'JSON (*.json)|*.json'
-    $dlg.FileName = $(if ($script:UltimoEsComm) { 'test_comm_' } else { 'diagnostico_' }) + (Get-Date -Format 'yyyyMMdd_HHmm') + '.json'
-    if ($dlg.ShowDialog() -ne 'OK') { return }
     $obj = [ordered]@{
         tipo    = $(if ($script:UltimoEsComm) { 'test_comm' } else { 'diagnostico_tcu' })
         mapa    = $VERSION_MAPA
@@ -6584,14 +6566,13 @@ $btnGJson.Add_Click({
         fecha   = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         tcus    = @($script:UltimoDiag)
     }
-    ConvertTo-Json $obj -Depth 5 | Set-Content $dlg.FileName -Encoding UTF8
-    Con "JSON exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
+    [void](Exportar-Json $obj $(if ($script:UltimoEsComm) { 'test_comm' } else { 'diagnostico' }))
 })
 
 # ------------------------- SINCRONIZAR RELOJ -------------------------
 $btnSync.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    $tcus = Rango-Tcus $txtSIni.Text $txtSFin.Text 'Sincronizar'
+    $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtSTcus.Text 'Sincronizar') $txtGw.Text).tcus
     $r = [System.Windows.Forms.MessageBox]::Show(
         "Sincronizar fecha/hora de $($tcus.Count) TCUs ($($tcus[0])-$($tcus[-1])) con la hora de este PC?`r`n`r`nSecuencia por TCU: 40007 bit0 (permitir) -> 40001..40006 -> 40007 bit1 (aplicar).",
         'Confirmar sincronizacion', 'YesNo', 'Question')
@@ -6770,7 +6751,7 @@ $btnCsvTcu.Add_Click({ Lanzar {
 # ------------------------- BACKUP MASIVO DE NCU -------------------------
 $btnBackupNcu.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    $tcus = Rango-Tcus $txtBIni.Text $txtBFin.Text 'Backup NCU'
+    $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtBTcus.Text 'Backup NCU') $txtGw.Text).tcus
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
     $dlg.Description = "Carpeta donde guardar los backups JSON (uno por TCU, $($tcus.Count) ficheros)"
     if ($dlg.ShowDialog() -ne 'OK') { return }
@@ -7042,14 +7023,10 @@ $btnCQuitar.Add_Click({
 
 $btnCCsv.Add_Click({
     if ($script:Cierre.Count -eq 0) { return }
-    $dlg = New-Object System.Windows.Forms.SaveFileDialog
-    $dlg.Filter = 'CSV (*.csv)|*.csv'
-    $dlg.FileName = 'cierre_' + ((Nombre-Planta) -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
-    if ($dlg.ShowDialog() -ne 'OK') { return }
-    @($script:Cierre.Values | Sort-Object { [int]("0" + "$($_.ncu)") }, { [int]$_.tcu } | ForEach-Object {
+    $filas = @($script:Cierre.Values | Sort-Object { [int]("0" + "$($_.ncu)") }, { [int]$_.tcu } | ForEach-Object {
         [pscustomobject]@{NCU=$_.ncu; TCU=$_.tcu; Firmware=$_.fw; Parametros=$_.params; NVM=$_.nvm; Modo=$_.modo; Desde=$_.desde; Estado=(Cierre-Estado $_)}
-    }) | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8 -Delimiter ';'
-    Con "CSV de cierre exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
+    })
+    [void](Exportar-Csv $filas ('cierre_' + (Planta-Fichero)) 'CSV de cierre')
 })
 
 # PREPARAR: esta pestana no escribe. Deja Escribir cargado con el preset y las
@@ -7076,12 +7053,11 @@ $btnCPrep.Add_Click({
 $btnCModo.Add_Click({
     $falta = @(Cierre-Pendientes | Where-Object { "$($_.modo)" -ne 'OK' })
     if ($falta.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('No hay ninguna TCU pendiente de volver a AUTO.','Cierre'); return }
-    $tcus = @($falta | ForEach-Object { [int]$_.tcu } | Sort-Object -Unique)
-    $txtPIni.Text = "$($tcus[0])"; $txtPFin.Text = "$($tcus[-1])"
+    $txtPTcus.Text = (Sel-Texto $falta)
     $cbPModo.SelectedItem = 'AUTO'
     $tabs.SelectedTab = $tabP
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Preparado el modo: rango TCU $($tcus[0])-$($tcus[-1]) y modo AUTO. Pulsa APLICAR MODO." ([System.Drawing.Color]::SteelBlue)
+    Con "Preparado el modo: las TCUs exactas ($($txtPTcus.Text)) y modo AUTO. Pulsa APLICAR MODO." ([System.Drawing.Color]::SteelBlue)
     Con "  Sin AUTO en $($falta.Count) TCUs: $(@($falta | ForEach-Object { "NCU$($_.ncu) TCU $($_.tcu)" }) -join ', ')" ([System.Drawing.Color]::Orange)
 })
 
@@ -7304,22 +7280,12 @@ $btnAud.Add_Click({ Lanzar {
 } })
 
 $btnAudCsv.Add_Click({
-    $dlg = New-Object System.Windows.Forms.SaveFileDialog
-    $dlg.Filter = 'CSV (*.csv)|*.csv'
-    $dlg.FileName = 'auditoria_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
-    if ($dlg.ShowDialog() -eq 'OK') {
-        $script:UltimaAud | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8
-        Con "CSV exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
-    }
+    [void](Exportar-Csv $script:UltimaAud 'auditoria')
 })
 
 # JSON de auditoria para el Historico de la plataforma (solo desviaciones +
 # recuento de TCUs auditadas/conformes de la ultima pasada)
 $btnAudJson.Add_Click({
-    $dlg = New-Object System.Windows.Forms.SaveFileDialog
-    $dlg.Filter = 'JSON (*.json)|*.json'
-    $dlg.FileName = 'auditoria_' + ((Nombre-Planta) -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.json'
-    if ($dlg.ShowDialog() -ne 'OK') { return }
     $conformes = @($script:SegAud.Values | Where-Object { $_.estado -eq 'OK' }).Count
     $obj = [ordered]@{
         tipo    = 'auditoria_tcu'
@@ -7333,15 +7299,16 @@ $btnAudJson.Add_Click({
         conformes      = $conformes
         desviaciones   = @($script:UltimaAud)
     }
-    ConvertTo-Json $obj -Depth 5 | Set-Content $dlg.FileName -Encoding UTF8
-    Con "JSON de auditoria exportado: $($dlg.FileName)  ($($script:SegAud.Count) TCUs, $conformes conformes, $($script:UltimaAud.Count) desviaciones). Subelo en la pagina Historico." ([System.Drawing.Color]::SteelBlue)
+    if ((Exportar-Json $obj ('auditoria_' + (Planta-Fichero)) 'JSON de auditoria') -ne '') {
+        Con "  $($script:SegAud.Count) TCUs, $conformes conformes, $($script:UltimaAud.Count) desviaciones. Subelo en la pagina Historico." ([System.Drawing.Color]::Gainsboro)
+    }
 })
 
 # ------------------------- INVENTARIO DE FLOTA -------------------------
 $btnInvF.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $tcus = $null
-    if (-not $cx.multi) { $tcus = Rango-Tcus $txtVIni.Text $txtVFin.Text 'Inventario' }
+    if (-not $cx.multi) { $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtVTcus.Text 'Inventario') $txtGw.Text).tcus }
     $trabajos = @(Trabajos-Planta $cx $tcus)
     if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
     $lvV.Items.Clear(); $script:UltimoInv = @(); $lblInvF.Text = ''
@@ -7419,21 +7386,11 @@ $btnInvF.Add_Click({ Lanzar {
 } })
 
 $btnInvFCsv.Add_Click({
-    $dlg = New-Object System.Windows.Forms.SaveFileDialog
-    $dlg.Filter = 'CSV (*.csv)|*.csv'
-    $dlg.FileName = 'inventario_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
-    if ($dlg.ShowDialog() -eq 'OK') {
-        $script:UltimoInv | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8
-        Con "CSV exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
-    }
+    [void](Exportar-Csv $script:UltimoInv 'inventario')
 })
 
 # JSON de inventario para el Historico de la plataforma
 $btnInvJson.Add_Click({
-    $dlg = New-Object System.Windows.Forms.SaveFileDialog
-    $dlg.Filter = 'JSON (*.json)|*.json'
-    $dlg.FileName = 'inventario_' + ((Nombre-Planta) -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.json'
-    if ($dlg.ShowDialog() -ne 'OK') { return }
     $obj = [ordered]@{
         tipo    = 'inventario_tcu'
         mapa    = $VERSION_MAPA
@@ -7443,8 +7400,9 @@ $btnInvJson.Add_Click({
         fecha   = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         tcus    = @($script:UltimoInv)
     }
-    ConvertTo-Json $obj -Depth 5 | Set-Content $dlg.FileName -Encoding UTF8
-    Con "JSON de inventario exportado: $($dlg.FileName)  ($($script:UltimoInv.Count) TCUs). Subelo en la pagina Historico." ([System.Drawing.Color]::SteelBlue)
+    if ((Exportar-Json $obj ('inventario_' + (Planta-Fichero)) 'JSON de inventario') -ne '') {
+        Con "  $($script:UltimoInv.Count) TCUs. Subelo en la pagina Historico." ([System.Drawing.Color]::Gainsboro)
+    }
 })
 
 # ------------------------- PEM (PUESTA EN MARCHA) -------------------------
@@ -7501,7 +7459,7 @@ function Guardia-Viento([hashtable]$cx) {
 $btnPMotor.Add_Click({ Lanzar {
     $cx = Params-Conexion
     if ($cx.multi) { throw 'el test de motor va por NCU: elige una entrada (auto)/GW, no Planta completa' }
-    $tcus = Rango-Tcus $txtPIni.Text $txtPFin.Text 'Test motor'
+    $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtPTcus.Text 'Test motor') $txtGw.Text).tcus
     $pulso = Val-Int $txtPPulso.Text 'Pulso' 1 30
     $umbral = Parse-RealFinito $txtPUmbral.Text
     if ($umbral -le 0 -or $umbral -gt 10) { throw 'umbral fuera de rango (0-10 deg)' }
@@ -7578,7 +7536,7 @@ $btnPMotor.Add_Click({ Lanzar {
 $btnPModo.Add_Click({ Lanzar {
     $cx = Params-Conexion
     if ($cx.multi) { throw 'el cambio de modo va por NCU: elige una entrada (auto)/GW' }
-    $tcus = Rango-Tcus $txtPIni.Text $txtPFin.Text 'Modo'
+    $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtPTcus.Text 'Modo') $txtGw.Text).tcus
     $modo = @{'OFF'=0; 'MANUAL'=1; 'AUTO'=2}[[string]$cbPModo.SelectedItem]
     $r = [System.Windows.Forms.MessageBox]::Show(
         "Pasar $($tcus.Count) TCUs a modo $($cbPModo.SelectedItem)?", 'Cambio de modo', 'YesNo', 'Warning')
@@ -7605,7 +7563,7 @@ $btnPModo.Add_Click({ Lanzar {
 $btnPClear.Add_Click({ Lanzar {
     $cx = Params-Conexion
     if ($cx.multi) { throw 'elige una entrada (auto)/GW' }
-    $tcus = Rango-Tcus $txtPIni.Text $txtPFin.Text 'Clear'
+    $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtPTcus.Text 'Clear') $txtGw.Text).tcus
     $r = [System.Windows.Forms.MessageBox]::Show(
         "Desenclavar alarmas de motor (40007 bit 13) en $($tcus.Count) TCUs?", 'Clear alarmas', 'YesNo', 'Question')
     if ($r -ne 'Yes') { return }
@@ -7634,7 +7592,7 @@ $btnPClear.Add_Click({ Lanzar {
 function Stow-Aplicar([int]$n) {
     $cx = Params-Conexion
     if ($cx.multi) { throw 'el stow va por NCU: elige una entrada (auto)/GW' }
-    $tcus = Rango-Tcus $txtPIni.Text $txtPFin.Text 'Stow'
+    $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtPTcus.Text 'Stow') $txtGw.Text).tcus
     $txtAccion = $(if ($n -gt 0) { "ACTIVAR safe position $n" } else { 'QUITAR el stow' })
     $r = [System.Windows.Forms.MessageBox]::Show(
         "$txtAccion en $($tcus.Count) TCUs? Los seguidores se moveran.", 'Stow', 'YesNo', 'Warning')
@@ -7705,7 +7663,7 @@ $btnPComis.Add_Click({ Lanzar {
             }
         }
     } else {
-        $tcus = Rango-Tcus $txtPIni.Text $txtPFin.Text 'Comisionado'
+        $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtPTcus.Text 'Comisionado') $txtGw.Text).tcus
         Con "Estado de comisionado (30001 bits 4:3) y modo (bits 9:8) en $(Eti-Rango $tcus)" ([System.Drawing.Color]::SteelBlue)
         $segs = @(Plan-Segmentos $tcus $cx)
         foreach ($seg in $segs) {
@@ -7740,7 +7698,7 @@ $btnPComis.Add_Click({ Lanzar {
 $btnPComisSet.Add_Click({ Lanzar {
     $cx = Params-Conexion
     if ($cx.multi) { throw 'elige una entrada (auto)/GW' }
-    $tcus = Rango-Tcus $txtPIni.Text $txtPFin.Text 'Comisionado'
+    $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtPTcus.Text 'Comisionado') $txtGw.Text).tcus
     $obj = [int]([string]$cbPComis.SelectedItem).Split(' ')[0]
     $r = [System.Windows.Forms.MessageBox]::Show(
         "Fijar estado de comisionado '$($ESTADOS_COMIS[$obj])' ($obj) en $($tcus.Count) TCUs?`r`nRecuerda GUARDAR EN NVM despues.",
@@ -7771,13 +7729,7 @@ $btnPComisSet.Add_Click({ Lanzar {
 } })
 
 $btnPCsv.Add_Click({
-    $dlg = New-Object System.Windows.Forms.SaveFileDialog
-    $dlg.Filter = 'CSV (*.csv)|*.csv'
-    $dlg.FileName = 'pem_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
-    if ($dlg.ShowDialog() -eq 'OK') {
-        $script:UltimoPem | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8
-        Con "CSV exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
-    }
+    [void](Exportar-Csv $script:UltimoPem 'pem')
 })
 
 # Seguimiento PEM de la sesion: una fila por TCU con las tres tareas de la
@@ -7787,10 +7739,6 @@ $btnPCsv.Add_Click({
 $btnPSeg.Add_Click({
     $filas = @(Seguimiento-Filas)
     if ($filas.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('Aun no hay datos: ejecuta LEER ESTADO (comisionado), la Auditoria de Flota o el TEST DE MOTOR.','Aviso'); return }
-    $dlg = New-Object System.Windows.Forms.SaveFileDialog
-    $dlg.Filter = 'JSON (*.json)|*.json'
-    $dlg.FileName = 'seguimiento_pem_' + ((Nombre-Planta) -replace '[^\w\-\.]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.json'
-    if ($dlg.ShowDialog() -ne 'OK') { return }
     $obj = [ordered]@{
         tipo    = 'seguimiento_pem'
         mapa    = $VERSION_MAPA
@@ -7801,9 +7749,10 @@ $btnPSeg.Add_Click({
         tecnico = "$env:USERNAME"
         tcus    = $filas
     }
-    ConvertTo-Json $obj -Depth 5 | Set-Content $dlg.FileName -Encoding UTF8
-    $nOk = @($filas | Where-Object { $_.cold_commissioning -eq 'OK' -and $_.config_tcu -eq 'OK' -and $_.prueba_movimiento -eq 'OK' }).Count
-    Con "Seguimiento PEM exportado: $($dlg.FileName)  ($($filas.Count) TCUs, $nOk con las 3 tareas OK). Subelo en la pagina Historico de la plataforma." ([System.Drawing.Color]::SteelBlue)
+    if ((Exportar-Json $obj ('seguimiento_pem_' + (Planta-Fichero)) 'Seguimiento PEM') -ne '') {
+        $nOk = @($filas | Where-Object { $_.cold_commissioning -eq 'OK' -and $_.config_tcu -eq 'OK' -and $_.prueba_movimiento -eq 'OK' }).Count
+        Con "  $($filas.Count) TCUs, $nOk con las 3 tareas OK. Subelo en la pagina Historico de la plataforma." ([System.Drawing.Color]::Gainsboro)
+    }
 })
 
 # ------------------------- CAMPANA DE FIRMWARE -------------------------
@@ -8081,23 +8030,18 @@ $btnFwPrep.Add_Click({ Lanzar {
 } })
 
 $btnFwCsv.Add_Click({
-    $dlg = New-Object System.Windows.Forms.SaveFileDialog
-    $dlg.Filter = 'CSV (*.csv)|*.csv'
-    $dlg.FileName = 'plan_firmware_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
-    if ($dlg.ShowDialog() -eq 'OK') {
-        # el plan de verdad son las VENTANAS: lo que se abre y lo que se pega
-        # en cada una. Los tramos sueltos van igualmente, para quien los quiera.
-        $vv = @($script:PlanFwVentanas)
-        if ($vv.Count -gt 0) { $vv | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8 -Delimiter ';' }
-        else { $script:PlanFw | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8 -Delimiter ';' }
-        Con "Plan exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
+    # el plan de verdad son las VENTANAS: lo que se abre y lo que se pega en
+    # cada una. Los tramos sueltos van igualmente, para quien los quiera.
+    $vv = @($script:PlanFwVentanas)
+    $f = Exportar-Csv $(if ($vv.Count -gt 0) { $vv } else { $script:PlanFw }) 'plan_firmware' 'Plan'
+    if ($f -ne '' -and @($script:PlanFwDetalle).Count -gt 0) {
         # el detalle por TCU va en su propio fichero: son dos cosas distintas,
         # los tramos se pegan en el updater y la lista es para seguimiento
-        if (@($script:PlanFwDetalle).Count -gt 0) {
-            $fd = [System.IO.Path]::ChangeExtension($dlg.FileName, $null) + '_pendientes.csv'
+        $fd = [System.IO.Path]::ChangeExtension($f, $null) + '_pendientes.csv'
+        try {
             $script:PlanFwDetalle | Export-Csv $fd -NoTypeInformation -Encoding UTF8 -Delimiter ';'
             Con "TCUs pendientes una a una: $fd  ($(@($script:PlanFwDetalle).Count) equipos)" ([System.Drawing.Color]::SteelBlue)
-        }
+        } catch { Con "No se ha podido escribir el detalle: $_" ([System.Drawing.Color]::Orange) }
     }
 })
 
@@ -9010,10 +8954,8 @@ $btnHNvm.Add_Click({ Lanzar {
 
 $btnHCaja.Add_Click({ Lanzar {
     $cx = Params-Hsu
-    $dlg = New-Object System.Windows.Forms.SaveFileDialog
-    $dlg.Filter = 'CSV (*.csv)|*.csv'
-    $dlg.FileName = 'hsu_cajanegra_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
-    if ($dlg.ShowDialog() -ne 'OK') { return }
+    $fCaja = Guardar-Como 'hsu_cajanegra' 'csv'
+    if ($fCaja -eq '') { return }
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Descargando caja negra 24h de la HSU $($cx.unitHsu) (1440 minutos, 58 lecturas)..." ([System.Drawing.Color]::SteelBlue)
     try { Modbus-Conectar $cx.ip $cx.puerto $cx.to } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
@@ -9044,8 +8986,8 @@ $btnHCaja.Add_Click({ Lanzar {
     for ($m = 0; $m -lt $minutos; $m++) {
         $filas += Hsu-CajaFila @($palabras[$m*4], $palabras[$m*4+1], $palabras[$m*4+2], $palabras[$m*4+3]) $m
     }
-    $filas | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8 -Delimiter ';'
-    Con "Caja negra exportada: $($dlg.FileName)  ($minutos minutos$(if ($minutos -lt 1440) { ', INCOMPLETA' }))." ([System.Drawing.Color]::SteelBlue)
+    $filas | Export-Csv $fCaja -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+    Con "Caja negra exportada: $fCaja  ($minutos minutos$(if ($minutos -lt 1440) { ', INCOMPLETA' }))." ([System.Drawing.Color]::SteelBlue)
     $vmax = ($filas | Measure-Object -Property Vmax_kmh -Maximum).Maximum
     Con ("Viento maximo del dia registrado por la HSU: {0} km/h." -f $vmax) ([System.Drawing.Color]::SteelBlue)
 } })
