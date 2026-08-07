@@ -1653,6 +1653,25 @@ Check 'tabla: diagnostico vacio' ((@(Bat-Tabla @())).Count) 0
 Check 'tabla: hay pestana' ($src.Contains("tabB.Text = 'Baterias'")) $true
 Check 'tabla: con su tabla' ($src.Contains('$lvB = New-Object System.Windows.Forms.ListView')) $true
 Check 'tabla: y sus botones' (($src.Contains('$btnBVer.Add_Click')) -and ($src.Contains('$btnBCsv.Add_Click'))) $true
+# Las cabeceras se cachean para poder marcarlas con la flechita. 'Leer variable'
+# rehace las columnas en cada lectura -una por variable- y la copia vieja se
+# escribia encima: los tres primeros nombres salian 'TCU', 'Valor' y 'Estado'.
+$flecha = [char]0x25BE
+Check 'cabeceras: si no cambian, se respeta la copia' ((Cab-Vigentes @('NCU','TCU','Estado') @("NCU$flecha", "TCU$flecha", "Estado$flecha")) -join ',') 'NCU,TCU,Estado'
+# el caso del fallo: 3 columnas guardadas y 8 en la tabla
+Check 'cabeceras: si cambian, mandan las de ahora' ((Cab-Vigentes @('TCU','Valor','Estado') @('NCU','TCU','41111 max_tilt_west_r1 [deg]','Estado')) -join ',') 'NCU,TCU,41111 max_tilt_west_r1 [deg],Estado'
+Check 'cabeceras: sin copia, las de ahora' ((Cab-Vigentes @() @('NCU','TCU')) -join ',') 'NCU,TCU'
+# y al recachear se quita la flechita y el asterisco de filtro, que no son nombre
+Check 'cabeceras: se limpia la flechita' ((Cab-Vigentes @() @("NCU $flecha", "TCU$flecha*")) -join ',') 'NCU,TCU'
+Check 'cabeceras: nunca se indexa fuera de la copia' (([regex]::Matches($src, '-lt @\(\$e\.cab\)\.Count')).Count -ge 3) $true
+# 'Estado' en la tabla de Leer variable se leia como "coincide con el preset".
+# No lo es: esa pestana lee, no compara. Quien compara es la Auditoria.
+Check 'leer: la columna se llama Respuesta' ($src.Contains("lvL.Columns.Add('Respuesta'")) $true
+Check 'leer: y lo dice al terminar' ($src.Contains('NO si el valor es el que toca')) $true
+Check 'leer: y manda a Auditoria' ($src.Contains("pestana Auditoria con 'Usar la ultima lectura' marcado")) $true
+# pero la propiedad sigue siendo Estado: el CSV y la auditoria van por ella
+Check 'leer: la propiedad no cambia' ($src.Contains("@('NCU','TCU','Estado') -contains `$pr.Name")) $true
+Check 'cabeceras: y los filtros viejos se tiran' ($src.Contains('if (@($e.cab).Count -ne $lv.Columns.Count) { $e.filtros = @{} }')) $true
 Check 'tabla: filtrable como las demas' ($src.Contains('$lvC, $lvB, $lvT)) { Lv-Filtrable')) $true
 Check 'tabla: sale del ultimo diagnostico' ($src.Contains('Bat-Tabla $script:UltimoDiag $script:UltimaBat')) $true
 # y el modo directo ya trae panel y corriente de panel, que estan en el mapa

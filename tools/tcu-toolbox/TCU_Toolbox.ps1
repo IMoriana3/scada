@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.16'
+$VERSION_TOOLBOX = '11.17'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -3687,6 +3687,17 @@ function Lv-Estado($lv) {
     return $lv.Tag
 }
 
+# Las cabeceras de verdad, a partir de la copia guardada y de lo que hay ahora
+# en la tabla. Si la tabla ha cambiado de columnas -'Leer variable' las rehace
+# en cada lectura, una por variable- la copia vieja NO vale: se estaba
+# escribiendo encima y los tres primeros nombres salian 'TCU', 'Valor' y
+# 'Estado' en vez de la variable leida. Pura: se prueba sin ventana.
+function Cab-Vigentes($cache, $textos) {
+    $t = @($textos | ForEach-Object { "$_" -replace ' ?\u25BE\*?$', '' })
+    if (@($cache).Count -ne $t.Count) { return $t }
+    return @($cache)
+}
+
 # Vuelve a coger la lista completa si la tabla se ha repintado desde fuera.
 function Lv-Sincronizar($lv) {
     $e = Lv-Estado $lv
@@ -3694,7 +3705,14 @@ function Lv-Sincronizar($lv) {
     $e.filtros = @{}
     $e.orig = @($lv.Items)
     $e.dejadas = $lv.Items.Count
-    if (@($e.cab).Count -eq 0) { $e.cab = @($lv.Columns | ForEach-Object { ($_.Text -replace ' \u25BE\*?$', '') }) }
+    # Si la tabla ha cambiado de columnas, las cabeceras cacheadas ya no valen.
+    # 'Leer variable' las rehace en cada lectura -una por variable- y esto las
+    # estaba pisando con las de la vez anterior: los nombres de las tres
+    # primeras salian como 'TCU', 'Valor' y 'Estado' en vez de la variable.
+    # Y los filtros van por numero de columna, asi que tampoco valen.
+    # y los filtros van por numero de columna, asi que tampoco valen
+    if (@($e.cab).Count -ne $lv.Columns.Count) { $e.filtros = @{} }
+    $e.cab = @(Cab-Vigentes $e.cab @($lv.Columns | ForEach-Object { $_.Text }))
     for ($i = 0; $i -lt $lv.Columns.Count -and $i -lt @($e.cab).Count; $i++) { $lv.Columns[$i].Text = $e.cab[$i] + [char]0x25BE }
 }
 
@@ -3818,8 +3836,8 @@ function Lv-Menu($lv, [int]$col) {
 function Lv-Filtrable($lv) {
     $e = Lv-Estado $lv
     # marca las cabeceras desde el principio, sin esperar a que haya datos
-    if (@($e.cab).Count -eq 0) { $e.cab = @($lv.Columns | ForEach-Object { $_.Text }) }
-    for ($i = 0; $i -lt $lv.Columns.Count; $i++) { $lv.Columns[$i].Text = $e.cab[$i] + [char]0x25BE }
+    $e.cab = @(Cab-Vigentes $e.cab @($lv.Columns | ForEach-Object { $_.Text }))
+    for ($i = 0; $i -lt $lv.Columns.Count -and $i -lt @($e.cab).Count; $i++) { $lv.Columns[$i].Text = $e.cab[$i] + [char]0x25BE }
     $lv.Add_ColumnClick({
         param($s3, $e3)
         try { (Lv-Menu $s3 $e3.Column).Show([System.Windows.Forms.Control]::MousePosition) }
@@ -4978,7 +4996,10 @@ $btnLeer.Add_Click({ Lanzar {
     [void]$lvL.Columns.Add('NCU', 44)
     [void]$lvL.Columns.Add('TCU', 48)
     foreach ($d in $defs) { [void]$lvL.Columns.Add($d.nombre, [math]::Max(110, [math]::Min(220, [int](746 / $defs.Count)))) }
-    [void]$lvL.Columns.Add('Estado', 130)
+    # 'Estado' se leia como "coincide con el preset" y no lo es: esta pestana
+    # LEE, no compara. Quien compara es la Auditoria. El nombre de la propiedad
+    # se queda ('Estado') porque el CSV y Aud-Indice van por el.
+    [void]$lvL.Columns.Add('Respuesta', 130)
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     if ($cx.multi) {
         $totTcus = 0; foreach ($tr in $trabajos) { $totTcus += @($tr.tcus).Count }
@@ -5130,6 +5151,8 @@ $btnLeer.Add_Click({ Lanzar {
             } catch { Con "No se pudo escribir el CSV de correccion: $_" ([System.Drawing.Color]::Orange) }
         }
     }
+    # que nadie lea "OK" como "coincide": aqui solo se lee
+    Con "La columna Respuesta dice si la TCU contesto, NO si el valor es el que toca. Para comparar contra un preset, pestana Auditoria con 'Usar la ultima lectura' marcado." ([System.Drawing.Color]::Gainsboro)
     Marcar-Bloque 'lectura'
     [void](Trabajo-Guardar 'lectura' $script:UltimaLectura "$(@($defs).Count) variables en $(@($script:UltimaLectura).Count) TCUs")
 } })
