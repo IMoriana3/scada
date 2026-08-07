@@ -70,6 +70,28 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**Los trabajos ya no se pisan (v11.7)** — el diagnóstico, el inventario, la
+auditoría, la lectura y la tabla de baterías vivían **solo en memoria**: lanzar
+lo siguiente borraba lo anterior. Y eso es justo lo que pasa en una campaña —
+auditas el firmware, y mientras el updater trabaja quieres diagnosticar—: al
+volver, lo de antes ya no estaba.
+
+Ahora **cada operación que termina se guarda sola** en `trabajos/`, con su
+fecha, su planta, su técnico y una nota de lo que salió. La pestaña **Trabajos**
+los lista (lo más reciente arriba) y **CARGAR** devuelve cualquiera a su pestaña
+— sin leer nada de la planta, que es una copia de disco.
+
+- Se guardan los **20 últimos de cada tipo y planta**; lo viejo se va solo, que
+  una semana de campaña son muchos diagnósticos de 754 filas.
+- **GUARDAR LO DE AHORA** deja una copia de todo lo que haya en memoria con una
+  nota tuya, para marcar un momento (*«antes de tocar la NCU 12»*).
+- La **lectura** cargada vuelve a valer para auditar con *«Usar la última
+  lectura»* marcado, sin volver a recorrer la planta.
+- La carpeta `trabajos/` no se sube al repo.
+
+El **cierre** no entra aquí porque ya se guardaba por planta en `cierre/`: eso
+sobrevivía a cerrar el programa desde la v9.
+
 **Un cuadro para decir qué equipos (v11.6)** — «TCU de [1] a [44]» no sabe decir
 *«la 10, la 22 y de la 30 a la 40»*, y menos aún mezclar NCUs. Había que ir tres
 veces o pasar por un CSV. Ahora hay **un solo cuadro `TCUs`** en Escribir, Leer,

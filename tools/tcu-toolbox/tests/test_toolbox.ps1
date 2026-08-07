@@ -1653,7 +1653,7 @@ Check 'tabla: diagnostico vacio' ((@(Bat-Tabla @())).Count) 0
 Check 'tabla: hay pestana' ($src.Contains("tabB.Text = 'Baterias'")) $true
 Check 'tabla: con su tabla' ($src.Contains('$lvB = New-Object System.Windows.Forms.ListView')) $true
 Check 'tabla: y sus botones' (($src.Contains('$btnBVer.Add_Click')) -and ($src.Contains('$btnBCsv.Add_Click'))) $true
-Check 'tabla: filtrable como las demas' ($src.Contains('$lvC, $lvB)) { Lv-Filtrable')) $true
+Check 'tabla: filtrable como las demas' ($src.Contains('$lvC, $lvB, $lvT)) { Lv-Filtrable')) $true
 Check 'tabla: sale del ultimo diagnostico' ($src.Contains('Bat-Tabla $script:UltimoDiag $script:UltimaBat')) $true
 # y el modo directo ya trae panel y corriente de panel, que estan en el mapa
 Check 'directo: lee desde el 30091' ($src.Contains('$r2 = FC03-Leer $tcu (Dir-Trama 30091) 8')) $true
@@ -2201,6 +2201,65 @@ Check 'escribir: ida y vuelta' ((Parse-Seleccion (Sel-Texto @(@{ncu='12'; tcu=39
 Check 'escribir: la auditoria pone la seleccion' ($src.Contains('$txtWTcus.Text = (Sel-Texto $malas)')) $true
 Check 'escribir: y el cierre tambien' ($src.Contains('$txtWTcus.Text = (Sel-Texto $falta)')) $true
 Check 'escribir: ya no hay CSV de correccion' ($src.Contains('Aud-CsvCorreccion')) $false
+
+Write-Host ''
+Write-Host '== trabajos guardados: lo hecho no se pierde al lanzar lo siguiente =='
+# El diagnostico, el inventario, la auditoria, la lectura y las baterias vivian
+# solo en memoria: auditar el firmware y luego diagnosticar borraba lo primero.
+Check 'trab: el fichero lleva tipo, planta y sello' (Trabajo-Fichero 'diag' 'Ayora (Planta completa)' '20260807_1200') 'diag__Ayora__Planta_completa___20260807_1200.json'
+Check 'trab: sin planta no deja un hueco' (Trabajo-Fichero 'diag' '' '20260807_1200') 'diag__sin_planta__20260807_1200.json'
+Check 'trab: la planta con barras no rompe la ruta' ((Trabajo-Fichero 'diag' 'a/b\c' '1').Contains('/')) $false
+# el resumen que se ve en la lista
+$objT = [pscustomobject]@{tipo='auditoria'; planta='Ayora'; fecha='2026-08-07 12:51'; tecnico='ivan'; nota='3 desviaciones'
+                          filas=@([pscustomobject]@{NCU='12'}, [pscustomobject]@{NCU='15'})}
+$rT = Trabajo-Resumen $objT 'C:\x\y.json'
+Check 'trab: pone el titulo en claro' ($rT.Tipo) 'Auditoria'
+Check 'trab: cuenta las filas' ($rT.Filas) 2
+Check 'trab: guarda el fichero' ($rT.fichero) 'C:\x\y.json'
+Check 'trab: y el tipo crudo, para cargarlo' ($rT.tipoRaw) 'auditoria'
+Check 'trab: un tipo raro no revienta' ((Trabajo-Resumen ([pscustomobject]@{tipo='zzz'; filas=@()})).Tipo) 'zzz'
+Check 'trab: sin filas, cero' ((Trabajo-Resumen ([pscustomobject]@{tipo='diag'})).Filas) 0
+# lo mas reciente primero: en campo interesa lo de hace un rato
+$ordT = @(Trabajos-Ordenar @(
+    [pscustomobject]@{Fecha='2026-08-07 09:00'; Tipo='Diagnostico'}
+    [pscustomobject]@{Fecha='2026-08-07 12:00'; Tipo='Auditoria'}
+    [pscustomobject]@{Fecha='2026-08-06 23:00'; Tipo='Inventario'}))
+Check 'trab: el mas nuevo arriba' ($ordT[0].Fecha) '2026-08-07 12:00'
+Check 'trab: y el mas viejo abajo' ($ordT[-1].Fecha) '2026-08-06 23:00'
+Check 'trab: lista vacia no revienta' ((@(Trabajos-Ordenar @())).Count) 0
+# y la carpeta no se llena: se quedan los N mas nuevos de cada tipo
+$fT = @('diag__A__20260801_100000.json','diag__A__20260802_100000.json','diag__A__20260803_100000.json','diag__A__20260804_100000.json')
+Check 'trab: con tope 2, sobran 2' ((@(Trabajos-Podar $fT 2)).Count) 2
+Check 'trab: y sobran los viejos' ((@(Trabajos-Podar $fT 2)) -contains 'diag__A__20260801_100000.json') $true
+Check 'trab: los nuevos se quedan' ((@(Trabajos-Podar $fT 2)) -contains 'diag__A__20260804_100000.json') $false
+Check 'trab: si caben todos, no sobra ninguno' ((@(Trabajos-Podar $fT 20)).Count) 0
+Check 'trab: justo en el tope, tampoco' ((@(Trabajos-Podar $fT 4)).Count) 0
+# los tipos declaran donde va cada cosa
+foreach ($tp in @('diag','comm','inventario','auditoria','lectura','baterias')) {
+    Check "trab: tipo $tp declarado" ($TRABAJO_TIPOS.ContainsKey($tp)) $true
+    Check "trab: tipo $tp con su variable" (("$($TRABAJO_TIPOS[$tp].var)").Length -gt 0) $true
+}
+Check 'trab: el diag pinta la columna GW' ($TRABAJO_TIPOS['diag'].cols -contains 'GW') $true
+Check 'trab: las baterias pintan la carga' ($TRABAJO_TIPOS['baterias'].cols -contains 'Carga') $true
+Check 'trab: las columnas del diag son las de su tabla' ($TRABAJO_TIPOS['diag'].cols.Count) 11
+# --- enganchado ---
+Check 'trab: hay pestana' ($src.Contains("tabT.Text = 'Trabajos'")) $true
+Check 'trab: con su tabla' ($src.Contains('$lvT = New-Object System.Windows.Forms.ListView')) $true
+foreach ($b in @('btnTRef','btnTCargar','btnTGuardar','btnTBorrar','btnTCarpeta')) {
+    Check "trab: boton ${b}" ($src.Contains("`$$b = New-Object System.Windows.Forms.Button")) $true
+    Check "trab: ${b} con handler" ($src.Contains("`$$b.Add_Click(")) $true
+}
+Check 'trab: doble clic tambien carga' ($src.Contains('$lvT.Add_DoubleClick({ Trabajo-Cargar })')) $true
+Check 'trab: la lista se pinta al arrancar' ($src.Contains("Cierre-Avisar`r`nTrabajos-Pintar") -or $src.Contains("Cierre-Avisar`nTrabajos-Pintar")) $true
+# cada operacion que termina deja su copia: si falta una, esa se pierde
+foreach ($t in @('diag','comm','lectura','auditoria','inventario','baterias')) {
+    Check "trab: se guarda solo el $t" ($src.Contains("Trabajo-Guardar '$t'")) $true
+}
+# y cargar no toca la planta
+$blqCarga = $src.Substring($src.IndexOf('function Trabajo-Cargar'), 2000)
+Check 'trab: cargar no lee la planta' ($blqCarga.Contains('Modbus-Conectar')) $false
+Check 'trab: y lo dice' ($blqCarga.Contains('no se ha leido nada de la planta')) $true
+Check 'trab: la carpeta esta ignorada por git' ((Get-Content (Join-Path $raizTb '.gitignore') -Raw).Contains('trabajos/')) $true
 
 # --- la seleccion, enganchada en las cuatro pestanas ---
 # Un cuadro por pestana, y los de/a fuera: si quedara uno suelto seguiria
