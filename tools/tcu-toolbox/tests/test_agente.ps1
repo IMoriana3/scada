@@ -110,6 +110,15 @@ try {
     try { $null = Pedir '/escribir-lote' 'POST' @{confirmar = $true; ncu = 1; tcus = '1'; valores = @(@{variable = '41004'; valor = '5'})}
           Check 'escribir-lote: bloquea la identidad de red' 'paso' 'no pasa' }
     catch { Check 'escribir-lote: bloquea la identidad de red' 'no pasa' 'no pasa' }
+    # el mismo cuadro que la toolbox offline: "12/10, 15/5-12" cruza NCUs sin
+    # tener que decir cual, que es lo que el desplegable de la web no dejaba
+    $e2b = Pedir '/escribir-lote' 'POST' @{confirmar = $true; tcus = '1/1, 2/2'
+        valores = @(@{variable = '41010'; valor = '-1.685'})}
+    Check 'escribir-lote: la seleccion puede cruzar NCUs' (@($e2b.filas | ForEach-Object { $_.ncu } | Sort-Object -Unique).Count) 2
+    Check 'escribir-lote: y cada fila dice su NCU' (@($e2b.filas)[0].ncu.Length -gt 0) 'True'
+    $mod = Pedir '/modo' 'POST' @{confirmar = $true; tcus = '1/1, 2/2'; modo = 'AUTO'}
+    Check 'modo: tambien acepta la seleccion con NCU' (@($mod.filas).Count) 2
+
     $e3 = Pedir '/escribir-csv' 'POST' @{confirmar = $true
         csv = "NCU;TCU;variable;valor`n1;1;41010;-1.685`n2;2;41111;55"}
     Check 'escribir-csv: cruza NCUs' (@($e3.filas | ForEach-Object { $_.ncu } | Sort-Object -Unique).Count) 2
