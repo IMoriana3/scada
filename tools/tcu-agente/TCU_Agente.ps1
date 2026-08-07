@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '2.2'
+$VERSION_AGENTE = '2.3'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -48,11 +48,144 @@ function Ancla-Toolbox([string]$src, [string]$marca) {
 $i3 = Ancla-Toolbox $src 'function Params-Conexion'; $f3 = Ancla-Toolbox $src 'function Refrescar-ComboPlantas'   # Plan-Segmentos, Trabajos-Planta, Parse-Seleccion
 $i4 = Ancla-Toolbox $src 'function Fijar-Modo';      $f4 = Ancla-Toolbox $src 'function Guardia-Viento'           # cambio de modo verificado
 $i5 = Ancla-Toolbox $src 'function Sat-Fichero';     $f5 = Ancla-Toolbox $src '$tmrSat = New-Object'                # los tres pases del SAT
-$logica += "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5)
+$i6 = Ancla-Toolbox $src '$BAT = @{';                $f6 = Ancla-Toolbox $src 'function Sospechas-Lectura'           # umbrales y tabla de baterias
+$i7 = Ancla-Toolbox $src 'function Cierre-DeJson';   $f7 = Ancla-Toolbox $src '$script:LogicaCache'                  # cierre y trabajos guardados
+$i8 = Ancla-Toolbox $src 'function Ident-Leer';      $f8 = Ancla-Toolbox $src '$btnIdent.Add_Click'                  # identidad y numero de serie
+foreach ($p in @(@($i3,$f3), @($i4,$f4), @($i5,$f5), @($i6,$f6), @($i7,$f7), @($i8,$f8))) {
+    $logica += "`n" + $src.Substring($p[0], $p[1] - $p[0]).Replace('$PSScriptRoot', '$dirToolbox')
+}
 Invoke-Expression $logica
 if ($cfg.puerto_ncu) { $PUERTO_NCU = [int]$cfg.puerto_ncu }   # solo para pruebas con simulador
 
 $script:Cancelar = $false
+
+# ---------------------------------------------------------------------------
+#  Lo que la toolbox hace en local, aqui de solo lectura
+# ---------------------------------------------------------------------------
+# Ninguna de estas toca un seguidor: leen. Van en GET y no dependen de
+# permitir_escritura. Todas devuelven el MISMO formato que exporta la toolbox,
+# para que lo que se vea en la web y lo que se suba al Historico sea lo mismo.
+
+# Baterias: se sacan del diagnostico, sin leer nada mas. Igual que la pestana.
+function Baterias-Planta {
+    $diag = @((Diag-Planta).tcus)
+    $hall = @(Bat-Auditar $diag)
+    return [ordered]@{tipo = 'baterias_tcu'; planta = $cfg.planta; toolbox = $VERSION_TOOLBOX
+        fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        hallazgos = $hall
+        tcus = @(Bat-Tabla $diag $hall)}
+}
+
+# Inventario: FW, serie y MAC. Esta va por Zigbee TCU a TCU, asi que es LENTA
+# (una planta entera son minutos, no segundos). Se avisa en la respuesta.
+function Inventario-Planta {
+    $filas = @()
+    foreach ($n in (Ncus-DePlanta)) {
+        $et = "$($n.ncu)"
+        $cx = @{ip = $n.ip; puerto = $null; gws = $n.gws; multi = $null; etiqueta = 'auto'; to = $timeoutMs; reint = 2}
+        foreach ($seg in @(Plan-Segmentos (Tcus-DeNcu $n) $cx)) {
+            try { Modbus-Conectar $n.ip $seg.puerto $timeoutMs } catch { continue }
+            foreach ($tcu in $seg.tcus) {
+                # Ident-Leer devuelve una lista Campo/Valor, no un diccionario:
+                # indexarla por nombre daba null en todas las columnas
+                $h = $null
+                try {
+                    $campos = Ident-Leer ([byte]$tcu)
+                    $h = @{}
+                    foreach ($c in @($campos)) { $h[$c.Campo] = $c.Valor }
+                } catch { $h = $null }
+                if ($h) {
+                    $filas += [pscustomobject]@{NCU = $et; TCU = [int]$tcu; Serie = $h['Numero de serie']; MAC = $h['MAC Xbee']
+                        FW = $h['FW principal']; FW_fabrica = $h['FW de fabrica']; HW = $h['HW PCBA']
+                        Fecha_fab = $h['Fecha de fabricacion']; Nota = 'OK'}
+                } else {
+                    $filas += [pscustomobject]@{NCU = $et; TCU = [int]$tcu; Serie = ''; MAC = ''; FW = ''
+                        FW_fabrica = ''; HW = ''; Fecha_fab = ''; Nota = 'sin respuesta'}
+                }
+            }
+            Modbus-Cerrar
+        }
+    }
+    return [ordered]@{tipo = 'inventario_tcu'; mapa = $VERSION_MAPA; toolbox = $VERSION_TOOLBOX
+        planta = $cfg.planta; fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); tcus = $filas}
+}
+
+# Plan de firmware: puro, a partir de un inventario. Si no se le pasa uno hecho,
+# lo levanta el (y entonces tarda lo que tarde el inventario).
+function Plan-Fw($objetivo, $inv = $null, $minTcu = 20) {
+    if (-not $objetivo) { throw 'falta "objetivo" (p. ej. v1.6.0)' }
+    $m = 0; if (-not [int]::TryParse("$minTcu", [ref]$m) -or $m -lt 1) { $m = 20 }
+    $minTcu = $m
+    if ($null -eq $inv) { $inv = @((Inventario-Planta).tcus) }
+    $gws = @{}; $ips = @{}
+    foreach ($n in (Ncus-DePlanta)) { $k = "$($n.ncu)"; $ips[$k] = $n.ip; $gws[$k] = $n.gws }
+    $plan = Plan-Firmware $inv "$objetivo" $gws @()
+    $vent = @(Plan-Ventanas $plan.tramos $ips ([int]$minTcu))
+    return [ordered]@{planta = $cfg.planta; objetivo = "$objetivo"; fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        pendientes = $plan.pendientes; al_dia = $plan.al_dia; sin_respuesta = @($plan.sin_respuesta)
+        ventanas = @($vent | ForEach-Object { @{ventana = $_.Orden; ncu = $_.NCU; ip = $_.IP; puerto = $_.Puerto
+                                                rangos = $_.Rangos; tcus = $_.TCUs; horas = [math]::Round([double]$_.Horas, 2)} })
+        texto = @(Plan-Texto $vent ([int]$minTcu))
+        detalle = @($plan.detalle)}
+}
+
+# Cierre: lo que ya esta guardado en disco por planta, sin tocar la planta.
+function Cierre-Planta {
+    Cierre-Cargar $cfg.planta
+    $filas = @($script:Cierre.Values | Sort-Object { [int]("0" + "$($_.ncu)") }, { [int]$_.tcu } | ForEach-Object {
+        @{ncu = $_.ncu; tcu = $_.tcu; firmware = $_.fw; parametros = $_.params; nvm = $_.nvm
+          modo = $_.modo; desde = $_.desde; estado = (Cierre-Estado $_)} })
+    return [ordered]@{planta = $cfg.planta; total = $filas.Count
+        pendientes = @($filas | Where-Object { $_.estado -ne 'CERRADA' }).Count; tcus = $filas}
+}
+
+# Trabajos guardados en este PC: los mismos que ve la pestana Trabajos.
+function Trabajos-Lista {
+    $r = @()
+    try {
+        foreach ($f in @(Get-ChildItem (Trabajos-Dir) -Filter '*.json' -File)) {
+            try { $r += ,(Trabajo-Resumen (Get-Content $f.FullName -Raw | ConvertFrom-Json) $f.Name) } catch {}
+        }
+    } catch {}
+    return @(Trabajos-Ordenar $r)
+}
+
+# Leer variables en un rango, como la pestana Leer variable.
+function Leer-Planta($nombresTxt, $ncuPedida, $tcusTxt) {
+    $nombres = @("$nombresTxt".Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if ($nombres.Count -eq 0) { throw 'falta "vars" (nombres separados por comas; vale el prefijo, p. ej. 41010)' }
+    $defs = @($nombres | ForEach-Object { @{nombre = (Resolver-Variable $_); vdef = $null} })
+    foreach ($d in $defs) { $d.vdef = $(if ($d.nombre -like 'ESTADO *') { $ESTADO[$d.nombre.Substring(7)] } else { $VARIABLES[$d.nombre] }) }
+    $filas = @()
+    foreach ($n in (Ncus-DePlanta)) {
+        if ($ncuPedida -and "$($n.ncu)" -ne "$ncuPedida") { continue }
+        $todas = Tcus-DeNcu $n
+        $pedidas = $todas
+        if ("$tcusTxt" -ne '') {
+            $l = Parse-ListaNums "$tcusTxt"
+            $pedidas = @($l | Where-Object { $todas -contains [int]$_ })
+        }
+        $cx = @{ip = $n.ip; puerto = $null; gws = $n.gws; multi = $null; etiqueta = 'auto'; to = $timeoutMs; reint = 2}
+        foreach ($seg in @(Plan-Segmentos $pedidas $cx)) {
+            try { Modbus-Conectar $n.ip $seg.puerto $timeoutMs } catch { continue }
+            foreach ($tcu in $seg.tcus) {
+                $o = [ordered]@{NCU = "$($n.ncu)"; TCU = [int]$tcu}
+                $mudo = $true
+                foreach ($d in $defs) {
+                    $v = ''
+                    try { $v = Leer-Decodificado ([byte]$tcu) $d.vdef; $mudo = $false } catch { $v = '' }
+                    $o[$d.nombre] = "$v"
+                    if ($mudo) { break }        # si la primera no contesta, el TCU esta mudo
+                }
+                $o['Estado'] = $(if ($mudo) { 'sin respuesta' } else { 'OK' })
+                $filas += [pscustomobject]$o
+            }
+            Modbus-Cerrar
+        }
+    }
+    return [ordered]@{planta = $cfg.planta; fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        variables = @($defs | ForEach-Object { $_.nombre }); tcus = $filas}
+}
 
 # ---------------------------------------------------------------------------
 #  SAT: se activa en remoto, se graba en ESTE PC
@@ -549,7 +682,7 @@ $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://localhost:$puerto/")
 $listener.Start()
 Write-Host "TCU Agente v$VERSION_AGENTE - planta '$($cfg.planta)' - http://localhost:$puerto  (toolbox v$VERSION_TOOLBOX)"
-Write-Host "Lectura (GET, X-Token): /ping /diagnostico /comisionado /hsus /sincronizar /sat /sat/descargar"
+Write-Host "Lectura (GET, X-Token): /ping /diagnostico /comisionado /hsus /baterias /inventario /cierre /trabajos /plan-firmware /leer /sincronizar /sat /sat/descargar"
 Write-Host ("SAT (POST): {0}  - se graba en {1}" -f ($OPS_SAT -join ' '), $script:SatDir)
 Write-Host ("Escritura (POST, X-Token + confirmar): {0}  [{1}]" -f ($OPS_POST -join ' '), $(if ($escritura) { 'HABILITADA' } else { 'DESHABILITADA (permitir_escritura=false)' }))
 Write-Host ("Vigilante de alarmas: {0}" -f $(if ($intervaloVig -gt 0) { "cada $intervaloVig min" } else { 'apagado' }))
@@ -587,6 +720,12 @@ while ($true) {
                 '/comisionado'  { $out = Comis-Planta }
                 '/hsus'         { $out = Hsus-Planta }
                 '/sincronizar'  { $out = Sincronizar }
+                '/baterias'     { $out = Baterias-Planta }
+                '/inventario'   { $out = Inventario-Planta }
+                '/cierre'       { $out = Cierre-Planta }
+                '/trabajos'     { $out = @{planta = $cfg.planta; trabajos = @(Trabajos-Lista)} }
+                '/plan-firmware' { $out = Plan-Fw "$($req.QueryString['objetivo'])" $null "$($req.QueryString['min_tcu'])" }
+                '/leer'         { $out = Leer-Planta "$($req.QueryString['vars'])" "$($req.QueryString['ncu'])" "$($req.QueryString['tcus'])" }
                 '/sat'          { $out = Sat-Estado }
                 '/sat/descargar' {
                     $nom = "$($req.QueryString['f'])"

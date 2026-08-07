@@ -33,6 +33,12 @@ Lectura (GET, siempre disponibles):
 | `/comisionado` | estado de comisionado (bits 4:3 del bloque compacto) por TCU |
 | `/hsus` | HSUs de cada NCU con salud y viento/nieve |
 | `/sincronizar` | lee toda la planta y **sube él mismo el diagnóstico al Histórico** (requiere credenciales Supabase en la config) |
+| `/baterias` | SoC, SoH, tensiones, corrientes y temperaturas de toda la planta, con la auditoría — **del diagnóstico, sin lecturas extra** |
+| `/inventario` | FW, nº de serie, MAC, HW y fecha de fabricación. ⚠️ **Lenta**: va TCU a TCU por Zigbee, minutos en una planta entera |
+| `/plan-firmware?objetivo=v1.6.0` | el plan por ventanas del updater (qué abrir, qué pegar, cuánto tarda) — hace el inventario primero, así que hereda su lentitud |
+| `/leer?vars=41010,41111&ncu=1&tcus=1-20` | leer variables en un rango, como la pestaña *Leer variable*. `vars` admite el prefijo (`41010`) |
+| `/cierre` | las TCUs actualizadas que aún no están cerradas, leído del disco de **este** PC |
+| `/trabajos` | los trabajos guardados en `trabajos/` de este PC |
 | `/sat` | estado del ensayo SAT: si está registrando, hasta cuándo, cuántos pases lleva y los ficheros de la carpeta |
 | `/sat/descargar?f=` | un fichero del ensayo, tal cual (solo nombres de esa carpeta: no admite rutas) |
 

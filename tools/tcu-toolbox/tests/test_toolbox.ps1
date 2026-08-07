@@ -2325,6 +2325,14 @@ Check 'agente SAT: se llama al arrancar' ($srcAg.Contains("Sat-Restaurar`r`n`$pr
 Check 'agente SAT: la descarga no admite rutas' ($srcAg.Contains('[System.IO.Path]::GetFileName($nom)')) $true
 # arrancar un ensayo NO es escribir en los seguidores: va por su lista aparte
 Check 'agente SAT: no va con las de escritura' ($srcAg.Contains("`$OPS_SAT = @('sat/iniciar', 'sat/parar')")) $true
+# lo que la web lee: el agente reutiliza estas funciones, no las copia
+foreach ($f in @('Bat-Tabla', 'Bat-Auditar', 'Cierre-Estado', 'Cierre-Cargar', 'Ident-Leer',
+                 'Leer-Decodificado', 'Resolver-Variable', 'Plan-Firmware', 'Plan-Ventanas', 'Plan-Texto',
+                 'Trabajo-Resumen', 'Trabajos-Ordenar', 'Trabajos-Dir')) {
+    Check "agente web: la toolbox tiene $f" ($src.Contains("function $f")) $true
+}
+# Ident-Leer devuelve una lista Campo/Valor: indexarla por nombre da null en todo
+Check 'agente web: el inventario la convierte a diccionario' ($srcAg.Contains('foreach ($c in @($campos)) { $h[$c.Campo] = $c.Valor }')) $true
 Check 'sel: el cuadro GW vive en Conexion' ($src.Contains("`$txtGw = TG `$gbCon")) $true
 Check 'sel: con su ayuda al pasar el raton' ($src.Contains('$ttW.SetToolTip($txtWTcus, $AYUDA_TCUS)')) $true
 # y las cuatro operaciones la usan, con el filtro de gateway
