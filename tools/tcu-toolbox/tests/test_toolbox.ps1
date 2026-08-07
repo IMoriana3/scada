@@ -434,6 +434,72 @@ Check 'plan tramo3 gw504' "$($t3.NCU)/$($t3.Puerto)/$($t3.Desde)" '1/504/60'
 Check 'plan incluye ncu2 (v1.5.0)' (@($pf.tramos | Where-Object { $_.NCU -eq '2' }).Count) 1
 try { $null = Plan-Firmware $invFw '' $gwsFw; Check 'plan sin objetivo lanza' 'no-lanzo' 'lanza' }
 catch { Check 'plan sin objetivo lanza' 'lanza' 'lanza' }
+# De una TCU que no comunica no se sabe la bateria: su hueco de la cache de la
+# NCU esta a ceros, y con eso el plan marcaba "SoC 0 % - BATERIA BAJA" en
+# equipos que estan al 100 %.
+$diagMuda = @(
+  [pscustomobject]@{NCU='1'; TCU=1; Salud='OFFLINE'; SoC=0}
+  [pscustomobject]@{NCU='1'; TCU=2; Salud='OK'; SoC=95}
+  [pscustomobject]@{NCU='1'; TCU=4; Salud='OK'; SoC=12}
+)
+$pfM = Plan-Firmware $invFw 'v1.6.0' $gwsFw $diagMuda
+$dM = @($pfM.detalle)
+Check 'plan: la muda no trae SoC' ((@($dM | Where-Object { $_.TCU -eq 1 })[0]).SoC) ''
+Check 'plan: y no cuenta como bateria baja' ((@($dM | Where-Object { $_.TCU -eq 1 })[0]).SoC_bajo) $false
+Check 'plan: la que si comunica, con su SoC' ((@($dM | Where-Object { $_.TCU -eq 2 })[0]).SoC) '95'
+Check 'plan: y la que esta baja de verdad se marca' ((@($dM | Where-Object { $_.TCU -eq 4 })[0]).SoC_bajo) $true
+Check 'plan: solo cuenta una con bateria baja' ($pfM.con_soc_bajo) 1
+
+# ---------- la seleccion de equipos: un cuadro para decir cuales ----------
+# "TCU de [1] a [44]" no sabe decir "la 10, la 22 y de la 30 a la 40", ni
+# mezclar NCUs. Ahora hay un solo cuadro que lo dice todo.
+Check 'sel: vacio = todas' ((Parse-Seleccion '').todas) $true
+Check 'sel: NA tambien' ((Parse-Seleccion 'NA').todas) $true
+Check 'sel: y la palabra todas' ((Parse-Seleccion 'todas').todas) $true
+Check 'sel: el rango de siempre' ((Parse-Seleccion '1-4').lista -join ',') '1,2,3,4'
+Check 'sel: una sola' ((Parse-Seleccion '10').lista -join ',') '10'
+Check 'sel: lista y tramos' ((Parse-Seleccion '10,22,30-32').lista -join ',') '10,22,30,31,32'
+Check 'sel: ordena y quita repetidas' ((Parse-Seleccion '22,10,10').lista -join ',') '10,22'
+Check 'sel: aguanta espacios' ((Parse-Seleccion ' 10 , 30 - 32 ').lista -join ',') '10,30,31,32'
+Check 'sel: sin prefijo, porNcu vacio' ((Parse-Seleccion '10,22').porNcu.Count) 0
+# con la NCU delante: cada tramo va a la suya
+$sp = Parse-Seleccion '12/10, 12/22, 15/5-7'
+Check 'sel: dos NCUs' ($sp.porNcu.Count) 2
+Check 'sel: las de la 12' ($sp.porNcu['12'] -join ',') '10,22'
+Check 'sel: las de la 15' ($sp.porNcu['15'] -join ',') '5,6,7'
+Check 'sel: y la lista suelta queda vacia' ($sp.lista.Count) 0
+Check 'sel: el asterisco es toda la NCU' ((Parse-Seleccion '12/*').porNcu['12'] -join ',') '*'
+Check 'sel: el asterisco se come el resto de esa NCU' ((Parse-Seleccion '12/*,12/5').porNcu['12'] -join ',') '*'
+# lo que no puede colar
+try { $null = Parse-Seleccion '12/10,22'; Check 'sel: mezclar con y sin NCU lanza' 'no-lanzo' 'lanza' }
+catch { Check 'sel: mezclar con y sin NCU lanza' 'lanza' 'lanza' }
+try { $null = Parse-Seleccion '40-30'; Check 'sel: rango al reves lanza' 'no-lanzo' 'lanza' }
+catch { Check 'sel: rango al reves lanza' 'lanza' 'lanza' }
+try { $null = Parse-Seleccion '0'; Check 'sel: el 0 lanza' 'no-lanzo' 'lanza' }
+catch { Check 'sel: el 0 lanza' 'lanza' 'lanza' }
+try { $null = Parse-Seleccion '300'; Check 'sel: fuera de 247 lanza' 'no-lanzo' 'lanza' }
+catch { Check 'sel: fuera de 247 lanza' 'lanza' 'lanza' }
+try { $null = Parse-Seleccion 'x'; Check 'sel: basura lanza' 'no-lanzo' 'lanza' }
+catch { Check 'sel: basura lanza' 'lanza' 'lanza' }
+try { $null = Parse-Seleccion '*'; Check 'sel: asterisco suelto lanza' 'no-lanzo' 'lanza' }
+catch { Check 'sel: asterisco suelto lanza' 'lanza' 'lanza' }
+
+# el filtro de gateway: "todas las TCUs del GW2" sin saberse el rango
+$gwsBurgo = @(@{puerto=503; ini=1; fin=56}, @{puerto=504; ini=57; fin=108})
+Check 'gw: vacio deja los dos' ((@(Gws-Filtrados $gwsBurgo '')).Count) 2
+Check 'gw: 504 deja uno' ((@(Gws-Filtrados $gwsBurgo '504'))[0].puerto) 504
+Check 'gw: uno que no existe deja cero' ((@(Gws-Filtrados $gwsBurgo '505')).Count) 0
+Check 'gw: de que gateway cuelga la 30' (Gw-DeTcu $gwsBurgo 30) '503'
+Check 'gw: y la 80' (Gw-DeTcu $gwsBurgo 80) '504'
+Check 'gw: una que no cae en ninguno' (Gw-DeTcu $gwsBurgo 200) ''
+# las TCUs que le tocan a una NCU con esa seleccion y ese gateway
+Check 'sel+gw: todas las del 504' ((Sel-TcusDe (Parse-Seleccion '') (Gws-Filtrados $gwsBurgo '504') '1') -join ',') (@(57..108) -join ',')
+Check 'sel+gw: la lista recortada al 504' ((Sel-TcusDe (Parse-Seleccion '10,60,70') (Gws-Filtrados $gwsBurgo '504') '1') -join ',') '60,70'
+Check 'sel+gw: sin filtro entran las dos' ((Sel-TcusDe (Parse-Seleccion '10,60') $gwsBurgo '1') -join ',') '10,60'
+Check 'sel+gw: por NCU, la que toca' ((Sel-TcusDe (Parse-Seleccion '12/10,15/5-6') $gwsBurgo '15') -join ',') '5,6'
+Check 'sel+gw: y a la NCU que no sale, nada' ((Sel-TcusDe (Parse-Seleccion '12/10') $gwsBurgo '15').Count) 0
+Check 'sel+gw: el asterisco son todas las suyas' ((Sel-TcusDe (Parse-Seleccion '15/*') (Gws-Filtrados $gwsBurgo '503') '15') -join ',') (@(1..56) -join ',')
+Check 'sel+gw: una fuera de los gateways se cae' ((Sel-TcusDe (Parse-Seleccion '10,200') $gwsBurgo '1') -join ',') '10'
 
 # ---------- el plan de campana: una VENTANA del updater por NCU+gateway ----------
 # Los tramos sueltos no eran un plan: con dos pendientes no consecutivas de la
@@ -1630,16 +1696,16 @@ $rSin = @(Bat-Auditar (@($flota) + @([pscustomobject]@{NCU='9'; TCU=42; Salud='O
     Vbat_mV=24000; Ibat_mA=5; Tbat_C='22,0'; Vpanel_mV=0; Ientrada_mA=0})))
 Check 'bat: sin saber si es de dia, calla' (@($rSin | Where-Object { $_.TCU -eq 42 -and ($_.Tipo -like '*PANEL*' -or $_.Tipo -eq 'NO CARGA') }).Count) 0
 # el bit 7 del MSR es el que lo dice, en los dos caminos
-Check 'bat: el dia sale del bit 7 del MSR' ($src.Contains('Dia = (($msr -shr 7) -band 1)')) $true
+Check 'bat: el dia sale del bit 7 del MSR' ($src.Contains('(($msr -shr 7) -band 1)')) $true
 Check 'bat: y tambien en el modo directo' ($src.Contains('Dia = (($r1[0] -shr 7) -band 1)')) $true
 # y el resumen no mezcla TCUs con avisos
 Check 'bat: el resumen dice cuantos avisos' ($src.Contains('TCUs con algo que mirar, $nAv')) $true
 # y los cuatro registros salen del bloque compat, no de direcciones inventadas
 $iC2 = $src.IndexOf('function Ncu-DiagCompat'); $fC2 = $src.IndexOf('function Ncu-HsuCompat')
 $com2 = $src.Substring($iC2, $fC2 - $iC2)
-Check 'bat: panel del offset 5' ($com2.Contains('Vpanel_mV = $w[$b+5]')) $true
+Check 'bat: panel del offset 5' ($com2.Contains('$w[$b+5]')) $true
 Check 'bat: entrada del offset 12 con signo' ($com2.Contains('$ient = $w[$b+12]; if ($ient -gt 32767)')) $true
-Check 'bat: motor de los offsets 8 y 9' ($com2.Contains('Imotor_mA = $w[$b+8]; ImotorPico_mA = $w[$b+9]')) $true
+Check 'bat: motor de los offsets 8 y 9' (($com2.Contains('$w[$b+8]')) -and ($com2.Contains('$w[$b+9]'))) $true
 # las de motor si se quedan vacias en directo: no estan en el mapa de la TCU
 Check 'bat: en directo las de motor van vacias' ($src.Contains("Imotor_mA = ''; ImotorPico_mA = ''")) $true
 Check 'bat: y van al CSV del registrador' ($src.Contains("'Vpanel_mV','Ientrada_mA','Imotor_mA','ImotorPico_mA'")) $true
@@ -1710,7 +1776,7 @@ $reg = 0x0210    # modo AUTO (2) + comisionado 2 (TCU configurado)
 Check 'los dos del mismo registro: modo' (Modo-De $reg) 'AUTO'
 Check 'los dos del mismo registro: comisionado' (Comis-De $reg) 2
 # el diagnostico usa el MISMO helper, para que no haya dos verdades
-Check 'diagnostico usa el helper' ($src.Contains('Modo = Modo-De $msr')) $true
+Check 'diagnostico usa el helper' ($src.Contains('Modo-De $msr')) $true
 Check 'el boton lo dice' ($src.Contains("btnPComis.Text = 'ESTADO Y MODO'")) $true
 
 Write-Host ''
@@ -1722,7 +1788,7 @@ Check 'aud->leer: boton creado' ($src.Contains("`$btnAudLeer = New-Object System
 Check 'aud->leer: con handler' ($src.Contains('$btnAudLeer.Add_Click(')) $true
 Check 'aud->leer: exige preset' ($src.Contains('es el que dice que variables hay que leer')) $true
 Check 'aud->leer: carga las variables del preset' ($src.Contains('foreach ($v in @($script:PresetRef)) {')) $true
-Check 'aud->leer: se lleva el rango' ($src.Contains('$txtLIni.Text = $txtAIni.Text')) $true
+Check 'aud->leer: se lleva la seleccion' ($src.Contains('$txtLTcus.Text = $txtATcus.Text')) $true
 Check 'aud->leer: salta a la pestana' ($src.Contains('$tabs.SelectedTab = $tabL')) $true
 Check 'aud->leer: dice como volver' ($src.Contains("Usar la ultima lectura' marcado")) $true
 # y no escribe ni lee nada por su cuenta: solo prepara
@@ -2120,25 +2186,48 @@ Check 'escribir: con handler' ($src.Contains('$btnAudEscr.Add_Click')) $true
 Check 'escribir: se habilita al auditar' ($src.Contains('$btnAudEscr.Enabled = (@(Aud-ConDesviacion')) $true
 # Un rango va de la primera a la ultima: con TCUs sueltas escribiria sobre las
 # buenas de en medio. Solo se usa si son un tramo seguido de UNA NCU.
-Check 'escribir: seguidas si son consecutivas' (Aud-Consecutivas @(@{ncu='12'; tcu=39}, @{ncu='12'; tcu=40}, @{ncu='12'; tcu=41})) $true
-Check 'escribir: una sola tambien' (Aud-Consecutivas @(@{ncu='12'; tcu=39})) $true
-Check 'escribir: con hueco no' (Aud-Consecutivas @(@{ncu='12'; tcu=39}, @{ncu='12'; tcu=41})) $false
-Check 'escribir: de dos NCUs no' (Aud-Consecutivas @(@{ncu='12'; tcu=39}, @{ncu='13'; tcu=40})) $false
-Check 'escribir: sin nada no' (Aud-Consecutivas @()) $false
-# y el CSV lleva una linea por TCU y variable, con su NCU
-$pr = @(@{nombre='41111 max_tilt_west_r1 [deg]'; texto='55'}, @{nombre='41068 safe_pos_options [hex]'; texto='0x0A00'})
-$csv = @(Aud-CsvCorreccion @(@{ncu='14'; tcu=22}, @{ncu='12'; tcu=39}) $pr)
-Check 'escribir: cabecera con NCU' ($csv[0]) 'NCU;TCU;variable;valor'
-Check 'escribir: dos TCUs por dos variables' ($csv.Count) 5
-Check 'escribir: la primera linea' ($csv[1]) '14;22;41111 max_tilt_west_r1 [deg];55'
-Check 'escribir: y el hexadecimal tal cual' ($csv[2]) '14;22;41068 safe_pos_options [hex];0x0A00'
-# lo que genera tiene que poder volver a leerse
-$vuelta = Parse-CsvPorTcu $csv
-Check 'escribir: el CSV que hace se puede cargar' (@($vuelta.jobs).Count) 4
-Check 'escribir: sin errores' (@($vuelta.errores).Count) 0
-Check 'escribir: y conserva la NCU' (@($vuelta.jobs)[0].ncu) '14'
-Check 'escribir: no pone rango si hay huecos' ($src.Contains('NO se pone rango')) $true
-Check 'escribir: y deja el CSV hecho' ($src.Contains("Pulsa 'CSV por TCU...' y cargalo")) $true
+# de la lista de TCUs malas al texto del cuadro TCUs: ya no hay que elegir
+# entre un rango que arrasa las buenas de en medio y generar un CSV
+Check 'escribir: seguidas van como rango' (Sel-Texto @(@{ncu='12'; tcu=39}, @{ncu='12'; tcu=40}, @{ncu='12'; tcu=41})) '39-41'
+Check 'escribir: una sola va suelta' (Sel-Texto @(@{ncu='12'; tcu=39})) '39'
+Check 'escribir: con hueco, dos tramos' (Sel-Texto @(@{ncu='12'; tcu=39}, @{ncu='12'; tcu=41})) '39,41'
+Check 'escribir: de dos NCUs, con prefijo' (Sel-Texto @(@{ncu='12'; tcu=39}, @{ncu='13'; tcu=40})) '12/39,13/40'
+Check 'escribir: mezcla de tramos y sueltas' (Sel-Texto @(@{ncu='12'; tcu=39}, @{ncu='12'; tcu=40}, @{ncu='15'; tcu=5}, @{ncu='15'; tcu=6}, @{ncu='15'; tcu=9})) '12/39-40,15/5-6,15/9'
+Check 'escribir: sin nada, vacio' (Sel-Texto @()) ''
+Check 'escribir: desordenadas y repetidas' (Sel-Texto @(@{ncu='12'; tcu=41}, @{ncu='12'; tcu=39}, @{ncu='12'; tcu=40}, @{ncu='12'; tcu=40})) '39-41'
+# y lo que escribe se tiene que poder volver a leer
+Check 'escribir: ida y vuelta' ((Parse-Seleccion (Sel-Texto @(@{ncu='12'; tcu=39}, @{ncu='15'; tcu=5}))).porNcu['15'] -join ',') '5'
+# la auditoria manda a Escribir las TCUs EXACTAS, sin pasar por un CSV
+Check 'escribir: la auditoria pone la seleccion' ($src.Contains('$txtWTcus.Text = (Sel-Texto $malas)')) $true
+Check 'escribir: y el cierre tambien' ($src.Contains('$txtWTcus.Text = (Sel-Texto $falta)')) $true
+Check 'escribir: ya no hay CSV de correccion' ($src.Contains('Aud-CsvCorreccion')) $false
+
+# --- la seleccion, enganchada en las cuatro pestanas ---
+# Un cuadro por pestana, y los de/a fuera: si quedara uno suelto seguiria
+# mandando un rango a alguna operacion.
+foreach ($t in @('W', 'L', 'G', 'A')) {
+    Check "sel: cuadro TCUs en $t" ($src.Contains("`$txt${t}Tcus = TG ")) $true
+    Check "sel: sin de/a en $t" (($src.Contains("`$txt${t}Ini")) -or ($src.Contains("`$txt${t}Fin"))) $false
+}
+Check 'sel: el cuadro GW vive en Conexion' ($src.Contains("`$txtGw = TG `$gbCon")) $true
+Check 'sel: con su ayuda al pasar el raton' ($src.Contains('$ttW.SetToolTip($txtWTcus, $AYUDA_TCUS)')) $true
+# y las cuatro operaciones la usan, con el filtro de gateway
+foreach ($e in @(@{n='Escribir'; t='W'}, @{n='Leer'; t='L'}, @{n='Diagnostico'; t='G'}, @{n='Auditoria'; t='A'})) {
+    Check "sel: $($e.n) la usa" ($src.Contains("(Parse-Seleccion `$txt$($e.t)Tcus.Text '$($e.n)') `$txtGw.Text")) $true
+}
+Check 'sel: y el test comm tambien' ($src.Contains("(Parse-Seleccion `$txtGTcus.Text 'Test comm') `$txtGw.Text")) $true
+Check 'sel: el NVM tambien, que escribe' ($src.Contains("(Parse-Seleccion `$txtWTcus.Text 'NVM') `$txtGw.Text")) $true
+# la planta completa ya no ignora el cuadro: antes solo miraba el filtro de NCUs
+Check 'sel: planta completa mira la seleccion' ($src.Contains("Trabajos-Planta `$cx `$null `$(if (`$cx.multi) { `$txtGNcus.Text } else { '' }) (Parse-Seleccion `$txtGTcus.Text 'Diagnostico')")) $true
+# de que gateway cuelga cada TCU, en la tabla y en los exports
+Check 'gw: columna en el diagnostico' ($src.Contains("lvG.Columns.Add('GW'")) $true
+Check 'gw: se calcula por fila' ($src.Contains('Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcu')) $true
+Check 'gw: y las filas de NCU/HSU lo llevan vacio' ($src.Contains("TCU='NCU'; GW=''")) $true
+# los ceros de una TCU que la NCU nunca ha leido no son medidas
+Check 'muda: no publica sus ceros' ($src.Contains('$vacio = ($lastc[$tcu] -eq 0)')) $true
+Check 'muda: ni su SoC' ($src.Contains("SoC = `$(if (`$vacio) { '' }")) $true
+Check 'muda: ni su modo' ($src.Contains("Modo = `$(if (`$vacio) { '-' }")) $true
+Check 'muda: el plan la salta' ($src.Contains("if (`"`$(`$d.Salud)`" -eq 'OFFLINE') { continue }")) $true
 
 Check 'auditoria: no ensucia el CSV'($src.Contains('$script:UltimaAud += [pscustomobject]@{NCU=$etNcu; TCU=[int]$tcu; Variable=$vacio')) $false
 

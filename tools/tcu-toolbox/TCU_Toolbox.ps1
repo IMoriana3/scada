@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.5'
+$VERSION_TOOLBOX = '11.6'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1105,6 +1105,10 @@ function Plan-Firmware([array]$inventario, [string]$objetivo, [hashtable]$gwsPor
     # SoC del ultimo diagnostico, indexado por NCU|TCU. Sin diagnostico, vacio.
     $soc = @{}
     foreach ($d in @($diag)) {
+        # de una TCU que no comunica no se sabe la bateria: lo que trae la cache
+        # de la NCU o son ceros o es de vete a saber cuando, y con eso se marcaba
+        # "BATERIA BAJA" en equipos al 100 %
+        if ("$($d.Salud)" -eq 'OFFLINE') { continue }
         $v = "$($d.SoC)".Trim() -replace '\s*%$', ''
         if ($v -eq '') { continue }
         $soc["$($d.NCU)|$($d.TCU)"] = $v
@@ -1161,6 +1165,30 @@ function Runs-Consecutivos([int[]]$tcus) {
     }
     if ($null -ne $ini) { [void]$runs.Add(@{ini=$ini; fin=$prev}) }
     return $runs
+}
+
+# El camino de vuelta: de una lista de @{ncu;tcu} al texto del cuadro TCUs.
+# "10,22,30-40" si son todas de la misma NCU, y "12/10,15/5-12" si no. Con esto
+# la auditoria puede mandar a Escribir las TCUs EXACTAS que fallaron, que antes
+# habia que sacar por un CSV porque un rango se llevaba por delante las buenas
+# de en medio. Pura.
+function Sel-Texto($equipos) {
+    $porNcu = @{}; $orden = @()
+    foreach ($e in @($equipos)) {
+        $k = "$($e.ncu)"
+        if (-not $porNcu.ContainsKey($k)) { $porNcu[$k] = @(); $orden += $k }
+        $porNcu[$k] += [int]$e.tcu
+    }
+    if ($orden.Count -eq 0) { return '' }
+    $varias = ($orden.Count -gt 1)
+    $partes = @()
+    foreach ($k in @($orden | Sort-Object { [int]("0" + "$_") })) {
+        $pre = $(if ($varias -and $k -ne '') { "$k/" } else { '' })
+        foreach ($r in @(Runs-Consecutivos @($porNcu[$k] | Sort-Object -Unique))) {
+            $partes += $pre + $(if ($r.ini -eq $r.fin) { "$($r.ini)" } else { "$($r.ini)-$($r.fin)" })
+        }
+    }
+    return ($partes -join ',')
 }
 
 # Horas en algo que se lee de un vistazo: minutos si es poco, y los dias de 8 h
@@ -1326,10 +1354,19 @@ function Ncu-DiagCompat([int[]]$tcus) {
                 }
                 elseif ((($al1 -band $CRIT_AL1) -ne 0) -or (($al2 -band $CRIT_AL2_NCU) -ne 0)) { $salud = 'ALARMA' }
                 elseif ($alarmas.Count -gt 0 -or $notas.Count -gt 0) { $salud = 'AVISO' }
+                # Si la NCU NUNCA ha hablado con este TCU, su hueco de la cache
+                # esta a ceros. Publicar esos ceros como medidas es inventarse
+                # datos: salia "SoC 0 % - BATERIA BAJA" en el plan de firmware de
+                # equipos cuya bateria esta al 100 %, y "OFF" como modo. Cuando
+                # SI la ha leido y el dato es viejo, los valores son los ultimos
+                # de verdad y se quedan: la columna Edad s dice de cuando son.
+                $vacio = ($lastc[$tcu] -eq 0)
                 $res[$tcu] = [pscustomobject]@{
                     TCU = $tcu; Salud = $salud
-                    Modo = Modo-De $msr
-                    Tilt = [math]::Round($tilt, 1); Objetivo = [math]::Round($targ, 1); Dif = [math]::Round($dif, 1)
+                    Modo = $(if ($vacio) { '-' } else { Modo-De $msr })
+                    Tilt = $(if ($vacio) { '' } else { [math]::Round($tilt, 1) })
+                    Objetivo = $(if ($vacio) { '' } else { [math]::Round($targ, 1) })
+                    Dif = $(if ($vacio) { '' } else { [math]::Round($dif, 1) })
                     # Cuantos segundos hace que la NCU hablo con esta TCU. En
                     # modo via NCU no se lee al seguidor: se lee lo ultimo que
                     # la NCU le oyo, y cada uno tiene su propio retardo. Sin
@@ -1337,12 +1374,14 @@ function Ncu-DiagCompat([int[]]$tcus) {
                     Edad_s = $(if ($edad -ge 0) { $edad } else { '' })
                     # bit 7 del MSR: 1 = de dia. De noche todos los paneles
                     # estan a 0 V y sin esto la auditoria marcaba media planta.
-                    Dia = (($msr -shr 7) -band 1)
-                    SoC = ($w[$b+13] -band 0xFF); SoH = ($w[$b+21] -band 0xFF)
-                    Vbat_mV = $w[$b+16]; Ibat_mA = $ibat
-                    Vpanel_mV = $w[$b+5]; Ientrada_mA = $ient
-                    Imotor_mA = $w[$b+8]; ImotorPico_mA = $w[$b+9]
-                    Tbat_C = [math]::Round(($w[$b+20] / 10.0) - 273.15, 1); Tpcb_C = [math]::Round(($w[$b+19] / 10.0) - 273.15, 1)
+                    Dia = $(if ($vacio) { '' } else { (($msr -shr 7) -band 1) })
+                    SoC = $(if ($vacio) { '' } else { ($w[$b+13] -band 0xFF) })
+                    SoH = $(if ($vacio) { '' } else { ($w[$b+21] -band 0xFF) })
+                    Vbat_mV = $(if ($vacio) { '' } else { $w[$b+16] }); Ibat_mA = $(if ($vacio) { '' } else { $ibat })
+                    Vpanel_mV = $(if ($vacio) { '' } else { $w[$b+5] }); Ientrada_mA = $(if ($vacio) { '' } else { $ient })
+                    Imotor_mA = $(if ($vacio) { '' } else { $w[$b+8] }); ImotorPico_mA = $(if ($vacio) { '' } else { $w[$b+9] })
+                    Tbat_C = $(if ($vacio) { '' } else { [math]::Round(($w[$b+20] / 10.0) - 273.15, 1) })
+                    Tpcb_C = $(if ($vacio) { '' } else { [math]::Round(($w[$b+19] / 10.0) - 273.15, 1) })
                     Alarmas = (($alarmas + $notas) -join '; ')
                     main_status = ("0x{0:X4}" -f $msr); alarmas_1 = ("0x{0:X4}" -f $al1); alarmas_2 = ("0x{0:X4}" -f $al2)
                     alarmas_3 = ''; alarmas_4 = ''; system_status = ("0x{0:X4}" -f $fl)
@@ -2126,6 +2165,18 @@ function LG($p, [string]$t, [int]$x, [int]$w, [int]$y = 25) {
     $l.Text = $t; $l.Location = New-Object System.Drawing.Point($x, $y)
     $l.Size = New-Object System.Drawing.Size($w, 20); $p.Controls.Add($l); return $l
 }
+# Un solo globo para toda la ventana: la sintaxis del cuadro TCUs no cabe en el
+# rotulo y sin esto hay que acordarse.
+$ttW = New-Object System.Windows.Forms.ToolTip
+$ttW.AutoPopDelay = 20000; $ttW.InitialDelay = 400; $ttW.ReshowDelay = 200
+$AYUDA_TCUS = @"
+1-44                que rango (lo de siempre)
+10,22,30-40         sueltas y tramos a la vez
+12/10, 15/5-12      cada tramo con SU NCU
+12/*                todas las de la NCU 12
+vacio o NA          todas las de la seleccion
+"@
+
 function TG($p, [string]$t, [int]$x, [int]$y, [int]$w) {
     $c = New-Object System.Windows.Forms.TextBox
     $c.Text = $t; $c.Location = New-Object System.Drawing.Point($x, $y)
@@ -2150,10 +2201,15 @@ $gbCon.Controls.Add($btnPlantas)
 $txtIp = TG $gbCon '192.168.4.60' 284 22 105
 [void](LG $gbCon 'Puerto' 398 46)
 $txtPort = TG $gbCon '503' 446 22 45
-[void](LG $gbCon 'Timeout ms' 502 76)
-$txtTo = TG $gbCon '8000' 578 22 50
-[void](LG $gbCon 'Reintentos' 638 70)
-$txtRet = TG $gbCon '3' 710 22 30
+[void](LG $gbCon 'T/O ms' 502 48)
+$txtTo = TG $gbCon '8000' 552 22 46
+[void](LG $gbCon 'Reint.' 606 42)
+$txtRet = TG $gbCon '3' 650 22 28
+# Filtro de gateway: vacio = todos. Con "(Planta completa)" y 504 aqui se
+# trabaja sobre TODAS las TCUs del GW2 de cada NCU, que antes obligaba a ir
+# NCU por NCU con su rango a mano.
+[void](LG $gbCon 'GW' 688 24)
+$txtGw = TG $gbCon '' 714 22 46
 
 $btnCancelar = New-Object System.Windows.Forms.Button
 $btnCancelar.Text = 'CANCELAR'
@@ -2174,31 +2230,33 @@ $tabW = New-Object System.Windows.Forms.TabPage
 $tabW.Text = 'Escribir'
 $tabs.TabPages.Add($tabW)
 
-[void](LG $tabW 'TCU de' 10 52)
-$txtWIni = TG $tabW '1' 62 22 45
-[void](LG $tabW 'a' 116 12)
-$txtWFin = TG $tabW '44' 131 22 45
+# Un solo cuadro: "1-44" de siempre, "10,22,30-40" para las sueltas y
+# "12/10, 15/5-12" cuando son de NCUs distintas. Con dos cuadros de/a habia que
+# ir tres veces o pasar por un CSV.
+[void](LG $tabW 'TCUs' 10 40)
+$txtWTcus = TG $tabW '1-44' 52 22 150
+$txtWTcus.Add_MouseHover({ $ttW.SetToolTip($txtWTcus, $AYUDA_TCUS) })
 
-[void](LG $tabW 'Filtro' 200 42)
-$txtWFiltro = TG $tabW '' 244 22 170
-$lblWFiltro = LG $tabW '' 424 104
+[void](LG $tabW 'Filtro' 212 42)
+$txtWFiltro = TG $tabW '' 256 22 150
+$lblWFiltro = LG $tabW '' 412 104
 $lblWFiltro.ForeColor = [System.Drawing.Color]::Gray
 
 $btnWQuitar = New-Object System.Windows.Forms.Button
 $btnWQuitar.Text = 'Quitar'
-$btnWQuitar.Location = New-Object System.Drawing.Point(534, 18)
+$btnWQuitar.Location = New-Object System.Drawing.Point(524, 18)
 $btnWQuitar.Size = New-Object System.Drawing.Size(78, 28)
 $tabW.Controls.Add($btnWQuitar)
 
 $btnPresetSave = New-Object System.Windows.Forms.Button
 $btnPresetSave.Text = 'Guardar preset'
-$btnPresetSave.Location = New-Object System.Drawing.Point(620, 18)
+$btnPresetSave.Location = New-Object System.Drawing.Point(610, 18)
 $btnPresetSave.Size = New-Object System.Drawing.Size(140, 28)
 $tabW.Controls.Add($btnPresetSave)
 
 $btnPresetLoad = New-Object System.Windows.Forms.Button
 $btnPresetLoad.Text = 'Cargar preset'
-$btnPresetLoad.Location = New-Object System.Drawing.Point(766, 18)
+$btnPresetLoad.Location = New-Object System.Drawing.Point(756, 18)
 $btnPresetLoad.Size = New-Object System.Drawing.Size(140, 28)
 $tabW.Controls.Add($btnPresetLoad)
 
@@ -2330,14 +2388,13 @@ $tabL = New-Object System.Windows.Forms.TabPage
 $tabL.Text = 'Leer variable'
 $tabs.TabPages.Add($tabL)
 
-[void](LG $tabL 'TCU de' 10 52)
-$txtLIni = TG $tabL '1' 62 22 45
-[void](LG $tabL 'a' 116 12)
-$txtLFin = TG $tabL '44' 131 22 45
+[void](LG $tabL 'TCUs' 10 40)
+$txtLTcus = TG $tabL '1-44' 52 22 150
+$txtLTcus.Add_MouseHover({ $ttW.SetToolTip($txtLTcus, $AYUDA_TCUS) })
 
-[void](LG $tabL 'Filtro' 200 42)
-$txtLFiltro = TG $tabL '' 244 22 170
-$lblLFiltro = LG $tabL '' 424 86
+[void](LG $tabL 'Filtro' 212 42)
+$txtLFiltro = TG $tabL '' 256 22 150
+$lblLFiltro = LG $tabL '' 412 86
 $lblLFiltro.ForeColor = [System.Drawing.Color]::Gray
 
 # El preset ya dice que variables importan: teclearlas otra vez aqui sobra. Con
@@ -2576,10 +2633,9 @@ $tabG = New-Object System.Windows.Forms.TabPage
 $tabG.Text = 'Diagnostico'
 $tabs.TabPages.Add($tabG)
 
-[void](LG $tabG 'TCU de' 10 52)
-$txtGIni = TG $tabG '1' 62 22 45
-[void](LG $tabG 'a' 116 12)
-$txtGFin = TG $tabG '44' 131 22 45
+[void](LG $tabG 'TCUs' 10 40)
+$txtGTcus = TG $tabG '1-44' 52 22 130
+$txtGTcus.Add_MouseHover({ $ttW.SetToolTip($txtGTcus, $AYUDA_TCUS) })
 
 $btnDiag = New-Object System.Windows.Forms.Button
 $btnDiag.Text = 'DIAGNOSTICAR'
@@ -2703,6 +2759,10 @@ $lvG.Size = New-Object System.Drawing.Size(898, 244)
 $lvG.View = 'Details'; $lvG.FullRowSelect = $true; $lvG.GridLines = $true
 [void]$lvG.Columns.Add('NCU', 45)
 [void]$lvG.Columns.Add('TCU', 45)
+# De que gateway cuelga cada TCU: en modo via NCU todo se lee por el 502, pero
+# el equipo sigue estando en su GW y hay que saberlo para el updater y para
+# saber a que red Zigbee pertenece.
+[void]$lvG.Columns.Add('GW', 48)
 [void]$lvG.Columns.Add('Salud', 65)
 [void]$lvG.Columns.Add('Modo', 65)
 [void]$lvG.Columns.Add('Tilt real', 58)
@@ -2710,7 +2770,7 @@ $lvG.View = 'Details'; $lvG.FullRowSelect = $true; $lvG.GridLines = $true
 [void]$lvG.Columns.Add('Dif', 46)
 [void]$lvG.Columns.Add('SoC', 46)
 [void]$lvG.Columns.Add('Edad s', 60)
-[void]$lvG.Columns.Add('Alarmas / notas', 390)
+[void]$lvG.Columns.Add('Alarmas / notas', 342)
 $tabG.Controls.Add($lvG)
 
 # ============================ TAB AUDITORIA ============================
@@ -2797,10 +2857,9 @@ $gbAud.Location = New-Object System.Drawing.Point(10, 6)
 $gbAud.Size = New-Object System.Drawing.Size(898, 182)
 $tabF.Controls.Add($gbAud)
 
-[void](LG $gbAud 'TCU de' 10 52)
-$txtAIni = TG $gbAud '1' 62 22 40
-[void](LG $gbAud 'a' 108 10)
-$txtAFin = TG $gbAud '44' 120 22 40
+[void](LG $gbAud 'TCUs' 10 40)
+$txtATcus = TG $gbAud '1-44' 52 22 110
+$txtATcus.Add_MouseHover({ $ttW.SetToolTip($txtATcus, $AYUDA_TCUS) })
 
 $btnPresetRef = New-Object System.Windows.Forms.Button
 $btnPresetRef.Text = 'Preset ref...'
@@ -3981,20 +4040,118 @@ function Eti-Rango($tcus) {
     return "TCUs $($t[0])-$($t[-1])"
 }
 
-function Trabajos-Planta([hashtable]$cx, [int[]]$tcus, [string]$filtro = '') {
+# Que equipos hay que tocar, en un solo sitio. Antes eran dos cuadros "de/a", y
+# con eso no se puede decir "la 10, la 22 y de la 30 a la 40": habia que ir tres
+# veces o pasar por un CSV.
+#
+#   ""  /  "NA"  /  "todas"   -> todas las de la seleccion
+#   "1-44"                    -> el rango de siempre
+#   "10,22,30-40"             -> lista suelta, en las NCUs elegidas
+#   "12/10, 12/22, 15/5-12"   -> cada tramo con SU NCU
+#   "12/*, 15/5-12"           -> toda la NCU 12, y de la 15 solo esas
+#
+# Devuelve @{todas; lista; porNcu}. Pura: se prueba sin planta.
+function Parse-Seleccion([string]$texto, [string]$etiqueta = 'TCUs') {
+    $t = "$texto".Trim()
+    if ($t -eq '' -or $t -eq 'NA' -or $t -match '^(?i)todas$') { return @{todas=$true; lista=@(); porNcu=@{}} }
+    $lista = @(); $porNcu = @{}
+    foreach ($parte in $t.Split(',')) {
+        $p = $parte.Trim()
+        if ($p -eq '') { continue }
+        $eti = $p
+        $ncu = ''
+        if ($p -match '^(\d+)\s*/\s*(.+)$') { $ncu = $Matches[1]; $p = $Matches[2].Trim() }
+        $nums = @()
+        if ($p -eq '*') {
+            if ($ncu -eq '') { throw "$etiqueta : el * solo vale con la NCU delante (12/*)" }
+            if (-not $porNcu.ContainsKey($ncu)) { $porNcu[$ncu] = @() }
+            $porNcu[$ncu] += '*'
+            continue
+        }
+        if ($p -match '^(\d+)\s*-\s*(\d+)$') {
+            $a = [int]$Matches[1]; $b = [int]$Matches[2]
+            if ($b -lt $a) { throw "$etiqueta : el tramo '$eti' va al reves" }
+            $nums = @($a..$b)
+        }
+        elseif ($p -match '^\d+$') { $nums = @([int]$p) }
+        else { throw "$etiqueta : no entiendo '$eti' (usa 10, 30-40 o 12/10)" }
+        foreach ($n in $nums) { if ($n -lt 1 -or $n -gt 247) { throw "$etiqueta : el $n esta fuera de 1..247" } }
+        if ($ncu -ne '') {
+            if (-not $porNcu.ContainsKey($ncu)) { $porNcu[$ncu] = @() }
+            $porNcu[$ncu] += $nums
+        } else { $lista += $nums }
+    }
+    # mezclarlo seria ambiguo: "12/10,22" no dice si el 22 es de la 12 o de todas
+    if ($porNcu.Count -gt 0 -and $lista.Count -gt 0) {
+        throw "$etiqueta : o pones la NCU delante en TODOS los tramos (12/10, 15/5-12) o en ninguno"
+    }
+    foreach ($k in @($porNcu.Keys)) {
+        if ($porNcu[$k] -contains '*') { $porNcu[$k] = @('*') }
+        else { $porNcu[$k] = @($porNcu[$k] | Sort-Object -Unique) }
+    }
+    return @{todas=$false; lista=@($lista | Sort-Object -Unique); porNcu=$porNcu}
+}
+
+# Los gateways de una NCU que sobreviven al filtro de GW ("503", o vacio = todos).
+# Pura.
+# De que gateway cuelga una TCU segun la topologia. Vacio si no cae en ninguno
+# (o si la entrada lleva puerto fijo, que entonces ya se sabe cual es). Pura.
+function Gw-DeTcu($gws, [int]$tcu) {
+    foreach ($g in @($gws)) { if ($tcu -ge [int]$g.ini -and $tcu -le [int]$g.fin) { return "$($g.puerto)" } }
+    return ''
+}
+
+function Gws-Filtrados($gws, [string]$gw) {
+    $g = "$gw".Trim()
+    if ($g -eq '' -or $g -match '^(?i)todos$') { return @($gws) }
+    return @(@($gws) | Where-Object { "$($_.puerto)" -eq $g })
+}
+
+# Las TCUs que le tocan a UNA NCU: las de su seleccion, recortadas a los
+# gateways que quedan. Sin seleccion, todas las del gateway -que es como se pide
+# "toda la NCU" o "todo el GW 504" sin tener que saberse el rango-. Pura.
+function Sel-TcusDe($sel, $gws, [string]$ncu) {
+    $todas = @()
+    foreach ($g in @($gws)) { $todas += @([int]$g.ini..[int]$g.fin) }
+    $todas = @($todas | Sort-Object -Unique)
+    if ($null -eq $sel -or $sel.todas) { return $todas }
+    $piden = @()
+    if ($sel.porNcu.Count -gt 0) { if ($sel.porNcu.ContainsKey("$ncu")) { $piden = @($sel.porNcu["$ncu"]) } }
+    else { $piden = @($sel.lista) }
+    if ($piden.Count -eq 0) { return @() }
+    if ($piden -contains '*') { return $todas }
+    return @($piden | Where-Object { $todas -contains [int]$_ } | Sort-Object -Unique)
+}
+
+function Trabajos-Planta([hashtable]$cx, [int[]]$tcus, [string]$filtro = '', $sel = $null, [string]$gw = '') {
     if (-not $cx.multi) {
         $n = Ncu-DeNombre $cx.nombre
-        return @{ncu=$(if ($n -ne '') { [int]$n } else { $null }); ip=$cx.ip; tcus=$tcus; cx=$cx}
+        $g = $(if ($cx.gws) { @(Gws-Filtrados $cx.gws $gw) } else { $null })
+        $t = $tcus
+        if ($null -ne $sel) {
+            if ($null -ne $g) {
+                if ($g.Count -eq 0) { throw "esta entrada no tiene ningun gateway $gw" }
+                $t = @(Sel-TcusDe $sel $g "$n")
+            }
+            elseif ($sel.todas) { throw 'di que TCUs: con un puerto fijo la herramienta no sabe cuantas hay (usa una entrada (auto) o escribe p. ej. 1-44)' }
+            elseif ($sel.porNcu.Count -gt 0) { $t = $(if ($sel.porNcu.ContainsKey("$n")) { @($sel.porNcu["$n"]) } else { @() }) }
+            else { $t = @($sel.lista) }
+        }
+        return @{ncu=$(if ($n -ne '') { [int]$n } else { $null }); ip=$cx.ip; tcus=@($t)
+                 cx=$(if ($null -ne $g) { @{ip=$cx.ip; puerto=$cx.puerto; gws=$g; multi=$null; etiqueta=$cx.etiqueta; to=$cx.to; reint=$cx.reint} } else { $cx })}
     }
     $lista = @()
     $nums = Parse-ListaNums $filtro
+    # con "12/10, 15/5-12" las NCUs las dice la propia seleccion
+    if ($null -ne $sel -and $sel.porNcu.Count -gt 0) { $nums = @($sel.porNcu.Keys | ForEach-Object { [int]$_ }) }
     foreach ($n in $cx.multi) {
         if ($nums -and -not ($nums -contains [int]$n.ncu)) { continue }
-        $lt = @()
-        foreach ($g in $n.gws) { $lt += @([int]$g.ini..[int]$g.fin) }
-        $lt = @($lt | Sort-Object -Unique)
+        $g = @(Gws-Filtrados $n.gws $gw)
+        if ($g.Count -eq 0) { continue }              # esa NCU no tiene ese gateway
+        $lt = @(Sel-TcusDe $sel $g "$($n.ncu)")
+        if ($lt.Count -eq 0) { continue }
         $lista += ,@{ncu=[int]$n.ncu; ip=$n.ip; tcus=$lt
-            cx=@{ip=$n.ip; puerto=$null; gws=$n.gws; multi=$null; etiqueta='auto'; to=$cx.to; reint=$cx.reint}}
+            cx=@{ip=$n.ip; puerto=$null; gws=$g; multi=$null; etiqueta='auto'; to=$cx.to; reint=$cx.reint}}
     }
     return $lista
 }
@@ -4058,21 +4215,17 @@ $cbPlanta.Add_SelectedIndexChanged({
         # planta completa: solo Diagnostico; IP, puertos y rangos van por NCU
         # (los campos se ignoran y se muestran como NA)
         $txtIp.Text = 'NA'; $txtPort.Text = 'auto'
-        $txtGIni.Text = 'NA'; $txtGFin.Text = 'NA'
-        $txtAIni.Text = 'NA'; $txtAFin.Text = 'NA'
+        $txtGTcus.Text = 'NA'; $txtATcus.Text = 'NA'; $txtLTcus.Text = 'NA'; $txtWTcus.Text = 'NA'
         $txtVIni.Text = 'NA'; $txtVFin.Text = 'NA'
-        $txtLIni.Text = 'NA'; $txtLFin.Text = 'NA'
-        Con "Planta completa seleccionada ($(@($p.ncus).Count) NCUs): vale en Diagnostico, Leer variable, Flota (auditoria e inventario) y comisionado, con rangos automaticos por NCU; el filtro NCUs del diagnostico admite '1,3-5' (vacio = todas)." ([System.Drawing.Color]::SteelBlue)
+        Con "Planta completa seleccionada ($(@($p.ncus).Count) NCUs): rangos automaticos por NCU. El cuadro TCUs admite '10,22,30-40' y '12/10, 15/5-12' (vacio o NA = todas), y el cuadro GW de Conexion deja trabajar solo sobre un gateway." ([System.Drawing.Color]::SteelBlue)
         return
     }
     if ($p) {
         $txtIp.Text = $p.ip
         if ($p.gws) { $txtPort.Text = 'auto' } else { $txtPort.Text = "$($p.puerto)" }
-        $txtWIni.Text = "$($p.ini)"; $txtWFin.Text = "$($p.fin)"
-        $txtLIni.Text = "$($p.ini)"; $txtLFin.Text = "$($p.fin)"
-        $txtGIni.Text = "$($p.ini)"; $txtGFin.Text = "$($p.fin)"
+        $rango = "$($p.ini)-$($p.fin)"
+        $txtWTcus.Text = $rango; $txtLTcus.Text = $rango; $txtGTcus.Text = $rango; $txtATcus.Text = $rango
         $txtSIni.Text = "$($p.ini)"; $txtSFin.Text = "$($p.fin)"
-        $txtAIni.Text = "$($p.ini)"; $txtAFin.Text = "$($p.fin)"
         $txtVIni.Text = "$($p.ini)"; $txtVFin.Text = "$($p.fin)"
         $txtBIni.Text = "$($p.ini)"; $txtBFin.Text = "$($p.fin)"
         $txtPIni.Text = "$($p.ini)"; $txtPFin.Text = "$($p.fin)"
@@ -4135,9 +4288,9 @@ function Escribir-EnTcus($tcus) {
         }
         $trabajos = @($lista)
     } else {
-        $trabajos = @(Trabajos-Planta $cx $tcus)
+        $trabajos = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtWTcus.Text 'Escribir') $txtGw.Text)
     }
-    if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
+    if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna TCU (mira los cuadros TCUs y GW).' ([System.Drawing.Color]::Orange); return }
     $nTcus = 0; foreach ($tr in $trabajos) { $nTcus += @($tr.tcus).Count }
     $donde = $(if ($cx.multi) { "$($trabajos.Count) NCUs de la PLANTA COMPLETA" } else { "$($cx.ip):$($cx.etiqueta)" })
     $resumen = ($vars | ForEach-Object {
@@ -4320,12 +4473,7 @@ function Escribir-EnTcus($tcus) {
     }
 }
 
-$btnEscribir.Add_Click({ Lanzar {
-    $cxW = Params-Conexion
-    $tcusW = $null
-    if (-not $cxW.multi) { $tcusW = Rango-Tcus $txtWIni.Text $txtWFin.Text 'Escribir' }
-    Escribir-EnTcus $tcusW
-} })
+$btnEscribir.Add_Click({ Lanzar { Escribir-EnTcus $null } })
 # Reintentar fallidas tiene que volver a la NCU de cada una: en una escritura
 # de planta completa los numeros de TCU se repiten entre NCUs.
 $btnFallidas.Add_Click({ Lanzar {
@@ -4340,9 +4488,10 @@ $btnNvm.Add_Click({ Lanzar {
         if ($r -ne 'Yes') { return }
     }
     $cx = Params-Conexion
-    $tcus = Rango-Tcus $txtWIni.Text $txtWFin.Text 'NVM'
+    $tcus = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtWTcus.Text 'NVM') $txtGw.Text).tcus
+    if (@($tcus).Count -eq 0) { throw 'la seleccion no deja ninguna TCU' }
     $r = [System.Windows.Forms.MessageBox]::Show(
-        "Guardar configuracion en NVM (40007 bit 15) en TCUs $($tcus[0]) a $($tcus[-1]) de $($cx.ip):$($cx.etiqueta)?",
+        "Guardar configuracion en NVM (40007 bit 15) en $(Eti-Rango $tcus) de $($cx.ip):$($cx.etiqueta)?",
         'Confirmar NVM', 'YesNo', 'Warning')
     if ($r -ne 'Yes') { return }
     $segs = @(Plan-Segmentos $tcus $cx)
@@ -4777,9 +4926,7 @@ $btnLeer.Add_Click({ Lanzar {
     if ($nombres.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('Elige al menos una variable en la tabla.','Aviso'); return }
     $defs = @($nombres | ForEach-Object { @{nombre=[string]$_; vdef=(Def-DeLectura $_)} })
     $cx = Params-Conexion
-    $tcus = $null
-    if (-not $cx.multi) { $tcus = Rango-Tcus $txtLIni.Text $txtLFin.Text 'Leer' }
-    $trabajos = @(Trabajos-Planta $cx $tcus)
+    $trabajos = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtLTcus.Text 'Leer') $txtGw.Text)
     if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
     $lvL.Items.Clear(); $lvL.Columns.Clear(); $script:UltimaLectura = @()
     $script:ReconfIntentos = 0; $script:ReconfConfirmados = 0; $script:ReconfCambios = 0; $script:ReconfSinAcuerdo = 0
@@ -4792,7 +4939,7 @@ $btnLeer.Add_Click({ Lanzar {
         $totTcus = 0; foreach ($tr in $trabajos) { $totTcus += @($tr.tcus).Count }
         Con "Leyendo $($defs.Count) variable(s) en PLANTA completa: $($trabajos.Count) NCUs, $totTcus TCUs (rangos automaticos)" ([System.Drawing.Color]::SteelBlue)
     } else {
-        Con "Leyendo $($defs.Count) variable(s) en $(Eti-Rango $tcus)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
+        Con "Leyendo $($defs.Count) variable(s) en $(Eti-Rango @($trabajos).tcus)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     }
     $nLeerTot = 0; foreach ($tr in $trabajos) { $nLeerTot += @($tr.tcus).Count }
     Prog-Iniciar ($nLeerTot * @($defs).Count)
@@ -5575,15 +5722,13 @@ function Diag-Correr {
     $script:UltimaCarga = @{}   # lo leido de carga era de la lectura anterior
     # trabajos: una entrada por NCU (planta completa) o una sola (modo normal)
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    $trabajos = @(Trabajos-Planta $cx $null $(if ($cx.multi) { $txtGNcus.Text } else { '' }) (Parse-Seleccion $txtGTcus.Text 'Diagnostico') $txtGw.Text)
+    if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna TCU (mira los cuadros NCUs, TCUs y GW).' ([System.Drawing.Color]::Orange); return }
     if ($cx.multi) {
-        $trabajos = @(Trabajos-Planta $cx $null $txtGNcus.Text)
-        if ($trabajos.Count -eq 0) { Con 'El filtro de NCUs no coincide con ninguna NCU de la planta.' ([System.Drawing.Color]::Orange); return }
         $totTcus = 0; foreach ($tr in $trabajos) { $totTcus += @($tr.tcus).Count }
-        Con "Diagnostico de PLANTA: $($trabajos.Count) NCUs, $totTcus TCUs (rangos por NCU automaticos)" ([System.Drawing.Color]::SteelBlue)
+        Con "Diagnostico de PLANTA: $($trabajos.Count) NCUs, $totTcus TCUs" ([System.Drawing.Color]::SteelBlue)
     } else {
-        $tcus = Rango-Tcus $txtGIni.Text $txtGFin.Text 'Diagnostico'
-        $trabajos = @(Trabajos-Planta $cx $tcus)
-        Con "Diagnostico de $(Eti-Rango $tcus)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
+        Con "Diagnostico de $(Eti-Rango @($trabajos).tcus)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     }
     $nOk = 0; $nAviso = 0; $nAlarma = 0; $nOff = 0
     $nHOk = 0; $nHMal = 0        # las HSUs van aparte de la cuenta de TCUs
@@ -5595,7 +5740,7 @@ function Diag-Correr {
     $paraleloOk = $false
     if ($chkGPar.Checked -and $chkGNcu.Checked -and @($trabajos).Count -gt 1) {
         Con "Barrido en paralelo: $(@($trabajos).Count) NCUs a la vez (desmarca 'en paralelo' si prefieres una detras de otra)." ([System.Drawing.Color]::SteelBlue)
-        $tareas = @($trabajos | ForEach-Object { @{ncu=$_.ncu; ip=$_.ip; puerto=$PUERTO_NCU; to=$_.cx.to; tcus=@($_.tcus)} })
+        $tareas = @($trabajos | ForEach-Object { @{ncu=$_.ncu; ip=$_.ip; puerto=$PUERTO_NCU; to=$_.cx.to; tcus=@($_.tcus); gws=$_.cx.gws} })
         $res = $null
         $avance = { param($t) Prog-Paso @($t.tcus).Count; [System.Windows.Forms.Application]::DoEvents() }
         try { $res = @(Paralelo-Ejecutar $tareas $DIAG_HILO 8 '' $avance) } catch { Con "El barrido en paralelo no ha podido arrancar ($_): se hace en serie." ([System.Drawing.Color]::Orange) }
@@ -5612,7 +5757,7 @@ function Diag-Correr {
                 foreach ($dh in @($o.hsus)) {
                     $dh.NCU = $eti
                     $itemH = New-Object System.Windows.Forms.ListViewItem($eti)
-                    foreach ($c in @($dh.TCU, $dh.Salud, $dh.Modo, $dh.Tilt, $dh.Objetivo, $dh.Dif, $dh.SoC, $dh.Edad_s, $dh.Alarmas)) { [void]$itemH.SubItems.Add("$c") }
+                    foreach ($c in @($dh.TCU, '', $dh.Salud, $dh.Modo, $dh.Tilt, $dh.Objetivo, $dh.Dif, $dh.SoC, $dh.Edad_s, $dh.Alarmas)) { [void]$itemH.SubItems.Add("$c") }
                     if ("$($dh.Salud)" -eq 'OK') { $itemH.ForeColor = [System.Drawing.Color]::DarkGreen; $nHOk++ }
                     else { $itemH.ForeColor = [System.Drawing.Color]::DarkOrange; $nHMal++ }
                     $lvG.Items.Add($itemH) | Out-Null
@@ -5620,8 +5765,9 @@ function Diag-Correr {
                 }
                 foreach ($d in @($o.filas)) {
                     $d | Add-Member -NotePropertyName NCU -NotePropertyValue $eti -Force
+                    $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcu $r.tarea.gws ([int]"$($d.TCU)")) -Force
                     $item = New-Object System.Windows.Forms.ListViewItem($eti)
-                    foreach ($c in @($d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
+                    foreach ($c in @($d.TCU, $d.GW, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
                     switch ("$($d.Salud)") {
                         'OK'      { $item.ForeColor = [System.Drawing.Color]::DarkGreen;  $nOk++ }
                         'AVISO'   { $item.ForeColor = [System.Drawing.Color]::DarkOrange; $nAviso++ }
@@ -5651,7 +5797,7 @@ function Diag-Correr {
             Modbus-Cerrar
         } catch { $nsErr = "$_"; Modbus-Cerrar }
         $dn = [pscustomobject]@{
-            NCU="$($tr.ncu)"; TCU='NCU'; Salud=$(if ($ns) { $ns.salud } else { 'AVISO' }); Modo='-'
+            NCU="$($tr.ncu)"; TCU='NCU'; GW=''; Salud=$(if ($ns) { $ns.salud } else { 'AVISO' }); Modo='-'
             Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''
             # El reloj salia SIEMPRE en la columna de alarmas y parecia un
             # problema. Solo se menciona si de verdad esta desviado.
@@ -5683,7 +5829,7 @@ function Diag-Correr {
         foreach ($dh in $hsus) {
             $dh.NCU = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
             $itemH = New-Object System.Windows.Forms.ListViewItem($dh.NCU)
-            foreach ($c in @($dh.TCU, $dh.Salud, $dh.Modo, $dh.Tilt, $dh.Objetivo, $dh.Dif, $dh.SoC, $dh.Edad_s, $dh.Alarmas)) { [void]$itemH.SubItems.Add("$c") }
+            foreach ($c in @($dh.TCU, '', $dh.Salud, $dh.Modo, $dh.Tilt, $dh.Objetivo, $dh.Dif, $dh.SoC, $dh.Edad_s, $dh.Alarmas)) { [void]$itemH.SubItems.Add("$c") }
             switch ($dh.Salud) {
                 # Las HSUs se cuentan aparte: pedir una TCU y ver "OK: 1 Aviso: 1"
                 # porque la meteo de esa NCU va en la misma tabla despista.
@@ -5710,7 +5856,7 @@ function Diag-Correr {
             if ($dm) { $d = $dm[[int]$tcu] }
             if ($null -eq $d) {
                 $d = [pscustomobject]@{
-                    TCU=[int]$tcu; Salud='OFFLINE'; Modo=''; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
+                    TCU=[int]$tcu; GW=''; Salud='OFFLINE'; Modo=''; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
                     Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''; Alarmas='sin datos via NCU'
                     main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
                 }
@@ -5718,8 +5864,10 @@ function Diag-Correr {
             $etiquetaNcu = ''
             if ($null -ne $tr.ncu) { $etiquetaNcu = "$($tr.ncu)" }
             $d | Add-Member -NotePropertyName NCU -NotePropertyValue $etiquetaNcu -Force
+            $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcu $tr.cx.gws ([int]"$($d.TCU)")) -Force
+        $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcu $tr.cx.gws ([int]"$($d.TCU)")) -Force
             $item = New-Object System.Windows.Forms.ListViewItem($etiquetaNcu)
-            foreach ($c in @($d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
+            foreach ($c in @($d.TCU, $d.GW, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
             switch ($d.Salud) {
                 'OK'      { $item.ForeColor = [System.Drawing.Color]::DarkGreen;  $nOk++ }
                 'AVISO'   { $item.ForeColor = [System.Drawing.Color]::DarkOrange; $nAviso++ }
@@ -5759,7 +5907,7 @@ function Diag-Correr {
         }
         if ($null -eq $d) {
             $d = [pscustomobject]@{
-                TCU=[int]$tcu; Salud='OFFLINE'; Modo=''; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
+                TCU=[int]$tcu; GW=''; Salud='OFFLINE'; Modo=''; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
                 Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''; Alarmas=$err
                 main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
             }
@@ -5767,8 +5915,9 @@ function Diag-Correr {
         $etiquetaNcu = ''
         if ($null -ne $tr.ncu) { $etiquetaNcu = "$($tr.ncu)" }
         $d | Add-Member -NotePropertyName NCU -NotePropertyValue $etiquetaNcu -Force
+        $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcu $tr.cx.gws ([int]"$($d.TCU)")) -Force
         $item = New-Object System.Windows.Forms.ListViewItem($etiquetaNcu)
-        foreach ($c in @($d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) {
+        foreach ($c in @($d.TCU, $d.GW, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) {
             [void]$item.SubItems.Add("$c")
         }
         switch ($d.Salud) {
@@ -5825,7 +5974,7 @@ function Diag-Refrescar {
         if ($fNcu -ne 'NCU - todas' -and ("NCU$($d.NCU)") -ne $fNcu) { continue }
         if ($sal.Count -gt 0 -and $sal -notcontains "$($d.Salud)") { continue }
         $item = New-Object System.Windows.Forms.ListViewItem("$($d.NCU)")
-        foreach ($c in @($d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
+        foreach ($c in @($d.TCU, $d.GW, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
         switch ("$($d.Salud)") {
             'OK'      { $item.ForeColor = [System.Drawing.Color]::DarkGreen }
             'AVISO'   { $item.ForeColor = [System.Drawing.Color]::DarkOrange }
@@ -5847,9 +5996,7 @@ $btnDiag.Add_Click({ Lanzar { $script:UltimoEsComm = $false; Diag-Correr } })
 # (2 regs por TCU) + la salud de cada NCU: ni bloque compacto ni Zigbee.
 $btnGComm.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    $tcus = $null
-    if (-not $cx.multi) { $tcus = Rango-Tcus $txtGIni.Text $txtGFin.Text 'Test comm' }
-    $trabajos = @(Trabajos-Planta $cx $tcus $(if ($cx.multi) { $txtGNcus.Text } else { '' }))
+    $trabajos = @(Trabajos-Planta $cx $null $(if ($cx.multi) { $txtGNcus.Text } else { '' }) (Parse-Seleccion $txtGTcus.Text 'Test comm') $txtGw.Text)
     if ($trabajos.Count -eq 0) { Con 'El filtro de NCUs no coincide con ninguna NCU de la planta.' ([System.Drawing.Color]::Orange); return }
     $lvG.Items.Clear(); $script:UltimoDiag = @(); $lblGResumen.Text = ''
     $script:UltimaCarga = @{}   # lo leido de carga era de la lectura anterior
@@ -5869,7 +6016,7 @@ $btnGComm.Add_Click({ Lanzar {
         Modbus-Cerrar
         if ($null -eq $c) {
             $nNcuKo++
-            $d = [pscustomobject]@{NCU=$et; TCU='NCU'; Salud='OFFLINE'; Modo='-'; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
+            $d = [pscustomobject]@{NCU=$et; TCU='NCU'; GW=''; Salud='OFFLINE'; Modo='-'; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
                 Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''; Alarmas="NCU SIN RESPUESTA en $($tr.ip):${PUERTO_NCU} - $err"
                 main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
             $script:UltimoDiag += $d
@@ -5878,12 +6025,12 @@ $btnGComm.Add_Click({ Lanzar {
             continue
         }
         $nNcuOk++
-        $script:UltimoDiag += [pscustomobject]@{NCU=$et; TCU='NCU'; Salud='OK'; Modo='-'; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
+        $script:UltimoDiag += [pscustomobject]@{NCU=$et; TCU='NCU'; GW=''; Salud='OK'; Modo='-'; Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
             Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''; Alarmas="NCU responde ($($tr.ip):$PUERTO_NCU)"
             main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
         foreach ($h in $c.hsus) {
             if ($h.comunica) { $nHsuOk++ } else { $nHsuKo++ }
-            $script:UltimoDiag += [pscustomobject]@{NCU=$et; TCU=$h.hsu; Salud=$(if ($h.comunica) { 'OK' } else { 'OFFLINE' }); Modo='-'
+            $script:UltimoDiag += [pscustomobject]@{NCU=$et; TCU=$h.hsu; GW=''; Salud=$(if ($h.comunica) { 'OK' } else { 'OFFLINE' }); Modo='-'
                 Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''
                 Alarmas=$(if ($h.comunica) { "comunica (hace $($h.edad) s)" } else { $(if ($h.lastcomm -eq 0) { 'la NCU nunca la ha leido' } else { "sin datos desde hace $($h.edad) s" }) })
                 main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
@@ -5893,7 +6040,7 @@ $btnGComm.Add_Click({ Lanzar {
             $e = $c.tcus[[int]$tcu]
             $ok = ($null -ne $e -and $e.comunica)
             if ($ok) { $nOk++ } else { $nOff++; $mudas += $tcu }
-            $script:UltimoDiag += [pscustomobject]@{NCU=$et; TCU=[int]$tcu; Salud=$(if ($ok) { 'OK' } else { 'OFFLINE' }); Modo='-'
+            $script:UltimoDiag += [pscustomobject]@{NCU=$et; TCU=[int]$tcu; GW=(Gw-DeTcu $tr.cx.gws ([int]$tcu)); Salud=$(if ($ok) { 'OK' } else { 'OFFLINE' }); Modo='-'
                 Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''
                 Alarmas=$(if ($ok) { "comunica (hace $($e.edad) s)" } elseif ($null -eq $e -or $e.lastcomm -eq 0) { 'la NCU nunca ha leido este TCU' } else { "sin datos desde hace $($e.edad) s" })
                 main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
@@ -6526,22 +6673,6 @@ function Aud-Resumen($filas, [int]$tcusOk, [int]$tcusDesv, [int]$tcusErr, [int]$
 # Las lineas de un CSV por TCU con el preset para las TCUs que hay que tocar.
 # El rango de Escribir va de la primera a la ultima y se lleva por delante las
 # buenas de en medio; con esto se escribe SOLO en las que fallaron. Pura.
-function Aud-CsvCorreccion($malas, $preset) {
-    $l = @('NCU;TCU;variable;valor')
-    foreach ($m in @($malas)) {
-        foreach ($v in @($preset)) { $l += "$($m.ncu);$($m.tcu);$($v.nombre);$($v.texto)" }
-    }
-    return $l
-}
-# Si las TCUs son un tramo seguido, el rango de Escribir vale; si hay huecos, no.
-function Aud-Consecutivas($malas) {
-    $ncus = @(@($malas | ForEach-Object { "$($_.ncu)" }) | Sort-Object -Unique)
-    if ($ncus.Count -ne 1) { return $false }
-    $t = @(@($malas | ForEach-Object { [int]$_.tcu }) | Sort-Object -Unique)
-    if ($t.Count -eq 0) { return $false }
-    return (($t[-1] - $t[0] + 1) -eq $t.Count)
-}
-
 function Aud-ConDesviacion($filas) {
     $r = @{}
     foreach ($f in @($filas)) {
@@ -6657,12 +6788,12 @@ $btnCPrep.Add_Click({
     $n = Cargar-FilasEnGrid $pares
     $ncus = @(@($falta | ForEach-Object { "$($_.ncu)" }) | Sort-Object -Unique)
     $tcus = @($falta | ForEach-Object { [int]$_.tcu } | Sort-Object -Unique)
-    $txtWIni.Text = "$($tcus[0])"; $txtWFin.Text = "$($tcus[-1])"
+    $txtWTcus.Text = (Sel-Texto $falta)
     $tabs.SelectedTab = $tabW
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Preparado para escribir: $n variables del preset '$($script:PresetRefNombre)' y el rango TCU $($tcus[0])-$($tcus[-1])." ([System.Drawing.Color]::SteelBlue)
+    Con "Preparado para escribir: $n variables del preset '$($script:PresetRefNombre)' y las TCUs exactas ($($txtWTcus.Text))." ([System.Drawing.Color]::SteelBlue)
     Con "  Faltan parametros en $($falta.Count) TCUs de $($ncus.Count) NCU(s): $(@($falta | ForEach-Object { "NCU$($_.ncu) TCU $($_.tcu)" }) -join ', ')" ([System.Drawing.Color]::Orange)
-    if ($ncus.Count -gt 1) { Con "  OJO: son de varias NCUs. Escribe una NCU cada vez, o usa 'CSV por TCU...' con columna NCU." ([System.Drawing.Color]::Orange) }
+    if ($ncus.Count -gt 1) { Con "  Son de varias NCUs: elige (Planta completa) arriba para que cada una vaya a la suya." ([System.Drawing.Color]::Orange) }
     Con "  Pulsa SIMULAR para ver que cambiaria, y luego ESCRIBIR. Al terminar, GUARDAR EN NVM." ([System.Drawing.Color]::Gainsboro)
 })
 
@@ -6724,7 +6855,7 @@ $btnAudLeer.Add_Click({
         [void]$dgvL.Rows.Add($nom, (Info-Lectura $nom))
         $n++
     }
-    $txtLIni.Text = $txtAIni.Text; $txtLFin.Text = $txtAFin.Text
+    $txtLTcus.Text = $txtATcus.Text
     $tabs.SelectedTab = $tabL
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Preparada la lectura: $n variables de '$($script:PresetRefNombre)' y el rango de la auditoria." ([System.Drawing.Color]::SteelBlue)
@@ -6740,38 +6871,23 @@ $btnAudEscr.Add_Click({
     $pares = @($script:PresetRef | ForEach-Object { [pscustomobject]@{variable=$_.nombre; valor=$_.texto} })
     $n = Cargar-FilasEnGrid $pares
     $ncus = @(@($malas | ForEach-Object { "$($_.ncu)" }) | Sort-Object -Unique)
-    $tcus = @($malas | ForEach-Object { [int]$_.tcu } | Sort-Object -Unique)
+    # Antes aqui habia que elegir entre un rango -que se llevaba por delante las
+    # TCUs buenas de en medio- y dejar un CSV. El cuadro TCUs dice exactamente
+    # cuales son, aunque sean de varias NCUs, asi que ya no hay que elegir.
+    $txtWTcus.Text = (Sel-Texto $malas)
     $tabs.SelectedTab = $tabW
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Preparado el preset '$($script:PresetRefNombre)' ($n variables) para las $($malas.Count) TCUs con desviaciones." ([System.Drawing.Color]::SteelBlue)
     Con "  $(@($malas | Select-Object -First 25 | ForEach-Object { "NCU$($_.ncu) TCU $($_.tcu)" }) -join ', ')$(if ($malas.Count -gt 25) { ' y mas' })" ([System.Drawing.Color]::Orange)
-    # Un rango va de la primera a la ultima y se lleva por delante las buenas de
-    # en medio. Solo se usa si las TCUs son un tramo seguido de UNA NCU; si hay
-    # huecos se deja un CSV por TCU, que toca solo las que fallaron.
-    if (Aud-Consecutivas $malas) {
-        $txtWIni.Text = "$($tcus[0])"; $txtWFin.Text = "$($tcus[-1])"
-        Con "  Son un tramo seguido: rango TCU $($tcus[0])-$($tcus[-1]) puesto. Pulsa SIMULAR y luego ESCRIBIR." ([System.Drawing.Color]::Gainsboro)
-    } else {
-        $dir = Join-Path $PSScriptRoot 'correcciones'
-        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
-        $fich = Join-Path $dir ('auditoria_' + ((Nombre-Planta) -replace '[^\w\-]', '_') + '_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv')
-        try {
-            Set-Content $fich (Aud-CsvCorreccion $malas $script:PresetRef) -Encoding UTF8
-            $porque = $(if ($ncus.Count -gt 1) { "son de $($ncus.Count) NCUs ($($ncus -join ', '))" } else { "no son consecutivas (hay TCUs buenas entre medias)" })
-            Con "  NO se pone rango: $porque. Un rango escribiria tambien sobre las que estan bien." ([System.Drawing.Color]::Salmon)
-            Con "  Hecho el CSV con las $($malas.Count) TCUs exactas: $fich" ([System.Drawing.Color]::LightGreen)
-            Con "  Pulsa 'CSV por TCU...' y cargalo: escribe solo en esas, y admite varias NCUs de una pasada." ([System.Drawing.Color]::Gainsboro)
-        } catch { Con "  No se pudo dejar el CSV ($_). Escribe una a una o pon el rango a mano." ([System.Drawing.Color]::Salmon) }
-    }
+    Con "  Puestas en TCUs: $($txtWTcus.Text)  -  solo esas, ninguna mas. Pulsa SIMULAR y luego ESCRIBIR." ([System.Drawing.Color]::Gainsboro)
+    if ($ncus.Count -gt 1) { Con "  Son de varias NCUs: elige (Planta completa) arriba para que cada una vaya a la suya." ([System.Drawing.Color]::Orange) }
     Con "  Al terminar, GUARDAR EN NVM." ([System.Drawing.Color]::Gainsboro)
 })
 
 $btnAud.Add_Click({ Lanzar {
     if (-not $script:PresetRef) { [void][System.Windows.Forms.MessageBox]::Show('Carga primero un preset de referencia (o un backup completo).','Aviso'); return }
     $cx = Params-Conexion
-    $tcus = $null
-    if (-not $cx.multi) { $tcus = Rango-Tcus $txtAIni.Text $txtAFin.Text 'Auditoria' }
-    $trabajos = @(Trabajos-Planta $cx $tcus)
+    $trabajos = @(Trabajos-Planta $cx $null '' (Parse-Seleccion $txtATcus.Text 'Auditoria') $txtGw.Text)
     if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
     $lvA.Items.Clear(); $script:UltimaAud = @()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
@@ -6779,7 +6895,7 @@ $btnAud.Add_Click({ Lanzar {
         $totTcus = 0; foreach ($tr in $trabajos) { $totTcus += @($tr.tcus).Count }
         Con "Auditoria de Planta completa: $($trabajos.Count) NCUs, $totTcus TCUs contra '$($script:PresetRefNombre)' ($($script:PresetRef.Count) variables)" ([System.Drawing.Color]::SteelBlue)
     } else {
-        Con "Auditoria de $(Eti-Rango $tcus) contra '$($script:PresetRefNombre)' ($($script:PresetRef.Count) variables)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
+        Con "Auditoria de $(Eti-Rango @($trabajos).tcus) contra '$($script:PresetRefNombre)' ($($script:PresetRef.Count) variables)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     }
     $nOk = 0; $nTcusOk = 0; $nDesv = 0; $nErr = 0; $nFalsas = 0; $nCache = 0; $nMixtas = 0
     $nAudTot = 0; foreach ($tr in $trabajos) { $nAudTot += @($tr.tcus).Count }
