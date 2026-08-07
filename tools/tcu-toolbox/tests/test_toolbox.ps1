@@ -2285,6 +2285,32 @@ Check 'exp: ningun CSV se escapa con coma' ($src -match "Export-Csv \`$dlg\.File
 Check 'exp: casi no quedan dialogos sueltos' (([regex]::Matches($src, 'New-Object System\.Windows\.Forms\.SaveFileDialog')).Count -le 4) $true
 Check 'exp: el nombre de planta sale de un sitio' ($src.Contains('function Planta-Fichero')) $true
 Check 'exp: y los exportadores lo usan' (([regex]::Matches($src, 'Planta-Fichero')).Count -ge 5) $true
+
+Write-Host ''
+Write-Host '== el agente del PC de planta no se puede quedar atras =='
+# El agente NO tiene copia de la logica: extrae trozos de este mismo fichero por
+# nombre de funcion. Al quitar Rango-Tcus en la v11.8 dejo de arrancar y no nos
+# enteramos hasta que alguien pregunto. Estas comprobaciones fallan aqui, en la
+# suite de la toolbox, antes de publicar.
+$fAg = Join-Path (Split-Path $raizTb -Parent) 'tcu-agente/TCU_Agente.ps1'
+Check 'agente: el fichero esta donde dice' (Test-Path $fAg) $true
+$srcAg = Get-Content $fAg -Raw
+# las marcas que el agente busca en la toolbox tienen que existir
+$anclas = @([regex]::Matches($srcAg, "Ancla-Toolbox \`$src '([^']+)'") | ForEach-Object { $_.Groups[1].Value })
+Check 'agente: declara sus anclas' ($anclas.Count -ge 4) $true
+foreach ($a in $anclas) { Check "agente: la toolbox tiene '$a'" ($src.Contains($a)) $true }
+# y las dos marcas del bloque grande, que van aparte
+foreach ($a in @('$VERSION_TOOLBOX', '$form = New-Object System.Windows.Forms.Form')) {
+    Check "agente: y la marca $a" ($src.Contains($a)) $true
+}
+# las funciones de la toolbox que el agente llama por su nombre
+foreach ($f in @('Ncu-DiagCompat', 'Ncu-HsuCompat', 'Plan-Segmentos', 'Modo-De', 'Comis-De', 'Fijar-Modo')) {
+    if (-not $srcAg.Contains($f)) { continue }
+    Check "agente: la toolbox sigue teniendo $f" ($src.Contains("function $f")) $true
+}
+# si falta una marca, el error tiene que decir cual
+Check 'agente: el error dice que falta' ($srcAg.Contains('ya no tiene')) $true
+Check 'agente: y que van juntas' ($srcAg.Contains('baja la misma release')) $true
 Check 'sel: el cuadro GW vive en Conexion' ($src.Contains("`$txtGw = TG `$gbCon")) $true
 Check 'sel: con su ayuda al pasar el raton' ($src.Contains('$ttW.SetToolTip($txtWTcus, $AYUDA_TCUS)')) $true
 # y las cuatro operaciones la usan, con el filtro de gateway

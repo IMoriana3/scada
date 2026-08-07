@@ -70,6 +70,21 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**El agente del PC de planta se había quedado atrás (v11.9)** — el
+[TCU Agente](../tcu-agente/) no tiene copia de esta lógica: **extrae trozos de
+`TCU_Toolbox.ps1` por nombre de función**, para que haya un solo origen de
+verdad. Una de sus marcas era `function Rango-Tcus`, que la v11.8 eliminó al
+unificar los cuadros de TCUs — así que **el agente dejaba de arrancar** con esa
+versión.
+
+Arreglado (nueva marca, y el agente pasa a v2.1), pero lo que importa es que no
+vuelva a pasar: ahora el error dice **qué marca falta y que las dos carpetas van
+juntas**, y la suite de la toolbox comprueba que todas las marcas y las
+funciones que el agente llama siguen existiendo. Si alguien renombra una,
+**falla aquí antes de publicar**, no en el PC de planta.
+
+Las dos carpetas viajan en la misma release y hay que copiar **las dos**.
+
 **Una sola forma de hacer cada cosa (v11.8)** — repaso de duplicidades entre
 pestañas. Lo que había:
 
