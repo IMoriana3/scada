@@ -435,6 +435,49 @@ Check 'plan incluye ncu2 (v1.5.0)' (@($pf.tramos | Where-Object { $_.NCU -eq '2'
 try { $null = Plan-Firmware $invFw '' $gwsFw; Check 'plan sin objetivo lanza' 'no-lanzo' 'lanza' }
 catch { Check 'plan sin objetivo lanza' 'lanza' 'lanza' }
 
+# ---------- el plan de campana: una VENTANA del updater por NCU+gateway ----------
+# Los tramos sueltos no eran un plan: con dos pendientes no consecutivas de la
+# misma NCU salian dos filas CARRIL identicas a las dos de TCU. Lo que hace
+# falta es "abre estas N ventanas, en cada una pega esto y tarda esto, total X".
+$ipsFw = @{'1'='10.0.0.1'; '2'='10.0.0.2'}
+$vv = @(Plan-Ventanas $pf.tramos $ipsFw 20)
+Check 'ventanas: una por NCU+gateway' ($vv.Count) 3     # 1/503, 1/504, 2/503
+Check 'ventanas: la mas cargada va primera' "$($vv[0].NCU)/$($vv[0].Puerto)" '1/503'
+Check 'ventanas: y lleva sus TCUs juntas' ($vv[0].TCUs) 3           # 1,2 y 4
+Check 'ventanas: con los dos rangos que pegar' ($vv[0].Rangos) '1-2 + 4'
+Check 'ventanas: numeradas en orden' ((@($vv | ForEach-Object { $_.Orden }) -join ',')) '1,2,3'
+Check 'ventanas: coge la IP de la NCU' ($vv[0].IP) '10.0.0.1'
+Check 'ventanas: horas de la ventana' ($vv[0].Horas) 1               # 3 TCUs x 20 min
+Check 'ventanas: una TCU sola tambien es ventana' ($vv[1].TCUs) 1
+Check 'ventanas: y su rango va sin guion' ($vv[1].Rangos) '60'
+Check 'ventanas: sin tramos no revienta' ((@(Plan-Ventanas @() $ipsFw 20)).Count) 0
+Check 'ventanas: sin IPs no revienta' ((@(Plan-Ventanas $pf.tramos $null 20))[0].IP) ''
+# el reloj de la campana lo marca la ventana mas cargada, no la suma
+$txt = @(Plan-Texto $vv 20)
+Check 'plan texto: abre 3 ventanas' ($txt[0].Contains('abre 3 ventanas')) $true
+Check 'plan texto: y dice las TCUs' ($txt[0].Contains('5 TCUs pendientes')) $true
+Check 'plan texto: una linea por ventana' ($txt.Count) 5             # cabecera + 3 + total
+Check 'plan texto: con lo que hay que pegar' ($txt[1].Contains('Add from...to: 1-2 + 4')) $true
+Check 'plan texto: y su IP y puerto' ($txt[1].Contains('10.0.0.1  puerto 503')) $true
+Check 'plan texto: el total es el de la mayor' ($txt[-1].Contains('~1 h con las 3 ventanas')) $true
+Check 'plan texto: y dice cuanto seria en serie' ($txt[-1].Contains('~1,7 h')) $true
+Check 'plan texto: sin ventanas, sin texto' ((@(Plan-Texto @() 20)).Count) 0
+# con una sola ventana no hay nada que comparar, y no debe decir "1 ventanas"
+$vUna = @(Plan-Ventanas @([pscustomobject]@{NCU='12'; Puerto='503'; Desde=10; Hasta=10; TCUs=1},
+                          [pscustomobject]@{NCU='12'; Puerto='503'; Desde=22; Hasta=22; TCUs=1}) @{'12'='192.168.4.80'} 20)
+$tUna = @(Plan-Texto $vUna 20)
+Check 'plan texto: en singular' ($tUna[0].Contains('abre 1 ventana del updater')) $true
+Check 'plan texto: los dos rangos en la misma ventana' ($tUna[1].Contains('Add from...to: 10 + 22')) $true
+# y la ventana y el total no pueden decir tiempos distintos de las mismas TCUs
+Check 'plan texto: la ventana dice 40 min' ($tUna[1].Contains('~40 min')) $true
+Check 'plan texto: y el total tambien' ($tUna[-1]) 'TOTAL: ~40 min en esa unica ventana.'
+# las horas, legibles: minutos si es poco y jornadas si es mucho
+Check 'horas: menos de una hora en minutos' (Horas-Texto 0.5) '30 min'
+Check 'horas: una hora justa' (Horas-Texto 1) '1 h'
+Check 'horas: con decimal y coma' (Horas-Texto 1.7) '1,7 h'
+Check 'horas: a partir de 8 h, en jornadas' ((Horas-Texto 15.7).Contains('dias de 8 h')) $true
+Check 'horas: y la jornada bien contada' (Horas-Texto 16) '16 h (2 dias de 8 h)'
+
 # ---------- TEST COMM (solo lastComm via NCU) ----------
 Modbus-Conectar '127.0.0.1' 15020 3000
 $cm = Ncu-Comm @(1,2,3)
@@ -1936,13 +1979,22 @@ Check 'verif: tambien las que no responden' ($src.Contains('sin respuesta al ver
 Check 'verif: marca tambien lo filtrado' ($src.Contains('$lvFW.Tag.orig')) $true
 # y solo a la TCU exacta, no a un tramo que la contenga
 Check 'verif: no marca tramos de varias' ($src.Contains('if ($de -ne $tcu -or $a -ne $tcu) { continue }')) $true
-# La tabla del plan lleva CARRILES y TCUs sueltas. Con un carril de una sola
-# TCU las dos filas salian identicas columna a columna y parecian repetidas:
-# la columna Fila dice que es cada una, y ademas hace de filtro.
+# La tabla del plan lleva VENTANAS, los rangos que se PEGAN en cada una y las
+# TCUs sueltas. Con una ventana de una sola TCU las dos filas salian identicas
+# columna a columna y parecian repetidas: la columna Fila dice que es cada una.
 Check 'plan: columna que separa las filas' ($src.Contains("lvFW.Columns.Add('Fila'")) $true
-Check 'plan: fila de carril etiquetada' ($src.Contains("@('CARRIL', `$ips[`"`$(`$t.NCU)`"]")) $true
+Check 'plan: fila de ventana etiquetada' ($src.Contains("@('VENTANA', `$v.IP, `$v.Puerto")) $true
+Check 'plan: fila de rango que pegar' ($src.Contains("@('PEGAR', `$v.IP, `$v.Puerto")) $true
 Check 'plan: fila de TCU etiquetada' ($src.Contains("@('TCU', `$ips[`"`$(`$d.NCU)`"]")) $true
 Check 'plan: y las que no responden' ($src.Contains("@('SIN RESPUESTA', `$ips[`"`$(`$m.ncu)`"]")) $true
+# con un solo rango la fila de la ventana YA lo lleva: repetirlo era el ruido
+Check 'plan: los rangos solo si hay mas de uno' ($src.Contains('if (@($v.Tramos).Count -gt 1) {')) $true
+# y las TCUs van debajo de SU ventana, no en un bloque suelto al final
+Check 'plan: cada TCU bajo su ventana' ($src.Contains('foreach ($d in @($detPorV[$k] | Sort-Object { [int]$_.TCU })) {')) $true
+# el plan tambien en texto, para leerlo mientras se teclea en el updater
+Check 'plan: lo escribe en la consola' ($src.Contains('foreach ($linea in @(Plan-Texto $ventanas $minTcu))')) $true
+# y el CSV que te llevas es el de ventanas, no los tramos sueltos
+Check 'plan: el CSV exporta las ventanas' ($src.Contains('$vv | Export-Csv $dlg.FileName')) $true
 # verificar solo puede repintar filas de TCU: la del carril habla del tramo
 Check 'verif: no toca la fila del carril' ($src.Contains("if (`"`$(`$it.SubItems[1].Text)`" -ne 'TCU') { continue }")) $true
 Check 'verif: nota en la columna nueva' ($src.Contains('$it.SubItems[7].Text = $nota')) $true

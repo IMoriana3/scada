@@ -27,7 +27,7 @@ Cuando una NCU tiene varios gateways, el desplegable ofrece además una entrada 
 | **PEM** | La pestaña de puesta en marcha. **TEST DE MOTOR** por rango: cada TCU pasa a MANUAL, pulsa Oeste y Este midiendo Δángulo y corriente, vuelve a su modo, y da veredicto **PASA / FALLA (no se mueve, sin corriente, sentido invertido) / DUDOSO** — con **guardia de viento** (consulta las HSU vía NCU y se bloquea si hay nivel > 0), parada de motor garantizada y TCUs con alarma crítica saltados. **APLICAR MODO** (OFF/MANUAL/AUTO) y **LIMPIAR ALARMAS** (reset de las alarmas enclavadas, 40007 bit 13) masivos con verificación por efecto en 30001/30006. **STOW / QUITAR STOW** (42000) con verificación de la safe position activa. **Comisionado**: leer el estado (30001 bits 4:3: Factory → Configurado → Motor verificado → COMISIONADO) por rango — o de la **Planta completa vía NCU** (los bits van en el registro de estado que la NCU cachea en su bloque compacto: toda la planta en segundos, sin Zigbee, con columna NCU y los TCUs offline marcados) — y fijarlo (40000 bits 7:5). Todo exportable a CSV. |
 | **HSU** | La estación meteo. Botón **BUSCAR HSUs** (v4.0): escanea las NCUs de la selección (Planta completa, (auto) o una entrada suelta) leyendo el bloque compacto que cada NCU cachea (30200+, puerto 502) y lista **qué HSUs hay y de qué NCU cuelga cada una**, con su salud y su viento/nieve; el desplegable permite elegir una — fija su IP y su esclavo si la topología lo trae — o "(todas)" para ver el resumen conjunto. **LEER METEO** y **LEER CONFIG** funcionan sobre **todas las HSUs de la planta de una pasada** (v5.3): con "(todas)" en el desplegable recorren cada una por la IP y el gateway de su NCU, con una cabecera por HSU en la tabla, las mudas marcadas y un resumen de cuántas respondieron y cuántas tienen alarma o viento; LEER CONFIG avisa además si alguna HSU lleva **umbrales distintos** de las demás. Las escrituras (umbrales, reloj, nieve, NVM) siguen pidiendo una HSU concreta a propósito. Las operaciones directas van por su esclavo Modbus (default 185, editable; se preselecciona desde la topología si el fichero de plantas trae `hsu_esclavo`): **meteo en vivo** (viento m/s y km/h, dirección, nieve, lluvia, T/HR, irradiancia) con **alarmas decodificadas**; **config y umbrales de viento** (leer y escribir, con confirmación de seguridad y verificación); **reloj UTC**; **calibración del cero de nieve**; **NVM**; y la **caja negra de 24 h** (viento medio/máx, nieve e irradiancia minuto a minuto) descargada a CSV — para investigar un stow después de que pase. |
 | **Flota** | **Auditoría**: compara un rango de TCUs contra un *preset de referencia* (un preset o un backup completo) y lista **solo las desviaciones** (esperado vs leído), marcando en rojo las que además son **valores imposibles** para esa variable (v7.1), con export CSV — el "¿está toda la NCU igual?" en un clic. **Inventario**: FW principal/fábrica, nº de serie, MAC Xbee, HW y fecha de fabricación de todo el rango, con aviso si hay firmwares mezclados y export CSV. Ambas aceptan también la entrada **"(Planta completa)"**: recorren todas las NCUs en secuencia con sus rangos automáticos (los campos de TCU muestran NA) y añaden la columna NCU a la vista, al CSV y al informe HTML. |
-| **Firmware** | Planifica la **campaña de actualización** (v4.4). La toolbox **no** actualiza firmware — eso lo hace el *TCU Updater* de Sunner — pero resuelve lo caro: a partir del último **Inventario** y de una **versión objetivo**, lista las TCUs pendientes agrupadas en tramos `desde-hasta` **por NCU y gateway**, que es justo lo que pide el updater (*Add from … to …*). Cada tramo es un **carril**: el updater admite varias ventanas a la vez, una por NCU+gateway, así que la campaña se divide por el número de carriles (con 20 min/TCU, Ayora pasa de ~250 h en serie a las horas del carril más cargado). Muestra la estimación en serie y en paralelo, marca las TCUs que no respondieron al inventario (no se puede actualizar lo que no comunica), exporta el plan a CSV y, al terminar, **VERIFICAR TRAS ACTUALIZAR** relee el FW de las TCUs del plan y dice cuáles subieron y cuáles siguen pendientes. |
+| **Firmware** | Planifica la **campaña de actualización** (v4.4). La toolbox **no** actualiza firmware — eso lo hace el *TCU Updater* de Sunner — pero resuelve lo caro: a partir del último **Inventario** y de una **versión objetivo**, saca el plan por **ventanas del updater** (una por NCU + gateway, que se abren a la vez): cada una dice con qué IP y puerto abrirla, qué rangos pegarle (*Add from … to …*) y cuánto tarda, y al final el total de la campaña. Muestra la estimación en paralelo y en serie, marca las TCUs que no respondieron al inventario (no se puede actualizar lo que no comunica), exporta el plan a CSV y, al terminar, **VERIFICAR TRAS ACTUALIZAR** relee el FW de las TCUs del plan y dice cuáles subieron y cuáles siguen pendientes. |
 | **SAT** | Los **ensayos de aceptación del Anexo 4** que se pueden automatizar (v6.6). **INICIAR REGISTRO** deja la toolbox registrando la planta entera durante los días que dure el ensayo, con dos cadencias sobre el bloque compacto de la NCU (puerto 502, sin tocar la Zigbee): un pase barato de **comunicaciones** cada 15 s (4 lecturas por NCU) y uno de **precisión y alarmas** cada minuto (18 por NCU). Escribe a disco en cada pase, en ficheros diarios y en modo añadir: si el PC se reinicia a los cuatro días, lo registrado sigue ahí y el ensayo continúa al volver a arrancar. Los **criterios de aceptación** (tolerancia de precisión, los umbrales de disponibilidad de TCU, RSU/NCU y comunicaciones, y la **ventana de la regla de los dos minutos** de D.4) y **todos los tiempos** (duración del ensayo **en minutos, horas o días** — 7 días para el ensayo del anexo, 20 minutos para comprobar el montaje antes de arrancarlo de verdad —, muestreo de TCU y de comunicaciones, ritmo del cronómetro y su tope) son **campos editables** y se recuerdan entre sesiones (v6.9 y v7.0): son de contrato, no del equipo, y cambian de una planta a otra. El registro **no depende de ellos**, así que ajustarlos y volver a analizar da el veredicto nuevo en segundos — sin repetir el ensayo. **ANALIZAR Y EMITIR** lee los CSV y emite el veredicto de los tres ensayos: **D.1.1** precisión de seguimiento (una muestra solo cuenta si el objetivo lleva dos muestras sin cambiar, que es como se descartan los transitorios y las activaciones de posición de seguridad que el anexo excluye), **D.3.4.1/2/3** disponibilidad de operación de TCUs (≥ 99 %), **RSU** (≥ 99,5 %) y **NCU** (≥ 99,5 %), por equipo y día, contando alarmas de motor, batería y comunicación; las meteorológicas no cuentan, como dice el anexo. Y **D.4** disponibilidad de comunicaciones, con la regla del anexo (un intento fallido suelto no computa salvo que se repita dentro de dos minutos, y entonces computan todos) y **umbrales distintos por tipo**: 98,5 % en TCU y 99,5 % en RSU. **RSU es lo que el mapa Sunner llama HSU**; los entregables del SAT usan RSU, que es como lo llama el contrato. Cada ensayo deja su `RESULTADO_*.csv` con el detalle por equipo y día, y la lista de los que incumplen. **CRONÓMETRO** (v6.7) para los **abanderamientos D.2.1–D.2.5** y la **posición objetivo manual D.3**: la condición la provoca el operario (bajar el umbral de viento, cortar la alimentación de la NCU…) y el cronómetro muestrea cada 3 s y apunta por TCU la hora UTC de recepción de la orden, la inclinación en ese momento, la hora de llegada a posición de seguridad, la inclinación allí, y lo mismo del desabanderamiento — las columnas exactas que pide el anexo, más los segundos de ida y vuelta. ⚠️ No hay un bit documentado de "posición de seguridad activa": la llegada de la orden se **infiere** del salto del objetivo y la llegada del seguidor de que el real alcanza ese objetivo. Queda dicho aquí porque en una recepción importa. **HOJA D.1.2** genera la hoja de precisión con equipo externo (nomenclatura, hora UTC, posición del tracker, posición según algoritmo) con la columna de la lectura del instrumento en blanco, que es la única que no puede poner una máquina. |
 | **Utilidades** | **Sincronizar reloj**: escribe la hora del PC en un rango de TCUs (40001–40006 + secuencia 40007 bit0→bit1) y verifica leyendo el reloj real (30079). **Identificación**: FW principal/fábrica, MCU secundario, BQ, HW, Xbee HW/FW, **MAC Xbee**, **número de serie**, fecha de fabricación y lote (bloque 30300+). |
 
@@ -69,6 +69,34 @@ a tener una columna **HSU** (o *HSU esclavo*) con el número de esclavo Modbus p
 fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
+
+**El plan de firmware es ahora un plan (v11.5)** — decía *«cada tramo es un
+CARRIL»* y soltaba los tramos sueltos. Con dos pendientes no consecutivas de la
+misma NCU eso daba dos filas CARRIL idénticas a las dos filas TCU de debajo, y
+una de ellas ponía «2 TCUs ~ 0,7 h» en una fila cuya columna TCUs decía **1**
+(el 1 era del tramo y el 2 del carril: ciertos los dos, contradictorios en la
+misma línea).
+
+Ahora el plan sale por **ventanas del updater** — una por NCU + gateway, que es
+lo que se puede abrir a la vez — y dice lo que hay que hacer:
+
+```
+PLAN: abre 3 ventanas del updater a la vez. 116 TCUs pendientes.
+  Ventana 1: NCU1  192.168.4.10  puerto 503  ->  Add from...to: 1-56    (56 TCUs, ~18,7 h (2,3 dias de 8 h))
+  Ventana 2: NCU1  192.168.4.10  puerto 504  ->  Add from...to: 57-108  (52 TCUs, ~17,3 h (2,2 dias de 8 h))
+  Ventana 3: NCU2  192.168.4.20  puerto 503  ->  Add from...to: 5-12    (8 TCUs, ~2,7 h)
+TOTAL: ~18,7 h (2,3 dias de 8 h) con las 3 ventanas abiertas a la vez, que lo marca
+la ventana 1 (NCU1/GW503). Una detras de otra serian ~38,7 h (4,8 dias de 8 h).
+```
+
+Van ordenadas **de más a menos carga**: la primera es la que marca el reloj y es
+la que hay que arrancar antes. En la tabla, cada ventana lleva debajo sus rangos
+(solo si tiene más de uno — con uno solo la propia fila ya lo dice) y las TCUs de
+esa ventana con su versión y su SoC. Y el CSV que te llevas es el de ventanas.
+
+Con una sola ventana el texto va en singular y no compara nada: *«TOTAL: ~40 min
+en esa única ventana»*. Antes la ventana decía 42 min y el total 40 para las
+mismas dos TCUs, porque las horas se redondeaban dos veces.
 
 **El equipo dice si está cargando (v11.4)** — hasta ahora había que deducirlo
 de las corrientes: si entra corriente y la batería no la coge, aviso. El bloque
@@ -524,7 +552,8 @@ fichero `_pendientes.csv` con esa lista, que es la que sirve para el seguimiento
 decir cuál era cuál, y cuando un carril tiene **una sola TCU** salían idénticas
 columna a columna (misma NCU, mismo gateway, mismo desde-hasta, mismo 1) —
 parecía la misma TCU repetida. Ahora una columna **Fila** dice qué es cada una
-(`CARRIL`, `TCU`, `SIN RESPUESTA`), y sirve además de filtro para quedarse solo
+(`CARRIL`, `TCU`, `SIN RESPUESTA` — en la v11.5 pasaron a `VENTANA`, `PEGAR`,
+`TCU` y `SIN RESPUESTA`), y sirve además de filtro para quedarse solo
 con las pendientes. `VERIFICAR TRAS ACTUALIZAR` tampoco repinta ya la fila del
 carril: con un carril de una TCU le borraba su reparto de horas.
 
@@ -796,7 +825,7 @@ El firmware de las TCUs lo actualiza el **TCU Updater de Sunner** (Rust + Modbus
 Lo que aporta la toolbox, sin tocar el firmware:
 
 1. **A quién hay que actualizar**: Inventario → pestaña **Firmware** → plan por NCU y gateway.
-2. **Cuántas ventanas lanzar**: cada tramo es un carril independiente (NCU + gateway = red Zigbee distinta). El updater no tiene bloqueo de instancia única: se pueden abrir varias a la vez, una por carril, y la campaña se divide por ese número.
+2. **Cuántas ventanas lanzar y qué pegar en cada una**: cada NCU + gateway es una red Zigbee distinta, y el updater no tiene bloqueo de instancia única, así que se pueden abrir varias a la vez. El plan da una **ventana** por NCU+gateway, con sus rangos, su tiempo y el total de la campaña.
 3. **Qué subió de verdad**: VERIFICAR TRAS ACTUALIZAR + un Inventario nuevo, cuyo **diff** en el Histórico de la plataforma deja constancia de qué TCUs pasaron de una versión a otra.
 
 ### Actualizar (o capturar) en una planta en producción

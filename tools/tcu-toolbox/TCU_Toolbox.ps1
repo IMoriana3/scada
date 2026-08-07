@@ -25,7 +25,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.4'
+$VERSION_TOOLBOX = '11.5'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1161,6 +1161,74 @@ function Runs-Consecutivos([int[]]$tcus) {
     }
     if ($null -ne $ini) { [void]$runs.Add(@{ini=$ini; fin=$prev}) }
     return $runs
+}
+
+# Horas en algo que se lee de un vistazo: minutos si es poco, y los dias de 8 h
+# si es tanto que ya no cabe en una jornada. Pura.
+function Horas-Texto([double]$h) {
+    if ($h -lt 1) { return ("{0:0} min" -f ($h * 60)) }
+    $t = ("{0:0.#} h" -f $h) -replace '\.', ','
+    if ($h -ge 8) { $t += (" ({0:0.#} dias de 8 h)" -f ($h / 8.0)) -replace '\.', ',' }
+    return $t
+}
+
+# El plan de campana: una VENTANA del updater por NCU+gateway, con los rangos
+# que hay que pegarle y lo que va a tardar.
+#
+# El updater admite varias ventanas abiertas a la vez, una por NCU+gateway, asi
+# que la campana no dura la suma: dura lo que tarde la ventana mas cargada. Lo
+# que faltaba era decirlo asi -"abre estas N ventanas, en cada una pega esto y
+# tarda esto, y el total es este"- en vez de soltar los tramos sueltos.
+#
+# Van ordenadas de mas a menos carga: la primera es la que marca el reloj, y es
+# la que hay que arrancar antes. Pura: se prueba sin planta.
+function Plan-Ventanas($tramos, $ips = $null, [int]$minTcu = 20) {
+    $por = @{}; $orden = @()
+    foreach ($t in @($tramos)) {
+        $k = "$($t.NCU)|$($t.Puerto)"
+        if (-not $por.ContainsKey($k)) { $por[$k] = @(); $orden += $k }
+        $por[$k] += ,$t
+    }
+    $vs = @()
+    foreach ($k in $orden) {
+        $ts = @($por[$k] | Sort-Object { [int]$_.Desde })
+        $n = 0; foreach ($t in $ts) { $n += [int]$t.TCUs }
+        $ip = ''
+        if ($null -ne $ips -and $ips["$($ts[0].NCU)"]) { $ip = "$($ips["$($ts[0].NCU)"])" }
+        $vs += ,[pscustomobject]@{
+            Orden = 0; NCU = "$($ts[0].NCU)"; Puerto = "$($ts[0].Puerto)"; IP = $ip
+            # sin redondear: redondear aqui hacia que la ventana dijera "42 min"
+            # y el total "40 min" para las mismas dos TCUs
+            Tramos = $ts; TCUs = $n; Horas = (($n * $minTcu) / 60.0)
+            Rangos = (@($ts | ForEach-Object { $(if ([int]$_.Desde -eq [int]$_.Hasta) { "$($_.Desde)" } else { "$($_.Desde)-$($_.Hasta)" }) }) -join ' + ')
+        }
+    }
+    $vs = @($vs | Sort-Object -Property @{Expression={[int]$_.TCUs}; Descending=$true},
+                                        @{Expression={[int]("0" + "$($_.NCU)")}},
+                                        @{Expression={"$($_.Puerto)"}})
+    for ($i = 0; $i -lt $vs.Count; $i++) { $vs[$i].Orden = $i + 1 }
+    return $vs
+}
+
+# El mismo plan en texto, para la consola y para leerlo mientras se teclea en el
+# updater. Pura.
+function Plan-Texto($ventanas, [int]$minTcu = 20) {
+    $vs = @($ventanas)
+    if ($vs.Count -eq 0) { return @() }
+    $tot = 0; $max = 0.0
+    foreach ($v in $vs) { $tot += [int]$v.TCUs; if ([double]$v.Horas -gt $max) { $max = [double]$v.Horas } }
+    $l = @("PLAN: abre $($vs.Count) $(if ($vs.Count -eq 1) { 'ventana' } else { 'ventanas' }) del updater a la vez. $tot TCUs pendientes.")
+    foreach ($v in $vs) {
+        $l += ("  Ventana {0}: NCU{1}  {2}  puerto {3}   ->  Add from...to: {4}   ({5} TCUs, ~{6})" -f `
+               $v.Orden, $v.NCU, $(if ($v.IP) { $v.IP } else { '(ip)' }), $v.Puerto, $v.Rangos, $v.TCUs, (Horas-Texto ([double]$v.Horas)))
+    }
+    # con una sola ventana no hay nada que comparar: el total es lo que tarda
+    if ($vs.Count -eq 1) { $l += ("TOTAL: ~{0} en esa unica ventana." -f (Horas-Texto $max)) }
+    else {
+        $l += ("TOTAL: ~{0} con las {1} ventanas abiertas a la vez, que lo marca la ventana 1 (NCU{2}/GW{3}). Una detras de otra serian ~{4}." -f `
+               (Horas-Texto $max), $vs.Count, $vs[0].NCU, $vs[0].Puerto, (Horas-Texto (($tot * $minTcu) / 60.0)))
+    }
+    return $l
 }
 
 # TEST COMM: la prueba mas rapida posible de "quien habla y quien no". No lee
@@ -3029,7 +3097,7 @@ $tabFW.Controls.Add($btnFwCsv)
 $lblFw = LG $tabFW 'Haz primero un Inventario (pestana Flota) y luego el plan.' 590 318 56
 $lblFw.ForeColor = [System.Drawing.Color]::Gray
 
-$lblFwNota = LG $tabFW 'Cada tramo es un CARRIL (NCU + gateway): el updater admite varias ventanas a la vez, una por carril. PREPARAR comprueba viento, comunicacion y alarmas, y hace backup antes de actualizar/capturar una TCU.' 10 898 82
+$lblFwNota = LG $tabFW 'El plan sale por VENTANAS del updater (una por NCU + gateway, y se abren a la vez): cada una dice que rangos pegarle y cuanto tarda, y al final el total. PREPARAR comprueba viento, comunicacion y alarmas, y hace backup antes de actualizar/capturar una TCU.' 10 898 82
 $lblFwNota.ForeColor = [System.Drawing.Color]::Gray
 
 $lvFW = New-Object System.Windows.Forms.ListView
@@ -3037,9 +3105,10 @@ $lvFW.Location = New-Object System.Drawing.Point(10, 104)
 $lvFW.Size = New-Object System.Drawing.Size(898, 256)
 $lvFW.View = 'Details'; $lvFW.FullRowSelect = $true; $lvFW.GridLines = $true
 [void]$lvFW.Columns.Add('NCU', 50)
-# La tabla lleva dos cosas a la vez: los CARRILES que se pegan en el updater y
-# las TCUs pendientes una a una. Cuando un carril tiene una sola TCU las dos
-# filas salen identicas columna a columna, y parecia la misma TCU repetida.
+# La tabla lleva tres cosas a la vez: la VENTANA del updater que hay que abrir,
+# los rangos que se le PEGAN dentro y las TCUs pendientes una a una. Sin esta
+# columna, una ventana de una sola TCU salia identica columna a columna a la
+# fila de esa TCU y parecia la misma repetida.
 [void]$lvFW.Columns.Add('Fila', 88)
 [void]$lvFW.Columns.Add('IP', 110)
 [void]$lvFW.Columns.Add('Gateway', 70)
@@ -7348,6 +7417,7 @@ $btnPSeg.Add_Click({
 # planifica la campana desde el inventario y verifica el resultado.
 $script:PlanFw = @()
 $script:PlanFwDetalle = @()
+$script:PlanFwVentanas = @()
 $btnFwPlan.Add_Click({ Lanzar {
     if (@($script:UltimoInv).Count -eq 0) {
         [void][System.Windows.Forms.MessageBox]::Show("Haz primero un INVENTARIO en la pestana Flota (puede ser de la planta completa).`r`nEl plan se calcula con esos datos, sin volver a leer nada.", 'Falta el inventario')
@@ -7368,33 +7438,59 @@ $btnFwPlan.Add_Click({ Lanzar {
     $lvFW.Items.Clear()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "PLAN DE FIRMWARE hacia $($txtFwObj.Text.Trim()): $($plan.pendientes) TCUs pendientes, $($plan.al_dia) ya al dia, $(@($plan.sin_respuesta).Count) sin respuesta en el inventario" ([System.Drawing.Color]::SteelBlue)
-    # carril = NCU + gateway: cada uno puede llevar su propia ventana del updater
+    # El plan sale por VENTANAS del updater (una por NCU+gateway, y se abren a la
+    # vez): cada una dice que rangos pegarle y cuanto tarda, y al final el total.
+    # Antes salian los tramos sueltos: con dos pendientes no consecutivas de la
+    # misma NCU daba dos filas CARRIL identicas a las dos de TCU y no se veia el
+    # plan por ningun lado.
     $minTcu = Val-Int $txtFwMin.Text 'min/TCU' 1 600
-    $carga = @{}
-    foreach ($t in $script:PlanFw) {
-        $k = "$($t.NCU)|$($t.Puerto)"
-        $carga[$k] = [int]$carga[$k] + [int]$t.TCUs
-    }
-    # cuantas del carril no van a instalar por bateria: se ve en el propio tramo
-    $bajasCarril = @{}
-    foreach ($d in @($plan.detalle)) {
-        if (-not $d.SoC_bajo) { continue }
+    $ventanas = @(Plan-Ventanas $script:PlanFw $ips $minTcu)
+    $script:PlanFwVentanas = @($ventanas | ForEach-Object {
+        [pscustomobject]@{Ventana=$_.Orden; NCU=$_.NCU; IP=$_.IP; Puerto=$_.Puerto; Rangos=$_.Rangos; TCUs=$_.TCUs
+                          Horas=[math]::Round([double]$_.Horas, 1)} })
+    $detalle = @($plan.detalle)
+    # cuantas de la ventana no van a instalar por bateria, y que TCUs son
+    $bajasV = @{}; $detPorV = @{}
+    foreach ($d in $detalle) {
         $kk = "$($d.NCU)|$($d.Puerto)"
-        $bajasCarril[$kk] = 1 + [int]$bajasCarril[$kk]
+        if (-not $detPorV.ContainsKey($kk)) { $detPorV[$kk] = @() }
+        $detPorV[$kk] += ,$d
+        if ($d.SoC_bajo) { $bajasV[$kk] = 1 + [int]$bajasV[$kk] }
     }
-    foreach ($t in $script:PlanFw) {
-        $k = "$($t.NCU)|$($t.Puerto)"
-        $h = [math]::Round(($carga[$k] * $minTcu) / 60.0, 1)
-        $colaB = $(if ([int]$bajasCarril[$k] -gt 0) { "  -  $($bajasCarril[$k]) con bateria baja" } else { '' })
-        $item = New-Object System.Windows.Forms.ListViewItem("$($t.NCU)")
-        foreach ($c in @('CARRIL', $ips["$($t.NCU)"], $t.Puerto, $t.Desde, $t.Hasta, $t.TCUs, "carril NCU$($t.NCU)/GW$($t.Puerto): $($carga[$k]) TCUs ~ $h h$colaB")) { [void]$item.SubItems.Add("$c") }
+    foreach ($v in $ventanas) {
+        $k = "$($v.NCU)|$($v.Puerto)"
+        $colaB = $(if ([int]$bajasV[$k] -gt 0) { "  -  $($bajasV[$k]) con bateria baja" } else { '' })
+        $marca = $(if ($ventanas.Count -gt 1 -and $v.Orden -eq 1) { ' Es la mas larga: es la que marca el total, arrancala primero.' } else { '' })
+        $item = New-Object System.Windows.Forms.ListViewItem("$($v.NCU)")
+        foreach ($c in @('VENTANA', $v.IP, $v.Puerto, $v.Tramos[0].Desde, $v.Tramos[-1].Hasta, $v.TCUs,
+                         ("Ventana $($v.Orden) de $($ventanas.Count): abrela con esta IP y este puerto. Add from...to: $($v.Rangos). $($v.TCUs) TCUs, ~$(Horas-Texto ([double]$v.Horas)).$marca$colaB"))) { [void]$item.SubItems.Add("$c") }
         $item.ForeColor = [System.Drawing.Color]::DarkOrange
         $lvFW.Items.Add($item) | Out-Null
-        Con ("  NCU{0,-3} {1,-15} GW {2}   TCUs {3}-{4}  ({5})" -f $t.NCU, $ips["$($t.NCU)"], $t.Puerto, $t.Desde, $t.Hasta, $t.TCUs) ([System.Drawing.Color]::Gainsboro)
+        # los rangos, uno por fila, solo cuando hay mas de uno: con uno solo la
+        # fila de la ventana ya lleva ese Desde-Hasta y seria repetirla
+        if (@($v.Tramos).Count -gt 1) {
+            foreach ($t in $v.Tramos) {
+                $itemT = New-Object System.Windows.Forms.ListViewItem("$($v.NCU)")
+                foreach ($c in @('PEGAR', $v.IP, $v.Puerto, $t.Desde, $t.Hasta, $t.TCUs, "en la ventana $($v.Orden): Add from $($t.Desde) to $($t.Hasta)")) { [void]$itemT.SubItems.Add("$c") }
+                $itemT.ForeColor = [System.Drawing.Color]::SaddleBrown
+                $lvFW.Items.Add($itemT) | Out-Null
+            }
+        }
+        # y debajo, los equipos de esa ventana: que version tienen y con que SoC
+        foreach ($d in @($detPorV[$k] | Sort-Object { [int]$_.TCU })) {
+            $eSoc = $(if ("$($d.SoC)" -ne '') { ", SoC $($d.SoC) %" } else { ', SoC desconocido' })
+            $aviso = $(if ($d.SoC_bajo) { " - BATERIA BAJA: por debajo del $SOC_MIN_OTA % el bootloader puede no instalarlo" } else { '' })
+            $itemD = New-Object System.Windows.Forms.ListViewItem("$($d.NCU)")
+            foreach ($c in @('TCU', $ips["$($d.NCU)"], $d.Puerto, $d.TCU, $d.TCU, 1, "pendiente: tiene $($d.FW), objetivo $($d.Objetivo)$eSoc$aviso")) { [void]$itemD.SubItems.Add("$c") }
+            $itemD.ForeColor = $(if ($d.SoC_bajo) { [System.Drawing.Color]::Firebrick } else { [System.Drawing.Color]::DarkOrange })
+            $lvFW.Items.Add($itemD) | Out-Null
+        }
+    }
+    foreach ($linea in @(Plan-Texto $ventanas $minTcu)) {
+        Con $linea $(if ($linea -like 'TOTAL:*') { [System.Drawing.Color]::Orange } elseif ($linea -like 'PLAN:*') { [System.Drawing.Color]::SteelBlue } else { [System.Drawing.Color]::Gainsboro })
     }
     # que equipos faltan y en que version estan: es la pregunta que se hace uno
     # al abrir esta pestana, y el plan por tramos no la contestaba
-    $detalle = @($plan.detalle)
     if ($detalle.Count -gt 0) {
         Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
         $porVer = @{}
@@ -7404,10 +7500,6 @@ $btnFwPlan.Add_Click({ Lanzar {
             $eSoc = $(if ("$($d.SoC)" -ne '') { ", SoC $($d.SoC) %" } else { ', SoC desconocido' })
             $aviso = $(if ($d.SoC_bajo) { " - BATERIA BAJA: por debajo del $SOC_MIN_OTA % el bootloader puede no instalarlo" } else { '' })
             Con ("  NCU{0,-3} TCU {1,3}   {2}  ->  {3}{4}{5}" -f $d.NCU, $d.TCU, $d.FW, $d.Objetivo, $eSoc, $aviso) $(if ($d.SoC_bajo) { [System.Drawing.Color]::Salmon } else { [System.Drawing.Color]::Orange })
-            $itemD = New-Object System.Windows.Forms.ListViewItem("$($d.NCU)")
-            foreach ($c in @('TCU', $ips["$($d.NCU)"], $d.Puerto, $d.TCU, $d.TCU, 1, "pendiente: tiene $($d.FW), objetivo $($d.Objetivo)$eSoc$aviso")) { [void]$itemD.SubItems.Add("$c") }
-            $itemD.ForeColor = $(if ($d.SoC_bajo) { [System.Drawing.Color]::Firebrick } else { [System.Drawing.Color]::DarkOrange })
-            $lvFW.Items.Add($itemD) | Out-Null
         }
         if ($plan.con_soc_bajo -gt 0) {
             Con "ATENCION: $($plan.con_soc_bajo) de las pendientes estan por debajo del $SOC_MIN_OTA % de bateria. El bootloader solo instala si supera su umbral (42005 soc_min_bootloader y 42006 vbat_min_bootloader), asi que esas se van a quedar como estan aunque el updater diga que ha enviado el firmware. Dejalas cargar y actualizalas en otra pasada." ([System.Drawing.Color]::Salmon)
@@ -7416,22 +7508,16 @@ $btnFwPlan.Add_Click({ Lanzar {
             Con "$($plan.sin_soc) pendientes sin SoC conocido: el plan cruza con el ULTIMO DIAGNOSTICO de esta sesion. Lanza un DIAGNOSTICAR (via NCU es rapido) y vuelve a pulsar PLAN para verlo." ([System.Drawing.Color]::Orange)
         }
     }
-    if ($plan.pendientes -gt 0) {
-        $hSec = [math]::Round(($plan.pendientes * $minTcu) / 60.0, 1)
-        $hPar = [math]::Round(((@($carga.Values | Measure-Object -Maximum).Maximum) * $minTcu) / 60.0, 1)
-        Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
-        Con ("A {0} min/TCU: una sola ventana = {1} h ({2} dias de 8 h). Con {3} carriles en paralelo (una ventana del updater por NCU+gateway) = {4} h, marcadas por el carril mas cargado." -f `
-            $minTcu, $hSec, [math]::Round($hSec / 8.0, 1), $carga.Count, $hPar) ([System.Drawing.Color]::Orange)
-    }
     foreach ($m in @($plan.sin_respuesta)) {
         $item = New-Object System.Windows.Forms.ListViewItem("$($m.ncu)")
         foreach ($c in @('SIN RESPUESTA', $ips["$($m.ncu)"], '-', $m.tcu, $m.tcu, 1, "sin respuesta en el inventario: $($m.nota)")) { [void]$item.SubItems.Add("$c") }
         $item.ForeColor = [System.Drawing.Color]::Gray
         $lvFW.Items.Add($item) | Out-Null
     }
-    $lblFw.Text = "$($plan.pendientes) pendientes | $($plan.al_dia) al dia | $(@($plan.sin_respuesta).Count) sin respuesta"
+    $lblFw.Text = $(if ($ventanas.Count -gt 0) { "$($ventanas.Count) ventana(s) | " } else { '' }) +
+                  "$($plan.pendientes) pendientes | $($plan.al_dia) al dia | $(@($plan.sin_respuesta).Count) sin respuesta"
     if ($script:PlanFw.Count -eq 0 -and $plan.al_dia -gt 0) { Con "Toda la flota inventariada ya esta en $($txtFwObj.Text.Trim())." ([System.Drawing.Color]::LightGreen) }
-    else { Con 'Pega cada tramo en el TCU Updater (NCU IP + Gateway port + Add from...to) y al terminar pulsa VERIFICAR TRAS ACTUALIZAR.' ([System.Drawing.Color]::Gainsboro) }
+    else { Con 'Abre una ventana del TCU Updater por cada VENTANA del plan (NCU IP + Gateway port + Add from...to) y al terminar pulsa VERIFICAR TRAS ACTUALIZAR.' ([System.Drawing.Color]::Gainsboro) }
     $btnFwCsv.Enabled = ($lvFW.Items.Count -gt 0)
     $btnFwVerif.Enabled = ($script:PlanFw.Count -gt 0)
 } })
@@ -7605,7 +7691,11 @@ $btnFwCsv.Add_Click({
     $dlg.Filter = 'CSV (*.csv)|*.csv'
     $dlg.FileName = 'plan_firmware_' + (Get-Date -Format 'yyyyMMdd_HHmm') + '.csv'
     if ($dlg.ShowDialog() -eq 'OK') {
-        $script:PlanFw | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+        # el plan de verdad son las VENTANAS: lo que se abre y lo que se pega
+        # en cada una. Los tramos sueltos van igualmente, para quien los quiera.
+        $vv = @($script:PlanFwVentanas)
+        if ($vv.Count -gt 0) { $vv | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8 -Delimiter ';' }
+        else { $script:PlanFw | Export-Csv $dlg.FileName -NoTypeInformation -Encoding UTF8 -Delimiter ';' }
         Con "Plan exportado: $($dlg.FileName)" ([System.Drawing.Color]::SteelBlue)
         # el detalle por TCU va en su propio fichero: son dos cosas distintas,
         # los tramos se pegan en el updater y la lista es para seguimiento
