@@ -70,6 +70,22 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**Lo que solo lee, también en remoto (v11.11)** — el [agente](../tcu-agente/)
+(v2.3) expone ahora `/baterias`, `/inventario`, `/plan-firmware`, `/leer`,
+`/cierre` y `/trabajos`, **reutilizando estas mismas funciones** (`Bat-Tabla`,
+`Bat-Auditar`, `Ident-Leer`, `Leer-Decodificado`, `Plan-Firmware`,
+`Plan-Ventanas`, `Cierre-Estado`…). Ninguna toca un seguidor y ninguna depende
+de `permitir_escritura`.
+
+Devuelven el **mismo formato** que exporta esta herramienta, así que la web pinta
+lo que venga sin una vista por pestaña. `/inventario` y `/plan-firmware` van TCU
+a TCU por Zigbee y en una planta entera son **minutos**: se avisa antes de
+arrancarlas.
+
+Un fallo que salió al montarlo: `Ident-Leer` devuelve una lista `Campo`/`Valor`,
+no un diccionario, así que indexarla por nombre daba **null en todas las
+columnas** del inventario. Verificado contra el simulador, columna a columna.
+
 **El SAT se arranca en remoto y se graba aquí (v11.10)** — el ensayo son días de
 muestreo continuo. Mandarlo por HTTP no tiene sentido: si se cae el túnel, se
 pierde. Ahora el [agente](../tcu-agente/) (v2.2) expone `/sat`, `/sat/iniciar`,
