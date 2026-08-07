@@ -70,6 +70,41 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**Un cuadro para decir qué equipos (v11.6)** — «TCU de [1] a [44]» no sabe decir
+*«la 10, la 22 y de la 30 a la 40»*, y menos aún mezclar NCUs. Había que ir tres
+veces o pasar por un CSV. Ahora hay **un solo cuadro `TCUs`** en Escribir, Leer,
+Diagnóstico y Auditoría:
+
+| Se escribe | Qué hace |
+|---|---|
+| `1-44` | el rango de siempre |
+| `10,22,30-40` | sueltas y tramos a la vez |
+| `12/10, 15/5-12` | cada tramo con **su** NCU |
+| `12/*` | todas las de la NCU 12 |
+| vacío o `NA` | todas las de la selección |
+
+Y en **Conexión**, un cuadro **`GW`**: con `504` se trabaja sobre **todas las
+TCUs de ese gateway** de cada NCU, que antes obligaba a ir NCU por NCU con el
+rango a mano. Vacío = todos.
+
+Con eso, **la auditoría y el cierre mandan a Escribir las TCUs exactas**. Antes,
+con TCUs de tres NCUs distintas (`NCU8/29`, `NCU13/14`, `NCU15/3`) el botón
+*PREPARAR ESCRITURA* ponía «TCU de 3 a 29» — 27 seguidores, la mayoría buenos, y
+todos de la NCU que estuviera seleccionada. Ahora pone `8/29,13/14,15/3` y toca
+esos tres. El CSV de corrección desaparece: ya no hace falta.
+
+El diagnóstico gana además una columna **GW**, que dice de qué gateway cuelga
+cada TCU: en modo *vía NCU* todo se lee por el 502, pero el equipo sigue estando
+en su red Zigbee y eso es lo que pide el updater.
+
+**Los ceros de una TCU muda no son medidas (v11.6)** — si la NCU **nunca** ha
+hablado con un seguidor, su hueco de la caché está a ceros, y la herramienta los
+publicaba como si fueran lecturas: el plan de firmware decía **«SoC 0 % —
+BATERÍA BAJA»** de equipos cuya batería está al 100 %, y el modo salía como
+`OFF`. Ahora esas filas van **en blanco**, y el plan no mira el SoC de una TCU
+que no comunica. Cuando la NCU **sí** la ha leído y el dato es viejo, los valores
+se quedan —son los últimos de verdad— y la columna *Edad s* dice de cuándo son.
+
 **El plan de firmware es ahora un plan (v11.5)** — decía *«cada tramo es un
 CARRIL»* y soltaba los tramos sueltos. Con dos pendientes no consecutivas de la
 misma NCU eso daba dos filas CARRIL idénticas a las dos filas TCU de debajo, y
