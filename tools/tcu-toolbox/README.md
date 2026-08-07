@@ -70,6 +70,22 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**El SAT se arranca en remoto y se graba aquí (v11.10)** — el ensayo son días de
+muestreo continuo. Mandarlo por HTTP no tiene sentido: si se cae el túnel, se
+pierde. Ahora el [agente](../tcu-agente/) (v2.2) expone `/sat`, `/sat/iniciar`,
+`/sat/parar` y `/sat/descargar`, y **reutiliza los tres pases de esta pestaña**
+(`Sat-PaseComms`, `Sat-PaseTcu`, `Sat-PaseEquipos`), así que graba en
+`informes/sat_<planta>/` con el **mismo formato** — y **ANALIZAR Y EMITIR** los
+lee tal cual.
+
+Desde la *Toolbox web* se arranca, se para y se descargan los CSV; el veredicto
+(D.1.1, D.3.4, D.4) se sigue emitiendo aquí, en el PC de planta. El agente
+**reanuda solo** el ensayo si se reinicia a mitad, igual que hace esta pestaña.
+
+Arrancar un ensayo no toca los seguidores, así que no va detrás de
+`permitir_escritura` ni pide doble confirmación — pero sí queda auditado con el
+usuario que lo pidió.
+
 **El agente del PC de planta se había quedado atrás (v11.9)** — el
 [TCU Agente](../tcu-agente/) no tiene copia de esta lógica: **extrae trozos de
 `TCU_Toolbox.ps1` por nombre de función**, para que haya un solo origen de
