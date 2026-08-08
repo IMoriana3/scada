@@ -70,6 +70,15 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**El GW también en las entradas de una sola NCU (v11.19)** — con una entrada de
+puerto fijo no hay lista de gateways, así que la columna **GW** salía **vacía**
+en todas ellas. Y no solo en la ventana: esos mismos JSON son los que se suben
+al Histórico y los que lee la web, así que allí tampoco se veía. Pero el puerto
+de esa entrada **es** el gateway, y ahora se usa. (En el barrido en paralelo se
+pasa solo la lista de gateways: su puerto es el 502 de la NCU, que no es
+ninguno.) En el Histórico, además, lo que falte se saca de la **topología** —
+la misma tabla que pinta la columna GW en la página de IPs.
+
 **Las NCUs se eligen una vez, el GW baja a cada pestaña (v11.18 / agente v2.7)**
 
 Faltaba lo más básico: **no había dónde decir "estas NCUs"** salvo en

@@ -2400,7 +2400,13 @@ Check 'gw: columna en el diagnostico' ($src.Contains("lvG.Columns.Add('GW'")) $t
 Check 'gw: y va delante de la TCU' ($src.IndexOf("lvG.Columns.Add('GW'") -lt $src.IndexOf("lvG.Columns.Add('TCU'")) $true
 Check 'gw: las filas siguen ese orden' ([regex]::Matches($src, [regex]::Escape('$d.GW, $d.TCU, $d.Salud')).Count) 4
 Check 'gw: y ninguna se quedo al reves' ($src.Contains('$d.TCU, $d.GW, $d.Salud')) $false
-Check 'gw: se calcula por fila' ($src.Contains('Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcu')) $true
+Check 'gw: se calcula por fila' ($src.Contains('Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcuCx')) $true
+# una entrada de puerto fijo no tiene lista de gateways, pero el puerto ES el
+# gateway: sin esto la columna GW salia vacia en todas las de una sola NCU
+Check 'gw: con puerto fijo tambien' ($src.Contains('function Gw-DeTcuCx')) $true
+Check 'gw: y el 502 de la NCU no cuela como gateway' ($src.Contains('-and $p -ne "$PUERTO_NCU"')) $true
+Check 'gw: al barrido en paralelo solo se le pasan los gateways' ($src.Contains('Gw-DeTcuCx @{gws=$r.tarea.gws}')) $true
+Check 'gw: ninguna fila usa ya la version sin conexion' ($src.Contains('Gw-DeTcu $tr.cx.gws')) $false
 Check 'gw: y las filas de NCU/HSU lo llevan vacio' ($src.Contains("GW=''; TCU='NCU'")) $true
 # los ceros de una TCU que la NCU nunca ha leido no son medidas
 Check 'muda: no publica sus ceros' ($src.Contains('$vacio = ($lastc[$tcu] -eq 0)')) $true
