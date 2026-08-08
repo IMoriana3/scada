@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.18'
+$VERSION_TOOLBOX = '11.19'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -4219,6 +4219,21 @@ function Gw-DeTcu($gws, [int]$tcu) {
     return ''
 }
 
+# El GW de una TCU a partir de una conexion. Con una entrada de puerto fijo no
+# hay lista de gateways, pero el puerto ES el gateway: sin esto la columna GW
+# salia vacia en TODAS las entradas de una sola NCU (y en el historico y en la
+# web, que se alimentan de esos mismos JSON).
+function Gw-DeTcuCx($cx, [int]$tcu) {
+    if ($null -eq $cx) { return '' }
+    if ($cx.gws) { return (Gw-DeTcu $cx.gws $tcu) }
+    # ojo: 'puerto' aqui es el de la ENTRADA elegida, que en una de puerto fijo
+    # es el del gateway. Al barrido en paralelo se le pasa solo 'gws' porque su
+    # puerto es el 502 de la NCU, que no es ningun gateway.
+    $p = "$($cx.puerto)".Trim()
+    if ($p -ne '' -and $p -ne 'auto' -and $p -ne "$PUERTO_NCU") { return $p }
+    return ''
+}
+
 function Gws-Filtrados($gws, [string]$gw) {
     $g = "$gw".Trim()
     if ($g -eq '' -or $g -match '^(?i)todos$') { return @($gws) }
@@ -5992,7 +6007,7 @@ function Diag-Correr {
                 }
                 foreach ($d in @($o.filas)) {
                     $d | Add-Member -NotePropertyName NCU -NotePropertyValue $eti -Force
-                    $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcu $r.tarea.gws ([int]"$($d.TCU)")) -Force
+                    $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcuCx @{gws=$r.tarea.gws} ([int]"$($d.TCU)")) -Force
                     $item = New-Object System.Windows.Forms.ListViewItem($eti)
                     foreach ($c in @($d.GW, $d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
                     switch ("$($d.Salud)") {
@@ -6091,8 +6106,8 @@ function Diag-Correr {
             $etiquetaNcu = ''
             if ($null -ne $tr.ncu) { $etiquetaNcu = "$($tr.ncu)" }
             $d | Add-Member -NotePropertyName NCU -NotePropertyValue $etiquetaNcu -Force
-            $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcu $tr.cx.gws ([int]"$($d.TCU)")) -Force
-        $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcu $tr.cx.gws ([int]"$($d.TCU)")) -Force
+            $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcuCx $tr.cx ([int]"$($d.TCU)")) -Force
+        $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcuCx $tr.cx ([int]"$($d.TCU)")) -Force
             $item = New-Object System.Windows.Forms.ListViewItem($etiquetaNcu)
             foreach ($c in @($d.GW, $d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) { [void]$item.SubItems.Add("$c") }
             switch ($d.Salud) {
@@ -6142,7 +6157,7 @@ function Diag-Correr {
         $etiquetaNcu = ''
         if ($null -ne $tr.ncu) { $etiquetaNcu = "$($tr.ncu)" }
         $d | Add-Member -NotePropertyName NCU -NotePropertyValue $etiquetaNcu -Force
-        $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcu $tr.cx.gws ([int]"$($d.TCU)")) -Force
+        $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcuCx $tr.cx ([int]"$($d.TCU)")) -Force
         $item = New-Object System.Windows.Forms.ListViewItem($etiquetaNcu)
         foreach ($c in @($d.GW, $d.TCU, $d.Salud, $d.Modo, $d.Tilt, $d.Objetivo, $d.Dif, $d.SoC, $d.Edad_s, $d.Alarmas)) {
             [void]$item.SubItems.Add("$c")
@@ -6269,7 +6284,7 @@ $btnGComm.Add_Click({ Lanzar {
             $e = $c.tcus[[int]$tcu]
             $ok = ($null -ne $e -and $e.comunica)
             if ($ok) { $nOk++ } else { $nOff++; $mudas += $tcu }
-            $script:UltimoDiag += [pscustomobject]@{NCU=$et; GW=(Gw-DeTcu $tr.cx.gws ([int]$tcu)); TCU=[int]$tcu; Salud=$(if ($ok) { 'OK' } else { 'OFFLINE' }); Modo='-'
+            $script:UltimoDiag += [pscustomobject]@{NCU=$et; GW=(Gw-DeTcuCx $tr.cx ([int]$tcu)); TCU=[int]$tcu; Salud=$(if ($ok) { 'OK' } else { 'OFFLINE' }); Modo='-'
                 Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''
                 Alarmas=$(if ($ok) { "comunica (hace $($e.edad) s)" } elseif ($null -eq $e -or $e.lastcomm -eq 0) { 'la NCU nunca ha leido este TCU' } else { "sin datos desde hace $($e.edad) s" })
                 main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
