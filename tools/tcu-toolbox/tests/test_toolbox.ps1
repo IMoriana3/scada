@@ -2746,6 +2746,31 @@ Check 'pem: los contadores del test viven en un hashtable' ($src.Contains('$c = 
 Check 'backup: el fichero lleva la NCU delante' ($src.Contains('backup_ncu{0}_tcu{1}')) $true
 Check 'backup: avisa antes de un backup de horas' ($src.Contains("'Backup largo'")) $true
 
+# ---- el export dice de donde salieron los datos, no que hay en los cuadros ----
+# hacer un diagnostico de planta y luego tocar la NCU3 exportaba el diagnostico
+# entero como si fuera de la NCU3
+$cxPl = @{ip='NA'; puerto=$null; gws=$null; multi=@(1,2,3); etiqueta='PLANTA'; to=3000; reint=1}
+$trPl = @(@{ncu=1; tcus=@(1,2)}, @{ncu=3; tcus=@(1)}, @{ncu=7; tcus=@(1)})
+$selloPl = Ctx-Sello 'Ayora (Planta completa)' $cxPl $trPl
+Check 'ctx: planta completa se declara como tal' $selloPl.alcance 'Planta completa (3 NCUs)'
+Check 'ctx: y lleva las NCUs de verdad' (($selloPl.ncus) -join ',') '1,3,7'
+Check 'ctx: la IP de planta no miente' $selloPl.ip 'NA'
+$cxNcu = @{ip='192.168.4.30'; puerto=$null; gws=@(@{puerto=503; ini=1; fin=60}); multi=$null; etiqueta='auto'; to=3000; reint=1}
+$selloN = Ctx-Sello 'Ayora NCU3 (auto)' $cxNcu @(@{ncu=3; tcus=@(1,2,3)})
+Check 'ctx: una NCU suelta se nombra' $selloN.alcance 'NCU3'
+Check 'ctx: con su IP' $selloN.ip '192.168.4.30'
+# entrada manual: sin NCU reconocible, al menos ip:puerto
+$selloM = Ctx-Sello '(manual)' @{ip='10.0.0.9'; puerto=503; gws=$null; multi=$null; etiqueta='503'; to=3000; reint=1} @(@{ncu=$null; tcus=@(1)})
+Check 'ctx: sin NCU, ip y puerto' $selloM.alcance '10.0.0.9:503'
+Check 'ctx: y ninguna NCU inventada' (@($selloM.ncus).Count) 0
+# los exports leen el sello, no los cuadros
+foreach ($b in @('diagnostico', 'auditoria', 'inventario', 'pem')) {
+    Check "ctx: el export de $b usa el sello" ($src.Contains("Ctx-Leer '$b'")) $true
+}
+Check 'ctx: y ya no hay export que lea el cuadro de IP' ($src -match "(?m)^\s+ip\s+= \`$txtIp\.Text\.Trim\(\)") $false
+Check 'ctx: el JSON lleva el alcance' ([regex]::Matches($src, [regex]::Escape('alcance = $ctx.alcance')).Count) 4
+Check 'ctx: y las NCUs del barrido' ([regex]::Matches($src, [regex]::Escape('ncus    = @($ctx.ncus)')).Count) 4
+
 $trabPem = @(@{ncu=3; tcus=@(1,2,3)}, @{ncu=4; tcus=@(7)}, @{ncu=5; tcus=@()})
 Check 'trab: contar TCUs de varias NCUs' (Cuantas-Tcus $trabPem) 4
 Check 'trab: sin trabajos, cero' (Cuantas-Tcus @()) 0
