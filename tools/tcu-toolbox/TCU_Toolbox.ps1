@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.22'
+$VERSION_TOOLBOX = '11.23'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1368,7 +1368,7 @@ function Ncu-DiagCompat([int[]]$tcus) {
                 $salud = 'OK'
                 if ($lastc[$tcu] -eq 0 -or ($edad -ge 0 -and $edad -gt 300)) {
                     $salud = 'OFFLINE'
-                    $notas = @($(if ($lastc[$tcu] -eq 0) { 'la NCU nunca ha leido este TCU' } else { "sin datos en la NCU desde hace $edad s" }))
+                    $notas = @($(if ($lastc[$tcu] -eq 0) { 'la NCU no tiene lectura de este TCU (si acaba de reiniciarse, su cache esta a cero)' } else { "sin datos en la NCU desde hace $edad s" }))
                 }
                 elseif ((($al1 -band $CRIT_AL1) -ne 0) -or (($al2 -band $CRIT_AL2_NCU) -ne 0)) { $salud = 'ALARMA' }
                 elseif ($alarmas.Count -gt 0 -or $notas.Count -gt 0) { $salud = 'AVISO' }
@@ -1474,7 +1474,7 @@ function Ncu-HsuCompat {
         $texto = ("viento {0:0.#} m/s (nivel {1}), dir {2:0} deg; nieve {3:0.###} m" -f $viento, $nivel, $dir, $nieve)
         if ($alarmas.Count) { $texto = ($alarmas -join '; ') + ' | ' + $texto }
         if ($edad -gt 90) { $texto += " | datos de hace $edad s" }
-        if ($salud -eq 'OFFLINE') { $texto = $(if ($lastc -eq 0) { 'la NCU nunca ha leido esta HSU' } else { "sin datos en la NCU desde hace $edad s" }) }
+        if ($salud -eq 'OFFLINE') { $texto = $(if ($lastc -eq 0) { 'la NCU no tiene lectura de esta HSU (si acaba de reiniciarse, su cache esta a cero)' } else { "sin datos en la NCU desde hace $edad s" }) }
         $lista += [pscustomobject]@{
             NCU=''; TCU=("HSU{0}" -f ($h + 1)); Salud=$salud; Modo='-'
             Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''
@@ -4305,10 +4305,19 @@ $REP_NO_APLICA = @(
     'V motor baja', 'V motor alta', 'limite Oeste alcanzado', 'limite Este alcanzado',
     'alarma de motor enclavada', 'SoC insuficiente para modo auto'
 )
+# La desviacion no llega como bit de alarma sino como NOTA de texto ("dif 63,7
+# deg"), asi que la lista de arriba no la cazaba: en la v11.22 los repetidores
+# seguian saliendo en AVISO por una desviacion de posicion que en ellos no
+# significa nada. Va por patron, no por texto exacto.
+$REP_NO_APLICA_RX = '^(dif\s|desviacion|tilt\b|objetivo\b)'
 # Las alarmas de un repetidor: las suyas, sin las de posicion ni motor. Pura.
 function Rep-Alarmas([string]$texto) {
     $l = @("$texto" -split ';' | ForEach-Object { "$_".Trim() } | Where-Object { $_ -ne '' })
-    $q = @($l | Where-Object { $x = $_; @($REP_NO_APLICA | Where-Object { $x -like "*$_*" }).Count -eq 0 })
+    $q = @($l | Where-Object {
+        $x = $_
+        if ($x -match $REP_NO_APLICA_RX) { return $false }
+        @($REP_NO_APLICA | Where-Object { $x -like "*$_*" }).Count -eq 0
+    })
     return ($q -join '; ')
 }
 
@@ -6477,10 +6486,41 @@ function Diag-Correr {
     [void](Trabajo-Guardar 'diag' $script:UltimoDiag "OK $nOk | AVISO $nAviso | ALARMA $nAlarma | OFFLINE $nOff")
     # resumen general por NCU (planta completa) y refresco de los filtros de vista
     if ($cx.multi) {
-        foreach ($g in @($script:UltimoDiag | Where-Object { $_.NCU } | Group-Object NCU)) {
+        # por numero de NCU, no por el orden en que se fueron a;adiendo las filas:
+        # con Group-Object a secas, una NCU cuyas unicas filas eran las de su
+        # repetidor -que se leen al final- salia la ultima de la lista.
+        $porNcu = @{}
+        foreach ($d in @($script:UltimoDiag | Where-Object { $_.NCU })) {
+            $k = "$($d.NCU)"
+            if (-not $porNcu.ContainsKey($k)) { $porNcu[$k] = @() }
+            $porNcu[$k] += ,$d
+        }
+        foreach ($tr in $trabajos) {
+            $k = "$($tr.ncu)"
+            if (-not $porNcu.ContainsKey($k)) { $porNcu[$k] = @() }
+        }
+        foreach ($k in @($porNcu.Keys | Sort-Object { [int]("0" + $_) })) {
+            # las TCUs por un lado; HSUs y repetidores no son seguidores y van
+            # aparte, igual que en el total
+            $filas = @($porNcu[$k])
+            $tcus = @($filas | Where-Object { "$($_.TCU)" -match '^\d+$' })
+            $otros = @($filas | Where-Object { "$($_.TCU)" -notmatch '^\d+$' -and "$($_.TCU)" -ne 'NCU' })
+            if ($tcus.Count -eq 0) {
+                # una NCU a la que no se ha podido llegar es LO MAS importante que
+                # hay que decir, y antes desaparecia del resumen sin mas
+                $n = @($trabajos | Where-Object { "$($_.ncu)" -eq $k })
+                $cuantas = $(if ($n.Count -gt 0) { @($n[0].tcus).Count } else { 0 })
+                Con ("  NCU{0}: SIN LECTURA - no se ha podido leer ninguna de sus {1} TCUs" -f $k, $cuantas) ([System.Drawing.Color]::Salmon)
+                continue
+            }
             $c = @{}
-            foreach ($d in $g.Group) { $c[$d.Salud] = 1 + [int]$c[$d.Salud] }
-            Con ("  NCU{0}: OK {1} | AVISO {2} | ALARMA {3} | OFFLINE {4}" -f $g.Name, [int]$c['OK'], [int]$c['AVISO'], [int]$c['ALARMA'], [int]$c['OFFLINE']) ([System.Drawing.Color]::SteelBlue)
+            foreach ($d in $tcus) { $c[$d.Salud] = 1 + [int]$c[$d.Salud] }
+            $extra = ''
+            if ($otros.Count -gt 0) {
+                $mal = @($otros | Where-Object { "$($_.Salud)" -ne 'OK' }).Count
+                $extra = "   (+{0} HSU/repetidor{1})" -f $otros.Count, $(if ($mal) { ", $mal mal" } else { '' })
+            }
+            Con ("  NCU{0}: OK {1} | AVISO {2} | ALARMA {3} | OFFLINE {4}{5}" -f $k, [int]$c['OK'], [int]$c['AVISO'], [int]$c['ALARMA'], [int]$c['OFFLINE'], $extra) ([System.Drawing.Color]::SteelBlue)
         }
     }
     $selV = $cbGVerNcu.SelectedItem
@@ -6574,7 +6614,7 @@ $btnGComm.Add_Click({ Lanzar {
             if ($ok) { $nOk++ } else { $nOff++; $mudas += $tcu }
             $script:UltimoDiag += [pscustomobject]@{NCU=$et; GW=(Gw-DeTcuCx $tr.cx ([int]$tcu)); TCU=[int]$tcu; Salud=$(if ($ok) { 'OK' } else { 'OFFLINE' }); Modo='-'
                 Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''
-                Alarmas=$(if ($ok) { "comunica (hace $($e.edad) s)" } elseif ($null -eq $e -or $e.lastcomm -eq 0) { 'la NCU nunca ha leido este TCU' } else { "sin datos desde hace $($e.edad) s" })
+                Alarmas=$(if ($ok) { "comunica (hace $($e.edad) s)" } elseif ($null -eq $e -or $e.lastcomm -eq 0) { 'la NCU no tiene lectura de este TCU (si acaba de reiniciarse, su cache esta a cero)' } else { "sin datos desde hace $($e.edad) s" })
                 main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
         }
         $nT = @($tr.tcus).Count

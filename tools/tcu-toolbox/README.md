@@ -70,6 +70,23 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**Tres cosas que decían lo que no era (v11.23)**
+
+- **Los repetidores seguían saliendo con alarmas de posición.** La desviación no
+  llega como bit de alarma sino como **nota de texto** (`dif 63,7 deg`), así que
+  la lista de la v11.22 no la cazaba y los cinco salían en AVISO por una posición
+  que en un equipo fijo no significa nada. Ahora va por patrón.
+- **«la NCU nunca ha leído este TCU»** afirmaba más de lo que dice el dato. Un
+  `lastComm` a 0 significa *no tengo lectura*; una NCU recién reiniciada tiene
+  toda su caché a cero, y eso no es «nunca».
+- **El resumen por NCU salía desordenado y se callaba lo peor.** Agrupaba en el
+  orden en que se añadían las filas, así que una NCU cuyas únicas filas eran las
+  de su repetidor —que se leen al final— aparecía la última. Y una NCU a la que
+  **no se ha podido llegar** desaparecía del resumen sin más: ahora sale como
+  `SIN LECTURA` con cuántas TCUs se han quedado sin leer. Las HSU y los
+  repetidores dejan además de contar dentro de la NCU: van aparte, como en el
+  total.
+
 **Los repetidores dejan de ser invisibles (v11.21)** — un repetidor **es una
 TCU**: mismo mapa, misma batería, mismo firmware. Lo único distinto es que está
 colocado para repetir la señal, no para mover un seguidor. Su esclavo cae
