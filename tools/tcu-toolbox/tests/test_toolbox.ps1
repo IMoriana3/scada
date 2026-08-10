@@ -2418,6 +2418,36 @@ Check 'resumen: ordena por numero de NCU' ($src.Contains('Sort-Object { [int]("0
 Check 'resumen: las HSU y los repetidores van aparte' ($src.Contains('(+{0} HSU/repetidor{1})')) $true
 Check 'resumen: una NCU sin lectura se dice' ($src.Contains('SIN LECTURA - no se ha podido leer ninguna de sus')) $true
 
+# --- el informe tiene que llevar TODOS los equipos, comuniquen o no ---
+$cxF = @{multi=@(
+  @{ncu=1; ip='10.0.0.1'; gws=@(@{puerto=503; ini=1; fin=3; reps=@(@{nombre='Repetidor 1'; esclavo=200})}); hsuLista=@(230)}
+  @{ncu=2; ip='10.0.0.2'; gws=@(@{puerto=503; ini=1; fin=2; reps=@()}); hsuLista=@()}
+)}
+$fl = @(Flota-Declarada $cxF)
+# NCU1: la NCU + 3 TCUs + 1 repetidor + 1 HSU = 6 ; NCU2: la NCU + 2 TCUs = 3
+Check 'flota: declara todos los equipos' ($fl.Count) 9
+Check 'flota: la propia NCU cuenta' (@($fl | Where-Object { $_.Tipo -eq 'NCU' }).Count) 2
+Check 'flota: las TCUs del rango' (@($fl | Where-Object { $_.Tipo -eq 'TCU' }).Count) 5
+Check 'flota: el repetidor' (@($fl | Where-Object { $_.Tipo -eq 'REP' })[0].TCU) 'Repetidor 1'
+Check 'flota: y la HSU' (@($fl | Where-Object { $_.Tipo -eq 'HSU' })[0].TCU) 'HSU1'
+
+# lo leido + lo declarado que no contesto
+$leido = @([pscustomobject]@{NCU='1'; TCU='1'; Salud='OK'; Alarmas=''})
+$comp = @(Diag-Completar $leido $fl)
+Check 'flota: completa lo que falta' ($comp.Count) 9
+Check 'flota: lo leido se respeta' (@($comp | Where-Object { "$($_.NCU)" -eq '1' -and "$($_.TCU)" -eq '1' })[0].Salud) 'OK'
+Check 'flota: lo no leido sale SIN LECTURA' (@($comp | Where-Object { "$($_.NCU)" -eq '2' -and "$($_.TCU)" -eq '1' })[0].Salud) 'SIN LECTURA'
+Check 'flota: y dice por que' ((@($comp | Where-Object { "$($_.Salud)" -eq 'SIN LECTURA' })[0].Alarmas) -like '*no leido en este barrido*') $true
+Check 'flota: no duplica lo ya leido' (@($comp | Where-Object { "$($_.NCU)" -eq '1' -and "$($_.TCU)" -eq '1' }).Count) 1
+
+# un repetidor NO es un seguidor: contarlo en el porcentaje lo falseaba
+Check 'tipo: una TCU es TCU'        (Fila-Tipo ([pscustomobject]@{TCU='7'})) 'TCU'
+Check 'tipo: la fila de la NCU'     (Fila-Tipo ([pscustomobject]@{TCU='NCU'})) 'NCU'
+Check 'tipo: una HSU'               (Fila-Tipo ([pscustomobject]@{TCU='HSU9'})) 'HSU'
+Check 'tipo: un repetidor no es TCU' (Fila-Tipo ([pscustomobject]@{TCU='Repetidor 1'})) 'REP'
+Check 'informe: el KPI cuenta solo seguidores' ($src.Contains("(Fila-Tipo `$_) -eq 'TCU'")) $true
+Check 'informe: completa la flota declarada' ($src.Contains('Diag-Completar $script:UltimoDiag (Flota-Declarada (Params-Conexion))')) $true
+
 Check 'rep salud: si no contesta, OFFLINE' (Rep-Salud $null 'no contesta') 'OFFLINE'
 Check 'rep salud: sin alarmas y con bateria, OK' (Rep-Salud ([pscustomobject]@{SoC=90}) '') 'OK'
 Check 'rep salud: SoC critico es ALARMA' (Rep-Salud ([pscustomobject]@{SoC=5}) 'SoC critico (<10%)') 'ALARMA'

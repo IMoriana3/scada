@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.23'
+$VERSION_TOOLBOX = '11.24'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -699,7 +699,8 @@ function Portada-Bloques($m) {
     $r = New-Object System.Collections.ArrayList
     $diag = @($m.diag)
     if ($diag.Count -gt 0) {
-        $tcus = @($diag | Where-Object { "$($_.TCU)" -ne 'NCU' -and "$($_.TCU)" -notlike 'HSU*' })
+        # un repetidor no es un seguidor: contarlo aqui falseaba el porcentaje
+        $tcus = @($diag | Where-Object { (Fila-Tipo $_) -eq 'TCU' })
         $ok = @($tcus | Where-Object { "$($_.Salud)" -eq 'OK' }).Count
         $pc = $(if ($tcus.Count -gt 0) { [math]::Round(100.0 * $ok / $tcus.Count, 1) } else { 0 })
         [void]$r.Add(@{titulo='Seguidores operativos'; valor="$pc %"; nota="$ok de $($tcus.Count) sin aviso ni alarma"
@@ -740,6 +741,71 @@ function Portada-Bloques($m) {
     return $r.ToArray()
 }
 
+# Los equipos que la topologia DICE que hay: NCUs, TCUs, HSUs y repetidores.
+# El informe se hacia solo con lo leido, asi que una NCU a la que no se llega
+# desaparecia con todas sus TCUs -en Ayora, 78 seguidores- y los totales no
+# cuadraban con la planta. Pura.
+function Flota-Declarada($cx) {
+    $r = @()
+    if ($null -eq $cx) { return $r }
+    $ncus = @()
+    if ($cx.multi) { $ncus = @($cx.multi) }
+    elseif ($cx.gws) { $ncus = @(@{ncu=(Ncu-DeNombre $cx.nombre); ip=$cx.ip; gws=$cx.gws; hsuLista=@($cx.hsuLista)}) }
+    elseif ($cx.ini -and $cx.fin) {
+        $ncus = @(@{ncu=(Ncu-DeNombre $cx.nombre); ip=$cx.ip
+                    gws=@(@{puerto=$cx.puerto; ini=$cx.ini; fin=$cx.fin; reps=@($cx.reps)}); hsuLista=@($cx.hsuLista)})
+    }
+    foreach ($n in $ncus) {
+        $et = "$($n.ncu)"
+        $r += ,@{NCU=$et; Tipo='NCU'; TCU='NCU'}
+        foreach ($g in @($n.gws)) {
+            for ($t = [int]$g.ini; $t -le [int]$g.fin; $t++) { $r += ,@{NCU=$et; Tipo='TCU'; TCU="$t"} }
+            $i = 0
+            foreach ($x in @($g.reps)) {
+                if (-not $x) { continue }
+                $i++
+                $nom = "$($x.nombre)"; if ($nom -eq '') { $nom = "Repetidor $i" }
+                $r += ,@{NCU=$et; Tipo='REP'; TCU=$nom}
+            }
+        }
+        $h = 0
+        foreach ($e in @($n.hsuLista)) { $h++; $r += ,@{NCU=$et; Tipo='HSU'; TCU="HSU$h"} }
+    }
+    return $r
+}
+
+# Completa lo leido con lo que la topologia dice que hay y no ha contestado.
+# Un equipo declarado del que no se sabe nada NO es lo mismo que un equipo OK:
+# sale como SIN LECTURA, que es lo que de verdad se sabe de el. Pura.
+function Diag-Completar($filas, $declarada) {
+    $vistos = @{}
+    foreach ($f in @($filas)) { $vistos["$($f.NCU)|$($f.TCU)"] = $true }
+    $r = @(@($filas))
+    foreach ($d in @($declarada)) {
+        $k = "$($d.NCU)|$($d.TCU)"
+        if ($vistos.ContainsKey($k)) { continue }
+        $r += ,[pscustomobject]@{
+            NCU=$d.NCU; GW=''; TCU=$d.TCU; Salud='SIN LECTURA'; Modo='-'
+            Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''
+            Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''
+            Tbat_C=''; Tpcb_C=''; Edad_s=''
+            Alarmas='declarado en la topologia y no leido en este barrido'
+            main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
+        }
+    }
+    return $r
+}
+
+# Que es cada fila del diagnostico. Un repetidor NO es un seguidor: contarlo en
+# el porcentaje de seguidores operativos falseaba el dato. Pura.
+function Fila-Tipo($f) {
+    $t = "$($f.TCU)"
+    if ($t -eq 'NCU') { return 'NCU' }
+    if ($t -like 'HSU*' -or $t -like 'RSU*') { return 'HSU' }
+    if ($t -match '^\d+$') { return 'TCU' }
+    return 'REP'
+}
+
 function Informe-Html([hashtable]$m) {
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.AppendLine('<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Informe PEM - ' + (Html-Esc $m.planta) + '</title><style>')
@@ -766,7 +832,7 @@ function Informe-Html([hashtable]$m) {
     # esta roto. Este aviso se queda visible en ese caso, y el propio JS lo
     # borra nada mas arrancar, asi que solo lo ve quien tiene el problema.
     [void]$sb.AppendLine('<div id="avisojs"><b>Los filtros de las tablas no estan activos.</b> Los monta JavaScript al abrir la pagina, y tu navegador lo tiene bloqueado. Si abajo sale la barra <i>&laquo;Internet Explorer ha restringido la ejecucion de scripts&raquo;</i>, pulsa <b>Permitir contenido bloqueado</b>. Si no, abre este fichero con Chrome o con Edge. El informe se lee igual sin filtros: solo pierdes poder filtrar y ordenar.</div>')
-    $clase = { param($s) switch -Wildcard ("$s") { 'OK*'{'ok'} 'PASA*'{'ok'} 'ALARMA*'{'alarma'} 'FALLA*'{'alarma'} 'FALLO*'{'alarma'} 'AVISO*'{'aviso'} 'DUDOSO*'{'aviso'} 'PENDIENTE*'{'aviso'} 'OFFLINE*'{'off'} 'SALTADO*'{'off'} default{''} } }
+    $clase = { param($s) switch -Wildcard ("$s") { 'OK*'{'ok'} 'PASA*'{'ok'} 'ALARMA*'{'alarma'} 'FALLA*'{'alarma'} 'FALLO*'{'alarma'} 'AVISO*'{'aviso'} 'DUDOSO*'{'aviso'} 'PENDIENTE*'{'aviso'} 'OFFLINE*'{'off'} 'SALTADO*'{'off'} 'SIN LECTURA*'{'off'} default{''} } }
     $tabla = {
         param($titulo, $filas, $cols, $colEstado, $clave)
         if (-not $filas -or @($filas).Count -eq 0) { return }
@@ -842,7 +908,7 @@ function Informe-Html([hashtable]$m) {
         @{clave='bat'; titulo='Auditoria de baterias'; filas=$m.bat
           cols=@('NCU','TCU','Tipo','Detalle','Gravedad'); estado='Gravedad'}
         @{clave='diag'; titulo='Diagnostico de flota'; filas=$m.diag
-          cols=@('NCU','TCU','Salud','Modo','Tilt','Objetivo','Dif','SoC','Alarmas'); estado='Salud'}
+          cols=@('NCU','GW','TCU','Salud','Modo','Tilt','Objetivo','Dif','SoC','Alarmas'); estado='Salud'}
         @{clave='pem'; titulo='Puesta en marcha (PEM)'; filas=$m.pem
           cols=@('NCU','TCU','Resultado','Detalle'); estado='Resultado'}
         @{clave='aud'; titulo='Auditoria contra preset de referencia'; filas=$m.aud
@@ -9576,7 +9642,16 @@ $btnInforme.Add_Click({
     try {
         $dir = Join-Path $PSScriptRoot 'informes'
         if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
-        $datos = @{diag = $script:UltimoDiag; pem = $script:UltimoPem; aud = $script:UltimaAud
+        # el informe se hacia solo con lo LEIDO: una NCU a la que no se llega
+        # desaparecia con todas sus TCUs y los totales no cuadraban con la planta.
+        # Se completa con lo que la topologia dice que hay, marcado SIN LECTURA.
+        $diagFull = $script:UltimoDiag
+        try {
+            if (@($script:UltimoDiag).Count -gt 0) {
+                $diagFull = @(Diag-Completar $script:UltimoDiag (Flota-Declarada (Params-Conexion)))
+            }
+        } catch { Con "AVISO: no se ha podido completar la flota del informe ($_)" ([System.Drawing.Color]::Orange) }
+        $datos = @{diag = $diagFull; pem = $script:UltimoPem; aud = $script:UltimaAud
                    inv = $script:UltimoInv; esc = $script:UltimaEscritura; lectura = $script:UltimaLectura
                    cierre = @(Cierre-Pendientes); bat = $script:UltimaBat}
         $conDatos = @($datos.Keys | Where-Object { @($datos[$_]).Count -gt 0 })

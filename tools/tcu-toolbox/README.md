@@ -70,6 +70,18 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**El informe lleva TODOS los equipos, comuniquen o no (v11.24)** — el informe se
+armaba **solo con lo leído**, así que una NCU a la que no se llega desaparecía
+con todas sus TCUs: en un Ayora con la NCU4 y la NCU5 caídas, el informe hablaba
+de **681** equipos en vez de 754, y las cuentas no cuadraban con la planta.
+
+Ahora se completa con lo que la **topología dice que hay** —NCUs, TCUs, HSUs y
+repetidores— y lo que no ha contestado sale como **`SIN LECTURA`**, que es lo
+que de verdad se sabe de ese equipo: no es un OK, pero tampoco un OFFLINE
+comprobado. Además, un **repetidor ya no cuenta como seguidor** en el porcentaje
+de *Seguidores operativos* (se colaba en el filtro, que solo excluía `NCU` y
+`HSU*`), y la tabla del diagnóstico gana la columna **GW**.
+
 **Tres cosas que decían lo que no era (v11.23)**
 
 - **Los repetidores seguían saliendo con alarmas de posición.** La desviación no
