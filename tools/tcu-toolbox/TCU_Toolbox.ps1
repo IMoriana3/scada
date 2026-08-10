@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.30'
+$VERSION_TOOLBOX = '11.31'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -4530,6 +4530,44 @@ function Trabajos-Planta([hashtable]$cx, [int[]]$tcus, [string]$filtro = '', $se
     return $lista
 }
 
+# De donde salieron los datos que hay en pantalla, congelado al lanzar la
+# operacion. Los exports miraban los cuadros EN EL MOMENTO DE EXPORTAR, y entre
+# el barrido y el boton puede haber pasado cualquier cosa: un diagnostico de
+# planta entera seguido de un cambio de modo en la NCU3 salia exportado como si
+# fuera de la NCU3, con 724 TCUs dentro. Pura: se prueba sin ventana.
+function Ctx-Sello([string]$planta, $cx, $trabajos) {
+    $ncus = @(@($trabajos) |
+        Where-Object { $null -ne $_ -and $null -ne $_.ncu } |
+        ForEach-Object { [int]$_.ncu } | Sort-Object -Unique)
+    $multi = [bool]$cx.multi
+    return @{
+        planta  = $planta
+        ip      = "$($cx.ip)"
+        puerto  = "$($cx.etiqueta)"
+        ncus    = @($ncus)
+        multi   = $multi
+        alcance = $(if ($multi) { "Planta completa ($($ncus.Count) NCUs)" }
+                    elseif ($ncus.Count -eq 1) { "NCU$($ncus[0])" }
+                    else { "$($cx.ip):$($cx.etiqueta)" })
+    }
+}
+
+$script:Ctx = @{}
+# el informe habla de "bloques" y el sello va por operacion: aqui se cruzan.
+# 'bat' sale del diagnostico, no de una lectura propia.
+$CTX_DE_BLOQUE = @{diag='diagnostico'; bat='diagnostico'; lectura='lectura'
+                   aud='auditoria'; inv='inventario'; pem='pem'}
+function Ctx-Guardar([string]$clave, $cx, $trabajos) {
+    $script:Ctx[$clave] = Ctx-Sello (Nombre-Planta) $cx $trabajos
+}
+# Si esa operacion no se ha corrido en esta sesion (datos cargados de Trabajos,
+# por ejemplo) no hay nada que congelar y se cae a lo que digan los cuadros.
+function Ctx-Leer([string]$clave) {
+    if ($script:Ctx.ContainsKey($clave)) { return $script:Ctx[$clave] }
+    return @{planta=(Nombre-Planta); ip=$txtIp.Text.Trim(); puerto=$txtPort.Text.Trim()
+             ncus=@(); multi=$false; alcance=''}
+}
+
 # Cuantas TCUs suman los trabajos. Ojo: @($null).Count vale 1 en PS 5.1, asi
 # que una NCU sin TCUs sumaria una de mentira si no se filtra antes.
 function Cuantas-Tcus($trabajos) {
@@ -5324,6 +5362,7 @@ $btnLeer.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtLTcus.Text 'Leer') $txtLGw.Text)
     if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
+    Ctx-Guardar 'lectura' $cx $trabajos
     $lvL.Items.Clear(); $lvL.Columns.Clear(); $script:UltimaLectura = @()
     $script:ReconfIntentos = 0; $script:ReconfConfirmados = 0; $script:ReconfCambios = 0; $script:ReconfSinAcuerdo = 0
     [void]$lvL.Columns.Add('NCU', 44)
@@ -6400,6 +6439,7 @@ function Diag-Correr {
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtGTcus.Text 'Diagnostico') $txtGGw.Text)
     if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna TCU (mira los cuadros NCUs, TCUs y GW).' ([System.Drawing.Color]::Orange); return }
+    Ctx-Guardar 'diagnostico' $cx $trabajos
     if ($cx.multi) {
         $totTcus = 0; foreach ($tr in $trabajos) { $totTcus += @($tr.tcus).Count }
         Con "Diagnostico de PLANTA: $($trabajos.Count) NCUs, $totTcus TCUs" ([System.Drawing.Color]::SteelBlue)
@@ -6756,6 +6796,7 @@ $btnGComm.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtGTcus.Text 'Test comm') $txtGGw.Text)
     if ($trabajos.Count -eq 0) { Con 'El filtro de NCUs no coincide con ninguna NCU de la planta.' ([System.Drawing.Color]::Orange); return }
+    Ctx-Guardar 'diagnostico' $cx $trabajos
     $lvG.Items.Clear(); $script:UltimoDiag = @(); $lblGResumen.Text = ''
     $script:UltimaCarga = @{}   # lo leido de carga era de la lectura anterior
     $script:UltimoEsComm = $true
@@ -7129,7 +7170,9 @@ $btnBJson.Add_Click({
     if (@($script:UltimaBatTabla).Count -eq 0) { return }
     # la carga cruda va aparte: en la tabla solo cabe el texto, y para
     # discutir con fabrica hacen falta los registros tal cual
-    $o = @{tipo='baterias_tcu'; planta=(Nombre-Planta); fecha=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+    $ctx = Ctx-Leer 'diagnostico'
+    $o = @{tipo='baterias_tcu'; planta=$ctx.planta; alcance=$ctx.alcance; ncus=@($ctx.ncus)
+           ip=$ctx.ip; fecha=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
            toolbox=$VERSION_TOOLBOX; tecnico=$script:Usuario; tcus=@($script:UltimaBatTabla)
            carga=$script:UltimaCarga}
     [void](Exportar-Json $o 'baterias' 'Baterias en JSON')
@@ -7169,7 +7212,7 @@ $btnGWa.Add_Click({
     $fNcu = "$($cbGVerNcu.SelectedItem)"
     $soloNcu = ''
     if ($fNcu -ne 'NCU - todas') { $soloNcu = ($fNcu -replace '^NCU', '') }
-    $txt = Texto-NoOk $script:UltimoDiag (Nombre-Planta) (Get-Date -Format 'dd/MM/yyyy HH:mm') $soloNcu
+    $txt = Texto-NoOk $script:UltimoDiag ((Ctx-Leer 'diagnostico').planta) (Get-Date -Format 'dd/MM/yyyy HH:mm') $soloNcu
     $copiado = $false
     try { [System.Windows.Forms.Clipboard]::SetText($txt); $copiado = $true } catch {}
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
@@ -7243,13 +7286,17 @@ $btnGJson.Add_Click({
             'Test de comunicacion', 'YesNo', 'Warning')
         if ($r -ne 'Yes') { return }
     }
+    # de donde salio ESTE barrido, no lo que digan los cuadros ahora
+    $ctx = Ctx-Leer 'diagnostico'
     $obj = [ordered]@{
         tipo    = $(if ($script:UltimoEsComm) { 'test_comm' } else { 'diagnostico_tcu' })
         mapa    = $VERSION_MAPA
         toolbox = $VERSION_TOOLBOX
-        planta  = Nombre-Planta
-        ip      = $txtIp.Text.Trim()
-        puerto  = $txtPort.Text.Trim()
+        planta  = $ctx.planta
+        alcance = $ctx.alcance
+        ncus    = @($ctx.ncus)
+        ip      = $ctx.ip
+        puerto  = $ctx.puerto
         fecha   = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         tcus    = @($script:UltimoDiag)
     }
@@ -7864,6 +7911,7 @@ $btnAud.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtATcus.Text 'Auditoria') $txtAGw.Text)
     if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
+    Ctx-Guardar 'auditoria' $cx $trabajos
     $lvA.Items.Clear(); $script:UltimaAud = @()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     if ($cx.multi) {
@@ -8009,13 +8057,16 @@ $btnAudCsv.Add_Click({
 # JSON de auditoria para el Historico de la plataforma (solo desviaciones +
 # recuento de TCUs auditadas/conformes de la ultima pasada)
 $btnAudJson.Add_Click({
+    $ctx = Ctx-Leer 'auditoria'
     $conformes = @($script:SegAud.Values | Where-Object { $_.estado -eq 'OK' }).Count
     $obj = [ordered]@{
         tipo    = 'auditoria_tcu'
         mapa    = $VERSION_MAPA
         toolbox = $VERSION_TOOLBOX
-        planta  = Nombre-Planta
-        ip      = $txtIp.Text.Trim()
+        planta  = $ctx.planta
+        alcance = $ctx.alcance
+        ncus    = @($ctx.ncus)
+        ip      = $ctx.ip
         fecha   = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         preset  = $script:PresetRefNombre
         tcus_auditadas = $script:SegAud.Count
@@ -8034,6 +8085,7 @@ $btnInvF.Add_Click({ Lanzar {
     if (-not $cx.multi) { $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtVTcus.Text 'Inventario') $txtVGw.Text).tcus }
     $trabajos = @(Trabajos-Planta $cx $tcus (Ncus-Filtro))
     if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
+    Ctx-Guardar 'inventario' $cx $trabajos
     $lvV.Items.Clear(); $script:UltimoInv = @(); $lblInvF.Text = ''
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     if ($cx.multi) {
@@ -8114,12 +8166,15 @@ $btnInvFCsv.Add_Click({
 
 # JSON de inventario para el Historico de la plataforma
 $btnInvJson.Add_Click({
+    $ctx = Ctx-Leer 'inventario'
     $obj = [ordered]@{
         tipo    = 'inventario_tcu'
         mapa    = $VERSION_MAPA
         toolbox = $VERSION_TOOLBOX
-        planta  = Nombre-Planta
-        ip      = $txtIp.Text.Trim()
+        planta  = $ctx.planta
+        alcance = $ctx.alcance
+        ncus    = @($ctx.ncus)
+        ip      = $ctx.ip
         fecha   = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         tcus    = @($script:UltimoInv)
     }
@@ -8235,6 +8290,7 @@ function Guardia-Viento([hashtable]$cx) {
 $btnPMotor.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Test motor') $txtPGw.Text)
+    Ctx-Guardar 'pem' $cx $trabajos
     $nTcus = Cuantas-Tcus $trabajos
     $pulso = Val-Int $txtPPulso.Text 'Pulso' 1 30
     $umbral = Parse-RealFinito $txtPUmbral.Text
@@ -8389,6 +8445,7 @@ $btnPComis.Add_Click({ Lanzar {
         # registro de estado que la NCU cachea (bloque compacto, puerto 502)
         # - toda la planta en segundos, sin rondas Zigbee
         $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
+        Ctx-Guardar 'pem' $cx $trabajos
         Con "Comisionado de Planta completa via NCU: $($trabajos.Count) NCUs (bloque compacto, sin Zigbee)" ([System.Drawing.Color]::SteelBlue)
         foreach ($tr in $trabajos) {
             $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
@@ -8450,6 +8507,7 @@ $btnPComis.Add_Click({ Lanzar {
 $btnPComisSet.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Comisionado') $txtPGw.Text)
+    Ctx-Guardar 'pem' $cx $trabajos
     $nTcus = Cuantas-Tcus $trabajos
     $obj = [int]([string]$cbPComis.SelectedItem).Split(' ')[0]
     if (-not (Pem-Confirmar $cx $trabajos $nTcus "Fijar estado de comisionado '$($ESTADOS_COMIS[$obj])' ($obj) en $nTcus TCUs?`r`nRecuerda GUARDAR EN NVM despues." 'Comisionado')) { return }
@@ -8481,12 +8539,15 @@ $btnPCsv.Add_Click({
 $btnPSeg.Add_Click({
     $filas = @(Seguimiento-Filas)
     if ($filas.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('Aun no hay datos: ejecuta LEER ESTADO (comisionado), la Auditoria de Flota o el TEST DE MOTOR.','Aviso'); return }
+    $ctx = Ctx-Leer 'pem'
     $obj = [ordered]@{
         tipo    = 'seguimiento_pem'
         mapa    = $VERSION_MAPA
         toolbox = $VERSION_TOOLBOX
-        planta  = Nombre-Planta
-        ip      = $txtIp.Text.Trim()
+        planta  = $ctx.planta
+        alcance = $ctx.alcance
+        ncus    = @($ctx.ncus)
+        ip      = $ctx.ip
         fecha   = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         tecnico = "$env:USERNAME"
         tcus    = $filas
@@ -9847,8 +9908,9 @@ $btnInforme.Add_Click({
             if ($r -eq 'Cancel') { return }
             $soloUltimo = ($r -eq 'Yes')
         }
+        $ctxI = Ctx-Leer $(if ($ultimo -and $CTX_DE_BLOQUE.ContainsKey($ultimo)) { $CTX_DE_BLOQUE[$ultimo] } else { '' })
         $m = @{
-            planta = (Nombre-Planta); ip = $txtIp.Text.Trim()
+            planta = $ctxI.planta; ip = $ctxI.ip; alcance = $ctxI.alcance
             fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm')
             usuario = $(if ($script:Usuario) { "$($script:Usuario.nombre) ($($script:Usuario.usuario))" } else { "$env:USERNAME" })
             version = $VERSION_TOOLBOX; mapa = $VERSION_MAPA

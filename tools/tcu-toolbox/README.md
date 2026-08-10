@@ -89,6 +89,26 @@ Al arrancar se revisa cada `plantas/*.json` y se avisa en la consola de:
 Lo segundo necesita que el export de la plataforma incluya `trackers` por
 entrada; sin ese dato no opina, no se lo inventa.
 
+**El export decía de dónde venía mirando los cuadros, no lo que había leído
+(v11.31)** — un diagnóstico de **planta completa** (724 TCUs) seguido de un
+cambio de modo en la **NCU3** salía exportado como *«Ayora · NCU3 ·
+192.168.4.30 · 724 TCUs»*. Los datos eran correctos; la cabecera, mentira.
+
+La causa: los exports leían `planta`, `ip` y `puerto` **de los cuadros de la
+pestaña Conexión en el momento de pulsar el botón**, no de lo que se barrió.
+Entre el barrido y el export puede pasar cualquier cosa — y en campo pasa
+siempre, porque después de diagnosticar se va a arreglar lo que ha salido.
+
+Ahora cada operación **congela su procedencia** al lanzarse (`Ctx-Sello`) y el
+export usa ese sello. Afecta a diagnóstico, test comm, baterías, lectura de
+variables, auditoría, inventario, seguimiento PEM, el informe HTML y el parte de
+WhatsApp. Los JSON llevan además dos campos nuevos que antes había que adivinar
+del nombre: **`alcance`** (`Planta completa (16 NCUs)` / `NCU3` / `ip:puerto`) y
+**`ncus`** con los números realmente recorridos.
+
+Si se cargan datos de la pestaña **Trabajos** (de otra sesión) no hay sello que
+valga y se cae a los cuadros, como antes.
+
 **Escribir en la planta entera y no poder guardarlo (v11.30)** — *ESCRIBIR*
 aceptaba la entrada **(Planta completa)** desde la v5.7, pero **GUARDAR EN NVM**
 no: se plantaba con *«la entrada (Planta completa) solo está soportada en
