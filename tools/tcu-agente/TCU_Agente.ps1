@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '2.8'
+$VERSION_AGENTE = '2.9'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -466,11 +466,47 @@ $script:TcusPedidas = ''
 $script:GwPedido = ''
 function Tcus-DeNcu($n) {
     if ("$($script:TcusPedidas)".Trim() -eq '' -and "$($script:GwPedido)".Trim() -eq '') {
+        # Tcus-DeGw descuenta los HUECOS declarados. Antes se expandia ini..fin a
+        # pelo y el agente leia numeros que no existen -las TCUs 14, 24 y 25 de la
+        # NCU7 de Ayora-, que salian OFFLINE en todos los barridos. Solo lo hacia
+        # bien cuando venia un filtro, que es justo cuando menos falta hace.
         $lt = @()
-        foreach ($g in $n.gws) { $lt += @([int]$g.ini..[int]$g.fin) }
+        foreach ($g in $n.gws) { $lt += @(Tcus-DeGw $g) }
         return @($lt | Sort-Object -Unique)
     }
     return @(Tcus-Pedidas $n $script:TcusPedidas $script:GwPedido)
+}
+
+# Los repetidores de una NCU. Son TCUs -mismo mapa, misma bateria, mismo
+# firmware- colocadas para repetir la senal. Su esclavo cae fuera del rango, asi
+# que hay que ir a por ellos aparte.
+function Reps-DeNcu($n) {
+    $r = @()
+    foreach ($g in @(Gws-Filtrados $n.gws $script:GwPedido)) {
+        $i = 0
+        foreach ($x in @($g.reps)) {
+            if (-not $x) { continue }
+            $i++
+            $nom = "$($x.nombre)"; if ($nom -eq '') { $nom = "Repetidor $i" }
+            $r += ,@{ncu = "$($n.ncu)"; puerto = [int]$g.puerto; nombre = $nom; esclavo = [int]$x.esclavo}
+        }
+    }
+    return $r
+}
+
+# Lo que la topologia dice que hay: la NCU, sus TCUs, sus repetidores y sus HSUs.
+# Sirve para que el diagnostico liste SIEMPRE todos los equipos, contesten o no.
+function Flota-Agente {
+    $r = @()
+    foreach ($n in (Ncus-DePlanta)) {
+        $et = "$($n.ncu)"
+        $r += ,@{NCU = $et; Tipo = 'NCU'; TCU = 'NCU'}
+        foreach ($t in @(Tcus-DeNcu $n)) { $r += ,@{NCU = $et; Tipo = 'TCU'; TCU = "$t"} }
+        foreach ($x in @(Reps-DeNcu $n)) { $r += ,@{NCU = $et; Tipo = 'REP'; TCU = $x.nombre} }
+        $h = 0
+        foreach ($e in @($n.hsuLista)) { $h++; $r += ,@{NCU = $et; Tipo = 'HSU'; TCU = "HSU$h"} }
+    }
+    return $r
 }
 
 function Fila-Vacia([string]$ncu, $tcu, [string]$salud, [string]$alarmas) {
@@ -524,7 +560,34 @@ function Diag-Planta {
                 $filas += $d
             }
         }
+        # --- repetidores de esta NCU ---
+        # Su esclavo cae fuera del rango, asi que no vienen en el bloque compacto:
+        # se leen uno a uno por Zigbee a traves de la NCU. Y su salud NO es la de
+        # un seguidor: estan fijos, asi que nada de posicion ni de motor.
+        foreach ($rp in @(Reps-DeNcu $n)) {
+            $dr = $null
+            try {
+                Modbus-Conectar $n.ip $rp.puerto $timeoutMs
+                $dr = Diag-LeerTcu ([byte]$rp.esclavo)
+                Modbus-Cerrar
+            } catch { try { Modbus-Cerrar } catch {}; $dr = $null }
+            $alR = $(if ($dr) { Rep-Alarmas "$($dr.Alarmas)" } else { "no contesta (esclavo $($rp.esclavo))" })
+            $fr = Fila-Vacia $et $rp.nombre (Rep-Salud $dr $alR) $alR
+            $fr.GW = "$($rp.puerto)"
+            $fr.Modo = '-'
+            if ($dr) {
+                foreach ($c in @('SoC','SoH','Vbat_mV','Ibat_mA','Vpanel_mV','Ientrada_mA','Tbat_C','Tpcb_C')) {
+                    if ($null -ne $dr.$c) { $fr.$c = $dr.$c }
+                }
+            }
+            $filas += $fr
+        }
     }
+    # Todos los equipos que la topologia declara, contesten o no. Una NCU a la
+    # que no se llega aportaba UNA fila en vez de las suyas, asi que el total
+    # bailaba: 748 en vez de 782. Lo que no se ha podido leer sale SIN LECTURA,
+    # que no es un OK pero tampoco un OFFLINE comprobado.
+    $filas = @(Diag-Completar $filas (Flota-Agente))
     return [ordered]@{
         tipo    = 'diagnostico_tcu'
         mapa    = $VERSION_MAPA
@@ -619,7 +682,8 @@ function Sincronizar {
             fecha = ([datetime]::ParseExact($d.fecha, 'yyyy-MM-dd HH:mm:ss', $null)).ToString('yyyy-MM-ddTHH:mm:ss')
             resumen = (Resumen-Diag $d); datos = $d
         }
-        if (-not $subido) { $aviso = 'sin credenciales de Supabase en la config: no subido' }
+        # sin el "no subido" del final: la web ya lo antepone y salia dos veces
+        if (-not $subido) { $aviso = 'sin credenciales de Supabase en la config' }
     } catch { $aviso = "error subiendo: $_" }
     return [ordered]@{ok=$true; guardado=$subido; aviso=$aviso; resumen=(Resumen-Diag $d); fecha=$d.fecha; filas=@($d.tcus).Count}
 }
