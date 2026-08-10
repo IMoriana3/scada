@@ -2721,6 +2721,37 @@ foreach ($b in @('btnLimpiar', 'btnUsuarios', 'btnHEsclavo', 'btnInforme', 'btnL
 }
 Check 'limpiar: no borra el log de fichero' ($src.Contains('$rtb.Clear()') -and -not $src.Contains('Remove-Item $script:LogFile')) $true
 
+# ---- planta completa en las acciones que escriben (v11.30) ----
+# ESCRIBIR siempre aceptaba (Planta completa) y NVM no: se podia escribir en
+# media planta y no poder guardarlo, con lo que se perdia al reiniciar la TCU.
+# Ninguna de estas acciones puede volver a rechazar la conexion de planta.
+foreach ($g in @(
+    'el cambio de modo va por NCU: elige una entrada (auto)/GW',
+    'el stow va por NCU: elige una entrada (auto)/GW',
+    'el test de motor va por NCU: elige una entrada (auto)/GW, no Planta completa')) {
+    Check "planta: ya no se rechaza ($($g.Split(':')[0]))" ($src.Contains($g)) $false
+}
+# el sintoma tenia una firma clara: coger .tcus de golpe y pasarselo a
+# Plan-Segmentos con la conexion de planta, que la rechaza
+foreach ($op in @('NVM', 'Sincronizar', 'Backup NCU', 'Modo', 'Clear', 'Stow', 'Test motor')) {
+    Check "planta: '$op' ya no aplana .tcus" ($src -match ("Parse-Seleccion \`$txt\w+\.Text '" + [regex]::Escape($op) + "'\) \`$txt\w+Gw\.Text\)\.tcus")) $false
+}
+# el bucle comun de PEM
+Check 'pem: Pem-PorTcu existe' ($src.Contains('function Pem-PorTcu(')) $true
+Check 'pem: y lo usan las cuatro acciones' ([regex]::Matches($src, [regex]::Escape('Pem-PorTcu $trabajos')).Count) 5
+Check 'pem: la guardia de viento va por NCU' ($src.Contains('Guardia-Viento $tr.cx')) $true
+Check 'pem: los contadores del test viven en un hashtable' ($src.Contains('$c = @{pasa=0; falla=0; salta=0; lim=0}')) $true
+# los backups de planta llevan la NCU en el nombre: si no, la TCU 12 de la NCU3
+# pisaria la TCU 12 de la NCU4
+Check 'backup: el fichero lleva la NCU delante' ($src.Contains('backup_ncu{0}_tcu{1}')) $true
+Check 'backup: avisa antes de un backup de horas' ($src.Contains("'Backup largo'")) $true
+
+$trabPem = @(@{ncu=3; tcus=@(1,2,3)}, @{ncu=4; tcus=@(7)}, @{ncu=5; tcus=@()})
+Check 'trab: contar TCUs de varias NCUs' (Cuantas-Tcus $trabPem) 4
+Check 'trab: sin trabajos, cero' (Cuantas-Tcus @()) 0
+# @($null).Count vale 1 en PS 5.1: una NCU sin TCUs no puede sumar
+Check 'trab: una NCU sin TCUs no suma' (Cuantas-Tcus @(@{ncu=9; tcus=$null})) 0
+
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }
 else { Write-Host "$fallos PRUEBAS FALLIDAS"; exit 1 }
