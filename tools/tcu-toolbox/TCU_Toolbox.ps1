@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.29'
+$VERSION_TOOLBOX = '11.30'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -4530,6 +4530,17 @@ function Trabajos-Planta([hashtable]$cx, [int[]]$tcus, [string]$filtro = '', $se
     return $lista
 }
 
+# Cuantas TCUs suman los trabajos. Ojo: @($null).Count vale 1 en PS 5.1, asi
+# que una NCU sin TCUs sumaria una de mentira si no se filtra antes.
+function Cuantas-Tcus($trabajos) {
+    $n = 0
+    foreach ($tr in @($trabajos)) {
+        if ($null -eq $tr) { continue }
+        $n += @(@($tr.tcus) | Where-Object { $null -ne $_ }).Count
+    }
+    return $n
+}
+
 function Refrescar-ComboPlantas {
     $sel = $cbPlanta.SelectedItem
     $cbPlanta.Items.Clear()
@@ -4658,7 +4669,7 @@ function Escribir-EnTcus($tcus) {
         $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtWTcus.Text 'Escribir') $txtWGw.Text)
     }
     if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna TCU (mira los cuadros TCUs y GW).' ([System.Drawing.Color]::Orange); return }
-    $nTcus = 0; foreach ($tr in $trabajos) { $nTcus += @($tr.tcus).Count }
+    $nTcus = Cuantas-Tcus $trabajos
     $donde = $(if ($cx.multi) { "$($trabajos.Count) NCUs de la PLANTA COMPLETA" } else { "$($cx.ip):$($cx.etiqueta)" })
     $resumen = ($vars | ForEach-Object {
         $hex = if ($_.esc.modo -eq 'fc16') { ($_.esc.palabras | ForEach-Object { '{0:X4}' -f $_ }) -join ' ' }
@@ -4855,35 +4866,53 @@ $btnNvm.Add_Click({ Lanzar {
         if ($r -ne 'Yes') { return }
     }
     $cx = Params-Conexion
-    $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtWTcus.Text 'NVM') $txtWGw.Text).tcus
-    if (@($tcus).Count -eq 0) { throw 'la seleccion no deja ninguna TCU' }
+    # Recorre NCU a NCU igual que ESCRIBIR. Antes cogia .tcus de golpe y
+    # llamaba a Plan-Segmentos con la conexion de planta, que la rechaza: se
+    # podia escribir en media planta y luego NO se podia guardar en NVM, asi
+    # que al reiniciar la TCU se perdia todo lo escrito.
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtWTcus.Text 'NVM') $txtWGw.Text)
+    $nTcus = Cuantas-Tcus $trabajos
+    if ($nTcus -eq 0) { throw 'la seleccion no deja ninguna TCU' }
+    $donde = $(if ($cx.multi) { "$($trabajos.Count) NCUs de la PLANTA COMPLETA" } else { "$($cx.ip):$($cx.etiqueta)" })
+    $queEti = $(if ($cx.multi) { "$nTcus TCUs" } else { Eti-Rango @($trabajos[0].tcus) })
     $r = [System.Windows.Forms.MessageBox]::Show(
-        "Guardar configuracion en NVM (40007 bit 15) en $(Eti-Rango $tcus) de $($cx.ip):$($cx.etiqueta)?",
+        "Guardar configuracion en NVM (40007 bit 15) en $queEti de ${donde}?",
         'Confirmar NVM', 'YesNo', 'Warning')
     if ($r -ne 'Yes') { return }
-    $segs = @(Plan-Segmentos $tcus $cx)
-    foreach ($seg in $segs) {
+    $ok = 0; $ko = 0
+    Con "Guardando en NVM $nTcus TCUs  ($donde)" ([System.Drawing.Color]::SteelBlue)
+    Prog-Iniciar $nTcus
+    foreach ($tr in $trabajos) {
         if ($script:Cancelar) { break }
-        $segOk = $true
-        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
-        catch { $segOk = $false; Con "ERROR de conexion ($($cx.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
-        foreach ($tcu in $seg.tcus) {
-            if (Chequear-Cancelado) { break }
-            $hecho = $false
-            if ($segOk) {
-                for ($i = 1; $i -le $cx.reint -and -not $hecho; $i++) {
-                    try { FC22-Mascara $tcu 40007 0x7FFF 0x8000; $hecho = $true; Cierre-MarcarSiEsta $script:NcuLog ([int]$tcu) 'nvm' 'OK' }
-                    catch {
-                        if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
-                        Start-Sleep -Milliseconds (300 * $i)
+        $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
+        if ($null -ne $tr.ncu) { Con ("--- NCU{0}  ({1})  {2} TCUs ---" -f $tr.ncu, $tr.ip, @($tr.tcus).Count) ([System.Drawing.Color]::SteelBlue) }
+        $segs = @(Plan-Segmentos @($tr.tcus) $tr.cx)
+        foreach ($seg in $segs) {
+            if ($script:Cancelar) { break }
+            $segOk = $true
+            try { Modbus-Conectar $tr.ip $seg.puerto $tr.cx.to }
+            catch { $segOk = $false; Con "ERROR de conexion ($($tr.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
+            foreach ($tcu in $seg.tcus) {
+                if (Chequear-Cancelado) { break }
+                $hecho = $false
+                if ($segOk) {
+                    for ($i = 1; $i -le $tr.cx.reint -and -not $hecho; $i++) {
+                        try { FC22-Mascara $tcu 40007 0x7FFF 0x8000; $hecho = $true; Cierre-MarcarSiEsta $script:NcuLog ([int]$tcu) 'nvm' 'OK' }
+                        catch {
+                            if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+                            Start-Sleep -Milliseconds (300 * $i)
+                        }
                     }
                 }
+                Prog-Paso
+                if ($hecho) { $ok++; Con ((Eti-Tcu $tcu) + "  NVM guardado") ([System.Drawing.Color]::LightGreen) }
+                else        { $ko++; Con ((Eti-Tcu $tcu) + "  NVM FALLO") ([System.Drawing.Color]::Salmon) }
             }
-            if ($hecho) { Con ((Eti-Tcu $tcu) + "  NVM guardado") ([System.Drawing.Color]::LightGreen) }
-            else        { Con ((Eti-Tcu $tcu) + "  NVM FALLO") ([System.Drawing.Color]::Salmon) }
         }
     }
+    $script:NcuLog = ''
     Modbus-Cerrar
+    Con "NVM: $ok guardadas, $ko con fallo." ([System.Drawing.Color]::SteelBlue)
 } })
 
 $btnSimular.Add_Click({
@@ -7230,25 +7259,35 @@ $btnGJson.Add_Click({
 # ------------------------- SINCRONIZAR RELOJ -------------------------
 $btnSync.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtSTcus.Text 'Sincronizar') $txtSGw.Text).tcus
+    # NCU a NCU, como ESCRIBIR: poner en hora una planta entera es justo el caso
+    # de uso, y antes la conexion (Planta completa) lo rechazaba.
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtSTcus.Text 'Sincronizar') $txtSGw.Text)
+    $nTcus = Cuantas-Tcus $trabajos
+    if ($nTcus -eq 0) { throw 'la seleccion no deja ninguna TCU' }
+    $donde = $(if ($cx.multi) { "$($trabajos.Count) NCUs de la PLANTA COMPLETA" } else { "$($cx.ip):$($cx.etiqueta)" })
     $r = [System.Windows.Forms.MessageBox]::Show(
-        "Sincronizar fecha/hora de $($tcus.Count) TCUs ($($tcus[0])-$($tcus[-1])) con la hora de este PC?`r`n`r`nSecuencia por TCU: 40007 bit0 (permitir) -> 40001..40006 -> 40007 bit1 (aplicar).",
+        "Sincronizar fecha/hora de $nTcus TCUs de $donde con la hora de este PC?`r`n`r`nSecuencia por TCU: 40007 bit0 (permitir) -> 40001..40006 -> 40007 bit1 (aplicar).",
         'Confirmar sincronizacion', 'YesNo', 'Question')
     if ($r -ne 'Yes') { return }
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Sincronizando reloj de $($tcus.Count) TCUs con el PC  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
+    Con "Sincronizando reloj de $nTcus TCUs con el PC  ($donde)" ([System.Drawing.Color]::SteelBlue)
     $ok = 0; $ko = 0
-    $segs = @(Plan-Segmentos $tcus $cx)
+    Prog-Iniciar $nTcus
+    foreach ($tr in $trabajos) {
+    if ($script:Cancelar) { break }
+    $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
+    if ($null -ne $tr.ncu) { Con ("--- NCU{0}  ({1})  {2} TCUs ---" -f $tr.ncu, $tr.ip, @($tr.tcus).Count) ([System.Drawing.Color]::SteelBlue) }
+    $segs = @(Plan-Segmentos @($tr.tcus) $tr.cx)
     foreach ($seg in $segs) {
     if ($script:Cancelar) { break }
     $segOk = $true
-    try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
-    catch { $segOk = $false; Con "ERROR de conexion ($($cx.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
+    try { Modbus-Conectar $tr.ip $seg.puerto $tr.cx.to }
+    catch { $segOk = $false; Con "ERROR de conexion ($($tr.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
     foreach ($tcu in $seg.tcus) {
         if (Chequear-Cancelado) { break }
         $hecho = $false; $fallo = ''
-        if (-not $segOk) { $fallo = "sin conexion ($($cx.ip):$($seg.puerto))" }
-        for ($i = 1; $i -le $cx.reint -and -not $hecho -and $segOk; $i++) {
+        if (-not $segOk) { $fallo = "sin conexion ($($tr.ip):$($seg.puerto))" }
+        for ($i = 1; $i -le $tr.cx.reint -and -not $hecho -and $segOk; $i++) {
             if ($script:Cancelar) { break }
             try {
                 # bit 0: permitir introduccion de fecha/hora
@@ -7283,8 +7322,11 @@ $btnSync.Add_Click({ Lanzar {
             $ko++
             Con ((Eti-Tcu $tcu) + ("  FALLO  {0}" -f $fallo)) ([System.Drawing.Color]::Salmon)
         }
+        Prog-Paso
     }
     }
+    }
+    $script:NcuLog = ''
     Modbus-Cerrar
     Con "Sincronizacion: $ok OK, $ko fallos" ([System.Drawing.Color]::SteelBlue)
 } })
@@ -7409,30 +7451,48 @@ $btnCsvTcu.Add_Click({ Lanzar {
 # ------------------------- BACKUP MASIVO DE NCU -------------------------
 $btnBackupNcu.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtBTcus.Text 'Backup NCU') $txtBGw.Text).tcus
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtBTcus.Text 'Backup NCU') $txtBGw.Text)
+    $nTcus = Cuantas-Tcus $trabajos
+    if ($nTcus -eq 0) { throw 'la seleccion no deja ninguna TCU' }
+    $donde = $(if ($cx.multi) { "$($trabajos.Count) NCUs de la PLANTA COMPLETA" } else { "$($cx.ip):$($cx.etiqueta)" })
+    # El backup lee las $($VARIABLES.Count) variables una a una: en una planta
+    # entera son horas. Mejor decirlo antes de que elija carpeta.
+    $nLecturas = $nTcus * $VARIABLES.Count
+    if ($nLecturas -gt 20000) {
+        $rAviso = [System.Windows.Forms.MessageBox]::Show(
+            "Vas a hacer backup de $nTcus TCUs ($donde).`r`n`r`nSon $nLecturas lecturas una a una: cuenta con horas, no minutos. Se puede parar con CANCELAR y lo ya guardado se queda.`r`n`r`nContinuar?",
+            'Backup largo', 'YesNo', 'Warning')
+        if ($rAviso -ne 'Yes') { return }
+    }
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dlg.Description = "Carpeta donde guardar los backups JSON (uno por TCU, $($tcus.Count) ficheros)"
+    $dlg.Description = "Carpeta donde guardar los backups JSON (uno por TCU, $nTcus ficheros)"
     if ($dlg.ShowDialog() -ne 'OK') { return }
     $dir = $dlg.SelectedPath
     $ts = Get-Date -Format 'yyyyMMdd_HHmm'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Backup NCU: $(Eti-Rango $tcus) -> $dir  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
+    Con "Backup NCU: $nTcus TCUs -> $dir  ($donde)" ([System.Drawing.Color]::SteelBlue)
     $ok = 0; $ko = 0
-    $segs = @(Plan-Segmentos $tcus $cx)
+    Prog-Iniciar $nTcus
+    foreach ($tr in $trabajos) {
+    if ($script:Cancelar) { break }
+    $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
+    if ($null -ne $tr.ncu) { Con ("--- NCU{0}  ({1})  {2} TCUs ---" -f $tr.ncu, $tr.ip, @($tr.tcus).Count) ([System.Drawing.Color]::SteelBlue) }
+    $segs = @(Plan-Segmentos @($tr.tcus) $tr.cx)
     foreach ($seg in $segs) {
         if ($script:Cancelar) { break }
         $segOk = $true
-        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
-        catch { $segOk = $false; Con "ERROR de conexion ($($cx.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
+        try { Modbus-Conectar $tr.ip $seg.puerto $tr.cx.to }
+        catch { $segOk = $false; Con "ERROR de conexion ($($tr.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
         foreach ($tcu in $seg.tcus) {
             if (Chequear-Cancelado) { break }
+            Prog-Paso
             if (-not $segOk) { $ko++; Con ((Eti-Tcu $tcu) + "  FALLO  sin conexion") ([System.Drawing.Color]::Salmon); continue }
             $vars = @(); $errs = 0
             foreach ($nombre in $VARIABLES.Keys) {
                 if ($script:Cancelar) { break }
                 $vdef = $VARIABLES[$nombre]
                 $val = $null
-                for ($i = 1; $i -le $cx.reint -and $null -eq $val; $i++) {
+                for ($i = 1; $i -le $tr.cx.reint -and $null -eq $val; $i++) {
                     try { $val = Leer-Decodificado $tcu $vdef }
                     catch {
                         if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
@@ -7446,18 +7506,23 @@ $btnBackupNcu.Add_Click({ Lanzar {
             $completo = ($errs -eq 0)
             $obj = [ordered]@{
                 tipo='backup_tcu'; mapa=$VERSION_MAPA; toolbox=$VERSION_TOOLBOX
-                planta=(Nombre-Planta); ip=$cx.ip; puerto=$seg.puerto; tcu=[int]$tcu
+                planta=(Nombre-Planta); ip=$tr.ip; puerto=$seg.puerto; ncu=$tr.ncu; tcu=[int]$tcu
                 fecha=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); completo=$completo; errores=$errs
                 variables=$vars
             }
             $suf = ''
             if (-not $completo) { $suf = '_INCOMPLETO' }
-            $fich = Join-Path $dir ("backup_tcu{0}_{1}{2}.json" -f $tcu, $ts, $suf)
+            # con la NCU delante: en una planta los numeros de TCU se repiten y
+            # los ficheros se pisarian unos a otros
+            $pre = $(if ($null -ne $tr.ncu) { "backup_ncu{0}_tcu{1}" -f $tr.ncu, $tcu } else { "backup_tcu{0}" -f $tcu })
+            $fich = Join-Path $dir ("{0}_{1}{2}.json" -f $pre, $ts, $suf)
             ConvertTo-Json $obj -Depth 5 | Set-Content $fich -Encoding UTF8
             if ($completo) { $ok++; Con ((Eti-Tcu $tcu) + "  backup OK") ([System.Drawing.Color]::LightGreen) }
             else { $ko++; Con ((Eti-Tcu $tcu) + ("  backup INCOMPLETO ({0} errores)" -f $errs)) ([System.Drawing.Color]::Orange) }
         }
     }
+    }
+    $script:NcuLog = ''
     Modbus-Cerrar
     Con "Backup NCU terminado: $ok completos, $ko incompletos/fallidos. Carpeta: $dir" ([System.Drawing.Color]::SteelBlue)
 } })
@@ -8083,6 +8148,59 @@ function Pem-Fila([string]$tcu, [string]$res, [string]$det, [string]$ncu = '') {
     [System.Windows.Forms.Application]::DoEvents()
 }
 
+# Las acciones de PEM (modo, clear, stow, comisionado) valen para una NCU y
+# para la planta entera. Antes se plantaban con "elige una entrada (auto)/GW",
+# asi que un cierre que tocaba varias NCUs habia que hacerlo NCU por NCU.
+# Estas tres funciones son el bucle comun: contar, confirmar y recorrer.
+function Pem-Confirmar($cx, $trabajos, [int]$nTcus, [string]$texto, [string]$titulo) {
+    if ($nTcus -eq 0) { throw 'la seleccion no deja ninguna TCU' }
+    $extra = ''
+    if ($cx.multi) { $extra = "`r`n`r`nSon $($trabajos.Count) NCUs de la PLANTA COMPLETA." }
+    $r = [System.Windows.Forms.MessageBox]::Show("$texto$extra", $titulo, 'YesNo', 'Warning')
+    return ($r -eq 'Yes')
+}
+
+# Recorre trabajo -> segmento -> TCU y llama a $accion con (tcu, ncu, tr, seg).
+# Si el segmento no conecta, marca sus TCUs como FALLA y sigue con el siguiente.
+# $antes se llama una vez por NCU con (tr, ncu): si devuelve $false esa NCU se
+# salta entera (lo usa la guardia de viento, que es por NCU porque cada una
+# tiene su propia HSU).
+function Pem-PorTcu($trabajos, [scriptblock]$accion, [scriptblock]$antes = $null) {
+    $script:PemSinConexion = 0
+    Prog-Iniciar (Cuantas-Tcus $trabajos)
+    foreach ($tr in @($trabajos)) {
+        if ($script:Cancelar) { break }
+        $ncu = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
+        $script:NcuLog = $ncu
+        if ($null -ne $antes) {
+            if (-not (& $antes $tr $ncu)) {
+                foreach ($tcu in @($tr.tcus)) { Prog-Paso }
+                continue
+            }
+        }
+        foreach ($seg in @(Plan-Segmentos @($tr.tcus) $tr.cx)) {
+            if ($script:Cancelar) { break }
+            $segOk = $true
+            try { Modbus-Conectar $tr.ip $seg.puerto $tr.cx.to }
+            catch { $segOk = $false }
+            if (-not $segOk) {
+                foreach ($tcu in $seg.tcus) {
+                    Pem-Fila $tcu 'FALLA' "sin conexion ($($tr.ip):$($seg.puerto))" $ncu
+                    $script:PemSinConexion++; Prog-Paso
+                }
+                continue
+            }
+            foreach ($tcu in $seg.tcus) {
+                if (Chequear-Cancelado) { break }
+                & $accion $tcu $ncu $tr $seg | Out-Null
+                Prog-Paso
+            }
+        }
+    }
+    $script:NcuLog = ''
+    Modbus-Cerrar
+}
+
 # Fija el modo (0 OFF / 1 MANUAL / 2 AUTO) tocando SOLO los bits 9:8 de 40000
 # y verifica por efecto en 30001. Devuelve $true si el TCU llego al modo.
 function Fijar-Modo([byte]$tcu, [int]$modo) {
@@ -8116,36 +8234,40 @@ function Guardia-Viento([hashtable]$cx) {
 
 $btnPMotor.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    if ($cx.multi) { throw 'el test de motor va por NCU: elige una entrada (auto)/GW, no Planta completa' }
-    $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Test motor') $txtPGw.Text).tcus
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Test motor') $txtPGw.Text)
+    $nTcus = Cuantas-Tcus $trabajos
     $pulso = Val-Int $txtPPulso.Text 'Pulso' 1 30
     $umbral = Parse-RealFinito $txtPUmbral.Text
     if ($umbral -le 0 -or $umbral -gt 10) { throw 'umbral fuera de rango (0-10 deg)' }
-    $r = [System.Windows.Forms.MessageBox]::Show(
-        "TEST DE MOTOR en $($tcus.Count) TCUs: cada uno pasara a MANUAL, movera OESTE ${pulso}s y ESTE ${pulso}s midiendo angulo y corriente, y volvera a su modo original.`r`n`r`nLos seguidores SE VAN A MOVER. Continuar?",
-        'TEST DE MOTOR', 'YesNo', 'Warning')
-    if ($r -ne 'Yes') { return }
-    if (-not (Guardia-Viento $cx)) { return }
+    # ~2 pulsos + maniobras de modo por TCU; en planta entera son horas y hay
+    # que decirlo antes, no despues de empezar a mover seguidores.
+    $mins = [int]([Math]::Ceiling($nTcus * (2 * $pulso + 12) / 60.0))
+    if (-not (Pem-Confirmar $cx $trabajos $nTcus "TEST DE MOTOR en $nTcus TCUs: cada uno pasara a MANUAL, movera OESTE ${pulso}s y ESTE ${pulso}s midiendo angulo y corriente, y volvera a su modo original.`r`n`r`nLos seguidores SE VAN A MOVER. Tiempo estimado: ~$mins min. Continuar?" 'TEST DE MOTOR')) { return }
+    # La guardia de viento es por NCU (cada una tiene su HSU): con una sola
+    # entrada se comprueba aqui, y con Planta completa antes de cada NCU.
+    if (-not $cx.multi) { if (-not (Guardia-Viento $cx)) { return } }
     $lvP.Items.Clear(); $script:UltimoPem = @(); $lblPResumen.Text = ''
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "TEST DE MOTOR: $(Eti-Rango $tcus), pulso ${pulso}s, umbral $umbral deg" ([System.Drawing.Color]::SteelBlue)
-    $nPasa = 0; $nFalla = 0; $nSalta = 0; $nLim = 0
-    $segs = @(Plan-Segmentos $tcus $cx)
-    foreach ($seg in $segs) {
-        if ($script:Cancelar) { break }
-        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
-        catch { foreach ($tcu in $seg.tcus) { Pem-Fila $tcu 'SALTADO' "sin conexion ($($cx.ip):$($seg.puerto))"; $nSalta++ }; continue }
-        foreach ($tcu in $seg.tcus) {
-            if (Chequear-Cancelado) { break }
+    Con "TEST DE MOTOR: $nTcus TCUs, pulso ${pulso}s, umbral $umbral deg" ([System.Drawing.Color]::SteelBlue)
+    # hashtable y no variables sueltas: el bloque corre en otro ambito
+    $c = @{pasa=0; falla=0; salta=0; lim=0}
+    $antesNcu = $(if ($cx.multi) { {
+        param($tr, $ncu)
+        if (Guardia-Viento $tr.cx) { return $true }
+        foreach ($tcu in @($tr.tcus)) { Pem-Fila $tcu 'SALTADO' 'guardia de viento de esta NCU' $ncu; $c.salta++ }
+        return $false
+    }.GetNewClosure() } else { $null })
+    Pem-PorTcu $trabajos {
+        param($tcu, $ncu, $tr, $seg)
             $modo0 = $null
             try {
                 $v0 = FC03-Leer $tcu (Dir-Trama 30001) 3          # 30001..30003: estado + alarmas 1/2
                 $modo0 = ($v0[0] -shr 8) -band 0x3
                 if ((($v0[1] -band $CRIT_AL1) -ne 0) -or (($v0[2] -band $CRIT_AL2) -ne 0)) {
-                    Pem-Fila $tcu 'SALTADO' 'alarma critica activa - resolver antes del test'; $nSalta++; continue
+                    Pem-Fila $tcu 'SALTADO' 'alarma critica activa - resolver antes del test' $ncu; $c.salta++; return
                 }
                 $t0 = (FC03-Leer $tcu (Dir-Trama 30111) 1)[0]; if ($t0 -gt 32767) { $t0 -= 65536 }
-                if (-not (Fijar-Modo $tcu 1)) { Pem-Fila $tcu 'FALLA' 'no entra en modo MANUAL'; $nFalla++; continue }
+                if (-not (Fijar-Modo $tcu 1)) { Pem-Fila $tcu 'FALLA' 'no entra en modo MANUAL' $ncu; $c.falla++; return }
                 # OESTE
                 FC16-Escribir $tcu 40017 @(1)
                 Start-Sleep -Milliseconds ([int]($pulso * 500))
@@ -8164,25 +8286,24 @@ $btnPMotor.Add_Click({ Lanzar {
                 $tE = (FC03-Leer $tcu (Dir-Trama 30111) 1)[0]; if ($tE -gt 32767) { $tE -= 65536 }
                 $dW = ($tW - $t0) / 10.0; $dE = ($tE - $tW) / 10.0
                 $v = Motor-Veredicto $dW $iW $dE $iE $umbral ($t0 / 10.0)
-                Pem-Fila $tcu $v.estado $v.detalle
+                Pem-Fila $tcu $v.estado $v.detalle $ncu
                 switch ($v.estado) {
-                    'PASA' { $nPasa++; if ($v.limite) { $nLim++ } }
-                    default { $nFalla++ }
+                    'PASA' { $c.pasa++; if ($v.limite) { $c.lim++ } }
+                    default { $c.falla++ }
                 }
             } catch {
-                Pem-Fila $tcu 'FALLA' "error durante el test: $_"; $nFalla++
+                Pem-Fila $tcu 'FALLA' "error durante el test: $_" $ncu; $c.falla++
                 if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
             } finally {
                 try { FC16-Escribir $tcu 40017 @(0) } catch {}     # parada de motor garantizada
                 if ($null -ne $modo0) { try { [void](Fijar-Modo $tcu $modo0) } catch {} }
             }
-        }
-    }
-    Modbus-Cerrar
-    $colaLim = $(if ($nLim -gt 0) { " ($nLim solo en un sentido, pegadas al limite)" } else { '' })
-    $lblPResumen.Text = "PASA $nPasa | FALLA $nFalla | saltados $nSalta"
-    Con "TEST DE MOTOR terminado: PASA $nPasa$colaLim | FALLA $nFalla | SALTADOS $nSalta" ([System.Drawing.Color]::SteelBlue)
-    if ($nLim -gt 0) { Con "  Las que solo se movieron en un sentido estaban pegadas a su limite de recorrido: el controlador no llega a activar el motor y la corriente se queda en 0. Para probar los dos sentidos, llevalas antes a una posicion mas centrada." ([System.Drawing.Color]::Gainsboro) }
+    }.GetNewClosure() $antesNcu
+    $c.salta += $script:PemSinConexion
+    $colaLim = $(if ($c.lim -gt 0) { " ($($c.lim) solo en un sentido, pegadas al limite)" } else { '' })
+    $lblPResumen.Text = "PASA $($c.pasa) | FALLA $($c.falla) | saltados $($c.salta)"
+    Con "TEST DE MOTOR terminado: PASA $($c.pasa)$colaLim | FALLA $($c.falla) | SALTADOS $($c.salta)" ([System.Drawing.Color]::SteelBlue)
+    if ($c.lim -gt 0) { Con "  Las que solo se movieron en un sentido estaban pegadas a su limite de recorrido: el controlador no llega a activar el motor y la corriente se queda en 0. Para probar los dos sentidos, llevalas antes a una posicion mas centrada." ([System.Drawing.Color]::Gainsboro) }
     # alimenta la tarea "Prueba movimiento" del seguimiento PEM
     foreach ($p in $script:UltimoPem) {
         if ($p.Resultado -eq 'SALTADO') { continue }
@@ -8193,94 +8314,67 @@ $btnPMotor.Add_Click({ Lanzar {
 
 $btnPModo.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    if ($cx.multi) { throw 'el cambio de modo va por NCU: elige una entrada (auto)/GW' }
-    $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Modo') $txtPGw.Text).tcus
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Modo') $txtPGw.Text)
+    $nTcus = Cuantas-Tcus $trabajos
     $modo = @{'OFF'=0; 'MANUAL'=1; 'AUTO'=2}[[string]$cbPModo.SelectedItem]
-    $r = [System.Windows.Forms.MessageBox]::Show(
-        "Pasar $($tcus.Count) TCUs a modo $($cbPModo.SelectedItem)?", 'Cambio de modo', 'YesNo', 'Warning')
-    if ($r -ne 'Yes') { return }
+    if (-not (Pem-Confirmar $cx $trabajos $nTcus "Pasar $nTcus TCUs a modo $($cbPModo.SelectedItem)?" 'Cambio de modo')) { return }
     $lvP.Items.Clear(); $script:UltimoPem = @()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Cambio de modo a $($cbPModo.SelectedItem) en $(Eti-Rango $tcus)" ([System.Drawing.Color]::SteelBlue)
-    $segs = @(Plan-Segmentos $tcus $cx)
-    foreach ($seg in $segs) {
-        if ($script:Cancelar) { break }
-        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
-        catch { foreach ($tcu in $seg.tcus) { Pem-Fila $tcu 'FALLA' "sin conexion ($($cx.ip):$($seg.puerto))" }; continue }
-        foreach ($tcu in $seg.tcus) {
-            if (Chequear-Cancelado) { break }
-            try {
-                if (Fijar-Modo $tcu $modo) { Pem-Fila $tcu 'OK' "en modo $($cbPModo.SelectedItem)" }
-                else { Pem-Fila $tcu 'FALLA' "no confirma el modo (30001)" }
-            } catch { Pem-Fila $tcu 'FALLA' "$_"; if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar } }
-        }
-    }
-    Modbus-Cerrar
+    Con "Cambio de modo a $($cbPModo.SelectedItem) en $nTcus TCUs" ([System.Drawing.Color]::SteelBlue)
+    Pem-PorTcu $trabajos {
+        param($tcu, $ncu, $tr, $seg)
+        try {
+            if (Fijar-Modo $tcu $modo) { Pem-Fila $tcu 'OK' "en modo $($cbPModo.SelectedItem)" $ncu }
+            else { Pem-Fila $tcu 'FALLA' "no confirma el modo (30001)" $ncu }
+        } catch { Pem-Fila $tcu 'FALLA' "$_" $ncu; if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar } }
+    }.GetNewClosure()
 } })
 
 $btnPClear.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    if ($cx.multi) { throw 'elige una entrada (auto)/GW' }
-    $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Clear') $txtPGw.Text).tcus
-    $r = [System.Windows.Forms.MessageBox]::Show(
-        "Desenclavar alarmas de motor (40007 bit 13) en $($tcus.Count) TCUs?", 'Clear alarmas', 'YesNo', 'Question')
-    if ($r -ne 'Yes') { return }
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Clear') $txtPGw.Text)
+    $nTcus = Cuantas-Tcus $trabajos
+    if (-not (Pem-Confirmar $cx $trabajos $nTcus "Desenclavar alarmas de motor (40007 bit 13) en $nTcus TCUs?" 'Clear alarmas')) { return }
     $lvP.Items.Clear(); $script:UltimoPem = @()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Clear de alarmas enclavadas en $(Eti-Rango $tcus)" ([System.Drawing.Color]::SteelBlue)
-    $segs = @(Plan-Segmentos $tcus $cx)
-    foreach ($seg in $segs) {
-        if ($script:Cancelar) { break }
-        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
-        catch { foreach ($tcu in $seg.tcus) { Pem-Fila $tcu 'FALLA' "sin conexion" }; continue }
-        foreach ($tcu in $seg.tcus) {
-            if (Chequear-Cancelado) { break }
-            try {
-                FC22-Mascara $tcu 40007 0xDFFF 0x2000
-                Start-Sleep -Milliseconds 400
-                $st = (FC03-Leer $tcu (Dir-Trama 30006) 1)[0]
-                if (($st -shr 11) -band 1) { Pem-Fila $tcu 'AVISO' 'la alarma sigue enclavada (revisar causa)' }
-                else { Pem-Fila $tcu 'OK' 'sin alarmas de motor enclavadas' }
-            } catch { Pem-Fila $tcu 'FALLA' "$_"; if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar } }
-        }
+    Con "Clear de alarmas enclavadas en $nTcus TCUs" ([System.Drawing.Color]::SteelBlue)
+    Pem-PorTcu $trabajos {
+        param($tcu, $ncu, $tr, $seg)
+        try {
+            FC22-Mascara $tcu 40007 0xDFFF 0x2000
+            Start-Sleep -Milliseconds 400
+            $st = (FC03-Leer $tcu (Dir-Trama 30006) 1)[0]
+            if (($st -shr 11) -band 1) { Pem-Fila $tcu 'AVISO' 'la alarma sigue enclavada (revisar causa)' $ncu }
+            else { Pem-Fila $tcu 'OK' 'sin alarmas de motor enclavadas' $ncu }
+        } catch { Pem-Fila $tcu 'FALLA' "$_" $ncu; if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar } }
     }
-    Modbus-Cerrar
 } })
 
 function Stow-Aplicar([int]$n) {
     $cx = Params-Conexion
-    if ($cx.multi) { throw 'el stow va por NCU: elige una entrada (auto)/GW' }
-    $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Stow') $txtPGw.Text).tcus
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Stow') $txtPGw.Text)
+    $nTcus = Cuantas-Tcus $trabajos
     $txtAccion = $(if ($n -gt 0) { "ACTIVAR safe position $n" } else { 'QUITAR el stow' })
-    $r = [System.Windows.Forms.MessageBox]::Show(
-        "$txtAccion en $($tcus.Count) TCUs? Los seguidores se moveran.", 'Stow', 'YesNo', 'Warning')
-    if ($r -ne 'Yes') { return }
+    if (-not (Pem-Confirmar $cx $trabajos $nTcus "$txtAccion en $nTcus TCUs? Los seguidores se moveran." 'Stow')) { return }
     $lvP.Items.Clear(); $script:UltimoPem = @()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "$txtAccion en $(Eti-Rango $tcus)" ([System.Drawing.Color]::SteelBlue)
-    $segs = @(Plan-Segmentos $tcus $cx)
-    foreach ($seg in $segs) {
-        if ($script:Cancelar) { break }
-        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
-        catch { foreach ($tcu in $seg.tcus) { Pem-Fila $tcu 'FALLA' "sin conexion" }; continue }
-        foreach ($tcu in $seg.tcus) {
-            if (Chequear-Cancelado) { break }
-            try {
-                FC22-Mascara $tcu 42000 0xFFF8 $n
-                Start-Sleep -Milliseconds 800
-                $v = (FC03-Leer $tcu (Dir-Trama 30001) 1)[0]
-                $activo = ($v -shr 13) -band 0x7
-                if ($n -gt 0) {
-                    if ($activo -eq $n) { Pem-Fila $tcu 'OK' "safe position $n activa (en movimiento hacia stow)" }
-                    else { Pem-Fila $tcu 'AVISO' "solicitada $n pero 30001 marca $activo (puede haber otra fuente de safe pos)" }
-                } else {
-                    if ($activo -eq 0) { Pem-Fila $tcu 'OK' 'stow retirado' }
-                    else { Pem-Fila $tcu 'AVISO' "sigue en safe position $activo (otra fuente: NCU/viento?)" }
-                }
-            } catch { Pem-Fila $tcu 'FALLA' "$_"; if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar } }
-        }
-    }
-    Modbus-Cerrar
+    Con "$txtAccion en $nTcus TCUs" ([System.Drawing.Color]::SteelBlue)
+    Pem-PorTcu $trabajos {
+        param($tcu, $ncu, $tr, $seg)
+        try {
+            FC22-Mascara $tcu 42000 0xFFF8 $n
+            Start-Sleep -Milliseconds 800
+            $v = (FC03-Leer $tcu (Dir-Trama 30001) 1)[0]
+            $activo = ($v -shr 13) -band 0x7
+            if ($n -gt 0) {
+                if ($activo -eq $n) { Pem-Fila $tcu 'OK' "safe position $n activa (en movimiento hacia stow)" $ncu }
+                else { Pem-Fila $tcu 'AVISO' "solicitada $n pero 30001 marca $activo (puede haber otra fuente de safe pos)" $ncu }
+            } else {
+                if ($activo -eq 0) { Pem-Fila $tcu 'OK' 'stow retirado' $ncu }
+                else { Pem-Fila $tcu 'AVISO' "sigue en safe position $activo (otra fuente: NCU/viento?)" $ncu }
+            }
+        } catch { Pem-Fila $tcu 'FALLA' "$_" $ncu; if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar } }
+    }.GetNewClosure()
 }
 $btnPStow.Add_Click({ Lanzar { Stow-Aplicar ([int][string]$cbPStow.SelectedItem) } })
 $btnPUnstow.Add_Click({ Lanzar { Stow-Aplicar 0 } })
@@ -8355,34 +8449,24 @@ $btnPComis.Add_Click({ Lanzar {
 
 $btnPComisSet.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    if ($cx.multi) { throw 'elige una entrada (auto)/GW' }
-    $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Comisionado') $txtPGw.Text).tcus
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Comisionado') $txtPGw.Text)
+    $nTcus = Cuantas-Tcus $trabajos
     $obj = [int]([string]$cbPComis.SelectedItem).Split(' ')[0]
-    $r = [System.Windows.Forms.MessageBox]::Show(
-        "Fijar estado de comisionado '$($ESTADOS_COMIS[$obj])' ($obj) en $($tcus.Count) TCUs?`r`nRecuerda GUARDAR EN NVM despues.",
-        'Comisionado', 'YesNo', 'Warning')
-    if ($r -ne 'Yes') { return }
+    if (-not (Pem-Confirmar $cx $trabajos $nTcus "Fijar estado de comisionado '$($ESTADOS_COMIS[$obj])' ($obj) en $nTcus TCUs?`r`nRecuerda GUARDAR EN NVM despues." 'Comisionado')) { return }
     $lvP.Items.Clear(); $script:UltimoPem = @()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Fijando comisionado=$obj ($($ESTADOS_COMIS[$obj])) en $(Eti-Rango $tcus)" ([System.Drawing.Color]::SteelBlue)
-    $segs = @(Plan-Segmentos $tcus $cx)
-    foreach ($seg in $segs) {
-        if ($script:Cancelar) { break }
-        try { Modbus-Conectar $cx.ip $seg.puerto $cx.to }
-        catch { foreach ($tcu in $seg.tcus) { Pem-Fila $tcu 'FALLA' "sin conexion" }; continue }
-        foreach ($tcu in $seg.tcus) {
-            if (Chequear-Cancelado) { break }
-            try {
-                FC22-Mascara $tcu 40000 0xFF1F ($obj -shl 5)
-                Start-Sleep -Milliseconds 500
-                $v = (FC03-Leer $tcu (Dir-Trama 30001) 1)[0]
-                $e = ($v -shr 3) -band 0x3
-                if ($e -eq $obj) { Pem-Fila $tcu 'OK' "comisionado = $e ($($ESTADOS_COMIS[[int]$e]))" }
-                else { Pem-Fila $tcu 'AVISO' "solicitado $obj pero 30001 marca $e" }
-            } catch { Pem-Fila $tcu 'FALLA' "$_"; if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar } }
-        }
-    }
-    Modbus-Cerrar
+    Con "Fijando comisionado=$obj ($($ESTADOS_COMIS[$obj])) en $nTcus TCUs" ([System.Drawing.Color]::SteelBlue)
+    Pem-PorTcu $trabajos {
+        param($tcu, $ncu, $tr, $seg)
+        try {
+            FC22-Mascara $tcu 40000 0xFF1F ($obj -shl 5)
+            Start-Sleep -Milliseconds 500
+            $v = (FC03-Leer $tcu (Dir-Trama 30001) 1)[0]
+            $e = ($v -shr 3) -band 0x3
+            if ($e -eq $obj) { Pem-Fila $tcu 'OK' "comisionado = $e ($($ESTADOS_COMIS[[int]$e]))" $ncu }
+            else { Pem-Fila $tcu 'AVISO' "solicitado $obj pero 30001 marca $e" $ncu }
+        } catch { Pem-Fila $tcu 'FALLA' "$_" $ncu; if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar } }
+    }.GetNewClosure()
     Con 'Recuerda GUARDAR EN NVM (pestana Escribir) para que el estado sobreviva a un reinicio.' ([System.Drawing.Color]::Orange)
 } })
 

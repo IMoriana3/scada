@@ -89,6 +89,31 @@ Al arrancar se revisa cada `plantas/*.json` y se avisa en la consola de:
 Lo segundo necesita que el export de la plataforma incluya `trackers` por
 entrada; sin ese dato no opina, no se lo inventa.
 
+**Escribir en la planta entera y no poder guardarlo (v11.30)** — *ESCRIBIR*
+aceptaba la entrada **(Planta completa)** desde la v5.7, pero **GUARDAR EN NVM**
+no: se plantaba con *«la entrada (Planta completa) solo está soportada en
+Diagnóstico y Flota; elige una NCU concreta»*. Es decir, se podía escribir en
+media planta y después **no** poder fijar los valores en memoria no volátil, con
+lo que **se perdían al reiniciar la TCU**. Lo mismo pasaba en *Sincronizar
+reloj*, *Backup NCU* y en las cuatro acciones de PEM (**modo**, **limpiar
+alarmas**, **stow** y **fijar comisionado**), que es donde más duele: un cierre
+de puesta en marcha necesita parámetros + NVM + modo AUTO, y si el trabajo
+tocaba varias NCUs había que repetirlo NCU por NCU.
+
+Ahora todas recorren la planta NCU a NCU igual que *ESCRIBIR*, con barra de
+progreso y la NCU delante en cada línea de la consola. Detalles que van con ello:
+
+- el **test de motor** también, con el tiempo estimado en la confirmación (son
+  ~2 pulsos por seguidor: en una planta entera son horas) y con la **guardia de
+  viento por NCU** — cada una tiene su HSU, así que se consulta la de la NCU que
+  toca y, si hay viento, se salta esa NCU entera y sigue con las demás;
+- el **backup masivo** guarda los ficheros como `backup_ncuX_tcuY_…json`: sin la
+  NCU delante, la TCU 12 de la NCU3 pisaba a la TCU 12 de la NCU4. Y avisa antes
+  de empezar si el backup pasa de 20 000 lecturas, que se cuenta en horas;
+- contar las TCUs de un trabajo es ahora una sola función (`Cuantas-Tcus`) que
+  filtra nulos: `@($null).Count` vale **1** en PowerShell 5.1, así que una NCU
+  sin TCUs sumaba una de mentira.
+
 **Ayora son 751 seguidores, no 754 (v11.27)** — la **NCU7** declara tres números
 que no están instalados (**14, 24 y 25**): salían OFFLINE en todos los barridos y
 engordaban el recuento de la planta. Con ellos fuera, Ayora son **751**
