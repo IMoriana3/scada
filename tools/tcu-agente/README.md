@@ -6,7 +6,7 @@
 
 - PowerShell puro (`TCU_Agente.ps1` + `TCU_Agente.bat`), sin instalar nada — igual que la toolbox.
 - **Reutiliza la lógica de `TCU_Toolbox.ps1`** (cliente Modbus, mapas, bloque compacto de la NCU): un único origen de verdad. Debe estar la carpeta `tcu-toolbox` al lado (o apuntar `toolbox` en la config a su ruta), con los JSON de la planta en `plantas/`.
-- ⏱️ **Las operaciones largas no caben en una petición HTTP.** El inventario y el plan de firmware van TCU a TCU por Zigbee: en una planta entera son minutos, y el borde de Cloudflare corta alrededor de los 100 s. Acótalas con `?ncus=` / `?tcus=` (o los cuadros de la barra en la web) o hazlas desde la toolbox de escritorio. El agente termina el trabajo igual, pero el resultado no llega a nadie.
+- ⏱️ **Las operaciones largas van por trozos, no en una petición** (v3.0). El inventario va TCU a TCU por Zigbee: en una planta entera son minutos, y el borde de Cloudflare corta sobre los 100 s. Se arranca con `/trabajo/inventario`, que devuelve un id, y se pregunta con `/trabajo`. El bucle principal lo avanza unos cientos de ms **entre peticiones**, así que el agente sigue atendiendo mientras corre, y se puede cerrar la página sin perderlo. Solo un trabajo a la vez: dos se pisarían el cliente Modbus.
 - Mientras el SAT registra, cada pase ocupa unos segundos y en ese rato el agente **no atiende peticiones** — igual que la toolbox no deja hacer otra cosa mientras registra.
 - ⚠️ **Las dos carpetas van juntas.** El agente no copia la lógica: la extrae del `.ps1` de la toolbox buscando nombres de función. Si mezclas un agente viejo con una toolbox nueva (o al revés), no arranca — y te dirá exactamente qué le falta. Copia siempre las dos de la **misma release**. La suite de la toolbox comprueba en cada cambio que esas marcas siguen existiendo, así que el desajuste se detecta antes de publicar (pasó una vez: la v11.8 eliminó `Rango-Tcus` y el agente v2.0 dejó de arrancar).
 - Lecturas **vía NCU** (puerto 502, bloque compacto): diagnóstico de la planta completa en segundos, sin Zigbee.
@@ -69,6 +69,9 @@ Lectura (GET, siempre disponibles):
 | `/hsus` | HSUs de cada NCU con salud y viento/nieve |
 | `/sincronizar` | lee toda la planta y **sube él mismo el diagnóstico al Histórico** (requiere credenciales Supabase en la config) |
 | `/baterias` | SoC, SoH, tensiones, corrientes y temperaturas de toda la planta, con la auditoría — **del diagnóstico, sin lecturas extra** |
+| `/trabajo/inventario?tcus=&gw=` | **arranca** el inventario como trabajo y devuelve su id. Es la forma buena de inventariar una planta entera |
+| `/trabajo` | por dónde va: `hechas`, `total`, `pct`, `faltan_s`, y el `resultado` completo cuando termina |
+| `/trabajo/parar` | corta el que esté en curso; lo hecho hasta ahí se conserva |
 | `/inventario?tcus=&gw=` | FW, nº de serie, MAC, HW y fecha de fabricación. ⚠️ **Lenta**: va TCU a TCU por Zigbee, minutos en una planta entera. Acotarla con `tcus` o `gw` la hace usable |
 | `/plan-firmware?objetivo=v1.6.0` | el plan por ventanas del updater (qué abrir, qué pegar, cuánto tarda) — hace el inventario primero, así que hereda su lentitud |
 | `/leer?vars=41010,41111&tcus=1-20&gw=504` | leer variables, como la pestaña *Leer variable*. `vars` admite el prefijo (`41010`); `tcus` admite `12/10, 15/5-12`; `gw` filtra por gateway |

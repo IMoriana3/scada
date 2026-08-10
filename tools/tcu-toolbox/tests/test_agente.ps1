@@ -129,6 +129,32 @@ try {
     Check 'rep: sale con su nombre' ($null -ne $rep1) 'True'
     Check 'rep: y con su gateway' "$($rep1.GW)" '15020'
 
+    # --- trabajos largos por trozos ---
+    # el inventario de una planta entera no cabe en una peticion HTTP: se arranca,
+    # se devuelve un id y el agente lo avanza entre peticiones, sirviendo mientras
+    $j0 = Pedir '/trabajo'
+    Check 'trabajo: al principio no hay ninguno' "$($j0.hay)" 'False'
+    $j1 = Pedir '/trabajo/inventario'
+    Check 'trabajo: arranca y da id' ($j1.id.Length) 8
+    Check 'trabajo: dice cuantas TCUs' $j1.total 4
+    Check 'trabajo: y que esta en curso' $j1.estado 'en curso'
+    # y MIENTRAS corre, el agente sigue atendiendo: eso es todo el objetivo
+    $pMientras = Pedir '/ping'
+    Check 'trabajo: el agente sigue vivo mientras corre' "$($pMientras.ok)" 'True'
+    $fin = $null
+    for ($k = 0; $k -lt 60 -and $null -eq $fin; $k++) {
+        Start-Sleep -Milliseconds 500
+        $e = Pedir '/trabajo'
+        if ("$($e.estado)" -eq 'hecho') { $fin = $e }
+    }
+    Check 'trabajo: termina' ($null -ne $fin) 'True'
+    if ($fin) {
+        Check 'trabajo: al 100%' $fin.pct 100
+        Check 'trabajo: con el resultado dentro' $fin.resultado.tipo 'inventario_tcu'
+        Check 'trabajo: y una fila por TCU' (@($fin.resultado.tcus).Count) 4
+        Check 'trabajo: mismas columnas que el inventario de una vez' ($null -ne @($fin.resultado.tcus)[0].PSObject.Properties['Serie']) 'True'
+    }
+
     $b = Pedir '/baterias'
     Check 'baterias: tipo correcto' $b.tipo 'baterias_tcu'
     # 4, no 5: la NCU1 declara el 2 como hueco y ese seguidor no existe
