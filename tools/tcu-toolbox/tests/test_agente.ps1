@@ -24,7 +24,9 @@ Copy-Item (Join-Path $raizTb 'TCU_Toolbox.ps1') (Join-Path $tmp 'tcu-toolbox') -
 Copy-Item (Join-Path $raizAg 'TCU_Agente.ps1')  (Join-Path $tmp 'tcu-agente')  -Force
 @'
 {"version":1,"plantas":[
- {"nombre":"Sim NCU1","ip":"127.0.0.1","puerto":15020,"tcu_ini":1,"tcu_fin":3,"hsu":185},
+ {"nombre":"Sim NCU1","ip":"127.0.0.1","puerto":15020,"tcu_ini":1,"tcu_fin":3,"hsu":185,
+  "huecos":[2],
+  "repetidores":[{"nombre":"Repetidor 1","esclavo":200}]},
  {"nombre":"Sim NCU2","ip":"127.0.0.1","puerto":15020,"tcu_ini":1,"tcu_fin":2,"hsu":185}
 ]}
 '@ | Set-Content (Join-Path $tmp 'tcu-toolbox/plantas/sim.json') -Encoding UTF8
@@ -108,9 +110,29 @@ try {
     try { $null = Pedir '/ping'; $vivo2 = $true } catch {}
     Check 'el agente sobrevive a un cliente que cuelga' $vivo2 'True'
 
+    # el diagnostico lista TODOS los equipos declarados, contesten o no: la NCU,
+    # sus TCUs (sin los huecos), sus repetidores y sus HSUs. Antes, una NCU a la
+    # que no se llega aportaba UNA fila en vez de las suyas y el total bailaba.
+    $dF = Pedir '/diagnostico'
+    $porTipo = @{}
+    foreach ($f in @($dF.tcus)) {
+        $t = "$($f.TCU)"
+        $k = $(if ($t -eq 'NCU') { 'NCU' } elseif ($t -like 'HSU*') { 'HSU' } elseif ($t -match '^\d+$') { 'TCU' } else { 'REP' })
+        $porTipo[$k] = 1 + [int]$porTipo[$k]
+    }
+    Check 'flota: una fila por NCU' ([int]$porTipo['NCU']) 2
+    Check 'flota: y los repetidores tambien salen' (([int]$porTipo['REP']) -ge 1) 'True'
+    # NCU1 declara 1-3 con el 2 de hueco (2 TCUs) y NCU2 1-2: cuatro en total
+    Check 'flota: ninguna TCU se queda sin fila' ([int]$porTipo['TCU']) 4
+    Check 'hueco: el 2 de la NCU1 no existe' (@($dF.tcus | Where-Object { "$($_.NCU)" -eq '1' -and "$($_.TCU)" -eq '2' }).Count) 0
+    $rep1 = @($dF.tcus | Where-Object { "$($_.TCU)" -eq 'Repetidor 1' })[0]
+    Check 'rep: sale con su nombre' ($null -ne $rep1) 'True'
+    Check 'rep: y con su gateway' "$($rep1.GW)" '15020'
+
     $b = Pedir '/baterias'
     Check 'baterias: tipo correcto' $b.tipo 'baterias_tcu'
-    Check 'baterias: una fila por TCU' (@($b.tcus).Count) 5
+    # 4, no 5: la NCU1 declara el 2 como hueco y ese seguidor no existe
+    Check 'baterias: una fila por TCU' (@($b.tcus).Count) 4
     Check 'baterias: lleva la columna Carga' ($null -ne @($b.tcus)[0].PSObject.Properties['Carga']) 'True'
 
     $inv = Pedir '/inventario'
@@ -120,7 +142,8 @@ try {
 
     $l = Pedir '/leer?vars=41010&tcus=1-2'
     Check 'leer: resuelve el prefijo' (@($l.variables)[0].StartsWith('41010')) 'True'
-    Check 'leer: dos TCUs por NCU' (@($l.tcus).Count) 4
+    # de la NCU1 solo la 1 (la 2 es hueco) y de la NCU2 las dos
+    Check 'leer: las TCUs que existen del rango' (@($l.tcus).Count) 3
 
     # la misma gramatica que la toolbox, tambien al leer, y con filtro de gateway
     $l2 = Pedir '/leer?vars=41010&tcus=1/1,2/2'

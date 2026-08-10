@@ -64,7 +64,7 @@ Lectura (GET, siempre disponibles):
 | Ruta | Qué devuelve |
 |---|---|
 | `/ping` | planta, versiones, hora del PC, lista de NCUs con sus rangos, **los gateways que existen** (para ofrecerlos en un desplegable) y si la escritura está habilitada |
-| `/diagnostico` | diagnóstico de la planta completa vía NCU, **mismo formato que el JSON de la toolbox** — subible al Histórico tal cual. Columnas **NCU · GW · TCU** |
+| `/diagnostico` | diagnóstico de la planta completa vía NCU, **mismo formato que el JSON de la toolbox** — subible al Histórico tal cual. Columnas **NCU · GW · TCU**. Desde la v2.9 lista **todos los equipos que declara la topología** —la NCU, sus TCUs (sin los huecos), sus repetidores y sus HSUs— contesten o no: lo que no se ha podido leer sale como `SIN LECTURA`. En Ayora son **782** filas siempre |
 | `/comisionado` | estado de comisionado (bits 4:3 del bloque compacto) por TCU |
 | `/hsus` | HSUs de cada NCU con salud y viento/nieve |
 | `/sincronizar` | lee toda la planta y **sube él mismo el diagnóstico al Histórico** (requiere credenciales Supabase en la config) |
