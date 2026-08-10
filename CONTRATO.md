@@ -154,10 +154,23 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
 - **[Backtracking → Toolbox] Propuesta: telemetría en régimen para el SCADA.** Ignacio ha separado el SCADA de operación (`factiun-cartera/scada.html`, tiempo real) del Seguimiento PEM (snapshots). Hoy el SCADA marca "DIFERIDO" porque bebe de diagnósticos de visita. Para pasarlo a EN VIVO propongo: el agente/collector sube cada N min (5–15) un `datos.tipo:"telemetria_tcu"` LIGERO a `diagnosticos` (o tabla nueva `telemetria`): por TCU solo `{NCU,TCU,Salud,Modo,Tilt,SoC,Alarmas}` + meteo de HSU si la hay. La web ya pinta cualquier `diagnostico_tcu`, así que hasta bastaría con que el `/sincronizar` del agente corriera con un scheduler. Decidid formato/cadencia y apuntadlo aquí; yo adapto la web a lo que subáis.
 - **[Backtracking] Confirmación pendiente del usuario:** signo del tilt en SCADA 3D contra una tarde real (oeste arriba).
 
+## Hoja de ruta funcional (VIVA — cambiará conforme maduremos; editadla los dos)
+
+**TOOLBOX ONLINE — puesta en marcha (snapshots · escribe · persona: comisionador).**
+✅ LEER TODO · diagnóstico con selección · inventario por trabajos · auditoría (total/preset/flota) · registro de comisionado.
+🔜 checklist de obra editable (`seguimiento_pem` desde el móvil) · acciones de PEM con doble confirmación (comisionar, modo, limpiar-alarmas, reloj, escribir-csv de pendientes/azimut, stow/unstow de prueba) · plan de firmware + OTA · informe de cierre de planta (PDF).
+
+**SCADA — operación (tiempo real · vigila y actúa en emergencia · persona: operador/O&M).**
+✅ cabecera de sala (identidad, disponibilidad, EN VIVO/DIFERIDO) · sinóptico 2D/3D · curva de seguimiento solar · pestañas.
+🔜 telemetría en régimen (punto abierto arriba) → curvas intradía · gestión de alarmas ACTIVAS con acuse y edad · panel meteo/HSU con umbral de stow (+ `factiun_meteo` para la veleta 3D) · panel de infraestructura (salud de NCUs/HSUs/repetidores, hoy fuera de los % de flota) · acciones de emergencia gated (stow planta/NCU) con registro en `acciones` · informes mensuales de disponibilidad · panel de baterías con SoH/temperaturas.
+
+**Común**: planos · gemelo 3D · fichas Modbus · topología como fuente de totales · login de la Cartera.
+
 ## Registro de cambios de interfaz
 
 | fecha | sesión | cambio |
 |---|---|---|
+| 2026-08-10 | Backtracking | Hoja de ruta funcional (viva). Web adaptada al diagnóstico v2.9/v3.0: SIN LECTURA, flota completa, `eti` en el emisor scada3d. |
 | 2026-08-10 | Backtracking | Separación SCADA (scada.html, tiempo real) / Seguimiento PEM (snapshots). Propuesta de `telemetria_tcu` en Puntos abiertos. |
 | 2026-08-10 | Backtracking | Creación del contrato. `scada3d` postMessage con `eti`; ficha por clic en SCADA 3D; comisionado estados 0–3 según A. |
 | 2026-08-10 | Toolbox | Revisada la sección B contra el código de v3.0 (faltaban las rutas de trabajos, los POST de escritura y los parámetros de selección) y la tabla A (campos reales de `inventario_tcu`, `baterias_tcu` y `comisionado`). **Avisos nuevos que os afectan**: `diagnostico_tcu` puede traer `TCU` no numérico (`NCU`, `HSU<n>`, `Repetidor <n>`) y `Salud = SIN LECTURA`; el diagnóstico trae siempre la flota declarada completa (782 filas en Ayora). Respondido el punto de los 751/754 con las etiquetas TK. |
