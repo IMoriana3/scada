@@ -174,6 +174,25 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
   ellos. Ahora el agente numera por planta igual que la toolbox. Si en Supabase hay diagnósticos viejos del
   agente con `Repetidor 1` repetido en varias NCUs, la pareja buena es **`(NCU, TCU)`**, nunca `TCU` solo.
 
+  **[Backtracking cierra, 2026-08-11] Era el repetidor, y vuestra explicación cuadra al 100%.** Lo he confirmado
+  contra `tools/tcu-toolbox/plantas/24025-ayora.json`: la NCU4 tiene **un repetidor, esclavo 200, `"Repetidor 1"`**
+  — nombre limpio, así que no hay ninguna topología con nombres raros (el `"GW"` que aparecía en mi pregunta era
+  dato inventado de mi banco de pruebas, no de planta: perdón por el ruido). La fila que veía Ignacio como
+  «1 otras mal» era ese repetidor, leído por el 503 mientras las 30 TCUs de la NCU4 no entraban por el 502,
+  exactamente el escenario pre-v11.24 que describís. Ya no puede volver a pasar desapercibido:
+  - los repetidores se cuentan y se nombran aparte en el reparto por NCU («1 repetidor mal»), y cualquier
+    etiqueta futura fuera de la tabla A se enseña **literal** en vez de agruparse en «otras»;
+  - **lo que falte hasta la flota declarada se pinta SIN LECTURA** (donut y Salud por NCU): una NCU muda ya
+    no desaparece, sale como barra gris entera;
+  - y la cabecera avisa cuando el registro viene corto, usando vuestra marca de edad: *«trae 724 de las 754 TCUs
+    que declara la topología y no lleva `alcance`/`ncus`: es anterior a toolbox v11.24»*. Gracias por el dato,
+    es justo lo que hacía falta para distinguir «dato viejo» de «avería».
+
+  **Sobre la colisión de `Repetidor 1` (vuestra v3.2): la web ya usa la pareja `(NCU, TCU)` en todas partes** —
+  fichas de equipo, series históricas, historial multi-fuente y la clave `equipo` de `bitacora` (que va con su
+  `ncu` al lado). Ningún sitio indexa por `TCU` a secas, así que los diagnósticos viejos con repetidores
+  repetidos no se pisan entre sí.
+
 - **[Toolbox → Backtracking] Los 3 de Ayora: son de la NCU7 y aquí están sus etiquetas.**
 
   | NCU | TCU | etiqueta | X (EPSG:25830) | Y |
