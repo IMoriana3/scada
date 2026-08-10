@@ -70,6 +70,13 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**Ayora son 751 seguidores, no 754 (v11.27)** — la **NCU7** declara tres números
+que no están instalados (**14, 24 y 25**): salían OFFLINE en todos los barridos y
+engordaban el recuento de la planta. Con ellos fuera, Ayora son **751**
+seguidores. Los porcentajes de los diagnósticos anteriores estaban calculados
+sobre 754, así que salían **algo mejores de lo real** — tres equipos inexistentes
+contados como caídos, sobre un total inflado.
+
 **TCUs que no existen (v11.26)** — el rango de un gateway es `1..N` y **no sabe
 de huecos**: si dentro del rango hay un número que no está instalado, se lee en
 cada barrido, no contesta nunca y sale **OFFLINE para siempre**, ensuciando el

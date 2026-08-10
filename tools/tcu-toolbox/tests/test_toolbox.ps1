@@ -2436,6 +2436,9 @@ Check 'resumen: una NCU sin lectura se dice' ($src.Contains('SIN LECTURA - no se
 $gwH = @{puerto=503; ini=1; fin=6; huecos=@(3,5)}
 Check 'hueco: fuera del rango efectivo' ((@(Tcus-DeGw $gwH)) -join ',') '1,2,4,6'
 Check 'hueco: sin huecos, el rango entero' ((@(Tcus-DeGw @{puerto=503; ini=1; fin=4})) -join ',') '1,2,3,4'
+# @($null) tiene UN elemento en PS 5.1: una entrada sin huecos llega aqui como
+# @($null) desde Construir-EntradasAuto y no puede comerse ninguna TCU
+Check 'hueco: @($null) no se come una TCU' ((@(Tcus-DeGw @{puerto=503; ini=1; fin=4; huecos=@($null)})) -join ',') '1,2,3,4'
 Check 'hueco: no se puede pedir una que no existe' ((@(Sel-TcusDe (Parse-Seleccion '3' 'x') @($gwH) '1')).Count) 0
 Check 'hueco: pedir el rango entero tampoco la trae' ((@(Sel-TcusDe (Parse-Seleccion '1-6' 'x') @($gwH) '1')) -join ',') '1,2,4,6'
 Check 'hueco: y sin seleccion, igual' ((@(Sel-TcusDe $null @($gwH) '1')) -join ',') '1,2,4,6'
@@ -2496,6 +2499,18 @@ $jAyora = Get-Content (Join-Path $raizTb 'plantas/24025-ayora.json') -Raw | Conv
 $repsAy = @($jAyora.plantas | Where-Object { $_.PSObject.Properties['repetidores'] })
 Check 'rep: Ayora declara repetidores' ($repsAy.Count) 4
 Check 'rep: y son cinco en total' ((@($repsAy | ForEach-Object { @($_.repetidores).Count } | Measure-Object -Sum).Sum)) 5
+
+# Ayora: la NCU7 declara tres numeros que no estan instalados (14, 24 y 25).
+# Sin ellos la planta son 751 seguidores, no 754: los tres salian OFFLINE en
+# todos los barridos y engordaban el recuento.
+$ncu7 = @($jAyora.plantas | Where-Object { "$($_.nombre)" -eq 'Ayora NCU7' })[0]
+Check 'hueco Ayora: la NCU7 los declara' ((@($ncu7.huecos)) -join ',') '14,24,25'
+$totAy = 0
+foreach ($e in $jAyora.plantas) {
+    # ojo: @($null) tiene UN elemento en PS 5.1, no cero
+    $totAy += ([int]$e.tcu_fin - [int]$e.tcu_ini + 1) - @($e.huecos | Where-Object { $null -ne $_ }).Count
+}
+Check 'hueco Ayora: la planta son 751 seguidores' $totAy 751
 
 # el boton y su handler existen de verdad
 Check 'cmp: hay boton COMPARAR' ($src.Contains("`$btnTCmp.Text = 'COMPARAR'")) $true

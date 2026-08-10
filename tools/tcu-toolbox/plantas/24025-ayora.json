@@ -67,7 +67,12 @@
       "ip": "192.168.4.55",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 25
+      "tcu_fin": 25,
+      "huecos": [
+        14,
+        24,
+        25
+      ]
     },
     {
       "nombre": "Ayora NCU8",
