@@ -92,6 +92,22 @@ try {
     $d5 = Pedir '/diagnostico'
     Check 'sel: el filtro no se queda pegado' (@($d5.tcus | ForEach-Object { "$($_.NCU)" } | Sort-Object -Unique).Count) 2
 
+    # un cliente que cuelga NO puede tumbar el agente: pasaba de verdad en planta
+    # -un inventario largo, el navegador se cansa, y Write lanzaba
+    # HttpListenerException que se llevaba por delante el servicio entero-
+    try {
+        $c = [System.Net.Sockets.TcpClient]::new('localhost', $PUERTO)
+        $st = $c.GetStream()
+        $pet = [Text.Encoding]::ASCII.GetBytes("GET /diagnostico HTTP/1.1`r`nHost: localhost`r`nX-Token: $TOKEN`r`n`r`n")
+        $st.Write($pet, 0, $pet.Length); $st.Flush()
+        Start-Sleep -Milliseconds 150
+        $c.Close()                      # colgamos sin leer la respuesta
+    } catch {}
+    Start-Sleep -Seconds 2
+    $vivo2 = $false
+    try { $null = Pedir '/ping'; $vivo2 = $true } catch {}
+    Check 'el agente sobrevive a un cliente que cuelga' $vivo2 'True'
+
     $b = Pedir '/baterias'
     Check 'baterias: tipo correcto' $b.tipo 'baterias_tcu'
     Check 'baterias: una fila por TCU' (@($b.tcus).Count) 5

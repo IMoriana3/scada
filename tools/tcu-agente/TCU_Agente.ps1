@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '2.7'
+$VERSION_AGENTE = '2.8'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -1041,22 +1041,32 @@ while ($true) {
         }
         else { $code = 405; $out = @{error = 'metodo no soportado'} }
     } catch { $code = 500; $out = @{error = "$_"}; $descarga = '' }
-    if ($descarga -ne '') {
-        # un CSV del ensayo: se manda tal cual, para que el navegador lo guarde
-        $buf = [IO.File]::ReadAllBytes($descarga)
-        $res.StatusCode = 200
-        $res.ContentType = 'text/csv; charset=utf-8'
-        $res.Headers.Add('Content-Disposition', 'attachment; filename="' + [IO.Path]::GetFileName($descarga) + '"')
-        $res.OutputStream.Write($buf, 0, $buf.Length)
-        $res.Close()
-    } else {
-        $json = ConvertTo-Json $out -Depth 7
-        $buf = [Text.Encoding]::UTF8.GetBytes($json)
-        $res.StatusCode = $code
-        $res.ContentType = 'application/json; charset=utf-8'
-        $res.OutputStream.Write($buf, 0, $buf.Length)
-        $res.Close()
+    # Escribir la respuesta puede fallar por algo que NO es culpa nuestra: si la
+    # operacion ha sido larga -un inventario de planta entera- el navegador o el
+    # tunel ya han colgado, y entonces Write lanza HttpListenerException ("el
+    # nombre de red especificado ya no esta disponible"). Sin este try, esa
+    # excepcion tumbaba el AGENTE ENTERO y habia que volver a arrancarlo a mano.
+    # Un cliente que se va no puede tirar el servicio.
+    try {
+        if ($descarga -ne '') {
+            # un CSV del ensayo: se manda tal cual, para que el navegador lo guarde
+            $buf = [IO.File]::ReadAllBytes($descarga)
+            $res.StatusCode = 200
+            $res.ContentType = 'text/csv; charset=utf-8'
+            $res.Headers.Add('Content-Disposition', 'attachment; filename="' + [IO.Path]::GetFileName($descarga) + '"')
+            $res.OutputStream.Write($buf, 0, $buf.Length)
+        } else {
+            $json = ConvertTo-Json $out -Depth 7
+            $buf = [Text.Encoding]::UTF8.GetBytes($json)
+            $res.StatusCode = $code
+            $res.ContentType = 'application/json; charset=utf-8'
+            $res.OutputStream.Write($buf, 0, $buf.Length)
+        }
+    } catch {
+        $code = 499   # el cliente se fue: se anota y se sigue
+        Write-Host ("  el cliente colgo antes de recibir la respuesta ({0})" -f $_.Exception.Message)
     }
+    try { $res.Close() } catch {}
     # fuera el filtro: el vigilante de alarmas y el SAT corren entre peticiones
     # y se habrian quedado muestreando solo lo que pidio la ultima ventana web
     $script:NcusPedidas = ''; $script:TcusPedidas = ''; $script:GwPedido = ''

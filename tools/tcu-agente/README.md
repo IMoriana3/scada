@@ -6,6 +6,7 @@
 
 - PowerShell puro (`TCU_Agente.ps1` + `TCU_Agente.bat`), sin instalar nada — igual que la toolbox.
 - **Reutiliza la lógica de `TCU_Toolbox.ps1`** (cliente Modbus, mapas, bloque compacto de la NCU): un único origen de verdad. Debe estar la carpeta `tcu-toolbox` al lado (o apuntar `toolbox` en la config a su ruta), con los JSON de la planta en `plantas/`.
+- ⏱️ **Las operaciones largas no caben en una petición HTTP.** El inventario y el plan de firmware van TCU a TCU por Zigbee: en una planta entera son minutos, y el borde de Cloudflare corta alrededor de los 100 s. Acótalas con `?ncus=` / `?tcus=` (o los cuadros de la barra en la web) o hazlas desde la toolbox de escritorio. El agente termina el trabajo igual, pero el resultado no llega a nadie.
 - Mientras el SAT registra, cada pase ocupa unos segundos y en ese rato el agente **no atiende peticiones** — igual que la toolbox no deja hacer otra cosa mientras registra.
 - ⚠️ **Las dos carpetas van juntas.** El agente no copia la lógica: la extrae del `.ps1` de la toolbox buscando nombres de función. Si mezclas un agente viejo con una toolbox nueva (o al revés), no arranca — y te dirá exactamente qué le falta. Copia siempre las dos de la **misma release**. La suite de la toolbox comprueba en cada cambio que esas marcas siguen existiendo, así que el desajuste se detecta antes de publicar (pasó una vez: la v11.8 eliminó `Rango-Tcus` y el agente v2.0 dejó de arrancar).
 - Lecturas **vía NCU** (puerto 502, bloque compacto): diagnóstico de la planta completa en segundos, sin Zigbee.
@@ -36,8 +37,9 @@ planta, la versión del agente y la de la toolbox, y las dos tienen que ser de l
 2. En `tcu-agente`, copia `agente_config.ejemplo.json` → `agente_config.json` y rellena: `planta` ("Ayora"), y un `token` largo aleatorio (es la llave: trátalo como una contraseña).
 3. Primera vez en ese PC (una sola vez, como administrador): `netsh http add urlacl url=http://localhost:8585/ user=Todos`
 4. Doble clic en `TCU_Agente.bat` — debe decir `TCU Agente v2.7 - planta 'Ayora'  (toolbox v11.27)`. Las dos versiones tienen que ser las de la **misma release**.
-5. Túnel: instala [cloudflared](https://github.com/cloudflare/cloudflared/releases/latest) (un solo .exe) y en otra ventana:
-   `cloudflared tunnel --url http://localhost:8585`
+5. Túnel: instala [cloudflared](https://github.com/cloudflare/cloudflared/releases/latest) (`cloudflared-windows-amd64.exe`, un solo fichero) y en otra ventana:
+   `cloudflared.exe tunnel --url http://localhost:8585 --http-host-header localhost:8585`
+   ⚠️ **El `--http-host-header` no es opcional.** El agente escucha en `localhost` y Windows (HTTP.SYS) rechaza con **«Bad Request - Invalid Hostname»** cualquier petición cuyo `Host` sea otro — y Cloudflare reenvía con el del túnel. Sin ese parámetro no conecta nada.
    Te dará una URL `https://xxxx.trycloudflare.com` (cambia en cada arranque; para URL fija hace falta un túnel con nombre y un dominio en Cloudflare — fase 2).
 6. En la plataforma → **Toolbox web**: pega la URL del túnel y el token, PING, y a diagnosticar. El botón "Guardar en Histórico" mete el diagnóstico en la misma tabla que los JSON subidos a mano (plano + diff incluidos).
 
