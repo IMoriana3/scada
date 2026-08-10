@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.25'
+$VERSION_TOOLBOX = '11.26'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -96,6 +96,13 @@ function Cargar-FicheroPlantas([string]$ruta) {
         # en el inventario ni en la campana de firmware ni en la auditoria de
         # baterias, y un repetidor con la bateria muerta se lleva por delante a
         # todo lo que cuelga de el. Admite ["200"] o [{"nombre":..,"esclavo":..}].
+        # TCUs que NO existen dentro del rango. El rango es 1..N y no sabe de
+        # huecos; declararlos aqui evita leerlas en cada barrido y que salgan
+        # OFFLINE para siempre en un equipo que no esta instalado.
+        if ($p.PSObject.Properties['huecos']) {
+            $lstH = @(@($p.huecos) | Where-Object { "$_" -match '^\d+$' } | ForEach-Object { [int]$_ })
+            if ($lstH.Count -gt 0) { $e.huecos = $lstH }
+        }
         if ($p.PSObject.Properties['repetidores']) {
             $lstR = @()
             foreach ($r in @($p.repetidores)) {
@@ -134,7 +141,7 @@ function Construir-EntradasAuto {
         }
         $prefijo = ($prefijo -replace '(GW|TCU)\S*$', '').Trim()
         if (-not $prefijo) { $prefijo = "NCU $ip" }
-        $gws = @($grupo | ForEach-Object { @{puerto=$_.p.puerto; ini=$_.p.ini; fin=$_.p.fin; reps=@($_.p.reps)} } | Sort-Object { $_.ini })
+        $gws = @($grupo | ForEach-Object { @{puerto=$_.p.puerto; ini=$_.p.ini; fin=$_.p.fin; reps=@($_.p.reps); huecos=@($_.p.huecos)} } | Sort-Object { $_.ini })
         $ini = @($gws | ForEach-Object { $_.ini } | Measure-Object -Minimum).Minimum
         $fin = @($gws | ForEach-Object { $_.fin } | Measure-Object -Maximum).Maximum
         $auto = @{ip=$ip; puerto=$null; ini=[int]$ini; fin=[int]$fin; gws=$gws}
@@ -155,7 +162,7 @@ function Construir-EntradasAuto {
         if ($porPlanta[$planta][$ncu].ip -ne $p.ip) { continue }   # inconsistencia: ignorar
         # el repetidor cuelga de SU gateway: sin esto no se sabria por que puerto
         # se llega a el, porque su esclavo no cae en ningun rango de TCUs
-        $porPlanta[$planta][$ncu].gws += ,@{puerto=$p.puerto; ini=$p.ini; fin=$p.fin; reps=@($p.reps)}
+        $porPlanta[$planta][$ncu].gws += ,@{puerto=$p.puerto; ini=$p.ini; fin=$p.fin; reps=@($p.reps); huecos=@($p.huecos)}
         if ($p.hsu -and -not $porPlanta[$planta][$ncu].hsu) { $porPlanta[$planta][$ncu].hsu = $p.hsu }
         # el mismo numero viene repetido en las entradas de los dos gateways de
         # la NCU: se queda el mayor, no se suman
@@ -759,7 +766,7 @@ function Flota-Declarada($cx) {
         $et = "$($n.ncu)"
         $r += ,@{NCU=$et; Tipo='NCU'; TCU='NCU'}
         foreach ($g in @($n.gws)) {
-            for ($t = [int]$g.ini; $t -le [int]$g.fin; $t++) { $r += ,@{NCU=$et; Tipo='TCU'; TCU="$t"} }
+            foreach ($t in @(Tcus-DeGw $g)) { $r += ,@{NCU=$et; Tipo='TCU'; TCU="$t"} }
             $i = 0
             foreach ($x in @($g.reps)) {
                 if (-not $x) { continue }
@@ -4408,9 +4415,18 @@ function Gws-Filtrados($gws, [string]$gw) {
 # Las TCUs que le tocan a UNA NCU: las de su seleccion, recortadas a los
 # gateways que quedan. Sin seleccion, todas las del gateway -que es como se pide
 # "toda la NCU" o "todo el GW 504" sin tener que saberse el rango-. Pura.
+# Los esclavos que de verdad hay en un gateway: su rango menos los HUECOS. Un
+# rango 1..N no puede expresar que falte el 14: sin esto, un numero que no
+# existe se lee en cada barrido, no contesta nunca y sale OFFLINE para siempre,
+# ensuciando el recuento de la planta. Pura.
+function Tcus-DeGw($g) {
+    $h = @(@($g.huecos) | Where-Object { "$_" -match '^\d+$' } | ForEach-Object { [int]$_ })
+    return @([int]$g.ini..[int]$g.fin | Where-Object { $h -notcontains $_ })
+}
+
 function Sel-TcusDe($sel, $gws, [string]$ncu) {
     $todas = @()
-    foreach ($g in @($gws)) { $todas += @([int]$g.ini..[int]$g.fin) }
+    foreach ($g in @($gws)) { $todas += @(Tcus-DeGw $g) }
     $todas = @($todas | Sort-Object -Unique)
     if ($null -eq $sel -or $sel.todas) { return $todas }
     $piden = @()

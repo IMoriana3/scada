@@ -2430,6 +2430,20 @@ Check 'resumen: ordena por numero de NCU' ($src.Contains('Sort-Object { [int]("0
 Check 'resumen: las HSU y los repetidores van aparte' ($src.Contains('(+{0} HSU/repetidor{1})')) $true
 Check 'resumen: una NCU sin lectura se dice' ($src.Contains('SIN LECTURA - no se ha podido leer ninguna de sus')) $true
 
+# --- TCUs que no existen: el rango 1..N no sabe de huecos ---
+# sin esto, un numero que no esta instalado se lee en cada barrido, no contesta
+# nunca y sale OFFLINE para siempre, ensuciando el recuento de la planta
+$gwH = @{puerto=503; ini=1; fin=6; huecos=@(3,5)}
+Check 'hueco: fuera del rango efectivo' ((@(Tcus-DeGw $gwH)) -join ',') '1,2,4,6'
+Check 'hueco: sin huecos, el rango entero' ((@(Tcus-DeGw @{puerto=503; ini=1; fin=4})) -join ',') '1,2,3,4'
+Check 'hueco: no se puede pedir una que no existe' ((@(Sel-TcusDe (Parse-Seleccion '3' 'x') @($gwH) '1')).Count) 0
+Check 'hueco: pedir el rango entero tampoco la trae' ((@(Sel-TcusDe (Parse-Seleccion '1-6' 'x') @($gwH) '1')) -join ',') '1,2,4,6'
+Check 'hueco: y sin seleccion, igual' ((@(Sel-TcusDe $null @($gwH) '1')) -join ',') '1,2,4,6'
+# y tampoco cuentan como flota declarada: no existen, no son equipos sin leer
+$flH = @(Flota-Declarada @{multi=@(@{ncu=1; ip='10.0.0.1'; gws=@($gwH); hsuLista=@()})})
+Check 'hueco: no entran en la flota declarada' (@($flH | Where-Object { $_.Tipo -eq 'TCU' }).Count) 4
+Check 'hueco: y la que falta no esta' (@($flH | Where-Object { $_.TCU -eq '3' }).Count) 0
+
 # --- el informe tiene que llevar TODOS los equipos, comuniquen o no ---
 $cxF = @{multi=@(
   @{ncu=1; ip='10.0.0.1'; gws=@(@{puerto=503; ini=1; fin=3; reps=@(@{nombre='Repetidor 1'; esclavo=200})}); hsuLista=@(230)}
