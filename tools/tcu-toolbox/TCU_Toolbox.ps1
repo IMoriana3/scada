@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.27'
+$VERSION_TOOLBOX = '11.28'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -99,6 +99,9 @@ function Cargar-FicheroPlantas([string]$ruta) {
         # TCUs que NO existen dentro del rango. El rango es 1..N y no sabe de
         # huecos; declararlos aqui evita leerlas en cada barrido y que salgan
         # OFFLINE para siempre en un equipo que no esta instalado.
+        # cuantos trackers dice la topologia que tiene: sirve para cantar si el
+        # rango de esclavos no cuadra con ellos
+        if ($p.PSObject.Properties['trackers'] -and "$($p.trackers)" -match '^\d+$') { $e.trackers = [int]$p.trackers }
         if ($p.PSObject.Properties['huecos']) {
             $lstH = @(@($p.huecos) | Where-Object { "$_" -match '^\d+$' } | ForEach-Object { [int]$_ })
             if ($lstH.Count -gt 0) { $e.huecos = $lstH }
@@ -210,7 +213,17 @@ if (Test-Path $rutaCsv) {
 $dirPlantas = Join-Path $PSScriptRoot 'plantas'
 if (Test-Path $dirPlantas) {
     foreach ($f in @(Get-ChildItem $dirPlantas | Where-Object { $_.Extension -in '.json', '.csv' } | Sort-Object Name)) {
-        try { $script:MsgsInicio += "plantas/$($f.Name): $(Cargar-FicheroPlantas $f.FullName) entradas" }
+        try {
+            $script:MsgsInicio += "plantas/$($f.Name): $(Cargar-FicheroPlantas $f.FullName) entradas"
+            # y si el fichero se contradice a si mismo, decirlo AL ARRANCAR: un
+            # JSON mal generado no da error, solo hace que se lea menos planta
+            if ($f.Extension -eq '.json') {
+                try {
+                    $jj = Get-Content $f.FullName -Raw | ConvertFrom-Json
+                    foreach ($a in @(Topologia-Avisos $jj.plantas)) { $script:MsgsInicio += "AVISO topologia: $a" }
+                } catch {}
+            }
+        }
         catch { $script:MsgsInicio += "AVISO: plantas/$($f.Name) ilegible ($_) - ignorado" }
     }
 }
@@ -4419,6 +4432,46 @@ function Gws-Filtrados($gws, [string]$gw) {
 # rango 1..N no puede expresar que falte el 14: sin esto, un numero que no
 # existe se lee en cada barrido, no contesta nunca y sale OFFLINE para siempre,
 # ensuciando el recuento de la planta. Pura.
+# Avisos sobre la propia topologia. Un fichero de plantas mal generado no da
+# error: la herramienta lee menos planta y se queda tan tranquila. En San Jose
+# faltaban CINCO NCUs enteras -603 TCUs- porque su campo de esclavos llevaba
+# varios tramos y el exportador solo entendia uno; nadie se entero. Esto lo
+# canta. Pura: recibe la lista de entradas y devuelve los avisos.
+function Topologia-Avisos($entradas) {
+    $av = @()
+    $porNcu = @{}
+    foreach ($e in @($entradas)) {
+        $m = [regex]::Match("$($e.nombre)", '^(.*?)\s+NCU(\d+)')
+        if (-not $m.Success) { continue }
+        $k = "$($m.Groups[1].Value.Trim())|$([int]$m.Groups[2].Value)"
+        if (-not $porNcu.ContainsKey($k)) { $porNcu[$k] = @() }
+        $porNcu[$k] += ,$e
+    }
+    foreach ($k in @($porNcu.Keys | Sort-Object)) {
+        $partes = $k -split '\|'
+        $eti = "$($partes[0]) NCU$($partes[1])"
+        $gs = @($porNcu[$k] | Sort-Object { [int]$_.tcu_ini })
+        # dos gateways que se pisan: un esclavo no puede colgar de los dos, y
+        # Gw-DeTcu se queda con el primero que encuentre. Paso en San Jose NCU3.
+        for ($i = 1; $i -lt $gs.Count; $i++) {
+            if ([int]$gs[$i].tcu_ini -le [int]$gs[$i-1].tcu_fin) {
+                $av += "$eti : los gateways se solapan en el esclavo $([int]$gs[$i].tcu_ini) ($([int]$gs[$i-1].tcu_ini)-$([int]$gs[$i-1].tcu_fin) y $([int]$gs[$i].tcu_ini)-$([int]$gs[$i].tcu_fin)): esa TCU se leera por uno solo"
+            }
+        }
+        # lo que la topologia dice que hay contra lo que su rango deja leer
+        $decl = 0; $hay = 0
+        foreach ($e in $gs) {
+            $hu = @(@($e.huecos) | Where-Object { "$_" -match '^\d+$' }).Count
+            $hay += ([int]$e.tcu_fin - [int]$e.tcu_ini + 1) - $hu
+            if ("$($e.trackers)" -match '^\d+$') { $decl += [int]$e.trackers }
+        }
+        if ($decl -gt 0 -and $decl -ne $hay) {
+            $av += "$eti : la topologia declara $decl trackers y su rango deja $hay. Revisa el campo de esclavos (admite varios tramos: '1-13 15-23')"
+        }
+    }
+    return $av
+}
+
 function Tcus-DeGw($g) {
     $h = @(@($g.huecos) | Where-Object { "$_" -match '^\d+$' } | ForEach-Object { [int]$_ })
     return @([int]$g.ini..[int]$g.fin | Where-Object { $h -notcontains $_ })

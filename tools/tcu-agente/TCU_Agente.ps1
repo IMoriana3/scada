@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '3.0'
+$VERSION_AGENTE = '3.1'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -111,6 +111,22 @@ function Trabajo-Iniciar([string]$tipo, [string]$tcusTxt, [string]$gw) {
     if ($script:Trab -and $script:Trab.estado -eq 'en curso') {
         throw "ya hay un trabajo en curso ($($script:Trab.tipo), $($script:Trab.hechas) de $($script:Trab.total)): espera o para con /trabajo/parar"
     }
+    # El diagnostico se trocea por NCU, no por TCU: cada NCU es una conexion al
+    # 502 y su bloque compacto se lee de golpe. Con 21 NCUs -San Jose- en serie
+    # se pasa del corte de ~100 s del tunel; asi ninguna vuelta pasa de unos
+    # segundos y el agente sigue atendiendo.
+    if ($tipo -eq 'diagnostico') {
+        $ncus = @(Ncus-DePlanta)
+        if ($ncus.Count -eq 0) { throw 'la seleccion no deja ninguna NCU' }
+        $script:Trab = @{
+            id = [guid]::NewGuid().ToString('N').Substring(0, 8)
+            tipo = $tipo; estado = 'en curso'; pend = $ncus; i = 0
+            total = $ncus.Count; hechas = 0; filas = @()
+            inicio = (Get-Date); fin = $null; error = ''
+            unidad = 'NCU'
+        }
+        return (Trabajo-Estado)
+    }
     $ped = @()
     foreach ($n in (Ncus-DePlanta)) {
         $pedidas = @(Tcus-Pedidas $n "$tcusTxt" "$gw")
@@ -128,6 +144,7 @@ function Trabajo-Iniciar([string]$tipo, [string]$tcusTxt, [string]$gw) {
         tipo = $tipo; estado = 'en curso'; pend = $ped; i = 0
         total = $ped.Count; hechas = 0; filas = @()
         inicio = (Get-Date); fin = $null; error = ''
+        unidad = 'TCU'
     }
     return (Trabajo-Estado)
 }
@@ -141,13 +158,19 @@ function Trabajo-Estado {
         hechas = $t.hechas; total = $t.total
         pct = $(if ($t.total -gt 0) { [math]::Round(100.0 * $t.hechas / $t.total, 1) } else { 0 })
         segundos = $seg
+        unidad = "$($t.unidad)"          # de que son las 'hechas': TCUs o NCUs
         # cuanto queda, a la velocidad que lleva: en campo importa mas que el %
         faltan_s = $(if ($t.hechas -gt 0 -and $t.estado -eq 'en curso') { [int](($t.total - $t.hechas) * ($seg / $t.hechas)) } else { $null })
         error = $t.error
     }
     if ($t.estado -eq 'hecho') {
-        $o.resultado = [ordered]@{tipo = 'inventario_tcu'; mapa = $VERSION_MAPA; toolbox = $VERSION_TOOLBOX
-                                  planta = $cfg.planta; fecha = $t.fin.ToString('yyyy-MM-dd HH:mm:ss'); tcus = @($t.filas)}
+        $filas = @($t.filas)
+        # el diagnostico se completa con la flota declarada, igual que el de una
+        # vez: los equipos que no se han podido leer salen SIN LECTURA
+        if ($t.tipo -eq 'diagnostico') { $filas = @(Diag-Completar $filas (Flota-Agente)) }
+        $o.resultado = [ordered]@{tipo = $(if ($t.tipo -eq 'diagnostico') { 'diagnostico_tcu' } else { 'inventario_tcu' })
+                                  mapa = $VERSION_MAPA; toolbox = $VERSION_TOOLBOX
+                                  planta = $cfg.planta; fecha = $t.fin.ToString('yyyy-MM-dd HH:mm:ss'); tcus = @($filas)}
     }
     return $o
 }
@@ -165,6 +188,18 @@ function Trabajo-Tick {
     if (-not $script:Trab -or $script:Trab.estado -ne 'en curso') { return }
     $t = $script:Trab
     $t0 = Get-Date
+    # el diagnostico se trocea por NCU: cada una es una conexion al 502 y su
+    # bloque compacto se lee de golpe, asi que no tiene sentido partirla mas
+    if ($t.tipo -eq 'diagnostico') {
+        while ($t.i -lt $t.total -and ((Get-Date) - $t0).TotalMilliseconds -lt $TRABAJO_MS) {
+            $n = $t.pend[$t.i]
+            try { $t.filas += @(Diag-UnaNcu $n) }
+            catch { $t.filas += ,(Fila-Vacia "$($n.ncu)" 'NCU' 'AVISO' "NCU sin respuesta: $_") }
+            $t.i++; $t.hechas++
+        }
+        if ($t.i -ge $t.total) { $t.estado = 'hecho'; $t.fin = Get-Date }
+        return
+    }
     $ip = ''; $pu = 0; $abierta = $false
     try {
         while ($t.i -lt $t.total -and ((Get-Date) - $t0).TotalMilliseconds -lt $TRABAJO_MS) {
@@ -625,65 +660,72 @@ function Fila-Vacia([string]$ncu, $tcu, [string]$salud, [string]$alarmas) {
 
 # Diagnostico de la planta completa via NCU: mismo formato que el JSON que
 # exporta la toolbox (tipo diagnostico_tcu), directamente subible al Historico.
-function Diag-Planta {
+# El diagnostico de UNA NCU. Aparte para que el barrido de una vez y el
+# trabajo por trozos usen exactamente el mismo, no dos copias.
+function Diag-UnaNcu($n) {
     $filas = @()
-    foreach ($n in (Ncus-DePlanta)) {
-        $et = "$($n.ncu)"
-        $dm = $null; $hsus = @(); $ns = $null
-        try {
-            Modbus-Conectar $n.ip $PUERTO_NCU $timeoutMs
-            try { $ns = Ncu-Salud } catch {}
-            $dm = Ncu-DiagCompat (Tcus-DeNcu $n)
-            try { $hsus = @(Ncu-HsuCompat) } catch {}
-            Modbus-Cerrar
-        } catch {
-            Modbus-Cerrar
-            $filas += Fila-Vacia $et 'NCU' 'AVISO' "NCU sin respuesta en ${PUERTO_NCU}: $_"
-            continue
-        }
-        if ($ns) {
-            $f = Fila-Vacia $et 'NCU' $ns.salud ((@($ns.alarmas) + $(if ($ns.fecha) { @("reloj NCU: $($ns.fecha)") } else { @() })) -join '; ')
-            $f.Modo = '-'
-            $filas += $f
-        }
-        foreach ($h in $hsus) {
-            $h | Add-Member -NotePropertyName NCU -NotePropertyValue $et -Force
-            $h | Add-Member -NotePropertyName GW -NotePropertyValue '' -Force
-            $filas += $h
-        }
-        foreach ($tcu in (Tcus-DeNcu $n)) {
-            $d = $null
-            if ($dm) { $d = $dm[[int]$tcu] }
-            if ($null -eq $d) { $filas += Fila-Vacia $et $tcu 'OFFLINE' 'sin datos via NCU' }
-            else {
-                $d | Add-Member -NotePropertyName NCU -NotePropertyValue $et -Force
-                $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcu $n.gws ([int]$tcu)) -Force
-                $filas += $d
-            }
-        }
-        # --- repetidores de esta NCU ---
-        # Su esclavo cae fuera del rango, asi que no vienen en el bloque compacto:
-        # se leen uno a uno por Zigbee a traves de la NCU. Y su salud NO es la de
-        # un seguidor: estan fijos, asi que nada de posicion ni de motor.
-        foreach ($rp in @(Reps-DeNcu $n)) {
-            $dr = $null
-            try {
-                Modbus-Conectar $n.ip $rp.puerto $timeoutMs
-                $dr = Diag-LeerTcu ([byte]$rp.esclavo)
-                Modbus-Cerrar
-            } catch { try { Modbus-Cerrar } catch {}; $dr = $null }
-            $alR = $(if ($dr) { Rep-Alarmas "$($dr.Alarmas)" } else { "no contesta (esclavo $($rp.esclavo))" })
-            $fr = Fila-Vacia $et $rp.nombre (Rep-Salud $dr $alR) $alR
-            $fr.GW = "$($rp.puerto)"
-            $fr.Modo = '-'
-            if ($dr) {
-                foreach ($c in @('SoC','SoH','Vbat_mV','Ibat_mA','Vpanel_mV','Ientrada_mA','Tbat_C','Tpcb_C')) {
-                    if ($null -ne $dr.$c) { $fr.$c = $dr.$c }
-                }
-            }
-            $filas += $fr
+
+    $et = "$($n.ncu)"
+    $dm = $null; $hsus = @(); $ns = $null
+    try {
+        Modbus-Conectar $n.ip $PUERTO_NCU $timeoutMs
+        try { $ns = Ncu-Salud } catch {}
+        $dm = Ncu-DiagCompat (Tcus-DeNcu $n)
+        try { $hsus = @(Ncu-HsuCompat) } catch {}
+        Modbus-Cerrar
+    } catch {
+        Modbus-Cerrar
+        $filas += Fila-Vacia $et 'NCU' 'AVISO' "NCU sin respuesta en ${PUERTO_NCU}: $_"
+        continue
+    }
+    if ($ns) {
+        $f = Fila-Vacia $et 'NCU' $ns.salud ((@($ns.alarmas) + $(if ($ns.fecha) { @("reloj NCU: $($ns.fecha)") } else { @() })) -join '; ')
+        $f.Modo = '-'
+        $filas += $f
+    }
+    foreach ($h in $hsus) {
+        $h | Add-Member -NotePropertyName NCU -NotePropertyValue $et -Force
+        $h | Add-Member -NotePropertyName GW -NotePropertyValue '' -Force
+        $filas += $h
+    }
+    foreach ($tcu in (Tcus-DeNcu $n)) {
+        $d = $null
+        if ($dm) { $d = $dm[[int]$tcu] }
+        if ($null -eq $d) { $filas += Fila-Vacia $et $tcu 'OFFLINE' 'sin datos via NCU' }
+        else {
+            $d | Add-Member -NotePropertyName NCU -NotePropertyValue $et -Force
+            $d | Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcu $n.gws ([int]$tcu)) -Force
+            $filas += $d
         }
     }
+    # --- repetidores de esta NCU ---
+    # Su esclavo cae fuera del rango, asi que no vienen en el bloque compacto:
+    # se leen uno a uno por Zigbee a traves de la NCU. Y su salud NO es la de
+    # un seguidor: estan fijos, asi que nada de posicion ni de motor.
+    foreach ($rp in @(Reps-DeNcu $n)) {
+        $dr = $null
+        try {
+            Modbus-Conectar $n.ip $rp.puerto $timeoutMs
+            $dr = Diag-LeerTcu ([byte]$rp.esclavo)
+            Modbus-Cerrar
+        } catch { try { Modbus-Cerrar } catch {}; $dr = $null }
+        $alR = $(if ($dr) { Rep-Alarmas "$($dr.Alarmas)" } else { "no contesta (esclavo $($rp.esclavo))" })
+        $fr = Fila-Vacia $et $rp.nombre (Rep-Salud $dr $alR) $alR
+        $fr.GW = "$($rp.puerto)"
+        $fr.Modo = '-'
+        if ($dr) {
+            foreach ($c in @('SoC','SoH','Vbat_mV','Ibat_mA','Vpanel_mV','Ientrada_mA','Tbat_C','Tpcb_C')) {
+                if ($null -ne $dr.$c) { $fr.$c = $dr.$c }
+            }
+        }
+        $filas += $fr
+    }
+    return $filas
+}
+
+function Diag-Planta {
+    $filas = @()
+    foreach ($n in (Ncus-DePlanta)) { $filas += @(Diag-UnaNcu $n) }
     # Todos los equipos que la topologia declara, contesten o no. Una NCU a la
     # que no se llega aportaba UNA fila en vez de las suyas, asi que el total
     # bailaba: 748 en vez de 782. Lo que no se ha podido leer sale SIN LECTURA,
@@ -1146,6 +1188,7 @@ while ($true) {
                 '/inventario'   { $out = Inventario-Planta "$($req.QueryString['tcus'])" "$($req.QueryString['gw'])" }
                 # el inventario largo, por trozos: se arranca y se pregunta
                 '/trabajo/inventario' { $out = Trabajo-Iniciar 'inventario' "$($req.QueryString['tcus'])" "$($req.QueryString['gw'])" }
+                '/trabajo/diagnostico' { $out = Trabajo-Iniciar 'diagnostico' "$($req.QueryString['tcus'])" "$($req.QueryString['gw'])" }
                 '/trabajo'      { $out = Trabajo-Estado }
                 '/trabajo/parar' { $out = Trabajo-Parar }
                 '/cierre'       { $out = Cierre-Planta }
