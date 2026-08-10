@@ -79,7 +79,10 @@ se enteró.
 Al arrancar se revisa cada `plantas/*.json` y se avisa en la consola de:
 
 - **gateways solapados** — San José NCU3 tiene `1-46` y `46-120`: el esclavo 46
-  cuelga de los dos y solo se lee por uno;
+  cuelga de los dos y solo se lee por uno. Se comparan los esclavos **de verdad**,
+  no los extremos del rango: en San José varias NCUs **alternan los dos gateways
+  por bloques** (`1-19 22-31 38-47…` en GW1 y `20-21 32-37…` en GW2), y mirar los
+  extremos cantaba un solape que no existe (v11.29);
 - **el rango no cuadra con los trackers declarados** — si la topología dice que
   una NCU tiene 123 y su rango deja 103, lo canta con los dos números.
 

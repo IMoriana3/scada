@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.28'
+$VERSION_TOOLBOX = '11.29'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -4451,11 +4451,18 @@ function Topologia-Avisos($entradas) {
         $partes = $k -split '\|'
         $eti = "$($partes[0]) NCU$($partes[1])"
         $gs = @($porNcu[$k] | Sort-Object { [int]$_.tcu_ini })
-        # dos gateways que se pisan: un esclavo no puede colgar de los dos, y
+        # Dos gateways que se pisan: un esclavo no puede colgar de los dos, y
         # Gw-DeTcu se queda con el primero que encuentre. Paso en San Jose NCU3.
-        for ($i = 1; $i -lt $gs.Count; $i++) {
-            if ([int]$gs[$i].tcu_ini -le [int]$gs[$i-1].tcu_fin) {
-                $av += "$eti : los gateways se solapan en el esclavo $([int]$gs[$i].tcu_ini) ($([int]$gs[$i-1].tcu_ini)-$([int]$gs[$i-1].tcu_fin) y $([int]$gs[$i].tcu_ini)-$([int]$gs[$i].tcu_fin)): esa TCU se leera por uno solo"
+        # Ojo: se comparan los esclavos DE VERDAD, no los extremos del rango. En
+        # San Jose los dos gateways de varias NCUs se alternan por bloques -GW1
+        # 1-91 y GW2 20-119, entrelazados con huecos- y mirar los extremos
+        # cantaba un solape que no existe.
+        $usados = @{}
+        foreach ($e in $gs) {
+            foreach ($t in @(Tcus-DeGw @{ini = $e.tcu_ini; fin = $e.tcu_fin; huecos = $e.huecos})) {
+                if ($usados.ContainsKey($t)) {
+                    $av += "$eti : el esclavo $t esta en dos gateways a la vez ($($usados[$t]) y $($e.puerto)): se leera solo por uno"
+                } else { $usados[$t] = "$($e.puerto)" }
             }
         }
         # lo que la topologia dice que hay contra lo que su rango deja leer
