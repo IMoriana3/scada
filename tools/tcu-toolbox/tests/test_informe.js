@@ -18,16 +18,23 @@ const { chromium } = require('playwright');
   // cada tabla lleva su id (t-diag, t-lectura, t-bat): los filtros se prueban
   // sobre la de diagnostico, asi que todo va colgado de ella
   const tDiag = p.locator('#t-diag');
+  // por NOMBRE de cabecera, no por indice: a;adir una columna (el GW, v11.24)
+  // movia el filtro de Salud y rompia la prueba sin que nada estuviera mal
+  const cabsDiag = (await tDiag.locator('thead tr:first-child th').allTextContents())
+    .map(t => t.replace(/[\u25B2\u25BC\s]+$/, '').trim());
+  const iSalud = cabsDiag.indexOf('Salud');
+  const iTcu = cabsDiag.indexOf('TCU');
+  const iModo = cabsDiag.indexOf('Modo');
+  const iTilt = cabsDiag.indexOf('Tilt');
   const visibles = async () => tDiag.locator('tbody tr:visible').count();
   chk('filas iniciales', await visibles(), 40);
 
-  // columna Salud = indice 2
-  const botSalud = tDiag.locator('tr.filtros td').nth(2).locator('button.fmb');
+  const botSalud = tDiag.locator('tr.filtros td').nth(iSalud).locator('button.fmb');
   chk('boton multi presente', await botSalud.count(), 1);
   chk('rotulo inicial', (await botSalud.textContent()).trim(), '(todas)');
 
   await botSalud.click();
-  const panel = tDiag.locator('tr.filtros td').nth(2).locator('div.fmp');
+  const panel = tDiag.locator('tr.filtros td').nth(iSalud).locator('div.fmp');
   chk('panel abierto', await panel.isVisible(), true);
 
   // marcar ALARMA y OFFLINE a la vez
@@ -39,22 +46,22 @@ const { chromium } = require('playwright');
   const dos = await visibles();
   chk('dos opciones suman', dos > soloAlarma, true);
   chk('rotulo con 2', (await botSalud.textContent()).trim(), '2 opciones');
-  const saludes = await tDiag.locator('tbody tr:visible td:nth-child(3)').allTextContents();
+  const saludes = await tDiag.locator(`tbody tr:visible td:nth-child(${iSalud+1})`).allTextContents();
   chk('solo ALARMA/OFFLINE', saludes.every(s => s === 'ALARMA' || s === 'OFFLINE'), true);
 
   // combinar con otro filtro multi: Modo
-  await tDiag.locator('tr.filtros td').nth(3).locator('button.fmb').click();
+  await tDiag.locator('tr.filtros td').nth(iModo).locator('button.fmb').click();
   chk('el panel anterior se cierra', await panel.isVisible(), false);
-  const panModo = tDiag.locator('tr.filtros td').nth(3).locator('div.fmp');
+  const panModo = tDiag.locator('tr.filtros td').nth(iModo).locator('div.fmp');
   await panModo.locator('label', { hasText: 'AUTO' }).locator('input').check();
   await p.waitForTimeout(120);
   const cruzado = await visibles();
   chk('cruce de dos columnas reduce', cruzado < dos && cruzado > 0, true);
-  const modos = await tDiag.locator('tbody tr:visible td:nth-child(4)').allTextContents();
+  const modos = await tDiag.locator(`tbody tr:visible td:nth-child(${iModo+1})`).allTextContents();
   chk('modo solo AUTO', modos.every(m => m === 'AUTO'), true);
 
   // "ninguna" vuelve a dejarlo todo
-  await tDiag.locator('tr.filtros td').nth(2).locator('button.fmb').click();
+  await tDiag.locator('tr.filtros td').nth(iSalud).locator('button.fmb').click();
   await panel.locator('a', { hasText: 'ninguna' }).click();
   await p.waitForTimeout(120);
   chk('ninguna = sin filtrar esa columna', (await visibles()) > cruzado, true);
@@ -65,14 +72,14 @@ const { chromium } = require('playwright');
   await p.waitForTimeout(120);
   chk('todas marcadas = 4 opciones', (await botSalud.textContent()).trim(), '4 opciones');
 
-  // la caja de texto sigue funcionando (columna Tilt, indice 4)
-  const cajaTilt = tDiag.locator('tr.filtros td').nth(4).locator('input');
+  // la caja de texto sigue funcionando (columna Tilt)
+  const cajaTilt = tDiag.locator('tr.filtros td').nth(iTilt).locator('input');
   chk('caja de texto donde hay muchos valores', await cajaTilt.count(), 1);
 
   // ordenar sigue funcionando
-  await tDiag.locator('thead tr:first-child th').nth(1).click();
+  await tDiag.locator('thead tr:first-child th').nth(iTcu).click();
   await p.waitForTimeout(120);
-  chk('sigue ordenando', (await tDiag.locator('thead tr:first-child th').nth(1).textContent()).includes('▲'), true);
+  chk('sigue ordenando', (await tDiag.locator('thead tr:first-child th').nth(iTcu).textContent()).includes('▲'), true);
 
   // portada: los recuadros de estado de planta
   chk('portada presente', await p.locator('.portada .tile').count() > 0, 'true');
