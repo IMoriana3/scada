@@ -70,6 +70,30 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**Los repetidores dejan de ser invisibles (v11.21)** — un repetidor **es una
+TCU**: mismo mapa, misma batería, mismo firmware. Lo único distinto es que está
+colocado para repetir la señal, no para mover un seguidor. Su esclavo cae
+**fuera** del rango `1..N`, así que hasta ahora **no se leía nunca**: no entraba
+en el inventario, ni en la campaña de firmware, ni en la auditoría de baterías.
+Y es el único equipo de la planta cuyo fallo es multiplicativo — con la batería
+muerta se lleva por delante todo lo que cuelga de él.
+
+Ahora la topología los declara (`repetidores` por gateway, con su nombre y su
+esclavo; la plataforma los exporta desde las columnas *Repetidores GW1/GW2*) y el
+**Diagnóstico los lee**, uno a uno por su esclavo a través de la NCU. Salen en la
+tabla con su nombre — **Repetidor 1**, *Repetidor 2*… — y **cuentan aparte**,
+como las HSU: Ayora sigue siendo **754 seguidores**, y los repetidores llevan su
+propia línea. Así los porcentajes siguen cuadrando con el SCADA y con todos los
+diagnósticos anteriores.
+
+Su **salud no es la de un seguidor**: no mueve nada, así que la desviación de
+posición y el modo no dicen nada de él. Lo que sí dice: si contesta, su batería
+y sus alarmas de hardware.
+
+En Ayora son cinco: uno en la NCU4 (esclavo 200), dos en la NCU12 (200 y 201),
+uno en la NCU14 (200) y uno en la NCU15 (200). El mismo número se repite entre
+NCUs y es correcto: cada NCU es su propia red Zigbee.
+
 **Comparar dos trabajos guardados (v11.20)** — lo que en la plataforma hace el
 Histórico, ahora sin salir de la herramienta y sin subir nada: en campo la
 pregunta es *"¿qué ha cambiado desde la última visita?"*, y hasta ahora había que

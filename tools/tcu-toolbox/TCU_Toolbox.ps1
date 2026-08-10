@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.20'
+$VERSION_TOOLBOX = '11.21'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -90,6 +90,21 @@ function Cargar-FicheroPlantas([string]$ruta) {
             $lstE = @(@($p.hsu_esclavos) | Where-Object { "$_" -match '^\d+$' } | ForEach-Object { [int]$_ })
             if ($lstE.Count -gt 0) { $e.hsuLista = $lstE; if (-not $e.hsu) { $e.hsu = $lstE[0] } }
         }
+        # Repetidores: son TCUs de verdad -mismo mapa, misma bateria, mismo FW-
+        # colocadas para repetir la senal, no para mover un seguidor. Su esclavo
+        # cae FUERA del rango 1..N, asi que hasta ahora no se leian: ni entraban
+        # en el inventario ni en la campana de firmware ni en la auditoria de
+        # baterias, y un repetidor con la bateria muerta se lleva por delante a
+        # todo lo que cuelga de el. Admite ["200"] o [{"nombre":..,"esclavo":..}].
+        if ($p.PSObject.Properties['repetidores']) {
+            $lstR = @()
+            foreach ($r in @($p.repetidores)) {
+                if ("$r" -match '^\d+$') { $lstR += ,@{nombre=''; esclavo=[int]"$r"}; continue }
+                $es = "$($r.esclavo)"
+                if ($es -match '^\d+$') { $lstR += ,@{nombre="$($r.nombre)"; esclavo=[int]$es} }
+            }
+            if ($lstR.Count -gt 0) { $e.reps = $lstR }
+        }
         $PLANTAS[[string]$p.nombre] = $e
         $n++
     }
@@ -119,7 +134,7 @@ function Construir-EntradasAuto {
         }
         $prefijo = ($prefijo -replace '(GW|TCU)\S*$', '').Trim()
         if (-not $prefijo) { $prefijo = "NCU $ip" }
-        $gws = @($grupo | ForEach-Object { @{puerto=$_.p.puerto; ini=$_.p.ini; fin=$_.p.fin} } | Sort-Object { $_.ini })
+        $gws = @($grupo | ForEach-Object { @{puerto=$_.p.puerto; ini=$_.p.ini; fin=$_.p.fin; reps=@($_.p.reps)} } | Sort-Object { $_.ini })
         $ini = @($gws | ForEach-Object { $_.ini } | Measure-Object -Minimum).Minimum
         $fin = @($gws | ForEach-Object { $_.fin } | Measure-Object -Maximum).Maximum
         $auto = @{ip=$ip; puerto=$null; ini=[int]$ini; fin=[int]$fin; gws=$gws}
@@ -138,7 +153,9 @@ function Construir-EntradasAuto {
         if (-not $porPlanta.Contains($planta)) { $porPlanta[$planta] = @{} }
         if (-not $porPlanta[$planta].Contains($ncu)) { $porPlanta[$planta][$ncu] = @{ip=$p.ip; gws=@(); hsu=$null; hsus=0; hsuLista=@()} }
         if ($porPlanta[$planta][$ncu].ip -ne $p.ip) { continue }   # inconsistencia: ignorar
-        $porPlanta[$planta][$ncu].gws += ,@{puerto=$p.puerto; ini=$p.ini; fin=$p.fin}
+        # el repetidor cuelga de SU gateway: sin esto no se sabria por que puerto
+        # se llega a el, porque su esclavo no cae en ningun rango de TCUs
+        $porPlanta[$planta][$ncu].gws += ,@{puerto=$p.puerto; ini=$p.ini; fin=$p.fin; reps=@($p.reps)}
         if ($p.hsu -and -not $porPlanta[$planta][$ncu].hsu) { $porPlanta[$planta][$ncu].hsu = $p.hsu }
         # el mismo numero viene repetido en las entradas de los dos gateways de
         # la NCU: se queda el mayor, no se suman
@@ -4240,6 +4257,57 @@ function Gw-DeTcuCx($cx, [int]$tcu) {
     return ''
 }
 
+# Los repetidores de una conexion, con su NCU y su puerto. Son TCUs: mismo mapa,
+# misma bateria, mismo firmware. Lo unico distinto es que no mueven un seguidor,
+# asi que no se les aplica el criterio de posicion y no cuentan en el total de
+# la flota: van aparte, como las HSU. Pura.
+function Reps-DeCx($cx, [string]$gw = '') {
+    $r = @()
+    if ($null -eq $cx) { return $r }
+    if ($cx.multi) {
+        foreach ($n in $cx.multi) {
+            foreach ($g in @(Gws-Filtrados $n.gws $gw)) {
+                foreach ($x in @($g.reps)) { if ($x) { $r += ,@{ncu="$($n.ncu)"; puerto=[int]$g.puerto; nombre="$($x.nombre)"; esclavo=[int]$x.esclavo} } }
+            }
+        }
+        return $r
+    }
+    $ncu = Ncu-DeNombre $cx.nombre
+    if ($cx.gws) {
+        foreach ($g in @(Gws-Filtrados $cx.gws $gw)) {
+            foreach ($x in @($g.reps)) { if ($x) { $r += ,@{ncu="$ncu"; puerto=[int]$g.puerto; nombre="$($x.nombre)"; esclavo=[int]$x.esclavo} } }
+        }
+        return $r
+    }
+    foreach ($x in @($cx.reps)) { if ($x) { $r += ,@{ncu="$ncu"; puerto=[int]$cx.puerto; nombre="$($x.nombre)"; esclavo=[int]$x.esclavo} } }
+    return $r
+}
+
+# Como se llama en las tablas. Si la topologia no le puso nombre, se numeran por
+# orden dentro de la planta, que es como estan rotulados en el plano. Pura.
+function Reps-Nombrar($reps) {
+    $i = 0
+    return @(@($reps) | ForEach-Object {
+        $i++
+        $n = "$($_.nombre)".Trim()
+        if ($n -eq '') { $n = "Repetidor $i" }
+        @{ncu=$_.ncu; puerto=$_.puerto; esclavo=$_.esclavo; nombre=$n}
+    })
+}
+
+# La salud de un repetidor NO es la de un seguidor: no mueve nada, asi que la
+# desviacion de posicion y el modo no dicen nada de el. Lo que si dice: si
+# contesta, su bateria y sus alarmas de hardware. Pura.
+function Rep-Salud($d) {
+    if ($null -eq $d) { return 'OFFLINE' }
+    $al = "$($d.Alarmas)"
+    if ($al -match '(?i)bateria critica|seta|sobrecorriente') { return 'ALARMA' }
+    $soc = 0
+    if ([int]::TryParse("$($d.SoC)", [ref]$soc) -and $soc -gt 0 -and $soc -lt 20) { return 'AVISO' }
+    if ($al -ne '') { return 'AVISO' }
+    return 'OK'
+}
+
 function Gws-Filtrados($gws, [string]$gw) {
     $g = "$gw".Trim()
     if ($g -eq '' -or $g -match '^(?i)todos$') { return @($gws) }
@@ -6333,10 +6401,57 @@ function Diag-Correr {
     }
     }
     }
+    # --- repetidores ---------------------------------------------------------
+    # Son TCUs, pero su esclavo cae fuera del rango 1..N, asi que ni el bloque
+    # compacto de la NCU ni las operaciones por rango los alcanzaban: hasta ahora
+    # no se leian NUNCA. Se leen por Zigbee directo (unit = su esclavo) porque el
+    # bloque compacto esta dimensionado al numero de TCUs y no consta que llegue
+    # al esclavo 200. Son cinco en toda Ayora: el coste es irrelevante.
+    $nROk = 0; $nRMal = 0
+    $reps = @(Reps-Nombrar (Reps-DeCx $cx $txtGGw.Text))
+    foreach ($rp in $reps) {
+        if (Chequear-Cancelado) { break }
+        $d = $null
+        try {
+            Modbus-Conectar $(if ($cx.multi) { @($cx.multi | Where-Object { "$($_.ncu)" -eq "$($rp.ncu)" })[0].ip } else { $cx.ip }) $rp.puerto $cx.to
+            $d = Diag-LeerTcu ([byte]$rp.esclavo)
+        } catch { $d = $null }
+        $sal = Rep-Salud $d
+        $fila = [pscustomobject]@{
+            NCU="$($rp.ncu)"; GW="$($rp.puerto)"; TCU="$($rp.nombre)"; Salud=$sal
+            Modo='-'; Tilt=''; Objetivo=''; Dif=''
+            SoC=$(if ($d) { "$($d.SoC)" } else { '' }); SoH=$(if ($d) { "$($d.SoH)" } else { '' })
+            Vbat_mV=$(if ($d) { "$($d.Vbat_mV)" } else { '' }); Ibat_mA=$(if ($d) { "$($d.Ibat_mA)" } else { '' })
+            Vpanel_mV=$(if ($d) { "$($d.Vpanel_mV)" } else { '' }); Ientrada_mA=$(if ($d) { "$($d.Ientrada_mA)" } else { '' })
+            Imotor_mA=''; ImotorPico_mA=''; Dia=$(if ($d) { "$($d.Dia)" } else { '' })
+            Tbat_C=$(if ($d) { "$($d.Tbat_C)" } else { '' }); Tpcb_C=$(if ($d) { "$($d.Tpcb_C)" } else { '' })
+            Edad_s=''
+            Alarmas=$(if ($d) { "$($d.Alarmas)" } else { "no contesta (esclavo $($rp.esclavo))" })
+            main_status=$(if ($d) { "$($d.main_status)" } else { '' })
+            alarmas_1=$(if ($d) { "$($d.alarmas_1)" } else { '' }); alarmas_2=$(if ($d) { "$($d.alarmas_2)" } else { '' })
+            alarmas_3=$(if ($d) { "$($d.alarmas_3)" } else { '' }); alarmas_4=$(if ($d) { "$($d.alarmas_4)" } else { '' })
+            system_status=$(if ($d) { "$($d.system_status)" } else { '' })
+        }
+        $it = New-Object System.Windows.Forms.ListViewItem("$($rp.ncu)")
+        foreach ($c in @($fila.GW, $fila.TCU, $fila.Salud, $fila.Modo, $fila.Tilt, $fila.Objetivo, $fila.Dif, $fila.SoC, $fila.Edad_s, $fila.Alarmas)) { [void]$it.SubItems.Add("$c") }
+        if ($sal -eq 'OK') { $it.ForeColor = [System.Drawing.Color]::DarkGreen; $nROk++ }
+        elseif ($sal -eq 'ALARMA') { $it.ForeColor = [System.Drawing.Color]::Firebrick; $nRMal++ }
+        elseif ($sal -eq 'OFFLINE') { $it.ForeColor = [System.Drawing.Color]::Gray; $nRMal++ }
+        else { $it.ForeColor = [System.Drawing.Color]::DarkOrange; $nRMal++ }
+        $lvG.Items.Add($it) | Out-Null
+        $script:UltimoDiag += $fila
+        if ($sal -ne 'OK') {
+            Con "NCU$($rp.ncu) $($rp.nombre) (esclavo $($rp.esclavo)): $sal  $($fila.Alarmas)" ([System.Drawing.Color]::Orange)
+        }
+    }
+    if ($reps.Count -gt 0) {
+        Con "Repetidores: $($reps.Count) leidos ($nROk OK). No cuentan en el total de la flota: no mueven ningun seguidor, pero de ellos cuelga lo que repiten." ([System.Drawing.Color]::SteelBlue)
+    }
     Modbus-Cerrar
     Cierre-Guardar (Nombre-Planta); Cierre-Pintar
     $lblGResumen.Text = "TCUs -> OK: $nOk  Aviso: $nAviso  Alarma: $nAlarma  Off: $nOff" +
-        $(if (($nHOk + $nHMal) -gt 0) { "   |   HSUs: $($nHOk + $nHMal) ($nHOk OK)" } else { '' })
+        $(if (($nHOk + $nHMal) -gt 0) { "   |   HSUs: $($nHOk + $nHMal) ($nHOk OK)" } else { '' }) +
+        $(if ($reps.Count -gt 0) { "   |   Repetidores: $($reps.Count) ($nROk OK)" } else { '' })
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Diagnostico: OK $nOk | AVISO $nAviso | ALARMA $nAlarma | OFFLINE $nOff" ([System.Drawing.Color]::SteelBlue)
     Marcar-Bloque 'diag'
