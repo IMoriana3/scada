@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.21'
+$VERSION_TOOLBOX = '11.22'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -4295,13 +4295,29 @@ function Reps-Nombrar($reps) {
     })
 }
 
-# La salud de un repetidor NO es la de un seguidor: no mueve nada, asi que la
-# desviacion de posicion y el modo no dicen nada de el. Lo que si dice: si
-# contesta, su bateria y sus alarmas de hardware. Pura.
-function Rep-Salud($d) {
+# Un repetidor esta FIJO: no mueve nada. Todo lo que habla de posicion o de
+# motor no significa nada en el, y sacarlo en la tabla solo sirve para que
+# alguien salga a mirar un eje que no existe. Se quitan de la columna Alarmas y
+# no cuentan para su salud. Lo que si cuenta: comunicacion y bateria.
+$REP_NO_APLICA = @(
+    'tilt fuera de rango', 'cortocircuito de motor', 'sobrecorriente de motor',
+    'eje bloqueado', 'motor mas lento de lo esperado', 'fallo en driver de motor',
+    'V motor baja', 'V motor alta', 'limite Oeste alcanzado', 'limite Este alcanzado',
+    'alarma de motor enclavada', 'SoC insuficiente para modo auto'
+)
+# Las alarmas de un repetidor: las suyas, sin las de posicion ni motor. Pura.
+function Rep-Alarmas([string]$texto) {
+    $l = @("$texto" -split ';' | ForEach-Object { "$_".Trim() } | Where-Object { $_ -ne '' })
+    $q = @($l | Where-Object { $x = $_; @($REP_NO_APLICA | Where-Object { $x -like "*$_*" }).Count -eq 0 })
+    return ($q -join '; ')
+}
+
+# La salud de un repetidor NO es la de un seguidor. Se le pasan sus alarmas ya
+# filtradas: si contesta, su bateria y sus alarmas de hardware. Pura.
+function Rep-Salud($d, [string]$alarmas) {
     if ($null -eq $d) { return 'OFFLINE' }
-    $al = "$($d.Alarmas)"
-    if ($al -match '(?i)bateria critica|seta|sobrecorriente') { return 'ALARMA' }
+    $al = "$alarmas"
+    if ($al -match '(?i)bateria critica|SoC critico|seta') { return 'ALARMA' }
     $soc = 0
     if ([int]::TryParse("$($d.SoC)", [ref]$soc) -and $soc -gt 0 -and $soc -lt 20) { return 'AVISO' }
     if ($al -ne '') { return 'AVISO' }
@@ -6416,7 +6432,9 @@ function Diag-Correr {
             Modbus-Conectar $(if ($cx.multi) { @($cx.multi | Where-Object { "$($_.ncu)" -eq "$($rp.ncu)" })[0].ip } else { $cx.ip }) $rp.puerto $cx.to
             $d = Diag-LeerTcu ([byte]$rp.esclavo)
         } catch { $d = $null }
-        $sal = Rep-Salud $d
+        # fuera lo de posicion y motor: esta fijo, no mueve nada
+        $alR = $(if ($d) { Rep-Alarmas "$($d.Alarmas)" } else { "no contesta (esclavo $($rp.esclavo))" })
+        $sal = Rep-Salud $d $alR
         $fila = [pscustomobject]@{
             NCU="$($rp.ncu)"; GW="$($rp.puerto)"; TCU="$($rp.nombre)"; Salud=$sal
             Modo='-'; Tilt=''; Objetivo=''; Dif=''
@@ -6426,7 +6444,7 @@ function Diag-Correr {
             Imotor_mA=''; ImotorPico_mA=''; Dia=$(if ($d) { "$($d.Dia)" } else { '' })
             Tbat_C=$(if ($d) { "$($d.Tbat_C)" } else { '' }); Tpcb_C=$(if ($d) { "$($d.Tpcb_C)" } else { '' })
             Edad_s=''
-            Alarmas=$(if ($d) { "$($d.Alarmas)" } else { "no contesta (esclavo $($rp.esclavo))" })
+            Alarmas=$alR
             main_status=$(if ($d) { "$($d.main_status)" } else { '' })
             alarmas_1=$(if ($d) { "$($d.alarmas_1)" } else { '' }); alarmas_2=$(if ($d) { "$($d.alarmas_2)" } else { '' })
             alarmas_3=$(if ($d) { "$($d.alarmas_3)" } else { '' }); alarmas_4=$(if ($d) { "$($d.alarmas_4)" } else { '' })

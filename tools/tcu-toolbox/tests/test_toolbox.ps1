@@ -2392,14 +2392,29 @@ $rn = @(Reps-Nombrar @(@{ncu='4'; puerto=503; nombre=''; esclavo=200}, @{ncu='12
 Check 'rep: sin nombre se numeran' ((@($rn | ForEach-Object { $_.nombre }) -join '|')) 'Repetidor 1|Repetidor 2'
 Check 'rep: y si la topologia lo trae, manda' ((@(Reps-Nombrar @(@{ncu='4'; puerto=503; nombre='Repetidor 5'; esclavo=200})))[0].nombre) 'Repetidor 5'
 
-# su salud NO es la de un seguidor: no mueve nada, la posicion no dice nada de el
-Check 'rep salud: si no contesta, OFFLINE' (Rep-Salud $null) 'OFFLINE'
-Check 'rep salud: sin alarmas y con bateria, OK' (Rep-Salud ([pscustomobject]@{SoC=90; Alarmas=''})) 'OK'
-Check 'rep salud: bateria critica es ALARMA' (Rep-Salud ([pscustomobject]@{SoC=5; Alarmas='bateria critica'})) 'ALARMA'
-Check 'rep salud: bateria baja es AVISO' (Rep-Salud ([pscustomobject]@{SoC=12; Alarmas=''})) 'AVISO'
-Check 'rep salud: cualquier otra alarma, AVISO' (Rep-Salud ([pscustomobject]@{SoC=90; Alarmas='reloj sin sincronizar'})) 'AVISO'
-# lo importante: una desviacion de posicion NO puede ensuciar su salud
-Check 'rep salud: la posicion no le afecta' (Rep-Salud ([pscustomobject]@{SoC=90; Alarmas=''; Dif=45; Tilt=-5; Objetivo=40})) 'OK'
+# esta FIJO: nada de posicion ni de motor, ni en la columna ni en su salud
+Check 'rep alarmas: fuera el tilt fuera de rango' (Rep-Alarmas 'tilt fuera de rango') ''
+Check 'rep alarmas: fuera el eje bloqueado'       (Rep-Alarmas 'eje bloqueado') ''
+Check 'rep alarmas: fuera la sobrecorriente de motor' (Rep-Alarmas 'sobrecorriente de motor') ''
+Check 'rep alarmas: fuera los limites Este/Oeste' (Rep-Alarmas 'limite Oeste alcanzado; limite Este alcanzado') ''
+Check 'rep alarmas: fuera el driver de motor'     (Rep-Alarmas 'fallo en driver de motor') ''
+# lo de comunicacion y bateria SI se queda: es lo unico que importa de un repetidor
+Check 'rep alarmas: se queda el fallo de Xbee'    (Rep-Alarmas 'fallo com con Xbee') 'fallo com con Xbee'
+Check 'rep alarmas: y el SoC critico'             (Rep-Alarmas 'SoC critico (<10%)') 'SoC critico (<10%)'
+Check 'rep alarmas: mezcla, se queda solo lo suyo' (Rep-Alarmas 'eje bloqueado; SoC bajo (L1); motor mas lento de lo esperado') 'SoC bajo (L1)'
+Check 'rep alarmas: sin alarmas, vacio'           (Rep-Alarmas '') ''
+
+Check 'rep salud: si no contesta, OFFLINE' (Rep-Salud $null 'no contesta') 'OFFLINE'
+Check 'rep salud: sin alarmas y con bateria, OK' (Rep-Salud ([pscustomobject]@{SoC=90}) '') 'OK'
+Check 'rep salud: SoC critico es ALARMA' (Rep-Salud ([pscustomobject]@{SoC=5}) 'SoC critico (<10%)') 'ALARMA'
+Check 'rep salud: bateria baja es AVISO' (Rep-Salud ([pscustomobject]@{SoC=12}) '') 'AVISO'
+Check 'rep salud: un fallo de comunicacion, AVISO' (Rep-Salud ([pscustomobject]@{SoC=90}) 'fallo com con Xbee') 'AVISO'
+# lo importante: nada de posicion ni de motor puede ensuciar su salud
+Check 'rep salud: el eje bloqueado no le afecta' (Rep-Salud ([pscustomobject]@{SoC=90}) (Rep-Alarmas 'eje bloqueado')) 'OK'
+Check 'rep salud: ni el tilt fuera de rango'     (Rep-Salud ([pscustomobject]@{SoC=90}) (Rep-Alarmas 'tilt fuera de rango')) 'OK'
+Check 'rep salud: ni la desviacion de posicion'  (Rep-Salud ([pscustomobject]@{SoC=90; Dif=45; Tilt=-5; Objetivo=40}) '') 'OK'
+# y el diagnostico lo filtra ANTES de pintarlo, no solo para el veredicto
+Check 'rep: la columna Alarmas sale filtrada' ($src.Contains('$alR = $(if ($d) { Rep-Alarmas "$($d.Alarmas)" }')) $true
 
 # el diagnostico los lee y los cuenta APARTE, como las HSU
 Check 'rep: el diagnostico los recorre' ($src.Contains('$reps = @(Reps-Nombrar (Reps-DeCx $cx $txtGGw.Text))')) $true
