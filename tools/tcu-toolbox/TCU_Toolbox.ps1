@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.19'
+$VERSION_TOOLBOX = '11.20'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -3267,7 +3267,13 @@ $btnTCarpeta.Location = New-Object System.Drawing.Point(502, 40)
 $btnTCarpeta.Size = New-Object System.Drawing.Size(110, 28)
 $tabT.Controls.Add($btnTCarpeta)
 
-$lblTRes = LG $tabT '' 622 286 46
+$btnTCmp = New-Object System.Windows.Forms.Button
+$btnTCmp.Text = 'COMPARAR'
+$btnTCmp.Location = New-Object System.Drawing.Point(620, 40)
+$btnTCmp.Size = New-Object System.Drawing.Size(110, 28)
+$tabT.Controls.Add($btnTCmp)
+
+$lblTRes = LG $tabT '' 738 170 46
 $lblTRes.ForeColor = [System.Drawing.Color]::Gray
 
 $lvT = New-Object System.Windows.Forms.ListView
@@ -5324,6 +5330,155 @@ function Trabajos-Podar($ficheros, [int]$max = 20) {
     return @($l[$max..($l.Count - 1)])
 }
 
+# ---------------------------------------------------------------------------
+#  Comparar dos trabajos guardados
+# ---------------------------------------------------------------------------
+# Lo mismo que hace el Historico de la plataforma, pero sin salir de aqui y sin
+# subir nada: en campo la comparacion util es "que ha cambiado desde la visita
+# anterior", y hasta ahora habia que abrir los dos CSV en Excel.
+#
+# Que se mira en cada tipo. El resto de columnas son ruido para un diff: en un
+# diagnostico de 754 TCUs, el tilt cambia en todas y no dice nada.
+$CMP_SOC_SALTO = 10       # puntos de SoC que hacen falta para que sea noticia
+$CMP_TIPOS = @{
+  diag       = @{titulo='Diagnostico'; campos=@('Salud'); salud=$true}
+  comm       = @{titulo='Test comm';   campos=@('Salud'); salud=$true}
+  inventario = @{titulo='Inventario';  campos=@('FW')}
+  # la auditoria SOLO lista desviaciones: que aparezca una fila es la noticia
+  auditoria  = @{titulo='Auditoria';   campos=@('Leido'); desviaciones=$true}
+  # el SoC sube y baja solo: si se cuenta cualquier cambio salen las 754. Solo
+  # se avisa de un salto grande, y del SoH y del estado, que no deberian moverse
+  baterias   = @{titulo='Baterias';    campos=@('SoH','Estado'); soc=$CMP_SOC_SALTO}
+}
+
+# Clave de una fila. La auditoria lleva ademas la variable: una TCU puede tener
+# varias desviaciones a la vez y no son la misma cosa. Pura.
+function Cmp-Clave($f) {
+    $k = "$($f.NCU)|$($f.TCU)"
+    if ("$($f.Variable)" -ne '') { return "$k|$($f.Variable)" }
+    return $k
+}
+# Como se llama ese equipo en el informe. Pura.
+function Cmp-Equipo($f) {
+    $t = "$($f.TCU)"
+    $e = $(if ($t -match '^\d+$') { "TCU $t" } else { $t })
+    if ("$($f.NCU)" -ne '') { return "NCU$($f.NCU)/$e" }
+    return $e
+}
+# Las NCUs que aparecen en una lista de filas. Pura.
+function Cmp-NcusDe($filas) {
+    return @(@($filas) | ForEach-Object { "$($_.NCU)" } | Sort-Object -Unique)
+}
+# Las NCUs que estan en las dos. Comparar una planta completa contra una sola
+# NCU tiene sentido -para esa NCU-, pero decir que las otras 15 "ya no aparecen"
+# no lo tiene. Pura.
+function Cmp-Comunes($a, $b) {
+    $sa = @(Cmp-NcusDe $a); $sb = @(Cmp-NcusDe $b)
+    return @($sa | Where-Object { $sb -contains $_ })
+}
+# OFFLINE no es un punto mas de la escala: es dejar de saber. Con OFFLINE entre
+# AVISO y ALARMA, un "ALARMA -> OFFLINE" salia como mejora. Pura.
+function Cmp-Salud([string]$a, [string]$b) {
+    $peso = @{OK=0; AVISO=1; ALARMA=2}
+    $a = "$a".ToUpper(); $b = "$b".ToUpper()
+    if ($a -eq $b) { return '' }
+    if ($b -eq 'OFFLINE') { return 'peor' }                                  # perderlo nunca mejora
+    if ($a -eq 'OFFLINE') { return $(if ($b -eq 'OK') { 'mejor' } else { 'neutro' }) }
+    if (-not $peso.ContainsKey($a) -or -not $peso.ContainsKey($b)) { return 'neutro' }
+    return $(if ($peso[$b] -gt $peso[$a]) { 'peor' } else { 'mejor' })
+}
+# El diff de dos listas de filas del MISMO tipo. Devuelve una fila por cambio.
+# Pura: ni lee ficheros ni toca la ventana, para poder probarla de verdad.
+function Cmp-Trabajos([string]$tipo, $antes, $ahora) {
+    $def = $CMP_TIPOS["$tipo"]
+    if (-not $def) { return @() }
+    $comunes = @(Cmp-Comunes $antes $ahora)
+    $pre = @{}
+    foreach ($f in @($antes)) { if ($comunes -contains "$($f.NCU)") { $pre[(Cmp-Clave $f)] = $f } }
+    $r = @()
+    foreach ($f in @($ahora)) {
+        if (-not ($comunes -contains "$($f.NCU)")) { continue }
+        $k = Cmp-Clave $f
+        $a = $pre[$k]
+        if ($null -eq $a) {
+            $que = $(if ($def.desviaciones) { 'desviacion nueva' } else { 'nuevo' })
+            $val = $(if ($def.desviaciones) { "$($f.Variable): $($f.Leido)" } else { "$($f."$(@($def.campos)[0])")" })
+            $r += ,[pscustomobject]@{Equipo=(Cmp-Equipo $f); Que=$que; Antes=''; Ahora=$val
+                                     Cambio=$(if ($def.desviaciones) { 'peor' } else { 'neutro' })}
+            continue
+        }
+        $pre.Remove($k)
+        foreach ($c in @($def.campos)) {
+            $va = "$($a.$c)"; $vb = "$($f.$c)"
+            if ($va -eq $vb) { continue }
+            $cam = $(if ($def.salud) { Cmp-Salud $va $vb } else { 'neutro' })
+            $et = $(if ($def.desviaciones) { "$($f.Variable)" } else { $c })
+            $r += ,[pscustomobject]@{Equipo=(Cmp-Equipo $f); Que=$et; Antes=$va; Ahora=$vb; Cambio=$cam}
+        }
+        # el SoC solo cuando pega un salto: si no, salen las 754 TCUs
+        if ($def.soc) {
+            $sa = 0; $sb = 0
+            if ([int]::TryParse("$($a.SoC)", [ref]$sa) -and [int]::TryParse("$($f.SoC)", [ref]$sb)) {
+                $d = $sb - $sa
+                if ([Math]::Abs($d) -ge [int]$def.soc) {
+                    $r += ,[pscustomobject]@{Equipo=(Cmp-Equipo $f); Que='SoC'; Antes="$sa"; Ahora="$sb"
+                                             Cambio=$(if ($d -lt 0) { 'peor' } else { 'mejor' })}
+                }
+            }
+        }
+    }
+    # lo que estaba y ya no: en la auditoria es la buena noticia, en el resto no
+    foreach ($k in @($pre.Keys)) {
+        $a = $pre[$k]
+        if ($def.desviaciones) {
+            $r += ,[pscustomobject]@{Equipo=(Cmp-Equipo $a); Que="$($a.Variable)"; Antes="$($a.Leido)"
+                                     Ahora=''; Cambio='mejor'}
+        } else {
+            $r += ,[pscustomobject]@{Equipo=(Cmp-Equipo $a); Que='ya no aparece'
+                                     Antes="$($a."$(@($def.campos)[0])")"; Ahora=''; Cambio='neutro'}
+        }
+    }
+    return @($r)
+}
+# Una linea que diga sobre que se ha comparado, para no leer un diff creyendo
+# que cubre la planta entera cuando cubre una NCU. Pura.
+function Cmp-Alcance($antes, $ahora) {
+    $comunes = @(Cmp-Comunes $antes $ahora)
+    $na = @(Cmp-NcusDe $antes); $nb = @(Cmp-NcusDe $ahora)
+    if ($comunes.Count -eq 0) { return 'no tienen ninguna NCU en comun: no hay nada que comparar' }
+    if ($na.Count -eq $nb.Count -and $comunes.Count -eq $na.Count) { return "$($comunes.Count) NCUs, las mismas en los dos" }
+    return "solo las NCUs comunes: $((@($comunes | Sort-Object { [int]("0" + $_) }) -join ', '))"
+}
+
+# Los dos trabajos a comparar: dos marcados, o uno marcado contra el anterior
+# del MISMO tipo y planta -que es lo que hace sola la web-. Pura.
+function Cmp-Pareja($lista, $indices) {
+    $i = @($indices)
+    if ($i.Count -ge 2) {
+        $dos = @(@($lista)[$i[0]], @($lista)[$i[1]])
+        # el mas antiguo primero, se marquen en el orden que se marquen
+        $ord = @($dos | Sort-Object { "$($_.Fecha)" })
+        if ("$($ord[0].Tipo)" -ne "$($ord[1].Tipo)") { throw "no se pueden comparar dos tipos distintos ($($ord[0].Tipo) y $($ord[1].Tipo))" }
+        return @{antes=$ord[0]; ahora=$ord[1]}
+    }
+    if ($i.Count -eq 1) {
+        $sel = @($lista)[$i[0]]
+        $previos = @(@($lista) | Where-Object {
+            "$($_.Tipo)" -eq "$($sel.Tipo)" -and "$($_.Planta)" -eq "$($sel.Planta)" -and "$($_.Fecha)" -lt "$($sel.Fecha)" })
+        if ($previos.Count -eq 0) { throw "no hay ningun $($sel.Tipo) anterior de $($sel.Planta) con el que comparar" }
+        $ant = @($previos | Sort-Object { "$($_.Fecha)" } -Descending)[0]
+        return @{antes=$ant; ahora=$sel}
+    }
+    throw 'marca un trabajo (se compara con el anterior del mismo tipo) o dos (se comparan entre si)'
+}
+
+# El tipo interno ('diag') a partir del titulo que se ve en la lista. La lista
+# guarda el titulo, no la clave. Pura.
+function Cmp-TipoDe([string]$titulo) {
+    foreach ($k in @($TRABAJO_TIPOS.Keys)) { if ("$($TRABAJO_TIPOS[$k].titulo)" -eq "$titulo") { return $k } }
+    return "$titulo"
+}
+
 # Guardar a fichero: el mismo dialogo, el mismo sello de fecha y el mismo aviso
 # en consola, que estaban copiados en diecinueve sitios. Y el MISMO separador:
 # siete de los CSV salian con coma y en un Excel en espanol se abren en una sola
@@ -6462,6 +6617,93 @@ function Trabajos-ComboNcus {
     if ($selV -and $cbGVerNcu.Items.Contains($selV)) { $cbGVerNcu.SelectedItem = $selV } else { $cbGVerNcu.SelectedIndex = 0 }
 }
 
+$script:UltimaCmp = @()
+$script:UltimaCmpNota = ''
+
+# Ventana aparte: la pestana Trabajos no tiene sitio para otra tabla y un diff
+# de planta entera son cientos de filas. Con su filtro por columna y su CSV,
+# como el resto de tablas.
+function Cmp-Ventana([string]$titulo, $filas) {
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text = $titulo
+    $d.Size = New-Object System.Drawing.Size(940, 560)
+    $d.StartPosition = 'CenterParent'
+    $lvX = New-Object System.Windows.Forms.ListView
+    $lvX.Location = New-Object System.Drawing.Point(12, 12)
+    $lvX.Size = New-Object System.Drawing.Size(900, 460)
+    $lvX.Anchor = 'Top,Bottom,Left,Right'
+    $lvX.View = 'Details'; $lvX.FullRowSelect = $true; $lvX.GridLines = $true
+    [void]$lvX.Columns.Add('Equipo', 150)
+    [void]$lvX.Columns.Add('Que', 220)
+    [void]$lvX.Columns.Add('Antes', 200)
+    [void]$lvX.Columns.Add('Ahora', 200)
+    [void]$lvX.Columns.Add('Cambio', 90)
+    foreach ($f in @($filas)) {
+        $it = New-Object System.Windows.Forms.ListViewItem("$($f.Equipo)")
+        foreach ($c in @($f.Que, $f.Antes, $f.Ahora, $f.Cambio)) { [void]$it.SubItems.Add("$c") }
+        switch ("$($f.Cambio)") {
+            'peor'  { $it.ForeColor = [System.Drawing.Color]::Firebrick }
+            'mejor' { $it.ForeColor = [System.Drawing.Color]::DarkGreen }
+            default { $it.ForeColor = [System.Drawing.Color]::DimGray }
+        }
+        $lvX.Items.Add($it) | Out-Null
+    }
+    $d.Controls.Add($lvX)
+    Lv-Filtrable $lvX
+    $bCsv = New-Object System.Windows.Forms.Button
+    $bCsv.Text = 'Exportar CSV'
+    $bCsv.Location = New-Object System.Drawing.Point(12, 482)
+    $bCsv.Size = New-Object System.Drawing.Size(130, 30)
+    $bCsv.Anchor = 'Bottom,Left'
+    $bCsv.Add_Click({ [void](Exportar-Csv $script:UltimaCmp "comparacion_$(Planta-Fichero)") }.GetNewClosure())
+    $d.Controls.Add($bCsv)
+    $lblN = LG $d "$($script:UltimaCmpNota)" 156 740 488
+    $lblN.Anchor = 'Bottom,Left'
+    $lblN.ForeColor = [System.Drawing.Color]::Gray
+    [void]$d.ShowDialog($form)
+}
+
+function Comparar-Trabajos {
+    $par = $null
+    try { $par = Cmp-Pareja $script:Trabajos $lvT.SelectedIndices }
+    catch { Con "Comparar: $_" ([System.Drawing.Color]::Orange); return }
+    $oa = $null; $ob = $null
+    try {
+        $oa = Get-Content $par.antes.fichero -Raw | ConvertFrom-Json
+        $ob = Get-Content $par.ahora.fichero -Raw | ConvertFrom-Json
+    } catch { Con "Comparar: no se ha podido leer el trabajo ($_)" ([System.Drawing.Color]::Salmon); return }
+    $tipo = "$($oa.tipo)"
+    if ($tipo -ne "$($ob.tipo)") { Con "Comparar: son de tipos distintos ($tipo y $($ob.tipo))." ([System.Drawing.Color]::Orange); return }
+    if (-not $CMP_TIPOS["$tipo"]) { Con "Comparar: los trabajos de tipo '$tipo' no se comparan (por ahora: diag, comm, inventario, auditoria y baterias)." ([System.Drawing.Color]::Orange); return }
+    $fa = @($oa.filas); $fb = @($ob.filas)
+    $alcance = Cmp-Alcance $fa $fb
+    $filas = @(Cmp-Trabajos $tipo $fa $fb)
+    $script:UltimaCmp = $filas
+    $script:UltimaCmpNota = "$($CMP_TIPOS["$tipo"].titulo): $($oa.fecha) -> $($ob.fecha) - $alcance"
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "COMPARAR $($CMP_TIPOS["$tipo"].titulo) - $($oa.planta)" ([System.Drawing.Color]::SteelBlue)
+    Con "  de $($oa.fecha)  a  $($ob.fecha)   ($alcance)" ([System.Drawing.Color]::Gainsboro)
+    if ($filas.Count -eq 0) {
+        Con '  Sin cambios.' ([System.Drawing.Color]::LightGreen)
+    } else {
+        $nP = @($filas | Where-Object { "$($_.Cambio)" -eq 'peor' }).Count
+        $nM = @($filas | Where-Object { "$($_.Cambio)" -eq 'mejor' }).Count
+        Con "  $($filas.Count) cambios: $nP a peor, $nM a mejor, $($filas.Count - $nP - $nM) sin signo" ([System.Drawing.Color]::SteelBlue)
+        foreach ($f in $filas) {
+            $col = switch ("$($f.Cambio)") {
+                'peor'  { [System.Drawing.Color]::Salmon }
+                'mejor' { [System.Drawing.Color]::LightGreen }
+                default { [System.Drawing.Color]::Gainsboro }
+            }
+            $de = $(if ("$($f.Antes)" -eq '') { '(no estaba)' } else { "$($f.Antes)" })
+            $a  = $(if ("$($f.Ahora)" -eq '') { '(ya no)' } else { "$($f.Ahora)" })
+            Con "  $($f.Equipo)  $($f.Que): $de -> $a" $col
+        }
+    }
+    Cmp-Ventana "Comparacion - $($CMP_TIPOS["$tipo"].titulo)" $filas
+}
+
+$btnTCmp.Add_Click({ Comparar-Trabajos })
 $btnTCargar.Add_Click({ Trabajo-Cargar })
 $lvT.Add_DoubleClick({ Trabajo-Cargar })
 
