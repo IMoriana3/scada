@@ -2363,6 +2363,55 @@ try { $null = Cmp-Pareja $lstT @() } catch { $eP3 = "$_" }
 Check 'cmp par: sin marcar nada, lo dice' ($eP3 -like '*marca un trabajo*') $true
 Check 'cmp: el titulo de la lista vuelve a su clave' (Cmp-TipoDe 'Test comm') 'comm'
 
+# ============================================================================
+#  Repetidores: son TCUs, pero su esclavo cae fuera del rango 1..N
+# ============================================================================
+# hasta la v11.21 no se leian NUNCA: ni inventario, ni campana de firmware, ni
+# auditoria de bateria. Y un repetidor con la bateria muerta se lleva por
+# delante todo lo que cuelga de el.
+$cxRep = @{multi=@(
+  @{ncu=4;  ip='10.0.0.4';  gws=@(@{puerto=503; ini=1; fin=30; reps=@(@{nombre='Repetidor 1'; esclavo=200})})}
+  @{ncu=12; ip='10.0.0.12'; gws=@(@{puerto=503; ini=1; fin=53; reps=@(@{nombre='Repetidor 2'; esclavo=200}, @{nombre='Repetidor 3'; esclavo=201})})}
+  @{ncu=13; ip='10.0.0.13'; gws=@(@{puerto=503; ini=1; fin=72; reps=@()})}
+)}
+$rr = @(Reps-DeCx $cxRep)
+Check 'rep: los saca de toda la planta' ($rr.Count) 3
+Check 'rep: con su NCU' ((@($rr | ForEach-Object { $_.ncu }) -join ',')) '4,12,12'
+Check 'rep: con su esclavo' ((@($rr | ForEach-Object { "$($_.esclavo)" }) -join ',')) '200,200,201'
+Check 'rep: y con su puerto, que su esclavo no cae en ningun rango' ((@($rr | ForEach-Object { "$($_.puerto)" } | Sort-Object -Unique) -join ',')) '503'
+# el 200 se repite entre NCUs y es correcto: cada NCU es su propia red Zigbee
+Check 'rep: el mismo esclavo en dos NCUs no es un error' (@($rr | Where-Object { $_.esclavo -eq 200 }).Count) 2
+# una NCU sin repetidores no aporta ninguno
+Check 'rep: la NCU sin repetidores no cuela ninguno' (@($rr | Where-Object { "$($_.ncu)" -eq '13' }).Count) 0
+# el filtro de gateway tambien vale aqui
+Check 'rep: con un GW que no existe, ninguno' ((@(Reps-DeCx $cxRep '504')).Count) 0
+Check 'rep: sin conexion, lista vacia' ((@(Reps-DeCx $null)).Count) 0
+
+# el nombre lo pone la topologia; si no lo trae, se numeran por orden
+$rn = @(Reps-Nombrar @(@{ncu='4'; puerto=503; nombre=''; esclavo=200}, @{ncu='12'; puerto=503; nombre=''; esclavo=201}))
+Check 'rep: sin nombre se numeran' ((@($rn | ForEach-Object { $_.nombre }) -join '|')) 'Repetidor 1|Repetidor 2'
+Check 'rep: y si la topologia lo trae, manda' ((@(Reps-Nombrar @(@{ncu='4'; puerto=503; nombre='Repetidor 5'; esclavo=200})))[0].nombre) 'Repetidor 5'
+
+# su salud NO es la de un seguidor: no mueve nada, la posicion no dice nada de el
+Check 'rep salud: si no contesta, OFFLINE' (Rep-Salud $null) 'OFFLINE'
+Check 'rep salud: sin alarmas y con bateria, OK' (Rep-Salud ([pscustomobject]@{SoC=90; Alarmas=''})) 'OK'
+Check 'rep salud: bateria critica es ALARMA' (Rep-Salud ([pscustomobject]@{SoC=5; Alarmas='bateria critica'})) 'ALARMA'
+Check 'rep salud: bateria baja es AVISO' (Rep-Salud ([pscustomobject]@{SoC=12; Alarmas=''})) 'AVISO'
+Check 'rep salud: cualquier otra alarma, AVISO' (Rep-Salud ([pscustomobject]@{SoC=90; Alarmas='reloj sin sincronizar'})) 'AVISO'
+# lo importante: una desviacion de posicion NO puede ensuciar su salud
+Check 'rep salud: la posicion no le afecta' (Rep-Salud ([pscustomobject]@{SoC=90; Alarmas=''; Dif=45; Tilt=-5; Objetivo=40})) 'OK'
+
+# el diagnostico los lee y los cuenta APARTE, como las HSU
+Check 'rep: el diagnostico los recorre' ($src.Contains('$reps = @(Reps-Nombrar (Reps-DeCx $cx $txtGGw.Text))')) $true
+Check 'rep: por Zigbee directo, no por la cache de la NCU' ($src.Contains('$d = Diag-LeerTcu ([byte]$rp.esclavo)')) $true
+Check 'rep: no suman al total de la flota' ($src.Contains('$nROk = 0; $nRMal = 0')) $true
+Check 'rep: y se dicen aparte en el resumen' ($src.Contains('Repetidores: $($reps.Count) ($nROk OK)')) $true
+# la topologia de Ayora ya los declara
+$jAyora = Get-Content (Join-Path $raizTb 'plantas/24025-ayora.json') -Raw | ConvertFrom-Json
+$repsAy = @($jAyora.plantas | Where-Object { $_.PSObject.Properties['repetidores'] })
+Check 'rep: Ayora declara repetidores' ($repsAy.Count) 4
+Check 'rep: y son cinco en total' ((@($repsAy | ForEach-Object { @($_.repetidores).Count } | Measure-Object -Sum).Sum)) 5
+
 # el boton y su handler existen de verdad
 Check 'cmp: hay boton COMPARAR' ($src.Contains("`$btnTCmp.Text = 'COMPARAR'")) $true
 Check 'cmp: y esta enganchado' ($src.Contains('$btnTCmp.Add_Click({ Comparar-Trabajos })')) $true
