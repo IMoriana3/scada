@@ -141,11 +141,23 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
   Con eso, la única evidencia de campo que hay es la de Ignacio, y va en la dirección de que no existen. Yo
   aplicaría los huecos también en el 3D. Si en algún momento aparece un levantamiento de Ayora que las mida,
   se revierte en un minuto por los dos lados (quitar `huecos` aquí, devolverlas al plano allí).
+
+  **[Backtracking responde, 2026-08-10]** Aceptado para topología/SCADA, con un matiz probado: `ayora_cotas.json`
+  **sí existe** en `cobertura-zigbee` (git-tracked; quizá buscasteis otra ruta) y **las tres posiciones tienen
+  cotas MEDIDAS por el topógrafo** (TK 040-05 y=[−9.65,−9.87/−9.68,−9.95]; TK 050-05 y=[−11.05,−12.65/…];
+  TK 051-05 y=[−10.90,−13.06/…]). O sea: hay evidencia de campo de que la **estructura** se montó y se midió.
+  Síntesis que aplico: en el **3D as-built se quedan** (acero real, con sus cotas), pero **sin TCU**: no cuentan
+  en topología ni en el SCADA (al no venir en ningún diagnóstico, el gemelo las deja en su color natural).
+  Para la topología de Supabase queda lo que decís: `1-13 15-23` en Esclavos GW1 de la NCU7 — eso lo toca
+  Ignacio (o quien tenga la sesión de topologia.html abierta).
+
+- **[Backtracking → Toolbox] Propuesta: telemetría en régimen para el SCADA.** Ignacio ha separado el SCADA de operación (`factiun-cartera/scada.html`, tiempo real) del Seguimiento PEM (snapshots). Hoy el SCADA marca "DIFERIDO" porque bebe de diagnósticos de visita. Para pasarlo a EN VIVO propongo: el agente/collector sube cada N min (5–15) un `datos.tipo:"telemetria_tcu"` LIGERO a `diagnosticos` (o tabla nueva `telemetria`): por TCU solo `{NCU,TCU,Salud,Modo,Tilt,SoC,Alarmas}` + meteo de HSU si la hay. La web ya pinta cualquier `diagnostico_tcu`, así que hasta bastaría con que el `/sincronizar` del agente corriera con un scheduler. Decidid formato/cadencia y apuntadlo aquí; yo adapto la web a lo que subáis.
 - **[Backtracking] Confirmación pendiente del usuario:** signo del tilt en SCADA 3D contra una tarde real (oeste arriba).
 
 ## Registro de cambios de interfaz
 
 | fecha | sesión | cambio |
 |---|---|---|
+| 2026-08-10 | Backtracking | Separación SCADA (scada.html, tiempo real) / Seguimiento PEM (snapshots). Propuesta de `telemetria_tcu` en Puntos abiertos. |
 | 2026-08-10 | Backtracking | Creación del contrato. `scada3d` postMessage con `eti`; ficha por clic en SCADA 3D; comisionado estados 0–3 según A. |
 | 2026-08-10 | Toolbox | Revisada la sección B contra el código de v3.0 (faltaban las rutas de trabajos, los POST de escritura y los parámetros de selección) y la tabla A (campos reales de `inventario_tcu`, `baterias_tcu` y `comisionado`). **Avisos nuevos que os afectan**: `diagnostico_tcu` puede traer `TCU` no numérico (`NCU`, `HSU<n>`, `Repetidor <n>`) y `Salud = SIN LECTURA`; el diagnóstico trae siempre la flota declarada completa (782 filas en Ayora). Respondido el punto de los 751/754 con las etiquetas TK. |
