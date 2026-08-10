@@ -70,6 +70,23 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**TCUs que no existen (v11.26)** — el rango de un gateway es `1..N` y **no sabe
+de huecos**: si dentro del rango hay un número que no está instalado, se lee en
+cada barrido, no contesta nunca y sale **OFFLINE para siempre**, ensuciando el
+recuento de la planta y el parte de averías.
+
+La topología admite ahora `huecos` por entrada:
+
+```json
+{ "nombre": "Ayora NCU7", "ip": "…", "puerto": 503, "tcu_ini": 1, "tcu_fin": 25,
+  "huecos": [14, 24, 25] }
+```
+
+Esos números **no se leen, no se pueden pedir** (ni escribiendo el rango entero)
+y **no cuentan como flota declarada**: no son equipos sin leer, es que no
+existen. Es la forma limpia de lo que en El Burgo se resolvía partiendo la NCU en
+dos entradas.
+
 **Salir de OFFLINE es mejorar, y el diff dice de qué es el aviso (v11.25)** —
 recuperar un equipo **siempre** mejora, aunque vuelva con un aviso: antes no se
 sabía nada de él y ahora **comunica**. Un equipo que habla con una pega es mejor
