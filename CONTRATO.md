@@ -189,6 +189,41 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
   y de cuando el rango no cuadra con los `trackers` declarados. **Para que lo segundo funcione, el export de
   `ips.html` debería incluir `trackers` por entrada** (la columna ya existe en la tabla). ¿Lo añadís?
 
+  **[Toolbox, 10/08] Sacado del Excel de coordenadas de San José (2289 TCUs, 21 NCUs, 10 repetidores, 8 HSUs),
+  cuadra NCU a NCU con la hoja de layout de comunicaciones.** Los valores para la tabla `topologia` — falta
+  solo la IP de cada NCU, que ya está ahí:
+
+  | NCU | Esclavos GW1 | Esclavos GW2 | Rep GW1 | Rep GW2 | HSU |
+  |---|---|---|---|---|---|
+  | 1 | `1-68` | `69-119` | – | `200` | 230 |
+  | 2 | `1-47` | `48-119` | – | – | – |
+  | 3 | `1-46` | `47-120` | – | – | – |
+  | 4 | `1-89` | `90-124` | `200` | – | – |
+  | 5 | `1-56` | `57-124` | – | – | – |
+  | 6 | `1-68` | `69-119` | – | – | 230 |
+  | 7 | `1-19 22-31 38-47 58-67 82-91` | `20-21 32-37 48-57 68-81 92-119` | – | `200` | – |
+  | 8 | `1-69` | `70-119` | – | – | 230 |
+  | 9 | `1-48` | `49-120` | – | – | – |
+  | 10 | `1-62` | `63-119` | – | – | – |
+  | 11 | `1-38` | `39-118` | – | – | 230 |
+  | 12 | `1-6 9-14 20-25 35-43 54-66 79-91 97-109` | `7-8 15-19 26-34 44-53 67-78 92-96 110-118` | `200,201` | `202` | – |
+  | 13 | `1-49` | `50-119` | – | – | – |
+  | 14 | `1-64` | – | `200` | – | – |
+  | 15 | `1-54` | – | `200` | – | – |
+  | 16 | `15-19 27-35 53-61 68-76 95-103` | `1-14 20-26 36-52 62-67 77-94 104-121` | `201` | `200` | 230,231 |
+  | 17 | `1-28 42-55 69-82 96-109` | `29-41 56-68 83-95 110-122` | – | – | – |
+  | 18 | `1-38` | `39-122` | – | – | – |
+  | 19 | `10-17 28-40 52-64 76-88 100-112` | `1-9 18-27 41-51 65-75 89-99 113-123` | – | – | 230 |
+  | 20 | `1-57` | – | – | – | – |
+  | 21 | `1-69` | – | – | – | 230 |
+
+  Ojo con **NCU3**: `1-46` y `47-120` según el Excel, sin solape. El `46-120` que hay hoy en la topología es un
+  error de un esclavo. Y ojo con las NCUs **7, 12, 16, 17 y 19**: sus dos gateways **se alternan por bloques**,
+  no se reparten el rango en dos mitades. Eso es correcto y hay que respetarlo tal cual.
+
+  El Excel **no se sube a ningún repo** (`scada` es público y es documentación del fabricante): esto es solo la
+  topología extraída.
+
   **[Backtracking responde, 2026-08-10] Añadido.** `entradasToolbox()` exporta ya `trackers` en cada entrada.
   Matiz de semántica: la columna es un **total por NCU**, así que en NCUs con dos gateways va el MISMO número
   repetido en las dos entradas (GW1 y GW2) — no lo suméis por entrada; comparadlo contra la unión de rangos de
@@ -215,5 +250,6 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
 | 2026-08-10 | Backtracking | Hoja de ruta funcional (viva). Web adaptada al diagnóstico v2.9/v3.0: SIN LECTURA, flota completa, `eti` en el emisor scada3d. |
 | 2026-08-10 | Backtracking | Separación SCADA (scada.html, tiempo real) / Seguimiento PEM (snapshots). Propuesta de `telemetria_tcu` en Puntos abiertos. |
 | 2026-08-10 | Backtracking | Creación del contrato. `scada3d` postMessage con `eti`; ficha por clic en SCADA 3D; comisionado estados 0–3 según A. |
+| 2026-08-10 | Toolbox | **v11.29**: el aviso de gateways solapados compara los esclavos de verdad, no los extremos del rango — en San José varias NCUs alternan los dos gateways por bloques y salía un falso positivo. Y publicada aquí la topología completa de San José sacada del Excel de coordenadas. |
 | 2026-08-10 | Toolbox | **agente v3.1**: nueva ruta `/trabajo/diagnostico` (trocea por NCU) y campo `unidad` en el estado del trabajo. San José son 21 NCUs y ~2300 TCUs: el diagnóstico de una petición se sale del corte de ~100 s. El `/diagnostico` síncrono sigue igual. |
 | 2026-08-10 | Toolbox | Revisada la sección B contra el código de v3.0 (faltaban las rutas de trabajos, los POST de escritura y los parámetros de selección) y la tabla A (campos reales de `inventario_tcu`, `baterias_tcu` y `comisionado`). **Avisos nuevos que os afectan**: `diagnostico_tcu` puede traer `TCU` no numérico (`NCU`, `HSU<n>`, `Repetidor <n>`) y `Salud = SIN LECTURA`; el diagnóstico trae siempre la flota declarada completa (782 filas en Ayora). Respondido el punto de los 751/754 con las etiquetas TK. |

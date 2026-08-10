@@ -2435,10 +2435,17 @@ Check 'resumen: una NCU sin lectura se dice' ($src.Contains('SIN LECTURA - no se
 # llevaba varios tramos y el exportador solo entendia uno. No dio ningun error:
 # la herramienta simplemente leia menos planta.
 $avSolapa = @(Topologia-Avisos @(
-  [pscustomobject]@{nombre='San Jose NCU3 GW1'; tcu_ini=1;  tcu_fin=46}
-  [pscustomobject]@{nombre='San Jose NCU3 GW2'; tcu_ini=46; tcu_fin=120}))
+  [pscustomobject]@{nombre='San Jose NCU3 GW1'; puerto=503; tcu_ini=1;  tcu_fin=46}
+  [pscustomobject]@{nombre='San Jose NCU3 GW2'; puerto=504; tcu_ini=46; tcu_fin=120}))
 Check 'topo: canta el solape entre gateways' ($avSolapa.Count) 1
 Check 'topo: y dice en que esclavo' (@($avSolapa)[0] -like '*esclavo 46*') $true
+# En San Jose varias NCUs alternan los dos gateways por bloques: los rangos se
+# cruzan pero NINGUN esclavo esta repetido. Mirar los extremos daba un falso
+# positivo; hay que comparar los esclavos de verdad.
+$avEntre = @(Topologia-Avisos @(
+  [pscustomobject]@{nombre='San Jose NCU7 GW1'; puerto=503; tcu_ini=1;  tcu_fin=10; huecos=@(4,5,6)}
+  [pscustomobject]@{nombre='San Jose NCU7 GW2'; puerto=504; tcu_ini=4;  tcu_fin=12; huecos=@(7,8,9,10)}))
+Check 'topo: los gateways entrelazados NO son un solape' ($avEntre.Count) 0
 $avOk = @(Topologia-Avisos @(
   [pscustomobject]@{nombre='Ayora NCU1'; tcu_ini=1; tcu_fin=63; trackers=63}))
 Check 'topo: si cuadra, no molesta' ($avOk.Count) 0
