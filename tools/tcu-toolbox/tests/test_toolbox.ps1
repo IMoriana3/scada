@@ -1439,9 +1439,12 @@ foreach ($t in @('lvL','lvD','lvG','lvA','lvV','lvP','lvFW','lvSat','lvH','lvI')
     Check "cabecera: ${t} filtrable" ($engancha.Groups[1].Value.Contains("`$$t")) $true
 }
 # y no puede quedarse ninguna fuera: si se crea una tabla nueva hay que anadirla
+# a esa linea, O llamar a Lv-Filtrable con ella (las tablas de los dialogos no
+# existen al arrancar, se crean al abrirse y se enganchan alli mismo)
 $todas = @([regex]::Matches($src, '\$(lv\w+) = New-Object System\.Windows\.Forms\.ListView') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
-$sueltas = @($todas | Where-Object { -not $engancha.Groups[1].Value.Contains("`$$_") })
+$sueltas = @($todas | Where-Object { -not $engancha.Groups[1].Value.Contains("`$$_") -and -not $src.Contains("Lv-Filtrable `$$_") })
 Check 'cabecera: ninguna tabla sin filtro' ($sueltas -join ',') ''
+Check 'cabecera: la tabla de la comparacion tambien filtra' ($src.Contains('Lv-Filtrable $lvX')) $true
 
 Write-Host ''
 Write-Host '== parte de averias para WhatsApp =='
@@ -2265,6 +2268,106 @@ $ordT = @(Trabajos-Ordenar @(
 Check 'trab: el mas nuevo arriba' ($ordT[0].Fecha) '2026-08-07 12:00'
 Check 'trab: y el mas viejo abajo' ($ordT[-1].Fecha) '2026-08-06 23:00'
 Check 'trab: lista vacia no revienta' ((@(Trabajos-Ordenar @())).Count) 0
+
+# ============================================================================
+#  Comparar dos trabajos guardados (lo que en la web hace el Historico)
+# ============================================================================
+# OFFLINE no es un punto mas de la escala: perder un seguidor nunca es mejora
+Check 'cmp: OK a ALARMA es peor'      (Cmp-Salud 'OK' 'ALARMA') 'peor'
+Check 'cmp: ALARMA a OK es mejor'     (Cmp-Salud 'ALARMA' 'OK') 'mejor'
+Check 'cmp: OK a AVISO es peor'       (Cmp-Salud 'OK' 'AVISO') 'peor'
+Check 'cmp: ALARMA a OFFLINE es peor' (Cmp-Salud 'ALARMA' 'OFFLINE') 'peor'
+Check 'cmp: OFFLINE a OK es mejor'    (Cmp-Salud 'OFFLINE' 'OK') 'mejor'
+Check 'cmp: OFFLINE a ALARMA no es mejora' (Cmp-Salud 'OFFLINE' 'ALARMA') 'neutro'
+Check 'cmp: sin cambio, nada'         (Cmp-Salud 'OK' 'OK') ''
+Check 'cmp: una salud rara no revienta' (Cmp-Salud 'OK' 'ZZZ') 'neutro'
+
+# la clave lleva la variable solo en la auditoria: una TCU puede tener varias
+Check 'cmp: clave de una TCU' (Cmp-Clave ([pscustomobject]@{NCU='12'; TCU=7})) '12|7'
+Check 'cmp: clave de una desviacion' (Cmp-Clave ([pscustomobject]@{NCU='12'; TCU=7; Variable='41010'})) '12|7|41010'
+Check 'cmp: nombre del equipo' (Cmp-Equipo ([pscustomobject]@{NCU='12'; TCU=7})) 'NCU12/TCU 7'
+Check 'cmp: y de una HSU'      (Cmp-Equipo ([pscustomobject]@{NCU='15'; TCU='HSU9'})) 'NCU15/HSU9'
+
+# comparar planta completa contra una sola NCU: solo esa NCU, no "las otras 15
+# ya no aparecen"
+$cmpA = @(
+  [pscustomobject]@{NCU='1';  TCU=1; Salud='OK'}
+  [pscustomobject]@{NCU='1';  TCU=2; Salud='OK'}
+  [pscustomobject]@{NCU='12'; TCU=5; Salud='OK'}
+)
+$cmpB = @(
+  [pscustomobject]@{NCU='1'; TCU=1; Salud='ALARMA'}
+  [pscustomobject]@{NCU='1'; TCU=3; Salud='OK'}
+)
+Check 'cmp: NCUs comunes' ((@(Cmp-Comunes $cmpA $cmpB)) -join ',') '1'
+$dif = @(Cmp-Trabajos 'diag' $cmpA $cmpB)
+Check 'cmp: la NCU que no esta en los dos no cuenta' (@($dif | Where-Object { "$($_.Equipo)" -like '*NCU12*' }).Count) 0
+Check 'cmp: el cambio de salud sale' (@($dif | Where-Object { "$($_.Equipo)" -eq 'NCU1/TCU 1' })[0].Cambio) 'peor'
+Check 'cmp: la TCU nueva sale' (@($dif | Where-Object { "$($_.Que)" -eq 'nuevo' })[0].Equipo) 'NCU1/TCU 3'
+Check 'cmp: la que ya no esta, tambien' (@($dif | Where-Object { "$($_.Que)" -eq 'ya no aparece' })[0].Equipo) 'NCU1/TCU 2'
+Check 'cmp: y el alcance lo dice' ((Cmp-Alcance $cmpA $cmpB) -like '*solo las NCUs comunes*') $true
+Check 'cmp: sin nada en comun lo dice' ((Cmp-Alcance @([pscustomobject]@{NCU='1'; TCU=1}) @([pscustomobject]@{NCU='9'; TCU=1})) -like '*no hay nada que comparar*') $true
+Check 'cmp: dos iguales, sin cambios' ((@(Cmp-Trabajos 'diag' $cmpA $cmpA)).Count) 0
+
+# la auditoria solo lista desviaciones: que aparezca una fila ES la noticia
+$audA = @([pscustomobject]@{NCU='12'; TCU=7; Variable='41010'; Leido='-1.6'})
+$audB = @([pscustomobject]@{NCU='12'; TCU=8; Variable='41111'; Leido='55'})
+$difA = @(Cmp-Trabajos 'auditoria' $audA $audB)
+Check 'cmp aud: una desviacion nueva es peor' (@($difA | Where-Object { "$($_.Que)" -eq 'desviacion nueva' })[0].Cambio) 'peor'
+Check 'cmp aud: y la que desaparece, mejor' (@($difA | Where-Object { "$($_.Equipo)" -eq 'NCU12/TCU 7' })[0].Cambio) 'mejor'
+$difA2 = @(Cmp-Trabajos 'auditoria' $audA @([pscustomobject]@{NCU='12'; TCU=7; Variable='41010'; Leido='-9.9'}))
+Check 'cmp aud: si sigue pero cambia el leido, se dice' (@($difA2)[0].Ahora) '-9.9'
+
+# inventario: lo que importa entre dos visitas es el firmware
+$invA = @([pscustomobject]@{NCU='1'; TCU=1; FW='v1.4.3'; Serie='A1'})
+$invB = @([pscustomobject]@{NCU='1'; TCU=1; FW='v1.6.0'; Serie='A1'})
+$difI = @(Cmp-Trabajos 'inventario' $invA $invB)
+Check 'cmp inv: el FW cambia' (@($difI)[0].Que) 'FW'
+Check 'cmp inv: de una a otra' ("$(@($difI)[0].Antes) -> $(@($difI)[0].Ahora)") 'v1.4.3 -> v1.6.0'
+Check 'cmp inv: la serie no es noticia' (@($difI | Where-Object { "$($_.Que)" -eq 'Serie' }).Count) 0
+
+# baterias: el SoC sube y baja solo, solo un salto grande es noticia
+$batA = @([pscustomobject]@{NCU='1'; TCU=1; SoC='85'; SoH='100'; Estado='OK'})
+Check 'cmp bat: 2 puntos de SoC no son noticia' ((@(Cmp-Trabajos 'baterias' $batA @([pscustomobject]@{NCU='1'; TCU=1; SoC='87'; SoH='100'; Estado='OK'}))).Count) 0
+$difB = @(Cmp-Trabajos 'baterias' $batA @([pscustomobject]@{NCU='1'; TCU=1; SoC='60'; SoH='100'; Estado='OK'}))
+Check 'cmp bat: 25 si' (@($difB)[0].Que) 'SoC'
+Check 'cmp bat: y bajar es a peor' (@($difB)[0].Cambio) 'peor'
+$difB2 = @(Cmp-Trabajos 'baterias' $batA @([pscustomobject]@{NCU='1'; TCU=1; SoC='85'; SoH='92'; Estado='OK'}))
+Check 'cmp bat: el SoH si, cualquier cambio' (@($difB2)[0].Que) 'SoH'
+Check 'cmp bat: el umbral no esta a null' ($CMP_TIPOS['baterias'].soc) 10
+
+# un tipo que no se compara no revienta: devuelve vacio
+Check 'cmp: un tipo sin diff da vacio' ((@(Cmp-Trabajos 'lectura' $cmpA $cmpB)).Count) 0
+
+# que dos trabajos se comparan: dos marcados, o uno contra el anterior suyo
+$lstT = @(
+  [pscustomobject]@{Fecha='2026-08-08 10:00'; Tipo='Diagnostico'; Planta='Ayora'; fichero='c'}
+  [pscustomobject]@{Fecha='2026-08-07 10:00'; Tipo='Diagnostico'; Planta='Ayora'; fichero='b'}
+  [pscustomobject]@{Fecha='2026-08-06 10:00'; Tipo='Inventario';  Planta='Ayora'; fichero='a'}
+)
+$parJ = Cmp-Pareja $lstT @(1, 0)
+Check 'cmp par: el mas antiguo va de "antes"' $parJ.antes.fichero 'b'
+Check 'cmp par: y el nuevo de "ahora"'        $parJ.ahora.fichero 'c'
+$parJ2 = Cmp-Pareja $lstT @(0, 1)      # marcados al reves: da igual
+Check 'cmp par: el orden en que se marcan da igual' $parJ2.antes.fichero 'b'
+$parU = Cmp-Pareja $lstT @(0)
+Check 'cmp par: con uno solo, contra el anterior de su tipo' $parU.antes.fichero 'b'
+$eP = ''
+try { $null = Cmp-Pareja $lstT @(0, 2) } catch { $eP = "$_" }
+Check 'cmp par: dos tipos distintos no se comparan' ($eP -like '*tipos distintos*') $true
+$eP2 = ''
+try { $null = Cmp-Pareja $lstT @(2) } catch { $eP2 = "$_" }
+Check 'cmp par: sin anterior del mismo tipo, lo dice' ($eP2 -like '*no hay ningun*') $true
+$eP3 = ''
+try { $null = Cmp-Pareja $lstT @() } catch { $eP3 = "$_" }
+Check 'cmp par: sin marcar nada, lo dice' ($eP3 -like '*marca un trabajo*') $true
+Check 'cmp: el titulo de la lista vuelve a su clave' (Cmp-TipoDe 'Test comm') 'comm'
+
+# el boton y su handler existen de verdad
+Check 'cmp: hay boton COMPARAR' ($src.Contains("`$btnTCmp.Text = 'COMPARAR'")) $true
+Check 'cmp: y esta enganchado' ($src.Contains('$btnTCmp.Add_Click({ Comparar-Trabajos })')) $true
+Check 'cmp: saca tabla aparte con su CSV' ($src.Contains('function Cmp-Ventana')) $true
+Check 'cmp: el CSV sale del mismo sitio que el resto' ($src.Contains('Exportar-Csv $script:UltimaCmp')) $true
 # y la carpeta no se llena: se quedan los N mas nuevos de cada tipo
 $fT = @('diag__A__20260801_100000.json','diag__A__20260802_100000.json','diag__A__20260803_100000.json','diag__A__20260804_100000.json')
 Check 'trab: con tope 2, sobran 2' ((@(Trabajos-Podar $fT 2)).Count) 2

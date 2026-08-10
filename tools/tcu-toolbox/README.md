@@ -70,6 +70,40 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**Comparar dos trabajos guardados (v11.20)** — lo que en la plataforma hace el
+Histórico, ahora sin salir de la herramienta y sin subir nada: en campo la
+pregunta es *"¿qué ha cambiado desde la última visita?"*, y hasta ahora había que
+abrir los dos CSV en Excel.
+
+En **Trabajos**, botón **COMPARAR**. Marcando **dos** trabajos compara esos dos
+(el más antiguo hace de "antes", se marquen en el orden que se marquen);
+marcando **uno**, contra el anterior del **mismo tipo y planta**, que es lo que
+hace sola la web. Dos tipos distintos no se comparan.
+
+El resultado sale **en la consola** (rojo lo que empeora, verde lo que mejora,
+gris lo neutro — se copia y se pega como el parte de averías) **y en una ventana
+aparte** con su tabla filtrable y su **CSV**.
+
+Qué se mira en cada tipo — el resto de columnas es ruido; en un diagnóstico de
+754 TCUs el tilt cambia en todas y no dice nada:
+
+| Tipo | Qué se compara |
+|---|---|
+| Diagnóstico / Test comm | el cambio de **Salud** |
+| Inventario | el cambio de **FW** |
+| Auditoría | **desviación nueva** (a peor), **resuelta** (a mejor) o cambio del valor leído |
+| Baterías | **SoH** y **Estado** (cualquier cambio) y el **SoC** solo si salta ≥ 10 puntos |
+
+Dos reglas heredadas del Histórico, y por las mismas razones: **OFFLINE no es un
+punto más de la escala** —pasar de ALARMA a OFFLINE no es una mejora, es dejar de
+saber— y se comparan **solo las NCUs comunes** a los dos trabajos, diciéndolo
+cuando el alcance es parcial. Comparar una planta completa contra una sola NCU
+tiene sentido para esa NCU; decir que las otras quince "ya no aparecen", no.
+
+En la plataforma esto **no** se añade: la web no recibe registros de baterías
+—solo diagnósticos, comisionado, inventarios y auditorías—, así que un diff de
+baterías allí sería código muerto.
+
 **El GW también en las entradas de una sola NCU (v11.19)** — con una entrada de
 puerto fijo no hay lista de gateways, así que la columna **GW** salía **vacía**
 en todas ellas. Y no solo en la ventana: esos mismos JSON son los que se suben
