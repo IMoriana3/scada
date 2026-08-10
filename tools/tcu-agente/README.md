@@ -18,7 +18,7 @@ Sin planta, en cualquier PC (es lo que corre en cada cambio):
 ```bash
 cd ../tcu-toolbox/tests
 python3 mb_server.py &                      # NCU simulada en 127.0.0.1:15020
-pwsh -NoProfile -File test_agente.ps1       # 33 comprobaciones
+pwsh -NoProfile -File test_agente.ps1       # 56 comprobaciones
 ```
 
 Monta una instalación de campo en miniatura en una carpeta temporal, **arranca
@@ -35,7 +35,7 @@ planta, la versión del agente y la de la toolbox, y las dos tienen que ser de l
 1. Copia las carpetas `tcu-toolbox` y `tcu-agente` al PC de planta (las de la release).
 2. En `tcu-agente`, copia `agente_config.ejemplo.json` → `agente_config.json` y rellena: `planta` ("Ayora"), y un `token` largo aleatorio (es la llave: trátalo como una contraseña).
 3. Primera vez en ese PC (una sola vez, como administrador): `netsh http add urlacl url=http://localhost:8585/ user=Todos`
-4. Doble clic en `TCU_Agente.bat` — debe decir "TCU Agente v2.6 - planta 'Ayora'".
+4. Doble clic en `TCU_Agente.bat` — debe decir `TCU Agente v2.7 - planta 'Ayora'  (toolbox v11.27)`. Las dos versiones tienen que ser las de la **misma release**.
 5. Túnel: instala [cloudflared](https://github.com/cloudflare/cloudflared/releases/latest) (un solo .exe) y en otra ventana:
    `cloudflared tunnel --url http://localhost:8585`
    Te dará una URL `https://xxxx.trycloudflare.com` (cambia en cada arranque; para URL fija hace falta un túnel con nombre y un dominio en Cloudflare — fase 2).
