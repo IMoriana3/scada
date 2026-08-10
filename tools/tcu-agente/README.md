@@ -70,6 +70,7 @@ Lectura (GET, siempre disponibles):
 | `/sincronizar` | lee toda la planta y **sube él mismo el diagnóstico al Histórico** (requiere credenciales Supabase en la config) |
 | `/baterias` | SoC, SoH, tensiones, corrientes y temperaturas de toda la planta, con la auditoría — **del diagnóstico, sin lecturas extra** |
 | `/trabajo/inventario?tcus=&gw=` | **arranca** el inventario como trabajo y devuelve su id. Es la forma buena de inventariar una planta entera |
+| `/trabajo/diagnostico?ncus=&tcus=&gw=` | igual, pero el diagnóstico, troceado **por NCU**. Con 21 NCUs (San José) el barrido de una petición se sale del corte de ~100 s del túnel |
 | `/trabajo` | por dónde va: `hechas`, `total`, `pct`, `faltan_s`, y el `resultado` completo cuando termina |
 | `/trabajo/parar` | corta el que esté en curso; lo hecho hasta ahí se conserva |
 | `/inventario?tcus=&gw=` | FW, nº de serie, MAC, HW y fecha de fabricación. ⚠️ **Lenta**: va TCU a TCU por Zigbee, minutos en una planta entera. Acotarla con `tcus` o `gw` la hace usable |

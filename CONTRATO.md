@@ -68,10 +68,15 @@ La web sube los resultados a Supabase con los `datos.tipo` de la tabla A.
 `12/10, 15/5-12`, cada tramo con su NCU) · `?gw=503`. Se aplican en el punto por donde pasan todas, así que
 ninguna ruta se los salta, y se limpian al terminar la petición para no contaminar al vigilante ni al SAT.
 
-**Trabajos largos (v3.0).** El inventario de una planta entera no cabe en una petición HTTP: son minutos y el
-borde de Cloudflare corta sobre los 100 s. `/trabajo/inventario` arranca y devuelve
-`{id, tipo, estado, hechas, total, pct, segundos, faltan_s}`; `/trabajo` da lo mismo y añade `resultado`
-(formato `inventario_tcu` de la tabla A) cuando `estado == "hecho"`. Estados: `en curso · hecho · parado`.
+**Trabajos largos (v3.0, ampliado en v3.1).** Ni el inventario ni —a escala San José— el diagnóstico caben en
+una petición HTTP: el borde de Cloudflare corta sobre los 100 s.
+`/trabajo/inventario` (trocea por **TCU**) y `/trabajo/diagnostico` (trocea por **NCU**) arrancan y devuelven
+`{id, tipo, estado, hechas, total, unidad, pct, segundos, faltan_s}`; `/trabajo` da lo mismo y añade
+`resultado` cuando `estado == "hecho"` — con `datos.tipo` = `inventario_tcu` o `diagnostico_tcu` de la tabla A,
+y en el caso del diagnóstico **con la flota declarada completa**, igual que el barrido de una vez.
+`unidad` dice de qué son las `hechas`: `"TCU"` o `"NCU"`. Estados: `en curso · hecho · parado`.
+Los `/diagnostico` e `/inventario` de una sola petición **siguen existiendo** y son los buenos para una
+selección pequeña (`?ncus=`); para planta entera, usad los trabajos.
 El bucle principal lo avanza ~700 ms entre peticiones, así que **el agente sigue atendiendo mientras corre** y
 la página se puede cerrar sin perderlo. **Solo un trabajo a la vez** (se pisarían el cliente Modbus): arrancar
 otro devuelve error 500 con el motivo.
@@ -153,6 +158,17 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
 
 - **[Backtracking → Toolbox] Propuesta: telemetría en régimen para el SCADA.** Ignacio ha separado el SCADA de operación (`factiun-cartera/scada.html`, tiempo real) del Seguimiento PEM (snapshots). Hoy el SCADA marca "DIFERIDO" porque bebe de diagnósticos de visita. Para pasarlo a EN VIVO propongo: el agente/collector sube cada N min (5–15) un `datos.tipo:"telemetria_tcu"` LIGERO a `diagnosticos` (o tabla nueva `telemetria`): por TCU solo `{NCU,TCU,Salud,Modo,Tilt,SoC,Alarmas}` + meteo de HSU si la hay. La web ya pinta cualquier `diagnostico_tcu`, así que hasta bastaría con que el `/sincronizar` del agente corriera con un scheduler. Decidid formato/cadencia y apuntadlo aquí; yo adapto la web a lo que subáis.
 - **[Backtracking] Confirmación pendiente del usuario:** signo del tilt en SCADA 3D contra una tarde real (oeste arriba).
+- **[Toolbox → Backtracking] San José: faltan 5 NCUs enteras en la topología exportada (603 TCUs).**
+  `scada/tools/tcu-toolbox/plantas/24019-san-jose.json` declara **1686** TCUs y 16 NCUs; el plano
+  (`factiun-cartera/planos/san-jose.json`) tiene **2289** y 21. Faltan **NCU 7, 12, 16, 17 y 19** — justo las que
+  tienen el campo *Esclavos* con **varios tramos**, que el `rango()` de `ips.html` no entendía y devolvía `null`,
+  así que no exportaba entrada. **Ya está arreglado** en `ips.html` (`rangos()` / `huecos()`), pero el JSON del
+  repo se generó antes: hay que **volver a exportarlo** desde IPs.
+  Dos más, menores: **NCU3** tiene los gateways solapados en el esclavo 46 (`1-46` y `46-120`) y **NCU9** va
+  desfasada en uno respecto al plano.
+  → Desde toolbox v11.28 esto ya no es invisible: al arrancar se revisa la topología y se avisa de los solapes
+  y de cuando el rango no cuadra con los `trackers` declarados. **Para que lo segundo funcione, el export de
+  `ips.html` debería incluir `trackers` por entrada** (la columna ya existe en la tabla). ¿Lo añadís?
 
 ## Hoja de ruta funcional (VIVA — cambiará conforme maduremos; editadla los dos)
 
@@ -173,4 +189,5 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
 | 2026-08-10 | Backtracking | Hoja de ruta funcional (viva). Web adaptada al diagnóstico v2.9/v3.0: SIN LECTURA, flota completa, `eti` en el emisor scada3d. |
 | 2026-08-10 | Backtracking | Separación SCADA (scada.html, tiempo real) / Seguimiento PEM (snapshots). Propuesta de `telemetria_tcu` en Puntos abiertos. |
 | 2026-08-10 | Backtracking | Creación del contrato. `scada3d` postMessage con `eti`; ficha por clic en SCADA 3D; comisionado estados 0–3 según A. |
+| 2026-08-10 | Toolbox | **agente v3.1**: nueva ruta `/trabajo/diagnostico` (trocea por NCU) y campo `unidad` en el estado del trabajo. San José son 21 NCUs y ~2300 TCUs: el diagnóstico de una petición se sale del corte de ~100 s. El `/diagnostico` síncrono sigue igual. |
 | 2026-08-10 | Toolbox | Revisada la sección B contra el código de v3.0 (faltaban las rutas de trabajos, los POST de escritura y los parámetros de selección) y la tabla A (campos reales de `inventario_tcu`, `baterias_tcu` y `comisionado`). **Avisos nuevos que os afectan**: `diagnostico_tcu` puede traer `TCU` no numérico (`NCU`, `HSU<n>`, `Repetidor <n>`) y `Salud = SIN LECTURA`; el diagnóstico trae siempre la flota declarada completa (782 filas en Ayora). Respondido el punto de los 751/754 con las etiquetas TK. |

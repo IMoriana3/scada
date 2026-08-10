@@ -70,6 +70,22 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**La topología se revisa a sí misma (v11.28)** — un fichero de plantas mal
+generado **no da error**: la herramienta simplemente lee menos planta y se queda
+tan tranquila. En San José faltaban **cinco NCUs enteras — 603 TCUs** — porque su
+campo de esclavos llevaba varios tramos y el exportador solo entendía uno. Nadie
+se enteró.
+
+Al arrancar se revisa cada `plantas/*.json` y se avisa en la consola de:
+
+- **gateways solapados** — San José NCU3 tiene `1-46` y `46-120`: el esclavo 46
+  cuelga de los dos y solo se lee por uno;
+- **el rango no cuadra con los trackers declarados** — si la topología dice que
+  una NCU tiene 123 y su rango deja 103, lo canta con los dos números.
+
+Lo segundo necesita que el export de la plataforma incluya `trackers` por
+entrada; sin ese dato no opina, no se lo inventa.
+
 **Ayora son 751 seguidores, no 754 (v11.27)** — la **NCU7** declara tres números
 que no están instalados (**14, 24 y 25**): salían OFFLINE en todos los barridos y
 engordaban el recuento de la planta. Con ellos fuera, Ayora son **751**

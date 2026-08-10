@@ -2430,6 +2430,31 @@ Check 'resumen: ordena por numero de NCU' ($src.Contains('Sort-Object { [int]("0
 Check 'resumen: las HSU y los repetidores van aparte' ($src.Contains('(+{0} HSU/repetidor{1})')) $true
 Check 'resumen: una NCU sin lectura se dice' ($src.Contains('SIN LECTURA - no se ha podido leer ninguna de sus')) $true
 
+# --- la topologia se revisa a si misma al arrancar ---
+# En San Jose faltaban CINCO NCUs enteras -603 TCUs- porque su campo de esclavos
+# llevaba varios tramos y el exportador solo entendia uno. No dio ningun error:
+# la herramienta simplemente leia menos planta.
+$avSolapa = @(Topologia-Avisos @(
+  [pscustomobject]@{nombre='San Jose NCU3 GW1'; tcu_ini=1;  tcu_fin=46}
+  [pscustomobject]@{nombre='San Jose NCU3 GW2'; tcu_ini=46; tcu_fin=120}))
+Check 'topo: canta el solape entre gateways' ($avSolapa.Count) 1
+Check 'topo: y dice en que esclavo' (@($avSolapa)[0] -like '*esclavo 46*') $true
+$avOk = @(Topologia-Avisos @(
+  [pscustomobject]@{nombre='Ayora NCU1'; tcu_ini=1; tcu_fin=63; trackers=63}))
+Check 'topo: si cuadra, no molesta' ($avOk.Count) 0
+$avFalta = @(Topologia-Avisos @(
+  [pscustomobject]@{nombre='San Jose NCU19'; tcu_ini=10; tcu_fin=112; trackers=123}))
+Check 'topo: canta si el rango no da los trackers' ($avFalta.Count) 1
+Check 'topo: con los dos numeros' ((@($avFalta)[0] -like '*declara 123*') -and (@($avFalta)[0] -like '*deja 103*')) $true
+# los huecos cuentan: 1-25 con tres huecos son 22, no 25
+$avHue = @(Topologia-Avisos @(
+  [pscustomobject]@{nombre='Ayora NCU7'; tcu_ini=1; tcu_fin=25; trackers=22; huecos=@(14,24,25)}))
+Check 'topo: los huecos cuentan para el total' ($avHue.Count) 0
+# sin 'trackers' no se inventa nada: solo avisa de lo que puede saber
+$avSin = @(Topologia-Avisos @([pscustomobject]@{nombre='X NCU1'; tcu_ini=1; tcu_fin=10}))
+Check 'topo: sin trackers declarados, no opina' ($avSin.Count) 0
+Check 'topo: se revisa al arrancar' ($src.Contains('AVISO topologia: $a')) $true
+
 # --- TCUs que no existen: el rango 1..N no sabe de huecos ---
 # sin esto, un numero que no esta instalado se lee en cada barrido, no contesta
 # nunca y sale OFFLINE para siempre, ensuciando el recuento de la planta

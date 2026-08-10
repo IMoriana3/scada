@@ -155,6 +155,26 @@ try {
         Check 'trabajo: mismas columnas que el inventario de una vez' ($null -ne @($fin.resultado.tcus)[0].PSObject.Properties['Serie']) 'True'
     }
 
+    # el diagnostico tambien por trozos: con 21 NCUs (San Jose) en serie se pasa
+    # del corte de ~100 s del tunel. Se trocea por NCU, no por TCU.
+    $jd = Pedir '/trabajo/diagnostico'
+    Check 'trabajo diag: cuenta por NCUs' $jd.total 2
+    Check 'trabajo diag: y lo dice' $jd.unidad 'NCU'
+    $finD = $null
+    for ($k = 0; $k -lt 60 -and $null -eq $finD; $k++) {
+        Start-Sleep -Milliseconds 500
+        $e = Pedir '/trabajo'
+        if ("$($e.estado)" -eq 'hecho') { $finD = $e }
+    }
+    Check 'trabajo diag: termina' ($null -ne $finD) 'True'
+    if ($finD) {
+        Check 'trabajo diag: es un diagnostico' $finD.resultado.tipo 'diagnostico_tcu'
+        # y sale la MISMA flota que el de una vez: mismo numero de filas
+        $dUnaVez = Pedir '/diagnostico'
+        Check 'trabajo diag: mismas filas que el de una vez' (@($finD.resultado.tcus).Count) (@($dUnaVez.tcus).Count)
+        Check 'trabajo diag: con los repetidores' (@($finD.resultado.tcus | Where-Object { "$($_.TCU)" -like 'Repetidor*' }).Count) 1
+    }
+
     $b = Pedir '/baterias'
     Check 'baterias: tipo correcto' $b.tipo 'baterias_tcu'
     # 4, no 5: la NCU1 declara el 2 como hueco y ese seguidor no existe
