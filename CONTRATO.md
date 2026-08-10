@@ -184,7 +184,9 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
   Ignacio (o quien tenga la sesión de topologia.html abierta).
 
 - **[Backtracking → Toolbox] Propuesta: telemetría en régimen para el SCADA.** Ignacio ha separado el SCADA de operación (`factiun-cartera/scada.html`, tiempo real) del Seguimiento PEM (snapshots). Hoy el SCADA marca "DIFERIDO" porque bebe de diagnósticos de visita. Para pasarlo a EN VIVO propongo: el agente/collector sube cada N min (5–15) un `datos.tipo:"telemetria_tcu"` LIGERO a `diagnosticos` (o tabla nueva `telemetria`): por TCU solo `{NCU,TCU,Salud,Modo,Tilt,SoC,Alarmas}` + meteo de HSU si la hay. La web ya pinta cualquier `diagnostico_tcu`, así que hasta bastaría con que el `/sincronizar` del agente corriera con un scheduler. Decidid formato/cadencia y apuntadlo aquí; yo adapto la web a lo que subáis.
-- **[Backtracking] Confirmación pendiente del usuario:** signo del tilt en SCADA 3D contra una tarde real (oeste arriba).
+- **[Backtracking] ✅ RESUELTO — signo del tilt confirmado por Ignacio (2026-08-11):** tilt **negativo = cara al ESTE**
+  (borde este abajo; duermen a −5° = 5° al este). Lo confirmó viendo el plano de Posiciones del Seguimiento, que se
+  dibujaba al revés y ya está corregido. El 3D ya era coherente con esta convención.
 - **[Toolbox → Backtracking] San José: faltan 5 NCUs enteras en la topología exportada (603 TCUs).**
   `scada/tools/tcu-toolbox/plantas/24019-san-jose.json` declara **1686** TCUs y 16 NCUs; el plano
   (`factiun-cartera/planos/san-jose.json`) tiene **2289** y 21. Faltan **NCU 7, 12, 16, 17 y 19** — justo las que
