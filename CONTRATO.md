@@ -202,7 +202,7 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
   | 5 | `1-56` | `57-124` | – | – | – |
   | 6 | `1-68` | `69-119` | – | – | 230 |
   | 7 | `1-19 22-31 38-47 58-67 82-91` | `20-21 32-37 48-57 68-81 92-119` | – | `200` | – |
-  | 8 | `1-69` | `70-119` | ❓ | ❓ | 230 |
+  | 8 | `1-69` | `70-119` | `200` | – | 230 |
   | 9 | `1-48` | `49-120` | – | – | – |
   | 10 | `1-62` | `63-119` | – | – | – |
   | 11 | `1-38` | `39-118` | – | – | 230 |
@@ -225,8 +225,11 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
   `REPETIDOR` (1, 2, 3, 5, 6, 7, 8, 9, 10, 11) con su gateway y su esclavo. La hoja de layout de
   comunicaciones (columna `RepetIdores`) trae **11**, y su fila de totales dice `8 RSU / 11 repetidores`:
   el que falta es el **repetidor 4, que es de la NCU8**. En la pestaña `NCU 8` del Excel de coordenadas la
-  tabla lateral solo tiene la NCU y la HSU 3 — la fila del repetidor no está, así que **no sabemos su gateway
-  ni su esclavo**. Por eso NCU8 va con `❓` en la tabla: hay que leerlo de la NCU en campo (o del instalador).
+  tabla lateral solo tiene la NCU y la HSU 3 — la fila del repetidor no está, así que su gateway y su esclavo
+  no salen de ningún Excel. **Regla de numeración de esclavos (Ignacio, 10/08): el primer repetidor de una NCU
+  es el esclavo 200; si hay más, 201 y 202.** La cumplen los diez del Excel de coordenadas, así que el 4 es
+  **esclavo 200**. El gateway se pone **GW1 provisionalmente** (decisión de Ignacio) — pendiente de confirmar
+  en campo: un INVENTARIO de la NCU8 sobre el esclavo 200 en los dos gateways lo resuelve en dos lecturas.
   Reparto según el layout:
 
   | Rep | NCU | GW | Esclavo |
@@ -234,7 +237,7 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
   | 1 | 1 | 2 | 200 |
   | 2 | 4 | 1 | 200 |
   | 3 | 7 | 2 | 200 |
-  | 4 | 8 | ❓ | ❓ |
+  | 4 | 8 | 1 ⚠️ | 200 |
   | 5 | 12 | 1 | 200 |
   | 6 | 12 | 1 | 201 |
   | 7 | 12 | 2 | 202 |
@@ -242,6 +245,9 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
   | 9 | 15 | 1 | 200 |
   | 10 | 16 | 2 | 200 |
   | 11 | 16 | 1 | 201 |
+
+  ⚠️ El GW del repetidor 4 es provisional (no está en ningún Excel). Los otros diez y todos los esclavos sí
+  son dato de fábrica.
 
   El Excel **no se sube a ningún repo** (`scada` es público y es documentación del fabricante): esto es solo la
   topología extraída.
@@ -272,7 +278,7 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
 | 2026-08-10 | Backtracking | Hoja de ruta funcional (viva). Web adaptada al diagnóstico v2.9/v3.0: SIN LECTURA, flota completa, `eti` en el emisor scada3d. |
 | 2026-08-10 | Backtracking | Separación SCADA (scada.html, tiempo real) / Seguimiento PEM (snapshots). Propuesta de `telemetria_tcu` en Puntos abiertos. |
 | 2026-08-10 | Backtracking | Creación del contrato. `scada3d` postMessage con `eti`; ficha por clic en SCADA 3D; comisionado estados 0–3 según A. |
-| 2026-08-10 | Toolbox | **Corrección: San José tiene 11 repetidores, no 10.** El Excel de coordenadas se salta la fila del **repetidor 4 (NCU8)**; la hoja de layout de comunicaciones sí lo cuenta (totales `8 RSU / 11 repetidores`). Publicado arriba el reparto repetidor→NCU/GW/esclavo; del 4 falta gateway y esclavo. |
+| 2026-08-10 | Toolbox | **Corrección: San José tiene 11 repetidores, no 10.** El Excel de coordenadas se salta la fila del **repetidor 4 (NCU8)**; la hoja de layout de comunicaciones sí lo cuenta (totales `8 RSU / 11 repetidores`). Publicado arriba el reparto repetidor→NCU/GW/esclavo. Regla de esclavos confirmada por Ignacio: **200 el primero de cada NCU, 201 y 202 si hay más**; el GW del 4 va a **GW1 provisional** hasta confirmarlo en campo. |
 | 2026-08-10 | Toolbox | **v11.29**: el aviso de gateways solapados compara los esclavos de verdad, no los extremos del rango — en San José varias NCUs alternan los dos gateways por bloques y salía un falso positivo. Y publicada aquí la topología completa de San José sacada del Excel de coordenadas. |
 | 2026-08-10 | Toolbox | **agente v3.1**: nueva ruta `/trabajo/diagnostico` (trocea por NCU) y campo `unidad` en el estado del trabajo. San José son 21 NCUs y ~2300 TCUs: el diagnóstico de una petición se sale del corte de ~100 s. El `/diagnostico` síncrono sigue igual. |
 | 2026-08-10 | Toolbox | Revisada la sección B contra el código de v3.0 (faltaban las rutas de trabajos, los POST de escritura y los parámetros de selección) y la tabla A (campos reales de `inventario_tcu`, `baterias_tcu` y `comisionado`). **Avisos nuevos que os afectan**: `diagnostico_tcu` puede traer `TCU` no numérico (`NCU`, `HSU<n>`, `Repetidor <n>`) y `Salud = SIN LECTURA`; el diagnóstico trae siempre la flota declarada completa (782 filas en Ayora). Respondido el punto de los 751/754 con las etiquetas TK. |
