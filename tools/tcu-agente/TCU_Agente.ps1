@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '2.9'
+$VERSION_AGENTE = '3.0'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -87,6 +87,124 @@ function Baterias-Planta {
 
 # Inventario: FW, serie y MAC. Esta va por Zigbee TCU a TCU, asi que es LENTA
 # (una planta entera son minutos, no segundos). Se avisa en la respuesta.
+# El inventario de UNA TCU, con la conexion ya abierta. Aparte para que la
+# lectura entera y el trabajo por trozos usen exactamente la misma.
+# Ojo: Ident-Leer devuelve una lista Campo/Valor, no un diccionario; indexarla
+# por nombre daba null en todas las columnas.
+# ---------------------------------------------------------------------------
+#  Trabajos largos: por trozos, no en una peticion
+# ---------------------------------------------------------------------------
+# El inventario va TCU a TCU por Zigbee: en una planta entera son minutos, y
+# ninguna peticion HTTP sobrevive a eso -el borde de Cloudflare corta sobre los
+# 100 s-. Ademas el agente se quedaba bloqueado todo ese rato sin atender nada,
+# y si el navegador colgaba, el resultado se perdia entero.
+#
+# Ahora se arranca el trabajo, se devuelve un id, y el bucle principal lo avanza
+# a ratos entre peticiones: el agente sigue sirviendo mientras corre. Mismo
+# patron que el SAT, y sin hilos, que en PowerShell 5.1 dan mas guerra que
+# beneficio. Cada vuelta se le dedican unos cientos de ms y se cierra la
+# conexion, porque cualquier otra peticion que entre usa el mismo cliente Modbus.
+$script:Trab = $null
+$TRABAJO_MS = 700          # cuanto se le dedica en cada vuelta del bucle
+
+function Trabajo-Iniciar([string]$tipo, [string]$tcusTxt, [string]$gw) {
+    if ($script:Trab -and $script:Trab.estado -eq 'en curso') {
+        throw "ya hay un trabajo en curso ($($script:Trab.tipo), $($script:Trab.hechas) de $($script:Trab.total)): espera o para con /trabajo/parar"
+    }
+    $ped = @()
+    foreach ($n in (Ncus-DePlanta)) {
+        $pedidas = @(Tcus-Pedidas $n "$tcusTxt" "$gw")
+        if ($pedidas.Count -eq 0) { continue }
+        $cx = @{ip = $n.ip; puerto = $null; gws = @(Gws-Filtrados $n.gws "$gw"); multi = $null; etiqueta = 'auto'; to = $timeoutMs; reint = 2}
+        foreach ($seg in @(Plan-Segmentos $pedidas $cx)) {
+            foreach ($t in $seg.tcus) {
+                $ped += ,@{ncu = "$($n.ncu)"; ip = $n.ip; puerto = [int]$seg.puerto; tcu = [int]$t; gws = $n.gws}
+            }
+        }
+    }
+    if ($ped.Count -eq 0) { throw 'la seleccion no deja ninguna TCU' }
+    $script:Trab = @{
+        id = [guid]::NewGuid().ToString('N').Substring(0, 8)
+        tipo = $tipo; estado = 'en curso'; pend = $ped; i = 0
+        total = $ped.Count; hechas = 0; filas = @()
+        inicio = (Get-Date); fin = $null; error = ''
+    }
+    return (Trabajo-Estado)
+}
+
+function Trabajo-Estado {
+    if (-not $script:Trab) { return @{hay = $false} }
+    $t = $script:Trab
+    $seg = [int]((Get-Date) - $t.inicio).TotalSeconds
+    $o = [ordered]@{
+        hay = $true; id = $t.id; tipo = $t.tipo; estado = $t.estado
+        hechas = $t.hechas; total = $t.total
+        pct = $(if ($t.total -gt 0) { [math]::Round(100.0 * $t.hechas / $t.total, 1) } else { 0 })
+        segundos = $seg
+        # cuanto queda, a la velocidad que lleva: en campo importa mas que el %
+        faltan_s = $(if ($t.hechas -gt 0 -and $t.estado -eq 'en curso') { [int](($t.total - $t.hechas) * ($seg / $t.hechas)) } else { $null })
+        error = $t.error
+    }
+    if ($t.estado -eq 'hecho') {
+        $o.resultado = [ordered]@{tipo = 'inventario_tcu'; mapa = $VERSION_MAPA; toolbox = $VERSION_TOOLBOX
+                                  planta = $cfg.planta; fecha = $t.fin.ToString('yyyy-MM-dd HH:mm:ss'); tcus = @($t.filas)}
+    }
+    return $o
+}
+
+function Trabajo-Parar {
+    if (-not $script:Trab -or $script:Trab.estado -ne 'en curso') { throw 'no hay ningun trabajo en curso' }
+    $script:Trab.estado = 'parado'
+    $script:Trab.fin = Get-Date
+    return (Trabajo-Estado)
+}
+
+# Un trozo de trabajo. Se agrupa por conexion mientras dure el trozo: dentro de
+# una vuelta no entra nadie mas, pero entre vueltas si.
+function Trabajo-Tick {
+    if (-not $script:Trab -or $script:Trab.estado -ne 'en curso') { return }
+    $t = $script:Trab
+    $t0 = Get-Date
+    $ip = ''; $pu = 0; $abierta = $false
+    try {
+        while ($t.i -lt $t.total -and ((Get-Date) - $t0).TotalMilliseconds -lt $TRABAJO_MS) {
+            $p = $t.pend[$t.i]
+            if (-not $abierta -or $ip -ne $p.ip -or $pu -ne $p.puerto) {
+                if ($abierta) { try { Modbus-Cerrar } catch {} }
+                Modbus-Conectar $p.ip $p.puerto $timeoutMs
+                $ip = $p.ip; $pu = $p.puerto; $abierta = $true
+            }
+            $t.filas += ,(Inv-UnaTcu $p.ncu $p.gws $p.tcu)
+            $t.i++; $t.hechas++
+        }
+    } catch {
+        # una NCU que no contesta no puede tumbar el trabajo entero: esa TCU
+        # queda como 'sin respuesta' y se sigue por la siguiente
+        $p = $t.pend[$t.i]
+        $t.filas += ,[pscustomobject]@{NCU = $p.ncu; TCU = $p.tcu; GW = ''; Serie = ''; MAC = ''; FW = ''
+                                       FW_fabrica = ''; HW = ''; Fecha_fab = ''; Nota = "sin respuesta ($_)"}
+        $t.i++; $t.hechas++
+    }
+    if ($abierta) { try { Modbus-Cerrar } catch {} }
+    if ($t.i -ge $t.total) { $t.estado = 'hecho'; $t.fin = Get-Date }
+}
+
+function Inv-UnaTcu([string]$et, $gws, [int]$tcu) {
+    $h = $null
+    try {
+        $campos = Ident-Leer ([byte]$tcu)
+        $h = @{}
+        foreach ($c in @($campos)) { $h[$c.Campo] = $c.Valor }
+    } catch { $h = $null }
+    if ($h) {
+        return [pscustomobject]@{NCU = $et; TCU = $tcu; GW = (Gw-DeTcu $gws $tcu); Serie = $h['Numero de serie']; MAC = $h['MAC Xbee']
+            FW = $h['FW principal']; FW_fabrica = $h['FW de fabrica']; HW = $h['HW PCBA']
+            Fecha_fab = $h['Fecha de fabricacion']; Nota = 'OK'}
+    }
+    return [pscustomobject]@{NCU = $et; TCU = $tcu; GW = (Gw-DeTcu $gws $tcu); Serie = ''; MAC = ''; FW = ''
+        FW_fabrica = ''; HW = ''; Fecha_fab = ''; Nota = 'sin respuesta'}
+}
+
 function Inventario-Planta([string]$tcusTxt = '', [string]$gw = '') {
     $filas = @()
     foreach ($n in (Ncus-DePlanta)) {
@@ -96,24 +214,7 @@ function Inventario-Planta([string]$tcusTxt = '', [string]$gw = '') {
         $cx = @{ip = $n.ip; puerto = $null; gws = @(Gws-Filtrados $n.gws "$gw"); multi = $null; etiqueta = 'auto'; to = $timeoutMs; reint = 2}
         foreach ($seg in @(Plan-Segmentos $pedidas $cx)) {
             try { Modbus-Conectar $n.ip $seg.puerto $timeoutMs } catch { continue }
-            foreach ($tcu in $seg.tcus) {
-                # Ident-Leer devuelve una lista Campo/Valor, no un diccionario:
-                # indexarla por nombre daba null en todas las columnas
-                $h = $null
-                try {
-                    $campos = Ident-Leer ([byte]$tcu)
-                    $h = @{}
-                    foreach ($c in @($campos)) { $h[$c.Campo] = $c.Valor }
-                } catch { $h = $null }
-                if ($h) {
-                    $filas += [pscustomobject]@{NCU = $et; TCU = [int]$tcu; GW = (Gw-DeTcu $n.gws ([int]$tcu)); Serie = $h['Numero de serie']; MAC = $h['MAC Xbee']
-                        FW = $h['FW principal']; FW_fabrica = $h['FW de fabrica']; HW = $h['HW PCBA']
-                        Fecha_fab = $h['Fecha de fabricacion']; Nota = 'OK'}
-                } else {
-                    $filas += [pscustomobject]@{NCU = $et; TCU = [int]$tcu; GW = (Gw-DeTcu $n.gws ([int]$tcu)); Serie = ''; MAC = ''; FW = ''
-                        FW_fabrica = ''; HW = ''; Fecha_fab = ''; Nota = 'sin respuesta'}
-                }
-            }
+            foreach ($tcu in $seg.tcus) { $filas += ,(Inv-UnaTcu $et $n.gws ([int]$tcu)) }
             Modbus-Cerrar
         }
     }
@@ -1008,6 +1109,7 @@ while ($true) {
         $proxVig = (Get-Date).AddMinutes($intervaloVig)
     }
     try { Sat-Tick } catch { Write-Host "SAT: $_" }
+    try { Trabajo-Tick } catch { Write-Host "trabajo: $_" }
     if (-not $tarea.Wait(1000)) { continue }
     $ctx = $tarea.Result
     $tarea = $listener.GetContextAsync()
@@ -1042,6 +1144,10 @@ while ($true) {
                 '/sincronizar'  { $out = Sincronizar }
                 '/baterias'     { $out = Baterias-Planta }
                 '/inventario'   { $out = Inventario-Planta "$($req.QueryString['tcus'])" "$($req.QueryString['gw'])" }
+                # el inventario largo, por trozos: se arranca y se pregunta
+                '/trabajo/inventario' { $out = Trabajo-Iniciar 'inventario' "$($req.QueryString['tcus'])" "$($req.QueryString['gw'])" }
+                '/trabajo'      { $out = Trabajo-Estado }
+                '/trabajo/parar' { $out = Trabajo-Parar }
                 '/cierre'       { $out = Cierre-Planta }
                 '/trabajos'     { $out = @{planta = $cfg.planta; trabajos = @(Trabajos-Lista)} }
                 '/plan-firmware' { $out = Plan-Fw "$($req.QueryString['objetivo'])" $null "$($req.QueryString['min_tcu'])" }

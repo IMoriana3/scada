@@ -2614,6 +2614,17 @@ Check 'agente SAT: se llama al arrancar' ($srcAg.Contains("Sat-Restaurar`r`n`$pr
 # la descarga no puede salirse de su carpeta
 Check 'agente SAT: la descarga no admite rutas' ($srcAg.Contains('[System.IO.Path]::GetFileName($nom)')) $true
 # arrancar un ensayo NO es escribir en los seguidores: va por su lista aparte
+# trabajos largos por trozos: el inventario de planta entera no cabe en una
+# peticion HTTP, asi que se arranca y se pregunta
+Check 'agente trabajo: se arranca y se pregunta' ($srcAg.Contains("'/trabajo/inventario'") -and $srcAg.Contains("'/trabajo'")) $true
+Check 'agente trabajo: avanza entre peticiones' ($srcAg.Contains('try { Trabajo-Tick } catch')) $true
+# dos a la vez se pisarian el cliente Modbus: se avisa en vez de arrancar
+Check 'agente trabajo: no deja arrancar dos' ($srcAg.Contains("ya hay un trabajo en curso")) $true
+# el trozo cierra su conexion: entre vueltas entra cualquier otra peticion y
+# usa el MISMO cliente Modbus
+Check 'agente trabajo: cada trozo cierra la conexion' ($srcAg.Contains('if ($abierta) { try { Modbus-Cerrar } catch {} }')) $true
+# una NCU muda no puede tumbar el trabajo entero
+Check 'agente trabajo: un fallo no lo tumba' ($srcAg.Contains("Nota = `"sin respuesta (`$_)`"")) $true
 Check 'agente SAT: no va con las de escritura' ($srcAg.Contains("`$OPS_SAT = @('sat/iniciar', 'sat/parar')")) $true
 # lo que la web lee: el agente reutiliza estas funciones, no las copia
 foreach ($f in @('Bat-Tabla', 'Bat-Auditar', 'Cierre-Estado', 'Cierre-Cargar', 'Ident-Leer',
