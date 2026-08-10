@@ -140,6 +140,40 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
   pantalla?). La web ya enseña la etiqueta literal en el chip («GW · ALARMA» en vez de «1 otras mal») desde hoy;
   si emitís más etiquetas fuera de la tabla A (SWITCH, GW…), apuntadlas ahí y las tratamos con nombre propio.
 
+  **[Toolbox responde, 2026-08-10] No emitimos ninguna etiqueta fuera de la tabla A. `GW` no sale de aquí.**
+  El vocabulario de `TCU` es **cerrado por construcción** y sale de tres sitios del código, los mismos en la
+  toolbox offline y en el agente:
+
+  | `TCU` | de dónde sale |
+  |---|---|
+  | `"7"` | el número de esclavo, siempre `[int]` |
+  | `"NCU"` | literal, fila de salud de la NCU |
+  | `"HSU1"`, `"HSU2"`… | literal `"HSU{n}"`, `n` = hueco de la caché (1-based) |
+  | *lo que diga la topología* | **repetidor: se copia `repetidores[].nombre` TAL CUAL**, sin validar |
+
+  Ese cuarto caso es el único hueco: **si la topología nombra un repetidor `"GW"`, sale `"GW"`**. Solo cuando
+  el nombre viene vacío ponemos nosotros `"Repetidor <n>"`. Y `entradasToolbox()` de `ips.html` siempre escribe
+  `"Repetidor "+n`, así que por esa vía no puede pasar: **mirad de qué topología salió ese diagnóstico**. Si
+  fue de un JSON hecho a mano, de una carga antigua, o de la topología que lee directamente la toolbox web,
+  ahí está el nombre raro. Pasadnos el string literal y os digo en qué campo está.
+
+  **Lo de las «0 TCUs» tiene otra explicación, y encaja con lo de arriba.** En la toolbox los repetidores se
+  leen en una **pasada aparte al final, de planta entera y por Zigbee directo** (esclavo 200, puerto del
+  gateway), no dentro del barrido por NCU, que va por el bloque compacto (**puerto 502**). Son dos caminos
+  distintos: si la NCU4 no respondía en el 502 —switch, protección saltada— sus TCUs no entraban, pero su
+  repetidor sí se leía por el 503. Resultado exacto: **NCU4 con 0 TCUs y una sola fila, la del repetidor.**
+  Eso es justo lo que describís, y es el comportamiento de **antes de toolbox v11.24 / agente v2.9**: hoy
+  `Diag-Completar` rellenaría las 30 TCUs de la NCU4 con `SIN LECTURA`. Así que sí: **ese diagnóstico es
+  antiguo**. Desde v11.31 los JSON llevan `alcance` y `ncus`, y los que no los traen son anteriores — os vale
+  como marca de edad sin tener que mirar la fecha.
+
+  **Y una que hemos encontrado nosotros mirando esto (agente v3.2, ya corregida).** Cuando la topología NO
+  traía nombre, la toolbox numeraba los repetidores **por planta** (`Repetidor 1..5` en Ayora) y el agente
+  **por NCU** — o sea, cuatro equipos distintos llamados `"Repetidor 1"` en el mismo diagnóstico. Como ese
+  texto es la identidad del equipo en `diagnostico_tcu` y la clave `equipo` de `bitacora`, se pisaban entre
+  ellos. Ahora el agente numera por planta igual que la toolbox. Si en Supabase hay diagnósticos viejos del
+  agente con `Repetidor 1` repetido en varias NCUs, la pareja buena es **`(NCU, TCU)`**, nunca `TCU` solo.
+
 - **[Toolbox → Backtracking] Los 3 de Ayora: son de la NCU7 y aquí están sus etiquetas.**
 
   | NCU | TCU | etiqueta | X (EPSG:25830) | Y |
@@ -270,8 +304,10 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
   de la NCU11 y falta la segunda de la NCU15, y eso ha corrido la numeración de todas las de detrás.**
   Ayora tiene **10 HSUs en 9 NCUs** (la NCU15 lleva dos, esclavos 230 y 231). En la tabla se ven ocho números
   y un hueco en el 8. Valores correctos según el Excel de coordenadas de Ayora (hoja resumen `24025 AYORA`
-  cruzada con la pestaña de cada NCU, que es la que trae el número de NCU real — la hoja resumen usa la
-  numeración de Acciona, `4.2`, `6.1`, `7.2`…, y por eso se presta a confusión):
+  cruzada con la pestaña de cada NCU, que es la que trae el número de NCU real. Ojo: la hoja resumen usa la
+  **segunda numeración del proyecto** —la de los centros, `4.2`, `6.1`, `7.2`, `9.1`, `10`, `11`…, la que se ve
+  en los nombres de las pestañas `NCU 15-10`—, no el número de NCU, y por eso se presta a confusión.
+  (Ayora es 24025 Grupo Zaragoza; **Acciona es San José**, no confundir las dos plantas):
 
   | NCU | RSU GW1 | HSU esclavo | En la tabla hoy | Nota |
   |---|---|---|---|---|
@@ -314,6 +350,7 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
 | 2026-08-10 | Backtracking | Hoja de ruta funcional (viva). Web adaptada al diagnóstico v2.9/v3.0: SIN LECTURA, flota completa, `eti` en el emisor scada3d. |
 | 2026-08-10 | Backtracking | Separación SCADA (scada.html, tiempo real) / Seguimiento PEM (snapshots). Propuesta de `telemetria_tcu` en Puntos abiertos. |
 | 2026-08-10 | Backtracking | Creación del contrato. `scada3d` postMessage con `eti`; ficha por clic en SCADA 3D; comisionado estados 0–3 según A. |
+| 2026-08-10 | Toolbox | **agente v3.2**: los repetidores sin nombre en la topología se numeran **por planta**, como ya hacía la toolbox. El agente los numeraba por NCU y salían cuatro `"Repetidor 1"` distintos en el mismo diagnóstico de Ayora — y ese texto es la identidad del equipo en `diagnostico_tcu` y la clave `equipo` de `bitacora`. En los diagnósticos viejos del agente, la pareja buena es `(NCU, TCU)`, nunca `TCU` solo. |
 | 2026-08-10 | Toolbox | **Las RSUs de Ayora están mal en `topologia`**: falta la de la **NCU11** y la **segunda de la NCU15**, y eso corrió la numeración de las demás. Publicada arriba la tabla correcta sacada del Excel de coordenadas (10 HSUs en 9 NCUs). Los `plantas/*.json` de la toolbox ya están bien; esto es solo Supabase. |
 | 2026-08-10 | Toolbox | **⚠️ Os afecta: los JSON exportados llevan `alcance` y `ncus`, y `planta`/`ip` ya no mienten (v11.31).** Hasta ahora los exports leían planta/IP **de los cuadros al pulsar el botón**, no de lo que se había barrido: un diagnóstico de planta completa seguido de un cambio de modo en la NCU3 llegaba a la plataforma como *«Ayora · NCU3 · 724 TCUs»*. Ya no. Nuevos campos en `diagnostico_tcu`, `test_comm`, `baterias_tcu`, `auditoria_tcu`, `inventario_tcu` y `seguimiento_pem`: **`alcance`** (`"Planta completa (16 NCUs)"` \| `"NCU3"` \| `"ip:puerto"`) y **`ncus`** (array con las NCUs realmente recorridas). Si los usáis para la columna ALCANCE del histórico en vez de trocear `planta`, no hará falta adivinar. Los ficheros antiguos no los traen: dejad el fallback actual. |
 | 2026-08-10 | Toolbox | **v11.30**: `GUARDAR EN NVM`, `Sincronizar reloj`, `Backup NCU` y las cuatro acciones de PEM (modo, clear, stow, comisionado) aceptan ya la entrada **(Planta completa)**. Antes solo `ESCRIBIR` la aceptaba, así que se podía escribir en varias NCUs y **no** poder fijarlo en NVM — se perdía al reiniciar la TCU. |
