@@ -70,6 +70,17 @@ fila de NCU, sale solo como `hsu_esclavo` en el JSON y la toolbox lo
 preselecciona. Mientras no exista, avisa por consola y las entradas salen sin
 él: la toolbox usa el 185 por defecto y **BUSCAR ESCLAVO**.
 
+**Salir de OFFLINE es mejorar, y el diff dice de qué es el aviso (v11.25)** —
+recuperar un equipo **siempre** mejora, aunque vuelva con un aviso: antes no se
+sabía nada de él y ahora **comunica**. Un equipo que habla con una pega es mejor
+noticia que un equipo mudo. Hasta ahora `OFFLINE → AVISO` y `OFFLINE → ALARMA`
+salían como *neutro*.
+
+Y `OK → AVISO` a secas obliga a salir a mirar para saber de qué: la comparación
+pega ahora **la nota del equipo** al estado nuevo — `AVISO (dif 6,2 deg)` — en la
+tabla y en el CSV. Mismo cambio en el Seguimiento PEM de la plataforma, para que
+las dos digan lo mismo.
+
 **El informe lleva TODOS los equipos, comuniquen o no (v11.24)** — el informe se
 armaba **solo con lo leído**, así que una NCU a la que no se llega desaparecía
 con todas sus TCUs: en un Ayora con la NCU4 y la NCU5 caídas, el informe hablaba

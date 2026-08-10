@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.24'
+$VERSION_TOOLBOX = '11.25'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -5542,10 +5542,22 @@ function Cmp-Salud([string]$a, [string]$b) {
     $a = "$a".ToUpper(); $b = "$b".ToUpper()
     if ($a -eq $b) { return '' }
     if ($b -eq 'OFFLINE') { return 'peor' }                                  # perderlo nunca mejora
-    if ($a -eq 'OFFLINE') { return $(if ($b -eq 'OK') { 'mejor' } else { 'neutro' }) }
+    # y recuperarlo SIEMPRE mejora, aunque vuelva con un aviso: antes no se
+    # sabia nada de el y ahora comunica. Un equipo que habla con una pega es
+    # mejor noticia que un equipo mudo.
+    if ($a -eq 'OFFLINE') { return 'mejor' }
     if (-not $peso.ContainsKey($a) -or -not $peso.ContainsKey($b)) { return 'neutro' }
     return $(if ($peso[$b] -gt $peso[$a]) { 'peor' } else { 'mejor' })
 }
+# "AVISO" a secas no dice nada: hay que salir a mirar para saber de que. La nota
+# va pegada al estado, tambien en el CSV. Pura.
+function Cmp-ConNota([string]$estado, [string]$nota) {
+    $n = "$nota".Trim()
+    if ($estado -eq 'OK' -or $n -eq '') { return $estado }
+    if ($n.Length -gt 70) { $n = $n.Substring(0, 67) + '...' }
+    return "$estado ($n)"
+}
+
 # El diff de dos listas de filas del MISMO tipo. Devuelve una fila por cambio.
 # Pura: ni lee ficheros ni toca la ventana, para poder probarla de verdad.
 function Cmp-Trabajos([string]$tipo, $antes, $ahora) {
@@ -5572,7 +5584,10 @@ function Cmp-Trabajos([string]$tipo, $antes, $ahora) {
             if ($va -eq $vb) { continue }
             $cam = $(if ($def.salud) { Cmp-Salud $va $vb } else { 'neutro' })
             $et = $(if ($def.desviaciones) { "$($f.Variable)" } else { $c })
-            $r += ,[pscustomobject]@{Equipo=(Cmp-Equipo $f); Que=$et; Antes=$va; Ahora=$vb; Cambio=$cam}
+            # con la salud, de que es el aviso: si no, hay que salir a mirar
+            $mA = $va; $mB = $vb
+            if ($def.salud) { $mA = Cmp-ConNota $va "$($a.Alarmas)"; $mB = Cmp-ConNota $vb "$($f.Alarmas)" }
+            $r += ,[pscustomobject]@{Equipo=(Cmp-Equipo $f); Que=$et; Antes=$mA; Ahora=$mB; Cambio=$cam}
         }
         # el SoC solo cuando pega un salto: si no, salen las 754 TCUs
         if ($def.soc) {
