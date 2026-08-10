@@ -2403,6 +2403,20 @@ Check 'rep alarmas: se queda el fallo de Xbee'    (Rep-Alarmas 'fallo com con Xb
 Check 'rep alarmas: y el SoC critico'             (Rep-Alarmas 'SoC critico (<10%)') 'SoC critico (<10%)'
 Check 'rep alarmas: mezcla, se queda solo lo suyo' (Rep-Alarmas 'eje bloqueado; SoC bajo (L1); motor mas lento de lo esperado') 'SoC bajo (L1)'
 Check 'rep alarmas: sin alarmas, vacio'           (Rep-Alarmas '') ''
+# la desviacion no llega como bit sino como NOTA de texto: en la v11.22 se colaba
+# y los repetidores salian en AVISO por una posicion que en ellos no significa nada
+Check 'rep alarmas: fuera la nota de desviacion'  (Rep-Alarmas 'dif 63,7 deg') ''
+Check 'rep alarmas: y con el punto decimal ingles' (Rep-Alarmas 'dif 60.2 deg') ''
+Check 'rep alarmas: mezclada con una suya'        (Rep-Alarmas 'dif 63,7 deg; SoC bajo (L1)') 'SoC bajo (L1)'
+Check 'rep salud: una desviacion no lo saca de OK' (Rep-Salud ([pscustomobject]@{SoC=90}) (Rep-Alarmas 'dif 63,7 deg')) 'OK'
+# el mensaje no puede afirmar mas de lo que dice el dato: lastComm a 0 es "no
+# tengo lectura", no "nunca la he leido" (una NCU recien reiniciada esta a cero)
+Check 'muda: el mensaje no dice "nunca"' ($src.Contains('nunca ha leido')) $false
+Check 'muda: dice lo que de verdad sabe' ($src.Contains('si acaba de reiniciarse, su cache esta a cero')) $true
+# el resumen por NCU: por numero, sin mezclar repetidores y diciendo las mudas
+Check 'resumen: ordena por numero de NCU' ($src.Contains('Sort-Object { [int]("0" + $_) }')) $true
+Check 'resumen: las HSU y los repetidores van aparte' ($src.Contains('(+{0} HSU/repetidor{1})')) $true
+Check 'resumen: una NCU sin lectura se dice' ($src.Contains('SIN LECTURA - no se ha podido leer ninguna de sus')) $true
 
 Check 'rep salud: si no contesta, OFFLINE' (Rep-Salud $null 'no contesta') 'OFFLINE'
 Check 'rep salud: sin alarmas y con bateria, OK' (Rep-Salud ([pscustomobject]@{SoC=90}) '') 'OK'
