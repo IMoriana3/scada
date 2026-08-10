@@ -258,6 +258,34 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
   esa NCU. El JSON de San José hay que **re-exportarlo desde IPs** igualmente (lo generado antes del arreglo de
   `rangos()` no lleva las NCU 7/12/16/17/19); eso es de Ignacio o de quien tenga la sesión abierta.
 
+  **[Toolbox → Backtracking / Ignacio, 10/08] Las RSUs de Ayora en la tabla `topologia` están mal: falta la
+  de la NCU11 y falta la segunda de la NCU15, y eso ha corrido la numeración de todas las de detrás.**
+  Ayora tiene **10 HSUs en 9 NCUs** (la NCU15 lleva dos, esclavos 230 y 231). En la tabla se ven ocho números
+  y un hueco en el 8. Valores correctos según el Excel de coordenadas de Ayora (hoja resumen `24025 AYORA`
+  cruzada con la pestaña de cada NCU, que es la que trae el número de NCU real — la hoja resumen usa la
+  numeración de Acciona, `4.2`, `6.1`, `7.2`…, y por eso se presta a confusión):
+
+  | NCU | RSU GW1 | HSU esclavo | En la tabla hoy | Nota |
+  |---|---|---|---|---|
+  | 2 | `1` | `230` | 1 | ok |
+  | 3 | `2` | `230` | 2 | ok |
+  | 5 | `3` | `230` | 3 | ok |
+  | 8 | `4` | `230` | 4 | ok |
+  | 11 | `5` | `230` | *(vacío)* | ⚠️ **falta** |
+  | 12 | `6` | `230` | 5 | corrido |
+  | 13 | `7` | `230` | 6 | corrido · con sensor de nieve |
+  | 15 | `8,9` | `230,231` | 7 | ⚠️ **falta la segunda** · la 8 con sensor de nieve |
+  | 16 | `10` | `230` | 9 | corrido |
+
+  El origen del error se ve en el propio Excel: la fila de la **HSU 9 tiene la celda NCU vacía** en la hoja
+  resumen (solo aparece dentro de la pestaña `NCU 15-10`), así que quien pasó los datos se la saltó; y al
+  faltar además la de la NCU11, los números de detrás se recolocaron uno abajo.
+
+  Las dos columnas admiten varios valores: `rsu_gw1` = `8,9` y `hsu_esclavo` = `230,231` (`ips.html` ya los
+  parte por coma, y de ahí sale `hsus` y `hsu_esclavos` en el JSON de la toolbox). **Los ficheros de
+  `plantas/` de la toolbox ya están bien** — la NCU11 con una y la NCU15 con dos —, así que esto solo afecta a
+  Supabase y a lo que la web pinte desde ahí.
+
 ## Hoja de ruta funcional (VIVA — cambiará conforme maduremos; editadla los dos)
 
 **TOOLBOX ONLINE — puesta en marcha (snapshots · escribe · persona: comisionador).**
@@ -278,6 +306,7 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
 | 2026-08-10 | Backtracking | Hoja de ruta funcional (viva). Web adaptada al diagnóstico v2.9/v3.0: SIN LECTURA, flota completa, `eti` en el emisor scada3d. |
 | 2026-08-10 | Backtracking | Separación SCADA (scada.html, tiempo real) / Seguimiento PEM (snapshots). Propuesta de `telemetria_tcu` en Puntos abiertos. |
 | 2026-08-10 | Backtracking | Creación del contrato. `scada3d` postMessage con `eti`; ficha por clic en SCADA 3D; comisionado estados 0–3 según A. |
+| 2026-08-10 | Toolbox | **Las RSUs de Ayora están mal en `topologia`**: falta la de la **NCU11** y la **segunda de la NCU15**, y eso corrió la numeración de las demás. Publicada arriba la tabla correcta sacada del Excel de coordenadas (10 HSUs en 9 NCUs). Los `plantas/*.json` de la toolbox ya están bien; esto es solo Supabase. |
 | 2026-08-10 | Toolbox | **⚠️ Os afecta: los JSON exportados llevan `alcance` y `ncus`, y `planta`/`ip` ya no mienten (v11.31).** Hasta ahora los exports leían planta/IP **de los cuadros al pulsar el botón**, no de lo que se había barrido: un diagnóstico de planta completa seguido de un cambio de modo en la NCU3 llegaba a la plataforma como *«Ayora · NCU3 · 724 TCUs»*. Ya no. Nuevos campos en `diagnostico_tcu`, `test_comm`, `baterias_tcu`, `auditoria_tcu`, `inventario_tcu` y `seguimiento_pem`: **`alcance`** (`"Planta completa (16 NCUs)"` \| `"NCU3"` \| `"ip:puerto"`) y **`ncus`** (array con las NCUs realmente recorridas). Si los usáis para la columna ALCANCE del histórico en vez de trocear `planta`, no hará falta adivinar. Los ficheros antiguos no los traen: dejad el fallback actual. |
 | 2026-08-10 | Toolbox | **v11.30**: `GUARDAR EN NVM`, `Sincronizar reloj`, `Backup NCU` y las cuatro acciones de PEM (modo, clear, stow, comisionado) aceptan ya la entrada **(Planta completa)**. Antes solo `ESCRIBIR` la aceptaba, así que se podía escribir en varias NCUs y **no** poder fijarlo en NVM — se perdía al reiniciar la TCU. |
 | 2026-08-10 | Toolbox | **Corrección: San José tiene 11 repetidores, no 10.** El Excel de coordenadas se salta la fila del **repetidor 4 (NCU8)**; la hoja de layout de comunicaciones sí lo cuenta (totales `8 RSU / 11 repetidores`). Publicado arriba el reparto repetidor→NCU/GW/esclavo. Regla de esclavos confirmada por Ignacio: **200 el primero de cada NCU, 201 y 202 si hay más**; el GW del 4 va a **GW1 provisional** hasta confirmarlo en campo. |
