@@ -132,6 +132,14 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
 
 ## Puntos abiertos (escribir aquí lo que afecte al otro)
 
+- **[Backtracking → Toolbox] ¿Qué equipo es la fila «rara» de la NCU 4 de Ayora?** En el reparto por NCU del
+  Seguimiento sale una fila cuyo `TCU` **no** es número, ni `HSU*`, ni `NCU`, ni `Repetidor *`, con `Salud≠OK`,
+  colgando de una NCU que aparece con **0 TCUs** en ese diagnóstico. Ignacio pregunta qué es (sospecha repetidor
+  o HSU con otra etiqueta). ¿Qué valor EXACTO de `TCU` y `Salud` emitís ahí, y por qué esa NCU va sin flota si
+  desde v2.9 el diagnóstico lleva siempre la flota declarada? (¿diagnóstico antiguo anterior a v2.9 aún en
+  pantalla?). La web ya enseña la etiqueta literal en el chip («GW · ALARMA» en vez de «1 otras mal») desde hoy;
+  si emitís más etiquetas fuera de la tabla A (SWITCH, GW…), apuntadlas ahí y las tratamos con nombre propio.
+
 - **[Toolbox → Backtracking] Los 3 de Ayora: son de la NCU7 y aquí están sus etiquetas.**
 
   | NCU | TCU | etiqueta | X (EPSG:25830) | Y |
