@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '3.1'
+$VERSION_AGENTE = '3.2'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -616,14 +616,32 @@ function Tcus-DeNcu($n) {
 # Los repetidores de una NCU. Son TCUs -mismo mapa, misma bateria, mismo
 # firmware- colocadas para repetir la senal. Su esclavo cae fuera del rango, asi
 # que hay que ir a por ellos aparte.
+# Si la topologia no le puso nombre hay que numerarlo, y el numero es DE PLANTA,
+# como estan rotulados en el plano y como los numera la toolbox. Numerar dentro
+# de la NCU daba cuatro "Repetidor 1" en Ayora, y ese texto es la identidad del
+# equipo en el diagnostico y en la bitacora: dos equipos distintos con la misma
+# clave.
+function Reps-Ordinal([string]$ncu, [int]$puerto, [int]$esclavo) {
+    $i = 0
+    foreach ($n in (Ncus-Todas)) {
+        foreach ($g in @($n.gws)) {
+            foreach ($x in @($g.reps)) {
+                if (-not $x) { continue }
+                $i++
+                if ("$($n.ncu)" -eq $ncu -and [int]$g.puerto -eq $puerto -and [int]$x.esclavo -eq $esclavo) { return $i }
+            }
+        }
+    }
+    return $i + 1
+}
+
 function Reps-DeNcu($n) {
     $r = @()
     foreach ($g in @(Gws-Filtrados $n.gws $script:GwPedido)) {
-        $i = 0
         foreach ($x in @($g.reps)) {
             if (-not $x) { continue }
-            $i++
-            $nom = "$($x.nombre)"; if ($nom -eq '') { $nom = "Repetidor $i" }
+            $nom = "$($x.nombre)"
+            if ($nom -eq '') { $nom = "Repetidor " + (Reps-Ordinal "$($n.ncu)" ([int]$g.puerto) ([int]$x.esclavo)) }
             $r += ,@{ncu = "$($n.ncu)"; puerto = [int]$g.puerto; nombre = $nom; esclavo = [int]$x.esclavo}
         }
     }
