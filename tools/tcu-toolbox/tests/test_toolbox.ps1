@@ -2278,7 +2278,10 @@ Check 'cmp: ALARMA a OK es mejor'     (Cmp-Salud 'ALARMA' 'OK') 'mejor'
 Check 'cmp: OK a AVISO es peor'       (Cmp-Salud 'OK' 'AVISO') 'peor'
 Check 'cmp: ALARMA a OFFLINE es peor' (Cmp-Salud 'ALARMA' 'OFFLINE') 'peor'
 Check 'cmp: OFFLINE a OK es mejor'    (Cmp-Salud 'OFFLINE' 'OK') 'mejor'
-Check 'cmp: OFFLINE a ALARMA no es mejora' (Cmp-Salud 'OFFLINE' 'ALARMA') 'neutro'
+# salir de OFFLINE es recuperar comunicacion: un equipo que habla con una pega
+# es mejor noticia que un equipo mudo, del que no se sabe nada
+Check 'cmp: OFFLINE a AVISO tambien es mejor'  (Cmp-Salud 'OFFLINE' 'AVISO') 'mejor'
+Check 'cmp: y OFFLINE a ALARMA, igual'         (Cmp-Salud 'OFFLINE' 'ALARMA') 'mejor'
 Check 'cmp: sin cambio, nada'         (Cmp-Salud 'OK' 'OK') ''
 Check 'cmp: una salud rara no revienta' (Cmp-Salud 'OK' 'ZZZ') 'neutro'
 
@@ -2303,6 +2306,15 @@ Check 'cmp: NCUs comunes' ((@(Cmp-Comunes $cmpA $cmpB)) -join ',') '1'
 $dif = @(Cmp-Trabajos 'diag' $cmpA $cmpB)
 Check 'cmp: la NCU que no esta en los dos no cuenta' (@($dif | Where-Object { "$($_.Equipo)" -like '*NCU12*' }).Count) 0
 Check 'cmp: el cambio de salud sale' (@($dif | Where-Object { "$($_.Equipo)" -eq 'NCU1/TCU 1' })[0].Cambio) 'peor'
+# "AVISO" a secas obliga a salir a mirar: la nota va pegada al estado
+Check 'cmp nota: OK no lleva nota'   (Cmp-ConNota 'OK' 'lo que sea') 'OK'
+Check 'cmp nota: sin nota, el estado solo' (Cmp-ConNota 'AVISO' '') 'AVISO'
+Check 'cmp nota: el aviso dice de que es' (Cmp-ConNota 'AVISO' 'dif 6,2 deg') 'AVISO (dif 6,2 deg)'
+Check 'cmp nota: una nota larga se recorta' ((Cmp-ConNota 'ALARMA' ('x' * 200)).Length) 79
+$difN = @(Cmp-Trabajos 'diag' @([pscustomobject]@{NCU='1'; TCU=9; Salud='OK'; Alarmas=''}) `
+                              @([pscustomobject]@{NCU='1'; TCU=9; Salud='AVISO'; Alarmas='dif 6,2 deg'}))
+Check 'cmp: el diff lleva el motivo del aviso' (@($difN)[0].Ahora) 'AVISO (dif 6,2 deg)'
+Check 'cmp: y el estado anterior sin adornos' (@($difN)[0].Antes) 'OK'
 Check 'cmp: la TCU nueva sale' (@($dif | Where-Object { "$($_.Que)" -eq 'nuevo' })[0].Equipo) 'NCU1/TCU 3'
 Check 'cmp: la que ya no esta, tambien' (@($dif | Where-Object { "$($_.Que)" -eq 'ya no aparece' })[0].Equipo) 'NCU1/TCU 2'
 Check 'cmp: y el alcance lo dice' ((Cmp-Alcance $cmpA $cmpB) -like '*solo las NCUs comunes*') $true
