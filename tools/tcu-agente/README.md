@@ -40,7 +40,15 @@ planta, la versión del agente y la de la toolbox, y las dos tienen que ser de l
 
    **Al actualizar, reemplaza solo `TCU_Agente.ps1`, `TCU_Toolbox.ps1` y los JSON de `plantas/`** — no las carpetas enteras, o te llevas por delante `agente_config.json`, `usuarios.json`, `registro/` y los informes.
 
-   Si al arrancar dice *«el puerto 8585 ya lo está usando otro programa»*, es que **el agente anterior sigue abierto**: `netstat -ano | findstr :8585` da el PID en la última columna y `taskkill /PID <pid> /F` lo cierra. Si dice que Windows no deja escuchar, falta el `netsh` del punto 3.
+   Si al arrancar dice *«el puerto 8585 ya lo está usando otro programa»*, es que **el agente anterior sigue abierto**. Para cerrarlo:
+
+   ```powershell
+   Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*TCU_Agente*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+   ```
+
+   ⚠️ **`netstat` no sirve para esto.** El agente escucha por **HTTP.SYS**, el servicio HTTP de Windows: el socket lo abre el kernel, así que `netstat -ano | findstr :8585` siempre devuelve **PID 4 (System)** — el propio Windows — y nunca señala al proceso culpable. Y un `taskkill` sobre el PID 4 **reinicia el equipo**. Si el comando de arriba no encuentra nada, la reserva se ha quedado huérfana: `netsh http show servicestate` y busca `localhost:8585`.
+
+   Si dice que Windows no deja escuchar, falta el `netsh http add urlacl` del punto 3.
 5. Túnel: instala [cloudflared](https://github.com/cloudflare/cloudflared/releases/latest) (`cloudflared-windows-amd64.exe`, un solo fichero) y en otra ventana:
    `cloudflared.exe tunnel --url http://localhost:8585 --http-host-header localhost:8585`
    ⚠️ **El `--http-host-header` no es opcional.** El agente escucha en `localhost` y Windows (HTTP.SYS) rechaza con **«Bad Request - Invalid Hostname»** cualquier petición cuyo `Host` sea otro — y Cloudflare reenvía con el del túnel. Sin ese parámetro no conecta nada.

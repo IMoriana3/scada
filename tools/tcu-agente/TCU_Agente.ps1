@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '3.4'
+$VERSION_AGENTE = '3.5'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -1163,8 +1163,18 @@ catch {
     if ($m -match '(?i)conflict|conflicto') {
         Write-Host "El puerto $puerto ya lo esta usando otro programa - casi seguro, OTRO AGENTE que se quedo abierto." -ForegroundColor Red
         Write-Host ''
-        Write-Host '  Para ver quien es:   netstat -ano | findstr :' -NoNewline; Write-Host $puerto
-        Write-Host '  Y para cerrarlo:     taskkill /PID <el numero de la ultima columna> /F'
+        # OJO: 'netstat' aqui NO sirve. El agente escucha por HTTP.SYS, el
+        # servicio HTTP de Windows: el socket lo abre el kernel, asi que netstat
+        # siempre dice PID 4 (System) y nunca senala al culpable. Y matar el 4
+        # reinicia el PC.
+        Write-Host '  Para cerrarlo (solo mata lo que lleve TCU_Agente en la linea de comandos):'
+        Write-Host '    Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*TCU_Agente*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }'
+        Write-Host ''
+        Write-Host '  Si eso no encuentra nada, la reserva se ha quedado huerfana en el servicio HTTP:'
+        Write-Host "    netsh http show servicestate      (busca localhost:$puerto y mira que proceso lo tiene)"
+        Write-Host ''
+        Write-Host '  NO uses netstat para esto: el agente escucha por HTTP.SYS y netstat siempre'
+        Write-Host '  dira PID 4 (System), que es el propio Windows. Matarlo reinicia el equipo.' -ForegroundColor Yellow
         Write-Host ''
         Write-Host "  (o cambia 'puerto' en agente_config.json y arranca en otro)"
     }
