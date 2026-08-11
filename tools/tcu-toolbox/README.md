@@ -257,7 +257,6 @@ como las HSU: Ayora sigue siendo **754 seguidores**, y los repetidores llevan su
 propia línea. Así los porcentajes siguen cuadrando con el SCADA y con todos los
 diagnósticos anteriores.
 
-<<<<<<< HEAD
 Su **salud no es la de un seguidor**, y sus **alarmas tampoco**: está fijo, no
 mueve nada. Las de posición y motor —*tilt fuera de rango*, *eje bloqueado*,
 *sobrecorriente de motor*, *motor más lento de lo esperado*, *fallo en driver de
@@ -265,11 +264,6 @@ motor*, *V motor alta/baja*, *límite Este/Oeste*, *alarma de motor enclavada*�
 **no se muestran ni cuentan para su salud** (v11.22): sacarlas solo serviría
 para que alguien salga a mirar un eje que no existe. Lo que sí cuenta: **si
 comunica y su batería**.
-=======
-Su **salud no es la de un seguidor**: no mueve nada, así que la desviación de
-posición y el modo no dicen nada de él. Lo que sí dice: si contesta, su batería
-y sus alarmas de hardware.
->>>>>>> origin/main
 
 En Ayora son cinco: uno en la NCU4 (esclavo 200), dos en la NCU12 (200 y 201),
 uno en la NCU14 (200) y uno en la NCU15 (200). El mismo número se repite entre

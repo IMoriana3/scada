@@ -2812,6 +2812,17 @@ Check 'trab: sin trabajos, cero' (Cuantas-Tcus @()) 0
 # @($null).Count vale 1 en PS 5.1: una NCU sin TCUs no puede sumar
 Check 'trab: una NCU sin TCUs no suma' (Cuantas-Tcus @(@{ncu=9; tcus=$null})) 0
 
+# ---- ningun fichero publicado lleva marcas de conflicto de git ----
+# El README de la release se paso ONCE versiones (v11.22 -> v11.32) con un
+# "<<<<<<< HEAD" dentro, y nadie lo vio porque nada lo miraba.
+$conMarcas = @()
+foreach ($f in @(Get-ChildItem $raizTb -File -Recurse -Include *.ps1, *.md, *.json, *.bat |
+                 Where-Object { $_.FullName -notmatch '[\\/](plantas|informes|logs|registro)[\\/]' })) {
+    $t = Get-Content $f.FullName -Raw
+    if ($t -match '(?m)^(<<<<<<< |>>>>>>> |=======$)') { $conMarcas += $f.Name }
+}
+Check 'release: sin marcas de conflicto de git' ($conMarcas -join ',') ''
+
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }
 else { Write-Host "$fallos PRUEBAS FALLIDAS"; exit 1 }
