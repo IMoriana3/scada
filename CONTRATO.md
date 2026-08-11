@@ -161,6 +161,21 @@ planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
 
 ## Puntos abiertos (escribir aquí lo que afecte al otro)
 
+- **[Toolbox → Backtracking] ¿Podéis exportar el NÚMERO de cada RSU en `entradasToolbox()`?** Un campo
+  `rsu: [10]` (o `[8,9]` en la NCU15 de Ayora) al lado de `hsus` y `hsu_esclavos`, sacado tal cual de las
+  columnas `rsu_gw1`/`rsu_gw2` que ya tenéis.
+
+  **Para qué.** El número que la toolbox enseña de cada estación (`HSU1`, `HSU2`…) **no nos lo inventamos**:
+  es el hueco que ocupa en la caché de la NCU, y resulta que **coincide con la columna RSU del Excel** —
+  verificado hoy en Ayora, las nueve que comunican salen 1, 2, 3, 4, 5, 6, 7, 8 y 9 en el orden exacto de la
+  topología. Pero la estación de la **NCU16 nunca ha comunicado**, así que su hueco está vacío y no hay número
+  que leer: sale como `NCU16 - HSU?`. Sabemos que falta una porque la topología dice `hsus: 1`, pero no cuál
+  de las diez es. Con el campo `rsu` diríamos `NCU16 - HSU10`, que es lo que hace falta para ir a buscarla.
+
+  **Ya está implementado por nuestro lado (v11.34)** y es tolerante: si el campo no viene, se sigue viendo
+  `HSU?` exactamente como hasta ahora; y si lo hallado no encaja con lo declarado tampoco se adivina, se
+  vuelve al `?`. Así que podéis añadirlo cuando os venga bien, sin coordinar versiones.
+
 - **[Backtracking → Toolbox] ¿Qué equipo es la fila «rara» de la NCU 4 de Ayora?** En el reparto por NCU del
   Seguimiento sale una fila cuyo `TCU` **no** es número, ni `HSU*`, ni `NCU`, ni `Repetidor *`, con `Salud≠OK`,
   colgando de una NCU que aparece con **0 TCUs** en ese diagnóstico. Ignacio pregunta qué es (sospecha repetidor
@@ -405,6 +420,8 @@ planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
 
 | fecha | sesión | cambio |
 |---|---|---|
+| 2026-08-11 | Toolbox | **v11.33 / agente v3.3**: el bit de «GW2 desconectado» de una NCU que **solo tiene un gateway** ya no es alarma — el primer arranque del vigilante en Ayora dio 19 alertas y 15 eran esa. `Ncu-Salud` mira ahora los gateways que declara la topología. Y el agente solo menciona el reloj de la NCU cuando está desviado. |
+| 2026-08-11 | Toolbox | **v11.34**: la toolbox lee un campo nuevo opcional `rsu` del JSON de plantas para poder nombrar la estación que nunca ha comunicado (`NCU16 - HSU10` en vez de `HSU?`). **Petición en Puntos abiertos**; sin el campo se comporta igual que hoy. |
 | 2026-08-11 | Backtracking | **`scada3d` lleva `meteo`** (viento real de la HSU con más viento, parseado del texto de su fila) y el SCADA **reenvía en cada repintado**: el gemelo 3D sigue a la planta en vivo. Botón «🧊 3D en vivo» en la cabecera. |
 | 2026-08-11 | Backtracking | **Tabla nueva `acuses`** (acuse de alarmas del SCADA, sección A). La web avisa además cuando un diagnóstico viene corto y usa `alcance`/`ncus` como marca de edad (gracias por el dato). Cerrada la fila «rara» de la NCU4: era su repetidor. |
 | 2026-08-10 | Backtracking | **Tabla nueva `bitacora`** (diario de mantenimiento por equipo, sección A): la escribe la ficha de equipo del SCADA jerárquico; la toolbox puede insertar también. `entradasToolbox()` exporta ya `trackers` por entrada (respondido el punto de San José). |
