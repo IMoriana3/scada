@@ -180,6 +180,38 @@ planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
   los demás tipos. Con eso el checklist hecho en el móvil entra en la curva el mismo día. Si vais a emitir
   tareas distintas de esas tres, decidlo aquí antes: la web las tiene fijadas en `TAREAS`.
 
+  **[Toolbox responde, 2026-08-11] Las tres tareas se quedan como están, y dos de las tres las podemos emitir
+  ya. La tercera es de otra clase de riesgo y por eso no está.**
+
+  Primero un matiz que cambia el planteamiento: en la toolbox de escritorio el checklist **no se teclea**. Es
+  *derivado*: `Seguimiento-Filas` mezcla tres acumuladores que rellenan solas las operaciones que hayas hecho
+  en esa sesión.
+
+  | Tarea | La rellena | Valores que emitimos |
+  |---|---|---|
+  | `cold_commissioning` | LEER ESTADO de comisionado (bits 4:3 de 30001) | `OK` si estado 0; vacío si no. **Nunca `NOK`**: no comisionada todavía no es un fallo |
+  | `config_tcu` | Auditoría contra el preset de referencia | `OK` sin desviaciones · `NOK` con desviaciones · vacío si no contestó |
+  | `prueba_movimiento` | TEST DE MOTOR | `OK` si PASA · `NOK` si FALLA · vacío si SALTADO |
+
+  Ojo con dos cosas: **hoy no emitimos nunca `N.A.`** (la web lo admite, pero nada lo produce), y el vacío
+  significa *«no se ha hecho»*, no *«no aplica»*.
+
+  **Lo que el agente puede dar ya**: tiene `/comisionado` y el POST `auditoria`, o sea **dos de las tres**.
+  Un `seguimiento_pem` con `prueba_movimiento` vacío entra en vuestra curva tal cual, y mueve `config_tcu`,
+  que hoy desde la online no se mueve nada. Eso es trabajo pequeño por nuestro lado.
+
+  **Lo que falta y por qué no está**: el test de motor es **la única de las tres que escribe y mueve
+  seguidores** — pasa a MANUAL, pulsa Oeste y Este, mide y vuelve al modo original. En el agente eso exige
+  `permitir_escritura=true`, guardia de viento y parada garantizada, al otro lado de un túnel público. No es
+  una ruta más: es la primera que mueve hierro sin nadie delante. Va después, y con doble confirmación.
+
+  Un detalle de diseño que os afecta poco pero conviene decir: la de escritorio acumula **por sesión**
+  (juntas lo que hayas ido haciendo). El agente es por petición, así que acumulará igual dentro de su sesión
+  y lo expondrá en una ruta `/seguimiento`; no esperéis que una sola llamada traiga las tres tareas.
+
+  **Fecha**: la parte de dos tareas, junto con el siguiente bloque de trabajo del agente. El test de motor
+  remoto no lo comprometo a fecha: antes quiero la escritura remota rodada con cosas que no muevan nada.
+
 - **[Toolbox → Backtracking] ¿Podéis exportar el NÚMERO de cada RSU en `entradasToolbox()`?** Un campo
   `rsu: [10]` (o `[8,9]` en la NCU15 de Ayora) al lado de `hsus` y `hsu_esclavos`, sacado tal cual de las
   columnas `rsu_gw1`/`rsu_gw2` que ya tenéis.
@@ -439,6 +471,8 @@ planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
 
 | fecha | sesión | cambio |
 |---|---|---|
+| 2026-08-11 | Toolbox | **Respondido el checklist online**: las tres tareas se quedan como están (no vamos a emitir otras). Dos de las tres las puede dar ya el agente (`/comisionado` y el POST `auditoria`); la tercera es el test de motor, que **mueve seguidores** y va detrás de la escritura remota. Aviso de formato: **nunca emitimos `N.A.`**, y el vacío significa «no se ha hecho», no «no aplica». |
+| 2026-08-11 | Toolbox | **v11.40 a v11.42 y agente v3.7**: pestañas **Comm NCU** (una fila por NCU: gateways, UPS, seta, reloj, FW de la NCU y TCUs que comunican) y **Estabilidad** (calidad de enlace inferida del `lastComm`: el mapa de Sunner **no expone RSSI ni LQI**). Y un `continue` dentro de una función hacía que la NCU sin respuesta perdiera el motivo del fallo. |
 | 2026-08-11 | Toolbox | **v11.33 / agente v3.3**: el bit de «GW2 desconectado» de una NCU que **solo tiene un gateway** ya no es alarma — el primer arranque del vigilante en Ayora dio 19 alertas y 15 eran esa. `Ncu-Salud` mira ahora los gateways que declara la topología. Y el agente solo menciona el reloj de la NCU cuando está desviado. |
 | 2026-08-11 | Toolbox | **v11.34**: la toolbox lee un campo nuevo opcional `rsu` del JSON de plantas para poder nombrar la estación que nunca ha comunicado (`NCU16 - HSU10` en vez de `HSU?`). **Petición en Puntos abiertos**; sin el campo se comporta igual que hoy. |
 | 2026-08-11 | Backtracking | **`scada3d` lleva `meteo`** (viento real de la HSU con más viento, parseado del texto de su fila) y el SCADA **reenvía en cada repintado**: el gemelo 3D sigue a la planta en vivo. Botón «🧊 3D en vivo» en la cabecera. |
