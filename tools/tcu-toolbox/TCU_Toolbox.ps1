@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.40'
+$VERSION_TOOLBOX = '11.41'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -826,10 +826,63 @@ function Flota-Declarada($cx) {
 # Estaba escrita a mano en el de serie y el paralelo no la ponia: la planta
 # entera salia sin una sola fila de NCU, y con ella se perdian GW, UPS, seta y
 # reloj de las 16. Pura: se prueba sin ventana.
+# La NCU publica su version como texto en el registro 50 (mapa R7.1, TEXT).
+# No la leiamos: sabiamos el firmware de cada TCU y no el de la NCU que las
+# gobierna. Dos caracteres por registro, hasta el primer cero.
+function Ncu-Version {
+    $w = FC03-Leer $UNIT_NCU (Dir-Trama 50) 16
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($r in $w) {
+        foreach ($c in @((($r -shr 8) -band 0xFF), ($r -band 0xFF))) {
+            if ($c -eq 0) { return "$($sb.ToString())".Trim() }
+            if ($c -ge 32 -and $c -lt 127) { [void]$sb.Append([char]$c) }
+        }
+    }
+    return "$($sb.ToString())".Trim()
+}
+
+# ---------- estabilidad de la Zigbee ----------
+# El mapa Modbus de Sunner NO expone RSSI ni LQI: no hay potencia de senal que
+# leer. Lo que si hay es el lastComm de cada TCU, y muestreandolo se ve lo
+# mismo por su efecto: una TCU al limite de cobertura no da un RSSI bajo, da
+# caidas frecuentes y edades altas. Esto es calidad INFERIDA, no medida.
+function Estab-Acumular($acc, [string]$ncu, $comm) {
+    if ($null -eq $comm -or $null -eq $comm.tcus) { return $acc }
+    foreach ($t in @($comm.tcus.Keys)) {
+        $k = "$ncu|$t"
+        if (-not $acc.ContainsKey($k)) { $acc[$k] = @{ncu=$ncu; tcu=[int]$t; muestras=0; frescas=0; caidas=0; edadMax=0; previa=$null} }
+        $e = $acc[$k]
+        $d = $comm.tcus[$t]
+        $e.muestras++
+        if ($d.comunica) { $e.frescas++ } elseif ($e.previa -eq $true) { $e.caidas++ }
+        if ([int]$d.edad -gt [int]$e.edadMax) { $e.edadMax = [int]$d.edad }
+        $e.previa = [bool]$d.comunica
+    }
+    return $acc
+}
+
+# De lo acumulado a la tabla, peor primero: lo que interesa es la cola.
+function Estab-Resumen($acc) {
+    $r = @()
+    foreach ($k in @($acc.Keys)) {
+        $e = $acc[$k]
+        $pct = $(if ($e.muestras -gt 0) { [Math]::Round(100.0 * $e.frescas / $e.muestras, 1) } else { 0 })
+        $r += ,[pscustomobject]@{
+            NCU = $e.ncu; TCU = $e.tcu; Muestras = $e.muestras
+            Frescas_pct = $pct; Caidas = $e.caidas; Edad_max_s = $e.edadMax
+            Veredicto = $(if ($pct -ge 99.5 -and $e.caidas -eq 0) { 'estable' }
+                          elseif ($pct -ge 95) { 'intermitente' }
+                          elseif ($pct -gt 0) { 'mala' }
+                          else { 'sin comunicacion' })
+        }
+    }
+    return @($r | Sort-Object @{Expression='Frescas_pct'; Descending=$false}, @{Expression='Caidas'; Descending=$true}, NCU, TCU)
+}
+
 # Una fila de la pestana Comm NCU. Traduce los bits del bloque 502 a algo que
 # se lee de un vistazo, y sobre todo distingue "no lo tiene" de "lo tiene mal":
 # un gateway que la topologia no declara sale '-', no 'CAIDO'. Pura.
-function Comm-FilaNcu([string]$ncu, [string]$ip, $ns, $gws, $comm, [int]$tcusDecl, [int]$hsusDecl) {
+function Comm-FilaNcu([string]$ncu, [string]$ip, $ns, $gws, $comm, [int]$tcusDecl, [int]$hsusDecl, [string]$fw = '') {
     $puertos = @(@($gws) | Where-Object { $_ -and $_.puerto } | ForEach-Object { [int]$_.puerto })
     $hay1 = ($puertos.Count -eq 0 -or $puertos -contains $PUERTO_GW1)
     $hay2 = ($puertos.Count -gt 0 -and $puertos -contains $PUERTO_GW2)
@@ -849,7 +902,7 @@ function Comm-FilaNcu([string]$ncu, [string]$ip, $ns, $gws, $comm, [int]$tcusDec
         $hsusOk = @(@($comm.hsus) | Where-Object { $_.comunica }).Count
     }
     return [pscustomobject]@{
-        NCU = $ncu; IP = $ip
+        NCU = $ncu; IP = $ip; FW = "$fw"
         Estado = $(if ($ns) { "$($ns.salud)" } else { 'SIN RESPUESTA' })
         GW1 = (& $gw $hay1 4); GW2 = (& $gw $hay2 5)
         UPS = $(if (-not $ns) { '' } elseif ($ups.Count -eq 0) { 'OK' } else { ($ups -join '; ') })
@@ -3737,12 +3790,56 @@ $lvN = New-Object System.Windows.Forms.ListView
 $lvN.Location = New-Object System.Drawing.Point(10, 56)
 $lvN.Size = New-Object System.Drawing.Size(898, 304)
 $lvN.View = 'Details'; $lvN.FullRowSelect = $true; $lvN.GridLines = $true
-foreach ($c in @(@('NCU',45), @('IP',110), @('Estado',86), @('GW1',62), @('GW2',62),
-                 @('UPS',96), @('Seta',62), @('Reloj',96), @('TCUs',66), @('HSUs',56), @('Notas',240))) {
+foreach ($c in @(@('NCU',45), @('IP',110), @('FW',70), @('Estado',86), @('GW1',56), @('GW2',56),
+                 @('UPS',92), @('Seta',56), @('Reloj',92), @('TCUs',62), @('HSUs',52), @('Notas',200))) {
     [void]$lvN.Columns.Add($c[0], $c[1])
 }
 $tabN.Controls.Add($lvN)
 [void](LG $tabN 'Una fila por NCU con lo que ella misma declara (puerto 502). El cuadro NCUs de arriba acota cuales.' 10 890 366)
+
+# ============================ TAB ESTABILIDAD ============================
+# El mapa Modbus de Sunner no expone RSSI ni LQI, asi que no hay potencia de
+# senal que leer. Pero la calidad de un enlace se ve igual por su efecto:
+# muestreando el lastComm de cada TCU sale que porcentaje del tiempo esta
+# fresca, cuantas veces se cae y cuanto tarda en volver. Es calidad INFERIDA,
+# y en el informe se dice asi.
+$tabE = New-Object System.Windows.Forms.TabPage
+$tabE.Text = 'Estabilidad'
+$tabs.TabPages.Add($tabE)
+
+[void](LG $tabE 'Durante' 10 52)
+$txtEMin = TG $tabE '10' 64 22 40
+[void](LG $tabE 'min, una muestra cada' 110 130)
+$txtEcada = TG $tabE '20' 244 22 40
+[void](LG $tabE 's' 290 14)
+
+$btnEIni = New-Object System.Windows.Forms.Button
+$btnEIni.Text = 'MEDIR ESTABILIDAD'
+$btnEIni.Location = New-Object System.Drawing.Point(320, 18)
+$btnEIni.Size = New-Object System.Drawing.Size(165, 28)
+$btnEIni.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnEIni.ForeColor = [System.Drawing.Color]::White
+$tabE.Controls.Add($btnEIni)
+
+$btnECsv = New-Object System.Windows.Forms.Button
+$btnECsv.Text = 'CSV'
+$btnECsv.Location = New-Object System.Drawing.Point(838, 18)
+$btnECsv.Size = New-Object System.Drawing.Size(70, 28)
+$tabE.Controls.Add($btnECsv)
+
+$lblERes = LG $tabE '' 500 330 24
+$lblERes.ForeColor = [System.Drawing.Color]::DimGray
+
+$lvE = New-Object System.Windows.Forms.ListView
+$lvE.Location = New-Object System.Drawing.Point(10, 56)
+$lvE.Size = New-Object System.Drawing.Size(898, 304)
+$lvE.View = 'Details'; $lvE.FullRowSelect = $true; $lvE.GridLines = $true
+foreach ($c in @(@('NCU',50), @('TCU',55), @('Muestras',75), @('% fresca',75),
+                 @('Caidas',65), @('Edad max s',90), @('Veredicto',120))) {
+    [void]$lvE.Columns.Add($c[0], $c[1])
+}
+$tabE.Controls.Add($lvE)
+[void](LG $tabE 'Calidad INFERIDA del enlace: el mapa de Sunner no da RSSI. Se mira cuanto tiempo esta fresca cada TCU, no la potencia de senal. Peores primero. Se para con CANCELAR.' 10 890 366)
 
 # ============================ TAB HSU (METEO) ============================
 $tabH = New-Object System.Windows.Forms.TabPage
@@ -4265,7 +4362,7 @@ $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $
                     $btnPresetSave, $btnPresetLoad, $btnLPreset, $btnCargarBackup, $btnLCsv, $btnDCsv, $btnBackupJson,
                     $btnComparar, $btnGCsv, $btnGJson, $btnGWa, $btnGBat, $btnBVer, $btnBAud, $btnBCar, $btnBCsv, $btnBJson, $btnICsv, $btnTCargar, $btnTGuardar, $btnTBorrar,
                     $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnAudEscr, $btnInvF, $btnInvFCsv,
-                    $btnNComm, $btnNCsv,
+                    $btnNComm, $btnNCsv, $btnEIni, $btnECsv,
                     $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm, $btnHEsclavo,
                     $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComis, $btnPComisSet, $btnPCsv,
                     $btnGBucle, $btnPSeg, $btnAudJson, $btnInvJson, $btnHBuscar, $btnGComm,
@@ -4758,7 +4855,7 @@ $script:Ctx = @{}
 # el informe habla de "bloques" y el sello va por operacion: aqui se cruzan.
 # 'bat' sale del diagnostico, no de una lectura propia.
 $CTX_DE_BLOQUE = @{diag='diagnostico'; bat='diagnostico'; lectura='lectura'
-                   aud='auditoria'; inv='inventario'; pem='pem'; comm='comm'}
+                   aud='auditoria'; inv='inventario'; pem='pem'; comm='comm'; estab='estab'}
 function Ctx-Guardar([string]$clave, $cx, $trabajos) {
     $script:Ctx[$clave] = Ctx-Sello (Nombre-Planta) $cx $trabajos
 }
@@ -9640,13 +9737,14 @@ $btnNComm.Add_Click({ Lanzar {
     foreach ($tr in $trabajos) {
         if (Chequear-Cancelado) { break }
         $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
-        $ns = $null; $comm = $null
+        $ns = $null; $comm = $null; $fwN = ''
         $gws = $(if ($tr.cx.gws) { $tr.cx.gws }
                  elseif ($tr.cx.puerto -and $tr.cx.puerto -ne $PUERTO_NCU) { @(@{puerto=[int]$tr.cx.puerto}) }
                  else { $null })
         try {
             Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
             $ns = Ncu-Salud $gws
+            try { $fwN = Ncu-Version } catch { $fwN = '' }
             # contar las TCUs que hablan es barato (2 registros por TCU, de 50
             # en 50) pero en San Jose son 21 NCUs de 120: se puede desmarcar
             if ($chkNTcus.Checked) { try { $comm = Ncu-Comm @($tr.tcus) } catch {} }
@@ -9654,10 +9752,10 @@ $btnNComm.Add_Click({ Lanzar {
         $nDecl = @($tr.tcus).Count
         $nHsu = [int]$(if ($tr.cx.multi) { 0 } else { 0 })
         $nHsu = @(Lista $(if ($null -ne $tr.hsuLista) { $tr.hsuLista } else { $tr.cx.hsuLista })).Count
-        $f = Comm-FilaNcu "$($tr.ncu)" "$($tr.ip)" $ns $gws $comm $nDecl $nHsu
+        $f = Comm-FilaNcu "$($tr.ncu)" "$($tr.ip)" $ns $gws $comm $nDecl $nHsu $fwN
         $script:UltimoComm += $f
         $it = New-Object System.Windows.Forms.ListViewItem("$($f.NCU)")
-        foreach ($c in @($f.IP, $f.Estado, $f.GW1, $f.GW2, $f.UPS, $f.Seta, $f.Reloj, $f.TCUs, $f.HSUs, $f.Notas)) { [void]$it.SubItems.Add("$c") }
+        foreach ($c in @($f.IP, $f.FW, $f.Estado, $f.GW1, $f.GW2, $f.UPS, $f.Seta, $f.Reloj, $f.TCUs, $f.HSUs, $f.Notas)) { [void]$it.SubItems.Add("$c") }
         switch ("$($f.Estado)") {
             'OK'     { $it.ForeColor = [System.Drawing.Color]::DarkGreen; $nOk++ }
             'AVISO'  { $it.ForeColor = [System.Drawing.Color]::DarkOrange; $nMal++ }
@@ -9680,6 +9778,77 @@ $btnNComm.Add_Click({ Lanzar {
 $btnNCsv.Add_Click({
     if (@($script:UltimoComm).Count -eq 0) { return }
     [void](Exportar-Csv $script:UltimoComm 'comm_ncu' 'Comm NCU')
+})
+
+# ------------------------- ESTABILIDAD -------------------------
+$script:UltimaEstab = @()
+$btnEIni.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    $mins = Val-Int $txtEMin.Text 'Minutos' 1 720
+    $cada = Val-Int $txtEcada.Text 'Cadencia' 5 600
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
+    if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
+    $nT = Cuantas-Tcus $trabajos
+    $pases = [Math]::Max(1, [int]($mins * 60 / $cada))
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "Medir estabilidad de $nT TCUs en $($trabajos.Count) NCU(s) durante $mins min, una muestra cada $cada s ($pases pases)?`r`n`r`nSolo LEE el lastComm por el puerto ${PUERTO_NCU}: no toca la Zigbee ni mueve nada.`r`n`r`nOJO: no es potencia de senal (el mapa no la da), es cuanto tiempo esta fresca cada TCU.",
+        'Medir estabilidad', 'YesNo', 'Question')
+    if ($r -ne 'Yes') { return }
+    $lvE.Items.Clear(); $script:UltimaEstab = @(); $lblERes.Text = ''
+    Ctx-Guardar 'estab' $cx $trabajos
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Estabilidad: $nT TCUs, $pases pases cada $cada s (~$mins min). CANCELAR para parar antes y quedarse con lo medido." ([System.Drawing.Color]::SteelBlue)
+    $acc = @{}
+    Prog-Iniciar $pases
+    for ($p = 1; $p -le $pases; $p++) {
+        if (Chequear-Cancelado) { break }
+        foreach ($tr in $trabajos) {
+            if ($script:Cancelar) { break }
+            $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
+            try {
+                Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
+                $acc = Estab-Acumular $acc "$($tr.ncu)" (Ncu-Comm @($tr.tcus))
+            } catch { } finally { Modbus-Cerrar }
+        }
+        Prog-Paso
+        $lblERes.Text = "pase $p de $pases"
+        [System.Windows.Forms.Application]::DoEvents()
+        if ($p -lt $pases -and -not $script:Cancelar) {
+            # espera troceada para que CANCELAR responda en el acto
+            $hasta = (Get-Date).AddSeconds($cada)
+            while ((Get-Date) -lt $hasta -and -not $script:Cancelar) {
+                Start-Sleep -Milliseconds 250
+                [System.Windows.Forms.Application]::DoEvents()
+            }
+        }
+    }
+    $script:NcuLog = ''
+    $script:UltimaEstab = @(Estab-Resumen $acc)
+    foreach ($e in $script:UltimaEstab) {
+        $it = New-Object System.Windows.Forms.ListViewItem("$($e.NCU)")
+        foreach ($c in @($e.TCU, $e.Muestras, $e.Frescas_pct, $e.Caidas, $e.Edad_max_s, $e.Veredicto)) { [void]$it.SubItems.Add("$c") }
+        switch ("$($e.Veredicto)") {
+            'estable'          { $it.ForeColor = [System.Drawing.Color]::DarkGreen }
+            'intermitente'     { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
+            'sin comunicacion' { $it.ForeColor = [System.Drawing.Color]::Gray }
+            default            { $it.ForeColor = [System.Drawing.Color]::Firebrick }
+        }
+        $lvE.Items.Add($it) | Out-Null
+    }
+    $mal = @($script:UltimaEstab | Where-Object { $_.Veredicto -ne 'estable' }).Count
+    $lblERes.Text = "$(@($script:UltimaEstab).Count) TCUs medidas   |   $mal con algo que mirar"
+    Con "Estabilidad: $(@($script:UltimaEstab).Count) TCUs medidas, $mal no estables. Las peores arriba." ([System.Drawing.Color]::SteelBlue)
+    if ($mal -gt 0) {
+        foreach ($e in @($script:UltimaEstab | Where-Object { $_.Veredicto -ne 'estable' } | Select-Object -First 10)) {
+            Con ("  NCU{0,-3} TCU {1,3}  {2,5} %  {3} caidas  edad max {4} s  -> {5}" -f $e.NCU, $e.TCU, $e.Frescas_pct, $e.Caidas, $e.Edad_max_s, $e.Veredicto) ([System.Drawing.Color]::Orange)
+        }
+    }
+    Marcar-Bloque 'estab'
+} })
+
+$btnECsv.Add_Click({
+    if (@($script:UltimaEstab).Count -eq 0) { return }
+    [void](Exportar-Csv $script:UltimaEstab 'estabilidad' 'Estabilidad')
 })
 
 $btnHBuscar.Add_Click({ Lanzar {
@@ -10275,7 +10444,7 @@ $btnLog.Add_Click({
 
 # ------------------------- informe HTML de la sesion -------------------------
 # Nombre legible de cada bloque, para el dialogo y para el nombre del fichero
-$script:NombreBloque = @{diag='Diagnostico'; lectura='Lectura de variables'; pem='PEM'; comm='Comm NCU'
+$script:NombreBloque = @{diag='Diagnostico'; lectura='Lectura de variables'; pem='PEM'; comm='Comm NCU'; estab='Estabilidad'
                          aud='Auditoria'; inv='Inventario'; esc='Escritura'}
 
 $btnInforme.Add_Click({
@@ -10847,7 +11016,7 @@ $form.Add_KeyDown({
 })
 
 # Todas las tablas de resultados filtran y ordenan al pulsar su cabecera.
-foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvSat, $lvH, $lvN, $lvI, $lvC, $lvB, $lvT)) { Lv-Filtrable $tabla }
+foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvSat, $lvH, $lvN, $lvE, $lvI, $lvC, $lvB, $lvT)) { Lv-Filtrable $tabla }
 
 $form.Add_Shown({
     try {

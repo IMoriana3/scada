@@ -1392,7 +1392,8 @@ Check 'modo: el resumen dice cuantas ya estaban' ($src.Contains('{0} ya estaban,
 # puede estar CAIDO: en Ayora todas las NCUs llevan uno solo.
 $nsOk = @{salud='OK'; alarmas=@(); fecha='2026-08-11 09:00:00 UTC'; desvio=3; din=0; principal=0}
 $commOk = @{tcus=@{1=@{comunica=$true}; 2=@{comunica=$true}; 3=@{comunica=$false}}; hsus=@(@{comunica=$true})}
-$f1 = Comm-FilaNcu '7' '192.168.4.55' $nsOk @(@{puerto=503}) $commOk 22 0
+$f1 = Comm-FilaNcu '7' '192.168.4.55' $nsOk @(@{puerto=503}) $commOk 22 0 'v1.2.3'
+Check 'comm: la version de la NCU' $f1.FW 'v1.2.3'
 Check 'comm: la NCU que va bien' $f1.Estado 'OK'
 Check 'comm: su unico gateway' $f1.GW1 'OK'
 Check 'comm: y el que no tiene, ni OK ni CAIDO' $f1.GW2 '-'
@@ -1417,6 +1418,37 @@ Check 'comm: ni inventa el UPS' $f3.UPS ''
 # reloj desviado
 $nsRel = @{salud='OK'; alarmas=@(); fecha='2026-08-11 09:00:00 UTC'; desvio=4000; din=0; principal=0}
 Check 'comm: el reloj desviado lo dice' ((Comm-FilaNcu '1' '1.1.1.1' $nsRel @(@{puerto=503}) $null 10 0).Reloj -like '*RELOJ NCU DESVIADO*') $true
+
+# ---------- estabilidad de la Zigbee (v11.41) ----------
+# No hay RSSI en el mapa: se infiere de cuanto tiempo esta fresca cada TCU.
+$m = @{}
+# TCU 1 siempre fresca, TCU 2 se cae una vez y vuelve, TCU 3 nunca
+$m = Estab-Acumular $m '7' @{tcus=@{1=@{comunica=$true; edad=3}; 2=@{comunica=$true; edad=5}; 3=@{comunica=$false; edad=900}}}
+$m = Estab-Acumular $m '7' @{tcus=@{1=@{comunica=$true; edad=4}; 2=@{comunica=$false; edad=400}; 3=@{comunica=$false; edad=1200}}}
+$m = Estab-Acumular $m '7' @{tcus=@{1=@{comunica=$true; edad=2}; 2=@{comunica=$true; edad=9}; 3=@{comunica=$false; edad=1500}}}
+$res = @(Estab-Resumen $m)
+Check 'estab: una fila por TCU' $res.Count 3
+$e1 = @($res | Where-Object { $_.TCU -eq 1 })[0]
+$e2 = @($res | Where-Object { $_.TCU -eq 2 })[0]
+$e3 = @($res | Where-Object { $_.TCU -eq 3 })[0]
+Check 'estab: la que siempre habla es estable' $e1.Veredicto 'estable'
+Check 'estab: y al 100 %' $e1.Frescas_pct 100
+Check 'estab: la que se cae una vez, contada' $e2.Caidas 1
+Check 'estab: con su porcentaje' $e2.Frescas_pct 66.7
+Check 'estab: y con dos de cada tres, mala' $e2.Veredicto 'mala'
+# el escalon de intermitente: 96 % es 24 de 25
+$mi = @{}
+for ($k=1; $k -le 24; $k++) { $mi = Estab-Acumular $mi '3' @{tcus=@{5=@{comunica=$true; edad=2}}} }
+$mi = Estab-Acumular $mi '3' @{tcus=@{5=@{comunica=$false; edad=500}}}
+Check 'estab: 96 por ciento es intermitente' (@(Estab-Resumen $mi)[0].Veredicto) 'intermitente'
+Check 'estab: la que nunca habla' $e3.Veredicto 'sin comunicacion'
+Check 'estab: caidas solo al pasar de fresca a muda' $e3.Caidas 0
+Check 'estab: guarda la edad maxima' $e3.Edad_max_s 1500
+# las peores primero: es lo que se mira
+Check 'estab: la peor va arriba' $res[0].TCU 3
+Check 'estab: y la mejor abajo' $res[-1].TCU 1
+Check 'estab: sin datos no revienta' (@(Estab-Resumen @{}).Count) 0
+Check 'estab: una NCU muda no aporta filas' (@(Estab-Resumen (Estab-Acumular @{} '9' $null)).Count) 0
 
 Check 'faltan: sin topologia, ninguna' ((@(Hsu-Faltantes @{ncu='4'; hsus=0} 0)).Count) 0
 Check 'faltan: y si hay mas de las dichas tampoco' ((@(Hsu-Faltantes @{ncu='4'; hsus=1} 3)).Count) 0
@@ -1592,7 +1624,7 @@ Check 'cabecera: se marcan al enganchar la tabla' ($src.Contains('# marca las ca
 # las diez tablas de resultados tienen que estar enganchadas
 $engancha = [regex]::Match($src, 'foreach \(\$tabla in @\(([^)]*)\)\) \{ Lv-Filtrable')
 Check 'cabecera: hay linea que engancha las tablas' $engancha.Success $true
-foreach ($t in @('lvL','lvD','lvG','lvA','lvV','lvP','lvFW','lvSat','lvH','lvN','lvI')) {
+foreach ($t in @('lvL','lvD','lvG','lvA','lvV','lvP','lvFW','lvSat','lvH','lvN','lvE','lvI')) {
     Check "cabecera: ${t} filtrable" ($engancha.Groups[1].Value.Contains("`$$t")) $true
 }
 # y no puede quedarse ninguna fuera: si se crea una tabla nueva hay que anadirla
