@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.39'
+$VERSION_TOOLBOX = '11.40'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -826,6 +826,44 @@ function Flota-Declarada($cx) {
 # Estaba escrita a mano en el de serie y el paralelo no la ponia: la planta
 # entera salia sin una sola fila de NCU, y con ella se perdian GW, UPS, seta y
 # reloj de las 16. Pura: se prueba sin ventana.
+# Una fila de la pestana Comm NCU. Traduce los bits del bloque 502 a algo que
+# se lee de un vistazo, y sobre todo distingue "no lo tiene" de "lo tiene mal":
+# un gateway que la topologia no declara sale '-', no 'CAIDO'. Pura.
+function Comm-FilaNcu([string]$ncu, [string]$ip, $ns, $gws, $comm, [int]$tcusDecl, [int]$hsusDecl) {
+    $puertos = @(@($gws) | Where-Object { $_ -and $_.puerto } | ForEach-Object { [int]$_.puerto })
+    $hay1 = ($puertos.Count -eq 0 -or $puertos -contains $PUERTO_GW1)
+    $hay2 = ($puertos.Count -gt 0 -and $puertos -contains $PUERTO_GW2)
+    $din = $(if ($ns) { [int]$ns.din } else { 0 })
+    $pri = $(if ($ns) { [int]$ns.principal } else { 0 })
+    $gw = { param($hay, $bit) $(if (-not $hay) { '-' } elseif ($pri -band (1 -shl $bit)) { 'CAIDO' } else { 'OK' }) }
+    $ups = @()
+    if ($din -band 0x1) { $ups += 'bateria baja' }
+    if ($din -band 0x2) { $ups += 'sin alimentacion' }
+    if ($pri -band 0x1) { $ups += 'alarma de bateria' }
+    $tcusOk = $null
+    if ($null -ne $comm -and $comm.tcus) {
+        $tcusOk = @(@($comm.tcus.Values) | Where-Object { $_.comunica }).Count
+    }
+    $hsusOk = $null
+    if ($null -ne $comm -and $null -ne $comm.hsus) {
+        $hsusOk = @(@($comm.hsus) | Where-Object { $_.comunica }).Count
+    }
+    return [pscustomobject]@{
+        NCU = $ncu; IP = $ip
+        Estado = $(if ($ns) { "$($ns.salud)" } else { 'SIN RESPUESTA' })
+        GW1 = (& $gw $hay1 4); GW2 = (& $gw $hay2 5)
+        UPS = $(if (-not $ns) { '' } elseif ($ups.Count -eq 0) { 'OK' } else { ($ups -join '; ') })
+        Seta = $(if (-not $ns) { '' } elseif ($din -band 0x2000) { 'PULSADA' } else { '-' })
+        Reloj = $(if (-not $ns) { '' } elseif ("$($ns.fecha)" -eq '') { 'sin hora' }
+                  elseif ($null -ne $ns.desvio -and $ns.desvio -gt $RELOJ_TOL_S) { (Reloj-Nota $ns) -join '' }
+                  else { 'en hora' })
+        TCUs = $(if ($null -eq $tcusOk) { '' } else { "$tcusOk/$tcusDecl" })
+        HSUs = $(if ($hsusDecl -le 0 -and $null -eq $hsusOk) { '-' }
+                 elseif ($null -eq $hsusOk) { '' } else { "$hsusOk/$hsusDecl" })
+        Notas = $(if ($ns) { (@($ns.alarmas) -join '; ') } else { '' })
+    }
+}
+
 function Diag-FilaNcu([string]$ncu, $ns, [string]$err) {
     return [pscustomobject]@{
         NCU=$ncu; GW=''; TCU='NCU'; Salud=$(if ($ns) { $ns.salud } else { 'AVISO' }); Modo='-'
@@ -3662,6 +3700,50 @@ $lvSat.View = 'Details'; $lvSat.FullRowSelect = $true; $lvSat.GridLines = $true
 [void]$lvSat.Columns.Add('Detalle', 640)
 $tabSAT.Controls.Add($lvSat)
 
+# ============================ TAB COMM NCU ============================
+# Lo que dice cada NCU de si misma: si contesta, sus gateways, el UPS, la seta,
+# el reloj y cuantas de sus TCUs le hablan. Estaba todo, pero repartido entre el
+# diagnostico, las alertas del vigilante y la consola, y una NCU se mira entera
+# o no se mira. Es el bloque 502: ~5 lecturas por NCU, la planta en segundos.
+$tabN = New-Object System.Windows.Forms.TabPage
+$tabN.Text = 'Comm NCU'
+$tabs.TabPages.Add($tabN)
+
+$btnNComm = New-Object System.Windows.Forms.Button
+$btnNComm.Text = 'COMPROBAR NCUs'
+$btnNComm.Location = New-Object System.Drawing.Point(10, 18)
+$btnNComm.Size = New-Object System.Drawing.Size(150, 28)
+$btnNComm.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnNComm.ForeColor = [System.Drawing.Color]::White
+$tabN.Controls.Add($btnNComm)
+
+$chkNTcus = New-Object System.Windows.Forms.CheckBox
+$chkNTcus.Text = 'contar TCUs que comunican'
+$chkNTcus.Checked = $true
+$chkNTcus.Location = New-Object System.Drawing.Point(176, 22)
+$chkNTcus.Size = New-Object System.Drawing.Size(190, 22)
+$tabN.Controls.Add($chkNTcus)
+
+$btnNCsv = New-Object System.Windows.Forms.Button
+$btnNCsv.Text = 'CSV'
+$btnNCsv.Location = New-Object System.Drawing.Point(838, 18)
+$btnNCsv.Size = New-Object System.Drawing.Size(70, 28)
+$tabN.Controls.Add($btnNCsv)
+
+$lblNRes = LG $tabN '' 380 440 24
+$lblNRes.ForeColor = [System.Drawing.Color]::DimGray
+
+$lvN = New-Object System.Windows.Forms.ListView
+$lvN.Location = New-Object System.Drawing.Point(10, 56)
+$lvN.Size = New-Object System.Drawing.Size(898, 304)
+$lvN.View = 'Details'; $lvN.FullRowSelect = $true; $lvN.GridLines = $true
+foreach ($c in @(@('NCU',45), @('IP',110), @('Estado',86), @('GW1',62), @('GW2',62),
+                 @('UPS',96), @('Seta',62), @('Reloj',96), @('TCUs',66), @('HSUs',56), @('Notas',240))) {
+    [void]$lvN.Columns.Add($c[0], $c[1])
+}
+$tabN.Controls.Add($lvN)
+[void](LG $tabN 'Una fila por NCU con lo que ella misma declara (puerto 502). El cuadro NCUs de arriba acota cuales.' 10 890 366)
+
 # ============================ TAB HSU (METEO) ============================
 $tabH = New-Object System.Windows.Forms.TabPage
 $tabH.Text = 'HSU'
@@ -4183,6 +4265,7 @@ $BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $
                     $btnPresetSave, $btnPresetLoad, $btnLPreset, $btnCargarBackup, $btnLCsv, $btnDCsv, $btnBackupJson,
                     $btnComparar, $btnGCsv, $btnGJson, $btnGWa, $btnGBat, $btnBVer, $btnBAud, $btnBCar, $btnBCsv, $btnBJson, $btnICsv, $btnTCargar, $btnTGuardar, $btnTBorrar,
                     $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnAudEscr, $btnInvF, $btnInvFCsv,
+                    $btnNComm, $btnNCsv,
                     $btnHMeteo, $btnHConfig, $btnHCaja, $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm, $btnHEsclavo,
                     $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComis, $btnPComisSet, $btnPCsv,
                     $btnGBucle, $btnPSeg, $btnAudJson, $btnInvJson, $btnHBuscar, $btnGComm,
@@ -4675,7 +4758,7 @@ $script:Ctx = @{}
 # el informe habla de "bloques" y el sello va por operacion: aqui se cruzan.
 # 'bat' sale del diagnostico, no de una lectura propia.
 $CTX_DE_BLOQUE = @{diag='diagnostico'; bat='diagnostico'; lectura='lectura'
-                   aud='auditoria'; inv='inventario'; pem='pem'}
+                   aud='auditoria'; inv='inventario'; pem='pem'; comm='comm'}
 function Ctx-Guardar([string]$clave, $cx, $trabajos) {
     $script:Ctx[$clave] = Ctx-Sello (Nombre-Planta) $cx $trabajos
 }
@@ -9542,6 +9625,63 @@ $btnSatAnal.Add_Click({ Lanzar {
     Con "Resultados escritos en $dir (ficheros RESULTADO_*.csv)." ([System.Drawing.Color]::LightGreen)
 } })
 
+# ------------------------- COMM NCU -------------------------
+$script:UltimoComm = @()
+$btnNComm.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
+    if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
+    Ctx-Guardar 'comm' $cx $trabajos
+    $lvN.Items.Clear(); $script:UltimoComm = @(); $lblNRes.Text = ''
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Comm NCU: $($trabajos.Count) NCU(s) por el puerto $PUERTO_NCU" ([System.Drawing.Color]::SteelBlue)
+    Prog-Iniciar $trabajos.Count
+    $nOk = 0; $nMal = 0
+    foreach ($tr in $trabajos) {
+        if (Chequear-Cancelado) { break }
+        $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
+        $ns = $null; $comm = $null
+        $gws = $(if ($tr.cx.gws) { $tr.cx.gws }
+                 elseif ($tr.cx.puerto -and $tr.cx.puerto -ne $PUERTO_NCU) { @(@{puerto=[int]$tr.cx.puerto}) }
+                 else { $null })
+        try {
+            Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
+            $ns = Ncu-Salud $gws
+            # contar las TCUs que hablan es barato (2 registros por TCU, de 50
+            # en 50) pero en San Jose son 21 NCUs de 120: se puede desmarcar
+            if ($chkNTcus.Checked) { try { $comm = Ncu-Comm @($tr.tcus) } catch {} }
+        } catch { } finally { Modbus-Cerrar }
+        $nDecl = @($tr.tcus).Count
+        $nHsu = [int]$(if ($tr.cx.multi) { 0 } else { 0 })
+        $nHsu = @(Lista $(if ($null -ne $tr.hsuLista) { $tr.hsuLista } else { $tr.cx.hsuLista })).Count
+        $f = Comm-FilaNcu "$($tr.ncu)" "$($tr.ip)" $ns $gws $comm $nDecl $nHsu
+        $script:UltimoComm += $f
+        $it = New-Object System.Windows.Forms.ListViewItem("$($f.NCU)")
+        foreach ($c in @($f.IP, $f.Estado, $f.GW1, $f.GW2, $f.UPS, $f.Seta, $f.Reloj, $f.TCUs, $f.HSUs, $f.Notas)) { [void]$it.SubItems.Add("$c") }
+        switch ("$($f.Estado)") {
+            'OK'     { $it.ForeColor = [System.Drawing.Color]::DarkGreen; $nOk++ }
+            'AVISO'  { $it.ForeColor = [System.Drawing.Color]::DarkOrange; $nMal++ }
+            'ALARMA' { $it.ForeColor = [System.Drawing.Color]::Firebrick; $nMal++ }
+            default  { $it.ForeColor = [System.Drawing.Color]::Gray; $nMal++ }
+        }
+        $lvN.Items.Add($it) | Out-Null
+        if ("$($f.Estado)" -ne 'OK') {
+            Con ("NCU{0,-3} {1,-15} {2,-13} {3}" -f $f.NCU, $f.IP, $f.Estado, $f.Notas) ([System.Drawing.Color]::Orange)
+        }
+        Prog-Paso
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    $script:NcuLog = ''
+    $lblNRes.Text = "NCUs: $($nOk + $nMal)   |   OK: $nOk   |   con algo que mirar: $nMal"
+    Con "Comm NCU: $nOk NCUs OK, $nMal con algo que mirar." ([System.Drawing.Color]::SteelBlue)
+    Marcar-Bloque 'comm'
+} })
+
+$btnNCsv.Add_Click({
+    if (@($script:UltimoComm).Count -eq 0) { return }
+    [void](Exportar-Csv $script:UltimoComm 'comm_ncu' 'Comm NCU')
+})
+
 $btnHBuscar.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $p = $null; if ($cbPlanta.SelectedItem) { $p = $PLANTAS[$cbPlanta.SelectedItem] }
@@ -10135,7 +10275,7 @@ $btnLog.Add_Click({
 
 # ------------------------- informe HTML de la sesion -------------------------
 # Nombre legible de cada bloque, para el dialogo y para el nombre del fichero
-$script:NombreBloque = @{diag='Diagnostico'; lectura='Lectura de variables'; pem='PEM'
+$script:NombreBloque = @{diag='Diagnostico'; lectura='Lectura de variables'; pem='PEM'; comm='Comm NCU'
                          aud='Auditoria'; inv='Inventario'; esc='Escritura'}
 
 $btnInforme.Add_Click({
@@ -10707,7 +10847,7 @@ $form.Add_KeyDown({
 })
 
 # Todas las tablas de resultados filtran y ordenan al pulsar su cabecera.
-foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvSat, $lvH, $lvI, $lvC, $lvB, $lvT)) { Lv-Filtrable $tabla }
+foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvSat, $lvH, $lvN, $lvI, $lvC, $lvB, $lvT)) { Lv-Filtrable $tabla }
 
 $form.Add_Shown({
     try {

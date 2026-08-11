@@ -89,6 +89,27 @@ Al arrancar se revisa cada `plantas/*.json` y se avisa en la consola de:
 Lo segundo necesita que el export de la plataforma incluya `trackers` por
 entrada; sin ese dato no opina, no se lo inventa.
 
+**Pestaña Comm NCU (v11.40)** — lo que cada NCU dice **de sí misma**, una fila
+por NCU: si contesta, sus **gateways**, el **UPS** (batería y alimentación), la
+**seta**, el **reloj** y su desvío, cuántas de sus **TCUs** le hablan y cuántas
+**HSUs**. Sale del bloque 502: unas cinco lecturas por NCU, la planta entera en
+segundos y sin tocar la Zigbee.
+
+Todo eso ya existía, pero repartido entre el diagnóstico, las alertas del
+vigilante y la consola — y una NCU se mira entera o no se mira. El día que
+saltaron las protecciones de los switches en Ayora, esta pestaña habría dicho en
+diez segundos lo que costó media mañana.
+
+Dos cosas que hace bien a propósito:
+
+- **distingue «no lo tiene» de «lo tiene mal»**: un gateway que la topología no
+  declara sale `-`, no `CAIDO`. En Ayora todas las NCUs llevan uno solo;
+- **la NCU que no contesta sale igual**, con `SIN RESPUESTA`, y sin inventarse
+  el estado de su UPS ni de sus gateways.
+
+El contador de TCUs se puede desmarcar: es barato (2 registros por TCU, de 50 en
+50) pero en San José son 21 NCUs de 120 seguidores.
+
 **Los estados de batería, en minúsculas (v11.39)** — `NO ENTRA CORRIENTE`,
 `FUERA DE LA FLOTA`, `PANEL SIN TENSION`… salían **en mayúsculas** en la columna
 *Estado*. Gritan sin necesidad y ensucian la tabla. Ahora van como `No entra
