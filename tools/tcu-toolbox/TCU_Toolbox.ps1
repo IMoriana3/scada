@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.36'
+$VERSION_TOOLBOX = '11.37'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -804,8 +804,17 @@ function Flota-Declarada($cx) {
         }
         # @($null).Count vale 1 en PS 5.1: sin filtrar, una NCU sin estaciones
         # declaraba una HSU1 fantasma que luego salia SIN LECTURA para siempre
+        # el numero de una HSU es el hueco que ocupa en la cache de la NCU, que
+        # coincide con la columna RSU del Excel. Si la topologia lo trae (campo
+        # `rsu`), se usa; si no, se numeran 1..n dentro de la NCU.
+        $escl = @(@($n.hsuLista) | Where-Object { "$_" -match '^\d+$' })
+        $rsu  = @(@($n.rsuLista) | Where-Object { "$_" -match '^\d+$' })
         $h = 0
-        foreach ($e in @(@($n.hsuLista) | Where-Object { "$_" -match '^\d+$' })) { $h++; $r += ,@{NCU=$et; Tipo='HSU'; TCU="HSU$h"} }
+        foreach ($e in $escl) {
+            $h++
+            $nom = $(if ($rsu.Count -eq $escl.Count) { "HSU$($rsu[$h - 1])" } else { "HSU$h" })
+            $r += ,@{NCU=$et; Tipo='HSU'; TCU=$nom}
+        }
     }
     return $r
 }
@@ -813,11 +822,65 @@ function Flota-Declarada($cx) {
 # Completa lo leido con lo que la topologia dice que hay y no ha contestado.
 # Un equipo declarado del que no se sabe nada NO es lo mismo que un equipo OK:
 # sale como SIN LECTURA, que es lo que de verdad se sabe de el. Pura.
+# La fila de salud de una NCU, igual la lea el barrido en serie o el paralelo.
+# Estaba escrita a mano en el de serie y el paralelo no la ponia: la planta
+# entera salia sin una sola fila de NCU, y con ella se perdian GW, UPS, seta y
+# reloj de las 16. Pura: se prueba sin ventana.
+function Diag-FilaNcu([string]$ncu, $ns, [string]$err) {
+    return [pscustomobject]@{
+        NCU=$ncu; GW=''; TCU='NCU'; Salud=$(if ($ns) { $ns.salud } else { 'AVISO' }); Modo='-'
+        Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''
+        Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''; Edad_s=''
+        Alarmas=$(if ($ns) { ((@($ns.alarmas) + $(Reloj-Nota $ns)) -join '; ') }
+                  else { "NCU sin respuesta en ${PUERTO_NCU}: $err" })
+        main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
+    }
+}
+
 function Diag-Completar($filas, $declarada) {
     $vistos = @{}
-    foreach ($f in @($filas)) { $vistos["$($f.NCU)|$($f.TCU)"] = $true }
+    $hsuLeidas = @{}
+    foreach ($f in @($filas)) {
+        $vistos["$($f.NCU)|$($f.TCU)"] = $true
+        if ("$($f.TCU)" -match '^HSU') {
+            $k = "$($f.NCU)"
+            if (-not $hsuLeidas.ContainsKey($k)) { $hsuLeidas[$k] = @() }
+            $hsuLeidas[$k] += "$($f.TCU)"
+        }
+    }
     $r = @(@($filas))
+    # Las HSUs aparte: su numero es el hueco que ocupan en la cache de la NCU,
+    # y no tiene por que coincidir con el orden en que la topologia las lista.
+    # Compararlas por etiqueta metia una HSU fantasma por cada una que se leia
+    # con otro numero, asi que se comparan por CUENTA dentro de cada NCU.
+    $hsuDecl = @{}
     foreach ($d in @($declarada)) {
+        if ("$($d.TCU)" -notmatch '^HSU') { continue }
+        $k = "$($d.NCU)"
+        if (-not $hsuDecl.ContainsKey($k)) { $hsuDecl[$k] = @() }
+        $hsuDecl[$k] += "$($d.TCU)"
+    }
+    foreach ($k in @($hsuDecl.Keys)) {
+        $leidas = Lista $hsuLeidas[$k]
+        $faltan = @($hsuDecl[$k]).Count - $leidas.Count
+        if ($faltan -le 0) { continue }
+        # si no se ha leido ninguna, las etiquetas declaradas valen tal cual;
+        # si se ha leido alguna con otro numero, no se adivina cual falta
+        $nombres = @($hsuDecl[$k] | Where-Object { $leidas -notcontains $_ })
+        for ($i = 0; $i -lt $faltan; $i++) {
+            $et = $(if ($leidas.Count -eq 0 -and $i -lt $nombres.Count) { $nombres[$i] } else { 'HSU?' })
+            $r += ,[pscustomobject]@{
+                NCU=$k; GW=''; TCU=$et; Salud='SIN LECTURA'; Modo='-'
+                Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''
+                Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''
+                Tbat_C=''; Tpcb_C=''; Edad_s=''
+                Alarmas='declarada en la topologia y no leida en este barrido'
+                main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
+            }
+        }
+    }
+    foreach ($d in @($declarada)) {
+        if ("$($d.TCU)" -match '^HSU') { continue }
         $k = "$($d.NCU)|$($d.TCU)"
         if ($vistos.ContainsKey($k)) { continue }
         $r += ,[pscustomobject]@{
@@ -4624,6 +4687,13 @@ function Ctx-Leer([string]$clave) {
              ncus=@(); multi=$false; alcance=''}
 }
 
+# @($null).Count vale 1 en PowerShell 5.1, asi que una variable vacia se cuenta
+# como si tuviera un elemento. Lleva CUATRO veces mordiendo en este proyecto
+# (el total de la flota, las TCUs por trabajo, las HSUs declaradas y las leidas),
+# siempre con el mismo sintoma: un equipo fantasma o uno que no se completa.
+# Todo lo que sea "una lista que puede venir vacia" pasa por aqui.
+function Lista($x) { return @(@($x) | Where-Object { $null -ne $_ -and "$_" -ne '' }) }
+
 # Cuantas TCUs suman los trabajos. Ojo: @($null).Count vale 1 en PS 5.1, asi
 # que una NCU sin TCUs sumaria una de mentira si no se filtra antes.
 function Cuantas-Tcus($trabajos) {
@@ -6055,9 +6125,13 @@ function Paralelo-Ejecutar($tareas, [scriptblock]$cuerpo, [int]$hilos = 8, [stri
 $DIAG_HILO = {
     param($logica, $RaizTb, $t)
     Invoke-Expression $logica
-    $out = @{ncu=$t.ncu; ip=$t.ip; filas=@(); hsus=@(); error=''}
+    $out = @{ncu=$t.ncu; ip=$t.ip; filas=@(); hsus=@(); salud=$null; error=''}
     try {
         Modbus-Conectar $t.ip $t.puerto $t.to
+        # la salud de la propia NCU (GW, UPS, seta, reloj) tambien aqui: el
+        # barrido en serie la leia y el paralelo no, y el paralelo es el modo
+        # por defecto, asi que la planta entera salia SIN una sola fila de NCU
+        try { $out.salud = Ncu-Salud $t.gws } catch {}
         $dm = Ncu-DiagCompat $t.tcus
         foreach ($u in $t.tcus) { if ($dm[[int]$u]) { $out.filas += ,$dm[[int]$u] } }
         try { $out.hsus = @(Ncu-HsuCompat) } catch {}
@@ -6524,6 +6598,21 @@ function Diag-Correr {
             foreach ($r in ($res | Sort-Object { [int]("0" + "$($_.tarea.ncu)") })) {
                 $o = @($r.salida)[0]
                 $eti = "$($r.tarea.ncu)"
+                # la fila de salud de la NCU va SIEMPRE, incluso si no contesta:
+                # una NCU muda que desaparece de la tabla es la peor version del
+                # dato. El barrido en serie ya lo hacia; el paralelo no, y es el
+                # modo por defecto.
+                $dnP = Diag-FilaNcu $eti $(if ($o) { $o.salud } else { $null }) $(if ($o) { "$($o.error)" } else { "$($r.error)" })
+                $itemNP = New-Object System.Windows.Forms.ListViewItem($eti)
+                foreach ($c in @('', $dnP.TCU, $dnP.Salud, $dnP.Modo, '', '', '', '', '', $dnP.Alarmas)) { [void]$itemNP.SubItems.Add("$c") }
+                switch ("$($dnP.Salud)") {
+                    'OK'     { $itemNP.ForeColor = [System.Drawing.Color]::DarkGreen }
+                    'AVISO'  { $itemNP.ForeColor = [System.Drawing.Color]::DarkOrange }
+                    'ALARMA' { $itemNP.ForeColor = [System.Drawing.Color]::Firebrick }
+                }
+                $lvG.Items.Add($itemNP) | Out-Null
+                $script:UltimoDiag += $dnP
+                if ("$($dnP.Salud)" -ne 'OK') { Con ("NCU{0}  {1,-8} {2}" -f $eti, $dnP.Salud, $dnP.Alarmas) ([System.Drawing.Color]::Orange) }
                 if ($null -eq $o -or "$($o.error)" -ne '') {
                     $msg = $(if ($o) { "$($o.error)" } else { "$($r.error)" })
                     Con "NCU$eti ($($r.tarea.ip)): $msg - no se sabe nada de sus $(@($r.tarea.tcus).Count) TCUs" ([System.Drawing.Color]::Salmon)
@@ -6577,14 +6666,9 @@ function Diag-Correr {
             $ns = Ncu-Salud $gwsN
             Modbus-Cerrar
         } catch { $nsErr = "$_"; Modbus-Cerrar }
-        $dn = [pscustomobject]@{
-            NCU="$($tr.ncu)"; GW=''; TCU='NCU'; Salud=$(if ($ns) { $ns.salud } else { 'AVISO' }); Modo='-'
-            Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''
-            # El reloj salia SIEMPRE en la columna de alarmas y parecia un
-            # problema. Solo se menciona si de verdad esta desviado.
-            Alarmas=$(if ($ns) { ((@($ns.alarmas) + $(Reloj-Nota $ns)) -join '; ') } else { "NCU sin respuesta en ${PUERTO_NCU}: $nsErr" })
-            main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
-        }
+        # El reloj solo se menciona si de verdad esta desviado (Reloj-Nota):
+        # colgado de cada fila parecia un problema y no lo era.
+        $dn = Diag-FilaNcu "$($tr.ncu)" $ns $nsErr
         $itemN = New-Object System.Windows.Forms.ListViewItem("$($tr.ncu)")
         foreach ($c in @($dn.TCU, $dn.Salud, $dn.Modo, $dn.Tilt, $dn.Objetivo, $dn.Dif, $dn.SoC, '', $dn.Alarmas)) { [void]$itemN.SubItems.Add("$c") }
         switch ($dn.Salud) {
@@ -6766,6 +6850,27 @@ function Diag-Correr {
         Con "Repetidores: $($reps.Count) leidos ($nROk OK). No cuentan en el total de la flota: no mueven ningun seguidor, pero de ellos cuelga lo que repiten." ([System.Drawing.Color]::SteelBlue)
     }
     Modbus-Cerrar
+    # Lo declarado y no leido, a la tabla como SIN LECTURA. Hasta ahora esto
+    # solo lo hacia el INFORME HTML, asi que la tabla y el JSON que se sube a
+    # la plataforma se quedaban con lo leido: en Ayora faltaba la HSU de la
+    # NCU16, que no ha comunicado nunca, y desaparecer no es informacion.
+    try {
+        $decl = @(Flota-Declarada $cx)
+        if ($decl.Count -gt 0) {
+            $antes = @($script:UltimoDiag).Count
+            $script:UltimoDiag = @(Diag-Completar $script:UltimoDiag $decl)
+            $nuevas = @($script:UltimoDiag).Count - $antes
+            if ($nuevas -gt 0) {
+                foreach ($d in @($script:UltimoDiag | Select-Object -Last $nuevas)) {
+                    $itS = New-Object System.Windows.Forms.ListViewItem("$($d.NCU)")
+                    foreach ($c in @($d.GW, $d.TCU, $d.Salud, $d.Modo, '', '', '', '', '', $d.Alarmas)) { [void]$itS.SubItems.Add("$c") }
+                    $itS.ForeColor = [System.Drawing.Color]::DimGray
+                    $lvG.Items.Add($itS) | Out-Null
+                }
+                Con "$nuevas equipos que la topologia declara y no han contestado en este barrido: van como SIN LECTURA." ([System.Drawing.Color]::Orange)
+            }
+        }
+    } catch { Con "AVISO: no se ha podido completar la flota declarada ($_)" ([System.Drawing.Color]::Orange) }
     Cierre-Guardar (Nombre-Planta); Cierre-Pintar
     $lblGResumen.Text = "TCUs -> OK: $nOk  Aviso: $nAviso  Alarma: $nAlarma  Off: $nOff" +
         $(if (($nHOk + $nHMal) -gt 0) { "   |   HSUs: $($nHOk + $nHMal) ($nHOk OK)" } else { '' }) +
