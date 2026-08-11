@@ -106,7 +106,9 @@ Tres cosas cambian:
   `1-13,15-23` en vez de `1-25`. Antes ese `1-25` era una selección explícita
   que volvía a pedir los tres equipos inexistentes.
 
-**El gateway que no existe no puede estar «desconectado» (v11.33)** — el primer
+**El gateway que no existe no puede estar «desconectado» (v11.33)** ✅ *verificado
+en Ayora el 11/08/2026: el vigilante pasó de 19 alertas a 4, y las 4 son reales.*
+— el primer
 arranque del vigilante en Ayora soltó **19 alertas, y 15 eran falsas**: una
 `GW2 DESCONECTADO` por cada NCU. En Ayora **todas las NCUs llevan un solo
 gateway**, así que el bit del segundo está permanentemente a 1 — no hay nada
@@ -169,7 +171,9 @@ del nombre: **`alcance`** (`Planta completa (16 NCUs)` / `NCU3` / `ip:puerto`) y
 Si se cargan datos de la pestaña **Trabajos** (de otra sesión) no hay sello que
 valga y se cae a los cuadros, como antes.
 
-**Escribir en la planta entera y no poder guardarlo (v11.30)** — *ESCRIBIR*
+**Escribir en la planta entera y no poder guardarlo (v11.30)** ✅ *verificado en
+Ayora el 11/08/2026: escritura en TCUs de las NCU12, 13 y 14 y `GUARDAR EN NVM`
+seguido, 3 de 3 guardadas.* — *ESCRIBIR*
 aceptaba la entrada **(Planta completa)** desde la v5.7, pero **GUARDAR EN NVM**
 no: se plantaba con *«la entrada (Planta completa) solo está soportada en
 Diagnóstico y Flota; elige una NCU concreta»*. Es decir, se podía escribir en
