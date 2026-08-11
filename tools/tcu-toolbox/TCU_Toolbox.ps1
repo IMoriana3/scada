@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.35'
+$VERSION_TOOLBOX = '11.36'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -786,7 +786,8 @@ function Flota-Declarada($cx) {
     elseif ($cx.gws) { $ncus = @(@{ncu=(Ncu-DeNombre $cx.nombre); ip=$cx.ip; gws=$cx.gws; hsuLista=@($cx.hsuLista)}) }
     elseif ($cx.ini -and $cx.fin) {
         $ncus = @(@{ncu=(Ncu-DeNombre $cx.nombre); ip=$cx.ip
-                    gws=@(@{puerto=$cx.puerto; ini=$cx.ini; fin=$cx.fin; reps=@($cx.reps)}); hsuLista=@($cx.hsuLista)})
+                    gws=@(@{puerto=$cx.puerto; ini=$cx.ini; fin=$cx.fin; reps=@($cx.reps)
+                            huecos=@($cx.huecos)}); hsuLista=@($cx.hsuLista); rsuLista=@($cx.rsuLista)})
     }
     foreach ($n in $ncus) {
         $et = "$($n.ncu)"
@@ -801,8 +802,10 @@ function Flota-Declarada($cx) {
                 $r += ,@{NCU=$et; Tipo='REP'; TCU=$nom}
             }
         }
+        # @($null).Count vale 1 en PS 5.1: sin filtrar, una NCU sin estaciones
+        # declaraba una HSU1 fantasma que luego salia SIN LECTURA para siempre
         $h = 0
-        foreach ($e in @($n.hsuLista)) { $h++; $r += ,@{NCU=$et; Tipo='HSU'; TCU="HSU$h"} }
+        foreach ($e in @(@($n.hsuLista) | Where-Object { "$_" -match '^\d+$' })) { $h++; $r += ,@{NCU=$et; Tipo='HSU'; TCU="HSU$h"} }
     }
     return $r
 }
@@ -6565,7 +6568,13 @@ function Diag-Correr {
         $ns = $null; $nsErr = ''
         try {
             Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
-            $ns = Ncu-Salud $tr.cx.gws
+            # una entrada de NCU suelta no trae lista de gateways, pero su
+            # puerto ES su gateway: sin esto seguia cantando "GW2 DESCONECTADO"
+            # en una NCU que solo tiene el GW1
+            $gwsN = $(if ($tr.cx.gws) { $tr.cx.gws }
+                      elseif ($tr.cx.puerto) { @(@{puerto=[int]$tr.cx.puerto}) }
+                      else { $null })
+            $ns = Ncu-Salud $gwsN
             Modbus-Cerrar
         } catch { $nsErr = "$_"; Modbus-Cerrar }
         $dn = [pscustomobject]@{
