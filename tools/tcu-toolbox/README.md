@@ -89,6 +89,18 @@ Al arrancar se revisa cada `plantas/*.json` y se avisa en la consola de:
 Lo segundo necesita que el export de la plataforma incluya `trackers` por
 entrada; sin ese dato no opina, no se lo inventa.
 
+**Tres restos del mismo agujero (v11.36)** — la v11.35 arregló la lectura con una
+NCU suelta, pero quedaban tres sitios que seguían sin enterarse:
+
+- **la flota declarada rehacía el rango sin los huecos**, así que la TCU 14 de la
+  NCU7 volvía por la puerta de atrás como `SIN LECTURA`: 24 filas donde debía
+  haber 23. Un equipo que no existe no puede faltar;
+- **`GW2 DESCONECTADO` seguía saliendo** con una entrada de NCU suelta: el
+  enmascarado de la v11.33 pedía lista de gateways y ahí solo hay un puerto —
+  que **es** su gateway;
+- y una NCU **sin estaciones declaraba una `HSU1` fantasma**, otra vez por
+  `@($null).Count`, que en PowerShell 5.1 vale **1**. Van tres veces con ésta.
+
 **Con UNA NCU suelta, los huecos se ignoraban (v11.35)** — en Ayora NCU7 seguían
 saliendo la 14, la 24 y la 25 como OFFLINE en cada barrido, con la v11.32 ya
 puesta. El motivo: **todo lo que la topología sabe de una entrada viajaba solo

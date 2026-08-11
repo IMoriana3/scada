@@ -1328,6 +1328,21 @@ $rangoH = (Runs-Consecutivos (Tcus-DeGw @{ini=1; fin=25; huecos=@(14,24,25)}) |
 Check 'huecos: el cuadro sale ya sin ellos' $rangoH '1-13,15-23'
 Check 'huecos: y ese texto lo entiende la seleccion' ((Parse-Seleccion $rangoH 'x').lista -join ',') ((1..13 + 15..23) -join ',')
 
+# ---------- la flota declarada de una NCU suelta tambien salta los huecos ----------
+# Con la entrada Ayora NCU7 salian 24 filas en vez de 23: se leian las 22 que
+# existen, pero Flota-Declarada rehacia el rango SIN huecos y metia la 14 como
+# SIN LECTURA. Un equipo que no existe no puede faltar.
+$cxN7 = @{ip='192.168.4.55'; puerto=503; gws=$null; multi=$null; etiqueta='503'; to=1000; reint=1
+          nombre='Ayora NCU7'; ini=1; fin=23; huecos=@(14)}
+$flN7 = @(Flota-Declarada $cxN7)
+Check 'flota: la NCU suelta declara sus TCUs' (@($flN7 | Where-Object { $_.Tipo -eq 'TCU' }).Count) 22
+Check 'flota: y no cuela el hueco' (@($flN7 | Where-Object { $_.Tipo -eq 'TCU' -and $_.TCU -eq '14' }).Count) 0
+Check 'flota: con su fila de NCU' (@($flN7 | Where-Object { $_.Tipo -eq 'NCU' }).Count) 1
+Check 'flota: total de filas' ($flN7.Count) 23
+# el GW que no existe tampoco es alarma con una NCU suelta: su puerto ES su gateway
+Check 'flota: el puerto de una NCU suelta vale como gateway' (
+    ($src -match '(?s)elseif \(\$tr\.cx\.puerto\) \{ @\(@\{puerto=\[int\]\$tr\.cx\.puerto\}\) \}')) $true
+
 Check 'faltan: sin topologia, ninguna' ((@(Hsu-Faltantes @{ncu='4'; hsus=0} 0)).Count) 0
 Check 'faltan: y si hay mas de las dichas tampoco' ((@(Hsu-Faltantes @{ncu='4'; hsus=1} 3)).Count) 0
 # ---------- la que falta tiene nombre si la topologia lo trae (v11.34) ----------
