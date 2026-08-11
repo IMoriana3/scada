@@ -22,7 +22,7 @@ $i1 = $src.IndexOf('$script:Cierre = @{}'); $f1 = $src.IndexOf('$btnIdent.Add_Cl
 $i2 = $src.IndexOf('function Diag-LeerTcu'); $f2 = $src.IndexOf('$btnDiag.Add_Click')
 $i3 = $src.IndexOf('function Params-Conexion'); $f3 = $src.IndexOf('function Refrescar-ComboPlantas')
 $i4 = $src.IndexOf('function Nombres-Legibles'); $f4 = $src.IndexOf('function Refrescar-FiltroLeer')
-$i5 = $src.IndexOf('function Hsu-Recorrer'); $f5 = $src.IndexOf('function Hsu-Mostrar')
+$i5 = $src.IndexOf('$script:HsuPuertoOk = @{}'); $f5 = $src.IndexOf('function Hsu-Mostrar')
 $i6 = $src.IndexOf('function Anclaje-Para'); $f6 = $src.IndexOf('# Anclar contra un contenedor')
 $i7 = $src.IndexOf('function Eti-Tcu'); $f7 = $src.IndexOf('# Divide una lista de TCUs')
 $i8 = $src.IndexOf('function Nombres-Unicos'); $f8 = $src.IndexOf('function Vars-DeTablaLeer')
@@ -717,6 +717,26 @@ Check 'hsus: viento de la primera' (@($rH.filas | Where-Object { "$($_.Campo)" -
 # una sola HSU no mete cabeceras
 $rH1 = Hsu-Recorrer @($objsH[0]) $cxH { param($u) Hsu-LeerMeteo $u } $null
 Check 'hsu unica sin cabecera' (@($rH1.filas | Where-Object { "$($_.Campo)" -like '--- *' }).Count) 0
+
+# ---------- la HSU puede colgar del SEGUNDO gateway (v11.32) ----------
+# Burgo I: cada NCU lleva una estacion en el GW1 y otra en el GW2. Antes se
+# preguntaba siempre por el puerto mas bajo y la del GW2 salia muda. Aqui el
+# 15021 no existe, asi que si no probara el segundo puerto no contestaria.
+$script:HsuPuertoOk = @{}
+$objDoble = @(@{etiqueta='NCU1 - HSU2'; ip='127.0.0.1'; puerto=15021; puertos=@(15021, 15020); unit=185})
+$rD = Hsu-Recorrer $objDoble $cxH { param($u) Hsu-LeerMeteo $u } $null
+Check 'hsu gw2: contesta por el segundo gateway' (@($rD.oks).Count) 1
+Check 'hsu gw2: y se recuerda cual era' (Hsu-PuertoRecordado '127.0.0.1' 185) 15020
+# con los dos gateways mudos lo dice, para no mandar a nadie a mirar un cable
+$script:HsuPuertoOk = @{}
+$objMuda = @(@{etiqueta='NCU9 - HSU9'; ip='127.0.0.1'; puerto=15020; puertos=@(15020, 15021); unit=7})
+$rM = Hsu-Recorrer $objMuda $cxH { param($u) Hsu-LeerMeteo $u } $null
+Check 'hsu gw2: la muda dice que probo los dos' (@($rM.filas | Where-Object { "$($_.Nota)" -like '*gateways 15020 y 15021*' }).Count) 1
+Check 'hsu gw2: y no recuerda ningun puerto' (Hsu-PuertoRecordado '127.0.0.1' 7) 0
+# sin lista de puertos sigue valiendo el de siempre
+$script:HsuPuertoOk = @{}
+$rU = Hsu-Recorrer @(@{etiqueta='NCU1 - HSU1'; ip='127.0.0.1'; puerto=15020; unit=185}) $cxH { param($u) Hsu-LeerMeteo $u } $null
+Check 'hsu gw2: sin lista de puertos funciona igual' (@($rU.oks).Count) 1
 
 # ---------- el informe empieza por lo ultimo que se hizo ----------
 # El caso real: haces un inventario despues de un diagnostico, pides el informe
