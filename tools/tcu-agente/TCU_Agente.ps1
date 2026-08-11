@@ -1,4 +1,4 @@
-# ============================================================================
+﻿# ============================================================================
 #  TCU Agente v1.0 - API de SOLO LECTURA para la Toolbox web (piloto)
 #  Corre en el PC de planta y expone por HTTP el diagnostico via NCU (bloque
 #  compacto, sin Zigbee), las HSUs y el comisionado de la planta configurada.
@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '3.6'
+$VERSION_AGENTE = '3.7'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -693,8 +693,13 @@ function Diag-UnaNcu($n) {
         Modbus-Cerrar
     } catch {
         Modbus-Cerrar
-        $filas += Fila-Vacia $et 'NCU' 'AVISO' "NCU sin respuesta en ${PUERTO_NCU}: $_"
-        continue
+        # 'return', no 'continue': dentro de una funcion, 'continue' salta al
+        # siguiente giro del bucle DEL QUE LLAMA y se lleva por delante lo que
+        # la funcion habia construido. Asi, la NCU que no contestaba perdia su
+        # propia fila -la que dice POR QUE no contesta- y luego Diag-Completar
+        # la reponia como un generico 'declarado y no leido'. El total cuadraba
+        # y el motivo se perdia, que es lo unico que hacia falta saber.
+        return (@($filas) + @(Fila-Vacia $et 'NCU' 'AVISO' "NCU sin respuesta en ${PUERTO_NCU}: $_"))
     }
     if ($ns) {
         # el reloj solo si esta DESVIADO, como en la toolbox: colgado de cada
