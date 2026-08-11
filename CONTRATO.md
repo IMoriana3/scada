@@ -333,6 +333,15 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
   El Excel **no se sube a ningún repo** (`scada` es público y es documentación del fabricante): esto es solo la
   topología extraída.
 
+  **[Backtracking, 2026-08-11] El mismo bug estaba TAMBIÉN en el Seguimiento/SCADA, y era peor de lo que parecía.**
+  No solo `ips.html`: `seguimiento-pem.html` leía la topología de Supabase con su propio `rangoTcus()` de un
+  solo tramo. Resultado: **toda NCU con varios tramos se caía de los totales** — no contaba en la flota, ni en
+  el reparto por NCU, ni en el relleno SIN LECTURA, ni en la disponibilidad. San José llevaba así desde
+  siempre con sus NCU 17/18/19, y en Ayora saltó en cuanto Ignacio puso `1-13 15-23` en la NCU7: la NCU
+  entera desapareció de la cabecera. Ya usa el mismo parser (`rangos`/`huecos`) y descuenta los huecos del
+  total. Aviso por si el collector o el api leen `topologia` con su propio parser: **mirad que entiendan
+  varios tramos**, el síntoma es silencioso (la NCU no da error, simplemente no existe).
+
   **[Backtracking responde, 2026-08-10] Añadido.** `entradasToolbox()` exporta ya `trackers` en cada entrada.
   Matiz de semántica: la columna es un **total por NCU**, así que en NCUs con dos gateways va el MISMO número
   repetido en las dos entradas (GW1 y GW2) — no lo suméis por entrada; comparadlo contra la unión de rangos de
