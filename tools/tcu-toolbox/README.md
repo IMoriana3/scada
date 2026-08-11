@@ -89,6 +89,26 @@ Al arrancar se revisa cada `plantas/*.json` y se avisa en la consola de:
 Lo segundo necesita que el export de la plataforma incluya `trackers` por
 entrada; sin ese dato no opina, no se lo inventa.
 
+**El gateway que no existe no puede estar «desconectado» (v11.33)** — el primer
+arranque del vigilante en Ayora soltó **19 alertas, y 15 eran falsas**: una
+`GW2 DESCONECTADO` por cada NCU. En Ayora **todas las NCUs llevan un solo
+gateway**, así que el bit del segundo está permanentemente a 1 — no hay nada
+conectado ahí porque no existe ese gateway.
+
+Ahora `Ncu-Salud` recibe los gateways que **declara la topología** y apaga el bit
+de los que no están, tanto para el texto como para la salud. Si la topología dice
+que la NCU tiene los dos, sigue cantando igual. Y **sin topología no se inventa
+nada**: se comporta como antes, porque callar una alarma real es peor que dar una
+falsa.
+
+Un falso positivo repetido 15 veces no es un detalle estético: las tres alarmas
+de verdad de ese arranque —dos cortocircuitos de motor y una seta pulsada—
+estaban enterradas entre el ruido.
+
+De paso, el agente ya solo menciona el reloj de la NCU **cuando está desviado**
+(`Reloj-Nota`, como la toolbox). Colgado de cada alerta parecía parte del
+problema, y era solo la hora.
+
 **La HSU puede colgar del SEGUNDO gateway (v11.32)** — la topología dice cuántas
 estaciones tiene cada NCU y con qué esclavos, pero **no de qué gateway cuelga
 cada una**. Hasta ahora las lecturas directas (LEER METEO, LEER CONFIG,
