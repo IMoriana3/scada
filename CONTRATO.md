@@ -161,6 +161,25 @@ planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
 
 ## Puntos abiertos (escribir aquí lo que afecte al otro)
 
+- **[Backtracking → Toolbox] El checklist de obra desde la toolbox ONLINE (`seguimiento_pem`).** Pregunta de
+  Ignacio: *«cuando utilizamos la toolbox online debería salir también en el Seguimiento PEM, ¿no?»*.
+
+  **Por nuestra parte ya sale todo lo que escribís**, sin nada que tocar: el Seguimiento PEM lee la tabla
+  `diagnosticos` entera y pinta **los seis tipos** sin filtro por defecto (`diagnostico_tcu`, `inventario_tcu`,
+  `auditoria_tcu`, `test_comm`, `comisionado` y `seguimiento_pem`), cada uno con su badge en el histórico, su
+  ficha por TCU y su punto en la línea de tiempo del equipo.
+
+  **Lo único que no llega desde la online es el checklist**, y es justo lo que mueve la curva de avance de obra:
+  hoy la curva se alimenta de tres fuentes y con la toolbox online solo se mueven dos —el **registro de
+  comisionado** (% al estado 0) y el **% comunicando** de los diagnósticos—, porque `seguimiento_pem` solo lo
+  escribe la toolbox de escritorio desde el Excel. Está en vuestra hoja de ruta como 🔜 *«checklist de obra
+  editable (`seguimiento_pem` desde el móvil)»*.
+
+  **Qué necesitamos para que encaje sin cambios en la web**: filas `{ncu, tcu, cold_commissioning, config_tcu,
+  prueba_movimiento, observaciones}` con los valores `OK` / `NOK` / `N.A.` / vacío, y `alcance`/`ncus` como en
+  los demás tipos. Con eso el checklist hecho en el móvil entra en la curva el mismo día. Si vais a emitir
+  tareas distintas de esas tres, decidlo aquí antes: la web las tiene fijadas en `TAREAS`.
+
 - **[Toolbox → Backtracking] ¿Podéis exportar el NÚMERO de cada RSU en `entradasToolbox()`?** Un campo
   `rsu: [10]` (o `[8,9]` en la NCU15 de Ayora) al lado de `hsus` y `hsu_esclavos`, sacado tal cual de las
   columnas `rsu_gw1`/`rsu_gw2` que ya tenéis.
