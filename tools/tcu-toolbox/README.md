@@ -89,6 +89,23 @@ Al arrancar se revisa cada `plantas/*.json` y se avisa en la consola de:
 Lo segundo necesita que el export de la plataforma incluya `trackers` por
 entrada; sin ese dato no opina, no se lo inventa.
 
+**Con UNA NCU suelta, los huecos se ignoraban (v11.35)** — en Ayora NCU7 seguían
+saliendo la 14, la 24 y la 25 como OFFLINE en cada barrido, con la v11.32 ya
+puesta. El motivo: **todo lo que la topología sabe de una entrada viajaba solo
+por la vía de los gateways** —las entradas *(auto)* y *(Planta completa)*—, y
+`Params-Conexion` con un puerto fijo devolvía IP y puerto y tiraba el resto. Con
+la entrada de una sola NCU se perdían los **huecos**, los **repetidores**, las
+**HSUs** y la flota declarada.
+
+Tres cosas cambian:
+
+- la entrada de una NCU **lleva consigo** sus huecos, repetidores y HSUs;
+- `Plan-Segmentos` descuenta los huecos **también sin lista de gateways**, y
+  dice cuáles ha saltado en vez de hacerlo en silencio;
+- al elegir la entrada, el cuadro de TCUs se rellena ya **sin los huecos**:
+  `1-13,15-23` en vez de `1-25`. Antes ese `1-25` era una selección explícita
+  que volvía a pedir los tres equipos inexistentes.
+
 **El gateway que no existe no puede estar «desconectado» (v11.33)** — el primer
 arranque del vigilante en Ayora soltó **19 alertas, y 15 eran falsas**: una
 `GW2 DESCONECTADO` por cada NCU. En Ayora **todas las NCUs llevan un solo

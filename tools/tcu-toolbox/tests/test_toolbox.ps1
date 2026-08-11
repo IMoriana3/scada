@@ -1312,6 +1312,22 @@ Check 'faltan: distingue que la NCU no conteste' ($ff2[0].texto.Contains('no con
 Check 'faltan: dos esperadas y una hallada' ((@(Hsu-Faltantes @{ncu='15'; hsus=2} 1)).Count) 1
 Check 'faltan: dos esperadas y dos halladas' ((@(Hsu-Faltantes @{ncu='15'; hsus=2} 2)).Count) 0
 # sin dato de topologia no se inventa ninguna
+# ---------- una NCU suelta tambien descuenta los huecos (v11.35) ----------
+# Los huecos solo se aplicaban por la via de los gateways ((auto) y Planta
+# completa). Con la entrada de UNA NCU se seguian leyendo: en Ayora NCU7 salian
+# la 14, la 24 y la 25 -que no existen- como OFFLINE en cada barrido.
+$cxSuelta = @{ip='1.2.3.4'; puerto=503; gws=$null; multi=$null; etiqueta='503'; to=1000; reint=1; huecos=@(14,24,25)}
+$segSuelta = Plan-Segmentos @(12,13,14,15,24,25) $cxSuelta
+Check 'huecos: la NCU suelta los descuenta' (($segSuelta.tcus) -join ',') '12,13,15'
+Check 'huecos: y respeta el puerto' $segSuelta.puerto 503
+$cxSinH = @{ip='1.2.3.4'; puerto=503; gws=$null; multi=$null; etiqueta='503'; to=1000; reint=1}
+Check 'huecos: sin huecos, no toca nada' ((Plan-Segmentos @(1,2,3) $cxSinH).tcus -join ',') '1,2,3'
+# el cuadro de TCUs al elegir la entrada: los huecos ya no entran
+$rangoH = (Runs-Consecutivos (Tcus-DeGw @{ini=1; fin=25; huecos=@(14,24,25)}) |
+           ForEach-Object { $(if ($_.ini -eq $_.fin) { "$($_.ini)" } else { "$($_.ini)-$($_.fin)" }) }) -join ','
+Check 'huecos: el cuadro sale ya sin ellos' $rangoH '1-13,15-23'
+Check 'huecos: y ese texto lo entiende la seleccion' ((Parse-Seleccion $rangoH 'x').lista -join ',') ((1..13 + 15..23) -join ',')
+
 Check 'faltan: sin topologia, ninguna' ((@(Hsu-Faltantes @{ncu='4'; hsus=0} 0)).Count) 0
 Check 'faltan: y si hay mas de las dichas tampoco' ((@(Hsu-Faltantes @{ncu='4'; hsus=1} 3)).Count) 0
 # ---------- la que falta tiene nombre si la topologia lo trae (v11.34) ----------

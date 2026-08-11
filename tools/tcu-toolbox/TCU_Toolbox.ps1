@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.34'
+$VERSION_TOOLBOX = '11.35'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -4233,7 +4233,21 @@ function Params-Conexion {
         return @{ip=$ip; puerto=$null; gws=$p.gws; etiqueta='auto'; to=$to; reint=$reint; nombre="$($cbPlanta.SelectedItem)"}
     }
     $puerto = Val-Int $pt 'Puerto' 1 65535
-    return @{ip=$ip; puerto=$puerto; gws=$null; etiqueta="$puerto"; to=$to; reint=$reint; nombre="$($cbPlanta.SelectedItem)"}
+    # Lo que la topologia sabe de ESA entrada viajaba solo por la via de los
+    # gateways ((auto) y Planta completa). Con una NCU suelta se quedaba fuera:
+    # los huecos no se descontaban -en Ayora NCU7 se seguian leyendo la 14, la
+    # 24 y la 25, que no existen-, los repetidores no se leian y la flota
+    # declarada salia vacia.
+    $pe = $null
+    if ($cbPlanta.SelectedItem) { $pe = $PLANTAS[$cbPlanta.SelectedItem] }
+    $r = @{ip=$ip; puerto=$puerto; gws=$null; etiqueta="$puerto"; to=$to; reint=$reint; nombre="$($cbPlanta.SelectedItem)"}
+    if ($pe -and -not $pe.gws -and -not $pe.ncus -and "$($pe.ip)" -eq $ip -and [int]$pe.puerto -eq $puerto) {
+        $r.ini = $pe.ini; $r.fin = $pe.fin
+        $r.huecos = @($pe.huecos); $r.reps = @($pe.reps)
+        $r.hsu = $pe.hsu; $r.hsus = [int]$pe.hsus
+        $r.hsuLista = @($pe.hsuLista); $r.rsuLista = @($pe.rsuLista)
+    }
+    return $r
 }
 
 # Etiqueta de una TCU para la consola. En Planta completa los numeros de TCU
@@ -4251,7 +4265,18 @@ function Eti-Tcu($tcu) {
 # avisa de los TCUs que no caen en ningun gateway.
 function Plan-Segmentos([int[]]$tcus, [hashtable]$cx) {
     if ($cx.multi) { throw "la entrada (Planta completa) solo esta soportada en Diagnostico y Flota; elige una NCU concreta" }
-    if (-not $cx.gws) { return @{puerto=$cx.puerto; tcus=$tcus} }
+    if (-not $cx.gws) {
+        # con una NCU suelta no hay lista de gateways, pero los huecos siguen
+        # siendo huecos: pedirlos es leer equipos que no estan instalados
+        $h = @(@($cx.huecos) | Where-Object { "$_" -match '^\d+$' } | ForEach-Object { [int]$_ })
+        if ($h.Count -eq 0) { return @{puerto=$cx.puerto; tcus=$tcus} }
+        $quedan = @($tcus | Where-Object { $h -notcontains $_ })
+        $fuera = @($tcus | Where-Object { $h -contains $_ })
+        if ($fuera.Count -gt 0) {
+            Con ("AVISO: la topologia dice que estas TCUs no existen (saltadas): " + ($fuera -join ', ')) ([System.Drawing.Color]::Orange)
+        }
+        return @{puerto=$cx.puerto; tcus=$quedan}
+    }
     $segs = New-Object System.Collections.ArrayList
     $huerfanos = @()
     $actual = $null
@@ -4670,7 +4695,10 @@ $cbPlanta.Add_SelectedIndexChanged({
     if ($p) {
         $txtIp.Text = $p.ip
         if ($p.gws) { $txtPort.Text = 'auto' } else { $txtPort.Text = "$($p.puerto)" }
-        $rango = "$($p.ini)-$($p.fin)"
+        # con los huecos fuera: "1-13 15-23" en vez de "1-25"
+        $rango = (Runs-Consecutivos (Tcus-DeGw @{ini=$p.ini; fin=$p.fin; huecos=@($p.huecos)}) |
+                  ForEach-Object { $(if ($_.ini -eq $_.fin) { "$($_.ini)" } else { "$($_.ini)-$($_.fin)" }) }) -join ','
+        if (-not $rango) { $rango = "$($p.ini)-$($p.fin)" }
         $txtWTcus.Text = $rango; $txtLTcus.Text = $rango; $txtGTcus.Text = $rango; $txtATcus.Text = $rango
         $txtSTcus.Text = $rango; $txtVTcus.Text = $rango; $txtBTcus.Text = $rango; $txtPTcus.Text = $rango
         if ($p.hsu) { $txtHSlave.Text = "$($p.hsu)" }
