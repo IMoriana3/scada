@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '3.5'
+$VERSION_AGENTE = '3.6'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -1168,7 +1168,9 @@ catch {
         # siempre dice PID 4 (System) y nunca senala al culpable. Y matar el 4
         # reinicia el PC.
         Write-Host '  Para cerrarlo (solo mata lo que lleve TCU_Agente en la linea de comandos):'
-        Write-Host '    Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*TCU_Agente*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }'
+        # el '-notlike *CimInstance*' es para que el propio comando no se mate a
+        # si mismo: su linea de comandos tambien lleva 'TCU_Agente' dentro
+        Write-Host '    Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*TCU_Agente.ps1*" -and $_.CommandLine -notlike "*CimInstance*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }'
         Write-Host ''
         Write-Host '  Si eso no encuentra nada, la reserva se ha quedado huerfana en el servicio HTTP:'
         Write-Host "    netsh http show servicestate      (busca localhost:$puerto y mira que proceso lo tiene)"

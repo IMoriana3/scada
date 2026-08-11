@@ -43,8 +43,10 @@ planta, la versión del agente y la de la toolbox, y las dos tienen que ser de l
    Si al arrancar dice *«el puerto 8585 ya lo está usando otro programa»*, es que **el agente anterior sigue abierto**. Para cerrarlo:
 
    ```powershell
-   Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*TCU_Agente*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+   Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like "*TCU_Agente.ps1*" -and $_.CommandLine -notlike "*CimInstance*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
    ```
+
+   (El `-notlike "*CimInstance*"` es para que el propio comando no se mate a sí mismo: su línea de comandos también lleva `TCU_Agente` dentro. Y ojo: si arrancaste con el `.bat`, quedan **dos** procesos — el `cmd.exe` del `.bat` y el `powershell.exe` del agente; hay que cerrar los dos.)
 
    ⚠️ **`netstat` no sirve para esto.** El agente escucha por **HTTP.SYS**, el servicio HTTP de Windows: el socket lo abre el kernel, así que `netstat -ano | findstr :8585` siempre devuelve **PID 4 (System)** — el propio Windows — y nunca señala al proceso culpable. Y un `taskkill` sobre el PID 4 **reinicia el equipo**. Si el comando de arriba no encuentra nada, la reserva se ha quedado huérfana: `netsh http show servicestate` y busca `localhost:8585`.
 
