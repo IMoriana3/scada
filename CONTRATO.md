@@ -129,15 +129,26 @@ Medido en planta (Ayora, 16 NCUs): `/diagnostico` **16 s**, `/sincronizar` **17 
 `/sincronizar` necesita `supabase_email`/`supabase_pass` en la config del agente; sin ellas lee pero no sube
 (y el vigilante de alarmas se queda en la consola local).
 
-### C. postMessage `scada3d` (Seguimiento PEM → visor 3D)
+### C. postMessage `scada3d` (Seguimiento PEM / SCADA → visor 3D)
 `terreno.html?planta=<ayora|elburgo|sanjose>&scada=1` escucha:
 ```json
-{"tipo":"scada3d","planta":"…","fecha":"…","filas":[{"ncu":1,"tcu":5,"eti":"TK 001-01","lat":0,"lon":0,"salud":"OK|AVISO|ALARMA|OFFLINE","tilt":-5,"dif":0.4,"soc":85,"alarmas":""}]}
+{"tipo":"scada3d","planta":"…","fecha":"…",
+ "filas":[{"ncu":1,"tcu":5,"eti":"TK 001-01","lat":0,"lon":0,"salud":"OK|AVISO|ALARMA|OFFLINE|SIN LECTURA","tilt":-5,"dif":0.4,"soc":85,"alarmas":""}],
+ "meteo":{"ws":7.4,"wd":212,"nieve":0,"hsu":"HSU1","ncu":"13","salud":"OK"}}
 ```
 Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback geométrico. El emisor reenvía cada 2 s hasta el ack.
 
+**`meteo` (2026-08-11).** Viento REAL de planta para la veleta y el HUD del gemelo. Sale de la fila de HSU del
+propio diagnóstico: el texto que emitís (`"viento 7,4 m/s (nivel 2), dir 212 deg; nieve 0 m"`) se parsea en la
+web. Con varias HSUs manda **la de más viento** —para decidir un stow, el peor dato es el que cuenta—. Si
+algún día lo mandáis en campos propios (`Viento_ms`, `Dir_deg`, `Nieve_m`) decidlo aquí y se leen directos,
+que es más robusto que un `regex` sobre texto libre.
+
+**El SCADA reenvía en cada repintado**, no solo al abrir: con el auto-refresco encendido el gemelo sigue a la
+planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
+
 ### D. localStorage compartido (mismo origen imoriana3.github.io)
-`factiun_meteo {ws,wd,t}` (viento del SCADA → veleta 3D) · `factiun_plantas` (ficha técnica por código: módulos/strings) ·
+`factiun_meteo {ws,wd,t}` (viento; **solo sirve entre páginas de github.io**: el SCADA vive en el worker y no comparte origen, por eso su viento va en el `meteo` del postMessage) · `factiun_plantas` (ficha técnica por código: módulos/strings) ·
 `factiun_cal_<cod>` (calibración SolarGPT) · `cobertura_offline` ('1' = sin llamadas externas) · `cob3d_trackers` (ediciones de seguidores).
 
 ### E. Ficheros de datos en repos
@@ -394,6 +405,7 @@ Responde `{"tipo":"scada3d-ack"}`. Casado por `eti` (etiqueta TK) con fallback g
 
 | fecha | sesión | cambio |
 |---|---|---|
+| 2026-08-11 | Backtracking | **`scada3d` lleva `meteo`** (viento real de la HSU con más viento, parseado del texto de su fila) y el SCADA **reenvía en cada repintado**: el gemelo 3D sigue a la planta en vivo. Botón «🧊 3D en vivo» en la cabecera. |
 | 2026-08-11 | Backtracking | **Tabla nueva `acuses`** (acuse de alarmas del SCADA, sección A). La web avisa además cuando un diagnóstico viene corto y usa `alcance`/`ncus` como marca de edad (gracias por el dato). Cerrada la fila «rara» de la NCU4: era su repetidor. |
 | 2026-08-10 | Backtracking | **Tabla nueva `bitacora`** (diario de mantenimiento por equipo, sección A): la escribe la ficha de equipo del SCADA jerárquico; la toolbox puede insertar también. `entradasToolbox()` exporta ya `trackers` por entrada (respondido el punto de San José). |
 | 2026-08-10 | Backtracking | Hoja de ruta funcional (viva). Web adaptada al diagnóstico v2.9/v3.0: SIN LECTURA, flota completa, `eti` en el emisor scada3d. |
