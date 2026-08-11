@@ -89,6 +89,17 @@ Al arrancar se revisa cada `plantas/*.json` y se avisa en la consola de:
 Lo segundo necesita que el export de la plataforma incluya `trackers` por
 entrada; sin ese dato no opina, no se lo inventa.
 
+**APLICAR MODO ya no escribe en las que ya están (v11.37)** — antes escribía en
+todas y luego verificaba, y la verificación son hasta **3 s por TCU**. Ahora lee
+primero el modo actual (30001, un registro) y las que ya están en el modo pedido
+se saltan: salen como `ya estaba en modo AUTO (no se ha escrito)`. Las que
+cambian dicen de dónde vienen — `MANUAL -> AUTO`— y al final hay un recuento:
+*«X ya estaban, Y cambiadas, Z con fallo»*.
+
+En una planta donde casi todo está ya en AUTO, eso es la diferencia entre
+minutos y una hora — y, sobre todo, es no escribir en 700 equipos para no
+cambiar nada.
+
 **El diagnóstico de planta salía sin una sola fila de NCU (v11.37)** — el JSON
 del barrido de Ayora del 11/08 trae **765 filas**: 751 TCUs, 9 HSUs y 5
 repetidores. Faltan **17**: las **16 NCUs** y la **HSU de la NCU16**.

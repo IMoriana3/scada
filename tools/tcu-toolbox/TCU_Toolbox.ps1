@@ -8443,6 +8443,13 @@ function Pem-PorTcu($trabajos, [scriptblock]$accion, [scriptblock]$antes = $null
 
 # Fija el modo (0 OFF / 1 MANUAL / 2 AUTO) tocando SOLO los bits 9:8 de 40000
 # y verifica por efecto en 30001. Devuelve $true si el TCU llego al modo.
+# En que modo esta ahora (bits 9:8 de 30001), o $null si no contesta.
+function Modo-Actual([byte]$tcu) {
+    $v = (FC03-Leer $tcu (Dir-Trama 30001) 1)[0]
+    return ((($v -shr 8) -band 0x3))
+}
+function Modo-Nombre([int]$m) { return $MODOS_TCU[($m -band 0x3)] }
+
 function Fijar-Modo([byte]$tcu, [int]$modo) {
     FC22-Mascara $tcu 40000 0xFCFF ($modo -shl 8)
     for ($i = 0; $i -lt 6; $i++) {
@@ -8562,13 +8569,26 @@ $btnPModo.Add_Click({ Lanzar {
     $lvP.Items.Clear(); $script:UltimoPem = @()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Cambio de modo a $($cbPModo.SelectedItem) en $nTcus TCUs" ([System.Drawing.Color]::SteelBlue)
+    $cM = @{ya=0; cambiadas=0; fallo=0}
     Pem-PorTcu $trabajos {
         param($tcu, $ncu, $tr, $seg)
         try {
-            if (Fijar-Modo $tcu $modo) { Pem-Fila $tcu 'OK' "en modo $($cbPModo.SelectedItem)" $ncu }
-            else { Pem-Fila $tcu 'FALLA' "no confirma el modo (30001)" $ncu }
-        } catch { Pem-Fila $tcu 'FALLA' "$_" $ncu; if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar } }
+            # se mira antes en que modo esta: escribir en una que ya esta en el
+            # modo pedido es una escritura de mas y, sobre todo, hasta 3 s de
+            # verificacion por TCU. En una planta entera eso es la diferencia
+            # entre minutos y una hora.
+            $md = Modo-Actual $tcu
+            if ($md -eq $modo) {
+                $cM.ya++
+                Pem-Fila $tcu 'OK' "ya estaba en modo $($cbPModo.SelectedItem) (no se ha escrito)" $ncu
+                return
+            }
+            if (Fijar-Modo $tcu $modo) { $cM.cambiadas++; Pem-Fila $tcu 'OK' "$(Modo-Nombre $md) -> $($cbPModo.SelectedItem)" $ncu }
+            else { $cM.fallo++; Pem-Fila $tcu 'FALLA' "no confirma el modo (30001)" $ncu }
+        } catch { $cM.fallo++; Pem-Fila $tcu 'FALLA' "$_" $ncu; if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar } }
     }.GetNewClosure()
+    $cM.fallo += $script:PemSinConexion
+    Con ("Modo $($cbPModo.SelectedItem): {0} ya estaban, {1} cambiadas, {2} con fallo." -f $cM.ya, $cM.cambiadas, $cM.fallo) ([System.Drawing.Color]::SteelBlue)
 } })
 
 $btnPClear.Add_Click({ Lanzar {

@@ -35,6 +35,9 @@ $i16 = $src.IndexOf('function Prog-Texto'); $f16 = $src.IndexOf('$script:ProgTot
 $i15 = $src.IndexOf('function Hsu-EsclavoDe'); $f15 = $src.IndexOf('#  Cierre post-actualizacion (interfaz)')
 $i13 = $src.IndexOf('function Esclavos-Barrido'); $f13 = $src.IndexOf('function Params-Hsu')
 $i14 = $src.IndexOf('function Buscar-Norm'); $f14 = $src.IndexOf('function Buscador-Abrir')
+# el modo de una TCU: leerlo antes de escribirlo es lo que evita tocar las que ya estan
+$i18 = $src.IndexOf('function Modo-Actual'); $f18 = $src.IndexOf('function Guardia-Viento')
+$logica += "`n" + $src.Substring($i18, $f18 - $i18)
 $logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7) + "`n" + $src.Substring($i8, $f8 - $i8) + "`n" + $src.Substring($i9, $f9 - $i9) + "`n" + $src.Substring($i10, $f10 - $i10) + "`n" + $src.Substring($i11, $f11 - $i11) + "`n" + $src.Substring($i12, $f12 - $i12) + "`n" + $src.Substring($i13, $f13 - $i13) + "`n" + $src.Substring($i14, $f14 - $i14) + "`n" + $src.Substring($i15, $f15 - $i15) + "`n" + $src.Substring($i16, $f16 - $i16)
 # los bloques anadidos tambien usan $PSScriptRoot (usuarios.json, registro/)
 $logica = $logica.Replace('$PSScriptRoot', '$PSScriptRootFake')
@@ -1370,6 +1373,18 @@ Check 'hsucuenta: si no cuadran los numeros, interrogante' (@($comp2 | Where-Obj
 # y con el campo rsu de la topologia, la declarada lleva ya su numero de planta
 $flRsu = @(Flota-Declarada @{nombre='Ayora NCU16'; ip='1.2.3.4'; puerto=503; ini=1; fin=2; hsuLista=@(230); rsuLista=@(10)})
 Check 'hsucuenta: con rsu, la HSU declarada es la 10' (@($flRsu | Where-Object { $_.Tipo -eq 'HSU' })[0].TCU) 'HSU10'
+
+# ---------- APLICAR MODO no escribe en las que ya estan (v11.37) ----------
+# El simulador tiene la TCU 1 en AUTO (bits 9:8 de 30001 = 2)
+# el simulador tiene la TCU 5 en AUTO (30001 = 0x0280) y la 1 sin preset (OFF)
+Modbus-Conectar '127.0.0.1' 15020 2000
+Check 'modo: lee el modo actual' (Modo-Actual 5) 2
+Check 'modo: y el de una que esta en OFF' (Modo-Actual 1) 0
+Modbus-Cerrar
+Check 'modo: el nombre sale de la tabla de siempre' (Modo-Nombre 2) 'AUTO'
+Check 'modo: se comprueba antes de escribir' ($src.Contains('$md = Modo-Actual $tcu')) $true
+Check 'modo: y si ya esta, no se escribe' ($src -match "if \(\`$md -eq \`$modo\) \{[\s\S]{0,200}no se ha escrito") $true
+Check 'modo: el resumen dice cuantas ya estaban' ($src.Contains('{0} ya estaban, {1} cambiadas, {2} con fallo')) $true
 
 Check 'faltan: sin topologia, ninguna' ((@(Hsu-Faltantes @{ncu='4'; hsus=0} 0)).Count) 0
 Check 'faltan: y si hay mas de las dichas tampoco' ((@(Hsu-Faltantes @{ncu='4'; hsus=1} 3)).Count) 0
