@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.33'
+$VERSION_TOOLBOX = '11.34'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -90,6 +90,14 @@ function Cargar-FicheroPlantas([string]$ruta) {
         if ($p.PSObject.Properties['hsus'] -and "$($p.hsus)" -match '^\d+$') { $e.hsus = [int]$p.hsus }
         # una NCU puede llevar mas de una estacion, cada una con su esclavo, en
         # el orden de los huecos HSU1, HSU2... de la cache (Ayora NCU15: 230 y 231)
+        # el NUMERO de cada estacion en la planta (columna RSU del Excel: 1..10 en
+        # Ayora). Coincide con el hueco que ocupa en la cache de la NCU, asi que
+        # sirve para poner nombre a la que NO aparece: sin esto una estacion que
+        # nunca ha comunicado sale como "HSU?" y no se sabe cual de las diez es.
+        if ($p.PSObject.Properties['rsu']) {
+            $lstR = @(@($p.rsu) | Where-Object { "$_" -match '^\d+$' } | ForEach-Object { [int]$_ })
+            if ($lstR.Count -gt 0) { $e.rsuLista = $lstR }
+        }
         if ($p.PSObject.Properties['hsu_esclavos']) {
             $lstE = @(@($p.hsu_esclavos) | Where-Object { "$_" -match '^\d+$' } | ForEach-Object { [int]$_ })
             if ($lstE.Count -gt 0) { $e.hsuLista = $lstE; if (-not $e.hsu) { $e.hsu = $lstE[0] } }
@@ -165,7 +173,7 @@ function Construir-EntradasAuto {
         $planta = $m.Groups[1].Value.Trim(); $ncu = [int]$m.Groups[2].Value
         # ojo: hashtable normal, no [ordered] (con clave int lo trataria como indice)
         if (-not $porPlanta.Contains($planta)) { $porPlanta[$planta] = @{} }
-        if (-not $porPlanta[$planta].Contains($ncu)) { $porPlanta[$planta][$ncu] = @{ip=$p.ip; gws=@(); hsu=$null; hsus=0; hsuLista=@()} }
+        if (-not $porPlanta[$planta].Contains($ncu)) { $porPlanta[$planta][$ncu] = @{ip=$p.ip; gws=@(); hsu=$null; hsus=0; hsuLista=@(); rsuLista=@()} }
         if ($porPlanta[$planta][$ncu].ip -ne $p.ip) { continue }   # inconsistencia: ignorar
         # el repetidor cuelga de SU gateway: sin esto no se sabria por que puerto
         # se llega a el, porque su esclavo no cae en ningun rango de TCUs
@@ -175,13 +183,14 @@ function Construir-EntradasAuto {
         # la NCU: se queda el mayor, no se suman
         if ($p.hsus -and [int]$p.hsus -gt [int]$porPlanta[$planta][$ncu].hsus) { $porPlanta[$planta][$ncu].hsus = [int]$p.hsus }
         if (@($p.hsuLista).Count -gt @($porPlanta[$planta][$ncu].hsuLista).Count) { $porPlanta[$planta][$ncu].hsuLista = @($p.hsuLista) }
+        if (@($p.rsuLista).Count -gt @($porPlanta[$planta][$ncu].rsuLista).Count) { $porPlanta[$planta][$ncu].rsuLista = @($p.rsuLista) }
     }
     foreach ($planta in $porPlanta.Keys) {
         $ncus = $porPlanta[$planta]
         if ($ncus.Count -lt 2) { continue }
         $lista = @()
         foreach ($n in ($ncus.Keys | Sort-Object)) {
-            $lista += ,@{ncu=[int]$n; ip=$ncus[$n].ip; gws=@($ncus[$n].gws | Sort-Object { $_.ini }); hsu=$ncus[$n].hsu; hsus=[int]$ncus[$n].hsus; hsuLista=@($ncus[$n].hsuLista)}
+            $lista += ,@{ncu=[int]$n; ip=$ncus[$n].ip; gws=@($ncus[$n].gws | Sort-Object { $_.ini }); hsu=$ncus[$n].hsu; hsus=[int]$ncus[$n].hsus; hsuLista=@($ncus[$n].hsuLista); rsuLista=@($ncus[$n].rsuLista)}
         }
         $PLANTAS["$planta (Planta completa)"] = @{ip=$null; puerto=$null; ini=$null; fin=$null; ncus=$lista}
     }
@@ -7619,13 +7628,28 @@ function Hsu-EsclavoDe($ncu, [int]$indice) {
 # Las HSUs que la topologia dice que hay y la cache de la NCU no trae. Igual
 # que con las TCUs: no aparecer no es informacion, hay que verlas en la tabla
 # diciendo que no comunican. Pura: se prueba sin planta.
-function Hsu-Faltantes($ncu, [int]$halladas, [string]$motivo = '') {
+# $halladasEti = las etiquetas que SI han salido ("HSU8", "HSU9"...). El numero
+# de una HSU es el hueco que ocupa en la cache de la NCU, y coincide con la
+# columna RSU del Excel; pero una estacion que nunca ha comunicado tiene su
+# hueco vacio y no se puede leer de ahi. Si la topologia trae los numeros
+# (campo `rsu` del JSON) se dice cual falta en vez de un "HSU?" a secas.
+# Si lo hallado no encaja con lo declarado no se adivina: se vuelve al "?".
+function Hsu-Faltantes($ncu, [int]$halladas, [string]$motivo = '', $halladasEti = @()) {
     $esperadas = [int]$ncu.hsus
     $r = @()
     if ($esperadas -le $halladas) { return $r }
+    $nombres = @()
+    $decl = @(@($ncu.rsuLista) | Where-Object { "$_" -match '^\d+$' } | ForEach-Object { [int]$_ })
+    if ($decl.Count -eq $esperadas) {
+        $vistos = @(@($halladasEti) | ForEach-Object { if ("$_" -match '^HSU(\d+)$') { [int]$Matches[1] } })
+        if (@($vistos | Where-Object { $decl -notcontains $_ }).Count -eq 0) {
+            $nombres = @($decl | Where-Object { $vistos -notcontains $_ } | Sort-Object)
+        }
+    }
     for ($i = $halladas; $i -lt $esperadas; $i++) {
+        $qual = $(if ($i - $halladas -lt $nombres.Count) { "HSU$($nombres[$i - $halladas])" } else { 'HSU?' })
         $r += ,@{
-            etiqueta = ($(if ($ncu.ncu) { "NCU$($ncu.ncu) - " } else { '' }) + "HSU?")
+            etiqueta = ($(if ($ncu.ncu) { "NCU$($ncu.ncu) - " } else { '' }) + $qual)
             salud = 'OFFLINE'
             texto = $(if ($motivo) { $motivo } else { "la NCU no la tiene en su cache: nunca ha comunicado con ella" }) +
                     " (la topologia dice que esta NCU lleva $esperadas)"
@@ -9342,12 +9366,12 @@ $btnHBuscar.Add_Click({ Lanzar {
     $p = $null; if ($cbPlanta.SelectedItem) { $p = $PLANTAS[$cbPlanta.SelectedItem] }
     $ncus = @()
     if ($cx.multi) {
-        foreach ($n in $cx.multi) { $ncus += ,@{ncu="$($n.ncu)"; ip=$n.ip; hsu=$n.hsu; gws=$n.gws; hsus=[int]$n.hsus; hsuLista=@($n.hsuLista)} }
+        foreach ($n in $cx.multi) { $ncus += ,@{ncu="$($n.ncu)"; ip=$n.ip; hsu=$n.hsu; gws=$n.gws; hsus=[int]$n.hsus; hsuLista=@($n.hsuLista); rsuLista=@($n.rsuLista)} }
     } else {
         $eti = ''
         $m = [regex]::Match("$($cbPlanta.SelectedItem)", 'NCU(\d+)')
         if ($m.Success) { $eti = $m.Groups[1].Value }
-        $ncus += ,@{ncu=$eti; ip=$cx.ip; hsu=$(if ($p) { $p.hsu } else { $null }); gws=$cx.gws; hsus=$(if ($p) { [int]$p.hsus } else { 0 }); hsuLista=@($(if ($p) { $p.hsuLista } else { @() }))}
+        $ncus += ,@{ncu=$eti; ip=$cx.ip; hsu=$(if ($p) { $p.hsu } else { $null }); gws=$cx.gws; hsus=$(if ($p) { [int]$p.hsus } else { 0 }); hsuLista=@($(if ($p) { $p.hsuLista } else { @() })); rsuLista=@($(if ($p) { $p.rsuLista } else { @() }))}
     }
     $lvH.Items.Clear()
     $script:HsusPlanta = @()
@@ -9384,7 +9408,7 @@ $btnHBuscar.Add_Click({ Lanzar {
         # ausentes. No van al desplegable ni a HsusPlanta -no se puede operar
         # con lo que no contesta, y el cuadre las tiene que seguir contando
         # como ausentes-, pero se ven.
-        foreach ($ff in @(Hsu-Faltantes $n @($filas).Count $motivo)) {
+        foreach ($ff in @(Hsu-Faltantes $n @($filas).Count $motivo @($filas | ForEach-Object { "$($_.TCU)" }))) {
             $itemF = New-Object System.Windows.Forms.ListViewItem($ff.etiqueta)
             [void]$itemF.SubItems.Add("$($ff.salud)"); [void]$itemF.SubItems.Add("$($ff.texto)")
             $itemF.ForeColor = [System.Drawing.Color]::Gray

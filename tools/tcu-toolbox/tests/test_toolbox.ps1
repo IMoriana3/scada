@@ -1314,6 +1314,22 @@ Check 'faltan: dos esperadas y dos halladas' ((@(Hsu-Faltantes @{ncu='15'; hsus=
 # sin dato de topologia no se inventa ninguna
 Check 'faltan: sin topologia, ninguna' ((@(Hsu-Faltantes @{ncu='4'; hsus=0} 0)).Count) 0
 Check 'faltan: y si hay mas de las dichas tampoco' ((@(Hsu-Faltantes @{ncu='4'; hsus=1} 3)).Count) 0
+# ---------- la que falta tiene nombre si la topologia lo trae (v11.34) ----------
+# El numero de una HSU es el hueco que ocupa en la cache de la NCU (= columna RSU
+# del Excel). La que nunca ha comunicado tiene el hueco vacio, asi que salia
+# "HSU?" aunque la topologia supiera que es la 10.
+$n16 = @{ncu='16'; hsus=1; rsuLista=@(10)}
+Check 'rsu: la que falta se llama por su numero' ((@(Hsu-Faltantes $n16 0 '' @()))[0].etiqueta) 'NCU16 - HSU10'
+# la NCU15 lleva la 8 y la 9: si sale la 8, la que falta es la 9
+$n15 = @{ncu='15'; hsus=2; rsuLista=@(8, 9)}
+Check 'rsu: con una hallada, nombra la otra' ((@(Hsu-Faltantes $n15 1 '' @('HSU8')))[0].etiqueta) 'NCU15 - HSU9'
+Check 'rsu: y al reves tambien' ((@(Hsu-Faltantes $n15 1 '' @('HSU9')))[0].etiqueta) 'NCU15 - HSU8'
+# si lo hallado no encaja con lo declarado no se adivina
+Check 'rsu: si no encaja, vuelve al interrogante' ((@(Hsu-Faltantes $n15 1 '' @('HSU3')))[0].etiqueta) 'NCU15 - HSU?'
+# y sin el campo en el JSON, como antes
+Check 'rsu: sin el dato, como antes' ((@(Hsu-Faltantes @{ncu='16'; hsus=1} 0 '' @()))[0].etiqueta) 'NCU16 - HSU?'
+# la lista declarada tiene que cuadrar con el numero de estaciones
+Check 'rsu: lista incoherente, interrogante' ((@(Hsu-Faltantes @{ncu='16'; hsus=2; rsuLista=@(10)} 0 '' @()))[0].etiqueta) 'NCU16 - HSU?'
 # no entran en el desplegable ni en el cuadre: no se puede operar con ellas
 $iBus2 = $src.IndexOf('$btnHBuscar.Add_Click'); $fBus2 = $src.IndexOf('# Barrido de esclavos')
 $bus2 = $src.Substring($iBus2, $fBus2 - $iBus2)
