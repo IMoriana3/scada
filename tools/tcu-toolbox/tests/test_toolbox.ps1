@@ -35,6 +35,9 @@ $i16 = $src.IndexOf('function Prog-Texto'); $f16 = $src.IndexOf('$script:ProgTot
 $i15 = $src.IndexOf('function Hsu-EsclavoDe'); $f15 = $src.IndexOf('#  Cierre post-actualizacion (interfaz)')
 $i13 = $src.IndexOf('function Esclavos-Barrido'); $f13 = $src.IndexOf('function Params-Hsu')
 $i14 = $src.IndexOf('function Buscar-Norm'); $f14 = $src.IndexOf('function Buscador-Abrir')
+# el modo de una TCU: leerlo antes de escribirlo es lo que evita tocar las que ya estan
+$i18 = $src.IndexOf('function Modo-Actual'); $f18 = $src.IndexOf('function Guardia-Viento')
+$logica += "`n" + $src.Substring($i18, $f18 - $i18)
 $logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f2 - $i2) + "`n" + $src.Substring($i3, $f3 - $i3) + "`n" + $src.Substring($i4, $f4 - $i4) + "`n" + $src.Substring($i5, $f5 - $i5) + "`n" + $src.Substring($i6, $f6 - $i6) + "`n" + $src.Substring($i7, $f7 - $i7) + "`n" + $src.Substring($i8, $f8 - $i8) + "`n" + $src.Substring($i9, $f9 - $i9) + "`n" + $src.Substring($i10, $f10 - $i10) + "`n" + $src.Substring($i11, $f11 - $i11) + "`n" + $src.Substring($i12, $f12 - $i12) + "`n" + $src.Substring($i13, $f13 - $i13) + "`n" + $src.Substring($i14, $f14 - $i14) + "`n" + $src.Substring($i15, $f15 - $i15) + "`n" + $src.Substring($i16, $f16 - $i16)
 # los bloques anadidos tambien usan $PSScriptRoot (usuarios.json, registro/)
 $logica = $logica.Replace('$PSScriptRoot', '$PSScriptRootFake')
@@ -1343,6 +1346,46 @@ Check 'flota: total de filas' ($flN7.Count) 23
 Check 'flota: el puerto de una NCU suelta vale como gateway' (
     ($src -match '(?s)elseif \(\$tr\.cx\.puerto\) \{ @\(@\{puerto=\[int\]\$tr\.cx\.puerto\}\) \}')) $true
 
+# ---------- la fila de la NCU, y las HSUs por cuenta (v11.37) ----------
+# El barrido EN PARALELO -que es el modo por defecto- no ponia la fila de salud
+# de la NCU: el diagnostico de Ayora salio con 765 filas en vez de 782, sin una
+# sola NCU y sin la HSU de la NCU16.
+$fn = Diag-FilaNcu '7' @{salud='ALARMA'; alarmas=@('GW2 DESCONECTADO'); fecha=''; desvio=$null} ''
+Check 'ncufila: es del tipo NCU' $fn.TCU 'NCU'
+Check 'ncufila: con su salud' $fn.Salud 'ALARMA'
+Check 'ncufila: y sus alarmas' $fn.Alarmas 'GW2 DESCONECTADO'
+$fnMuda = Diag-FilaNcu '9' $null 'timeout'
+Check 'ncufila: la NCU muda tambien sale' $fnMuda.Salud 'AVISO'
+Check 'ncufila: diciendo que no contesta' ($fnMuda.Alarmas -like '*sin respuesta*timeout*') $true
+# HSUs: el numero leido es el hueco de la cache y no casa con el orden declarado
+$declH = @(@{NCU='3'; Tipo='HSU'; TCU='HSU1'}, @{NCU='15'; Tipo='HSU'; TCU='HSU1'}, @{NCU='15'; Tipo='HSU'; TCU='HSU2'}, @{NCU='16'; Tipo='HSU'; TCU='HSU1'})
+$leidasH = @(
+    [pscustomobject]@{NCU='3'; TCU='HSU2'; Salud='OK'; Alarmas=''}
+    [pscustomobject]@{NCU='15'; TCU='HSU8'; Salud='OK'; Alarmas=''}
+    [pscustomobject]@{NCU='15'; TCU='HSU9'; Salud='ALARMA'; Alarmas=''})
+$compH = @(Diag-Completar $leidasH $declH)
+Check 'hsucuenta: no inventa las que ya se leyeron con otro numero' (@($compH | Where-Object { $_.Salud -eq 'SIN LECTURA' }).Count) 1
+Check 'hsucuenta: y la que falta es la de la NCU16' (@($compH | Where-Object { $_.Salud -eq 'SIN LECTURA' })[0].NCU) '16'
+Check 'hsucuenta: con el nombre que declara la topologia' (@($compH | Where-Object { $_.Salud -eq 'SIN LECTURA' })[0].TCU) 'HSU1'
+# si la NCU declara 2 y solo contesta 1 con otro numero, no se adivina cual es
+$comp2 = @(Diag-Completar @([pscustomobject]@{NCU='15'; TCU='HSU8'; Salud='OK'; Alarmas=''}) @(@{NCU='15'; TCU='HSU1'}, @{NCU='15'; TCU='HSU2'}))
+Check 'hsucuenta: si no cuadran los numeros, interrogante' (@($comp2 | Where-Object { $_.Salud -eq 'SIN LECTURA' })[0].TCU) 'HSU?'
+# y con el campo rsu de la topologia, la declarada lleva ya su numero de planta
+$flRsu = @(Flota-Declarada @{nombre='Ayora NCU16'; ip='1.2.3.4'; puerto=503; ini=1; fin=2; hsuLista=@(230); rsuLista=@(10)})
+Check 'hsucuenta: con rsu, la HSU declarada es la 10' (@($flRsu | Where-Object { $_.Tipo -eq 'HSU' })[0].TCU) 'HSU10'
+
+# ---------- APLICAR MODO no escribe en las que ya estan (v11.37) ----------
+# El simulador tiene la TCU 1 en AUTO (bits 9:8 de 30001 = 2)
+# el simulador tiene la TCU 5 en AUTO (30001 = 0x0280) y la 1 sin preset (OFF)
+Modbus-Conectar '127.0.0.1' 15020 2000
+Check 'modo: lee el modo actual' (Modo-Actual 5) 2
+Check 'modo: y el de una que esta en OFF' (Modo-Actual 1) 0
+Modbus-Cerrar
+Check 'modo: el nombre sale de la tabla de siempre' (Modo-Nombre 2) 'AUTO'
+Check 'modo: se comprueba antes de escribir' ($src.Contains('$md = Modo-Actual $tcu')) $true
+Check 'modo: y si ya esta, no se escribe' ($src -match "if \(\`$md -eq \`$modo\) \{[\s\S]{0,200}no se ha escrito") $true
+Check 'modo: el resumen dice cuantas ya estaban' ($src.Contains('{0} ya estaban, {1} cambiadas, {2} con fallo')) $true
+
 Check 'faltan: sin topologia, ninguna' ((@(Hsu-Faltantes @{ncu='4'; hsus=0} 0)).Count) 0
 Check 'faltan: y si hay mas de las dichas tampoco' ((@(Hsu-Faltantes @{ncu='4'; hsus=1} 3)).Count) 0
 # ---------- la que falta tiene nombre si la topologia lo trae (v11.34) ----------
@@ -2580,7 +2623,8 @@ $comp = @(Diag-Completar $leido $fl)
 Check 'flota: completa lo que falta' ($comp.Count) 9
 Check 'flota: lo leido se respeta' (@($comp | Where-Object { "$($_.NCU)" -eq '1' -and "$($_.TCU)" -eq '1' })[0].Salud) 'OK'
 Check 'flota: lo no leido sale SIN LECTURA' (@($comp | Where-Object { "$($_.NCU)" -eq '2' -and "$($_.TCU)" -eq '1' })[0].Salud) 'SIN LECTURA'
-Check 'flota: y dice por que' ((@($comp | Where-Object { "$($_.Salud)" -eq 'SIN LECTURA' })[0].Alarmas) -like '*no leido en este barrido*') $true
+# la de una HSU va en femenino ("no leida"), asi que se comprueba el rabo comun
+Check 'flota: y dice por que' ((@($comp | Where-Object { "$($_.Salud)" -eq 'SIN LECTURA' } | Where-Object { "$($_.Alarmas)" -notlike '*en este barrido*' })).Count) 0
 Check 'flota: no duplica lo ya leido' (@($comp | Where-Object { "$($_.NCU)" -eq '1' -and "$($_.TCU)" -eq '1' }).Count) 1
 
 # un repetidor NO es un seguidor: contarlo en el porcentaje lo falseaba
@@ -2775,7 +2819,7 @@ Check 'sel: planta completa mira la seleccion' ($src.Contains("Trabajos-Planta `
 Check 'gw: columna en el diagnostico' ($src.Contains("lvG.Columns.Add('GW'")) $true
 # NCU - GW - TCU: como se llega a un seguidor en planta
 Check 'gw: y va delante de la TCU' ($src.IndexOf("lvG.Columns.Add('GW'") -lt $src.IndexOf("lvG.Columns.Add('TCU'")) $true
-Check 'gw: las filas siguen ese orden' ([regex]::Matches($src, [regex]::Escape('$d.GW, $d.TCU, $d.Salud')).Count) 4
+Check 'gw: las filas siguen ese orden' ([regex]::Matches($src, [regex]::Escape('$d.GW, $d.TCU, $d.Salud')).Count) 5
 Check 'gw: y ninguna se quedo al reves' ($src.Contains('$d.TCU, $d.GW, $d.Salud')) $false
 Check 'gw: se calcula por fila' ($src.Contains('Add-Member -NotePropertyName GW -NotePropertyValue (Gw-DeTcuCx')) $true
 # una entrada de puerto fijo no tiene lista de gateways, pero el puerto ES el

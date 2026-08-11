@@ -89,6 +89,42 @@ Al arrancar se revisa cada `plantas/*.json` y se avisa en la consola de:
 Lo segundo necesita que el export de la plataforma incluya `trackers` por
 entrada; sin ese dato no opina, no se lo inventa.
 
+**APLICAR MODO ya no escribe en las que ya están (v11.37)** — antes escribía en
+todas y luego verificaba, y la verificación son hasta **3 s por TCU**. Ahora lee
+primero el modo actual (30001, un registro) y las que ya están en el modo pedido
+se saltan: salen como `ya estaba en modo AUTO (no se ha escrito)`. Las que
+cambian dicen de dónde vienen — `MANUAL -> AUTO`— y al final hay un recuento:
+*«X ya estaban, Y cambiadas, Z con fallo»*.
+
+En una planta donde casi todo está ya en AUTO, eso es la diferencia entre
+minutos y una hora — y, sobre todo, es no escribir en 700 equipos para no
+cambiar nada.
+
+**El diagnóstico de planta salía sin una sola fila de NCU (v11.37)** — el JSON
+del barrido de Ayora del 11/08 trae **765 filas**: 751 TCUs, 9 HSUs y 5
+repetidores. Faltan **17**: las **16 NCUs** y la **HSU de la NCU16**.
+
+Dos causas distintas, las dos por el mismo descuido — dar por hecho que lo que
+hace un camino lo hace el otro:
+
+- **El barrido *en paralelo* no ponía la fila de salud de la NCU.** El de serie
+  sí, pero el paralelo es el **modo por defecto**, así que en la práctica nunca
+  salía: la planta entera se quedaba sin GW, sin UPS, sin seta y sin reloj de
+  ninguna de sus 16 NCUs. Ahora el hilo lee `Ncu-Salud` como el de serie —
+  ambos por la misma función, `Diag-FilaNcu`— y la fila se pone **aunque la NCU
+  no conteste**, que es justo cuando más falta hace.
+- **La flota declarada solo se completaba en el INFORME HTML.** La tabla y el
+  JSON que sube a la plataforma se quedaban con lo leído, así que la HSU de la
+  NCU16 —que no ha comunicado nunca— desaparecía. Ahora `Diag-Completar` corre
+  también al terminar el diagnóstico.
+
+Y con eso salió un tercero: **las HSUs no se pueden comparar por etiqueta.** El
+número de una HSU leída es el hueco que ocupa en la caché de su NCU (`HSU8`,
+`HSU10`…) y no tiene por qué coincidir con el orden en que la topología las
+lista. Compararlas por nombre habría metido **una HSU fantasma por cada una que
+sí se lee**. Se comparan por **cuenta** dentro de cada NCU: si la topología dice
+dos y contesta una, falta una; y solo se le pone nombre si no hay ambigüedad.
+
 **Tres restos del mismo agujero (v11.36)** — la v11.35 arregló la lectura con una
 NCU suelta, pero quedaban tres sitios que seguían sin enterarse:
 
