@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.38'
+$VERSION_TOOLBOX = '11.39'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -5327,13 +5327,13 @@ function Bat-Auditar($diag, $cfg = $null) {
         # Ojo: ese texto solo sale del diagnostico DIRECTO. El bloque compat de
         # la NCU no tiene ese bit (su mapa lo da como Reserved), asi que en modo
         # via NCU la deteccion recae en la tension, que es la linea de abajo.
-        if ("$($f.Alarmas)" -like '*bateria desconectada*') { & $add 'SIN BATERIA' 'la TCU declara bateria desconectada' 'ALARMA'; $sinBat = $true }
-        elseif ($tieneV -and $v -lt $cfg.vbat_min) { & $add 'SIN BATERIA' "tension $v mV: no hay bateria util" 'ALARMA'; $sinBat = $true }
+        if ("$($f.Alarmas)" -like '*bateria desconectada*') { & $add 'Sin bateria' 'la TCU declara bateria desconectada' 'ALARMA'; $sinBat = $true }
+        elseif ($tieneV -and $v -lt $cfg.vbat_min) { & $add 'Sin bateria' "tension $v mV: no hay bateria util" 'ALARMA'; $sinBat = $true }
         if ($sinBat) { continue }          # lo demas ya no dice nada
-        if ($tieneV -and $v -gt $cfg.vbat_alto) { & $add 'SOBRETENSION' "tension $v mV" 'ALARMA' }
-        elseif ($tieneV -and $v -lt $cfg.vbat_bajo) { & $add 'TENSION BAJA' "tension $v mV" 'AVISO' }
-        if ($tieneSoh -and $soh -gt 0 -and $soh -lt $cfg.soh_bajo) { & $add 'SALUD BAJA' "SoH $soh %: la bateria ya no aguanta" 'AVISO' }
-        if ($tieneSoc -and $soc -lt $cfg.soc_bajo) { & $add 'CARGA BAJA' "SoC $soc %" 'AVISO' }
+        if ($tieneV -and $v -gt $cfg.vbat_alto) { & $add 'Sobretension' "tension $v mV" 'ALARMA' }
+        elseif ($tieneV -and $v -lt $cfg.vbat_bajo) { & $add 'Tension baja' "tension $v mV" 'AVISO' }
+        if ($tieneSoh -and $soh -gt 0 -and $soh -lt $cfg.soh_bajo) { & $add 'Salud baja' "SoH $soh %: la bateria ya no aguanta" 'AVISO' }
+        if ($tieneSoc -and $soc -lt $cfg.soc_bajo) { & $add 'Carga baja' "SoC $soc %" 'AVISO' }
         # De donde viene la falta de carga. El bloque de la NCU trae la tension
         # del panel y la corriente de entrada, asi que se puede separar "el
         # panel no da" de "da pero no llega a la bateria", que mandan a mirar
@@ -5347,24 +5347,24 @@ function Bat-Auditar($diag, $cfg = $null) {
         $esDia = ("$($f.Dia)" -eq '1')
         $flojo = ($esDia -and $tieneSoc -and $soc -lt $cfg.soc_sin_carga)
         if ($flojo -and $tieneVp -and $vp -lt $cfg.vpanel_min) {
-            & $add 'PANEL SIN TENSION' "panel a $vp mV con SoC $soc %: mira el panel, el cableado o el fusible" 'AVISO'
+            & $add 'Panel sin tension' "panel a $vp mV con SoC $soc %: mira el panel, el cableado o el fusible" 'AVISO'
         }
         elseif ($flojo -and $tieneIe -and $ie -lt $cfg.ient_min -and $tieneVp -and $vp -ge $cfg.vpanel_min) {
-            & $add 'NO ENTRA CORRIENTE' "panel a $vp mV pero solo $ie mA de entrada con SoC $soc %: el panel da y no llega" 'AVISO'
+            & $add 'No entra corriente' "panel a $vp mV pero solo $ie mA de entrada con SoC $soc %: el panel da y no llega" 'AVISO'
         }
         # ni carga ni descarga con la bateria a medias: panel, fusible o cargador.
         # Tambien solo de dia: de noche no cargar es lo normal.
         elseif ($flojo -and $tieneI -and [Math]::Abs($i) -lt $cfg.i_cero) {
-            & $add 'NO CARGA' "corriente $i mA con SoC $soc %" 'AVISO'
+            & $add 'No carga' "corriente $i mA con SoC $soc %" 'AVISO'
         }
-        if ($tieneTb -and $tb -gt $cfg.tbat_alta) { & $add 'TEMPERATURA' ("bateria a {0:0.#} C" -f $tb) 'AVISO' }
-        elseif ($tieneTb -and $tb -lt $cfg.tbat_baja) { & $add 'TEMPERATURA' ("bateria a {0:0.#} C" -f $tb) 'AVISO' }
+        if ($tieneTb -and $tb -gt $cfg.tbat_alta) { & $add 'Temperatura' ("bateria a {0:0.#} C" -f $tb) 'AVISO' }
+        elseif ($tieneTb -and $tb -lt $cfg.tbat_baja) { & $add 'Temperatura' ("bateria a {0:0.#} C" -f $tb) 'AVISO' }
         # y lo que se sale de la flota aunque este dentro de rango
         if ($null -ne $medV -and $tieneV -and $v -gt $cfg.vbat_min -and ($medV - $v) -gt $cfg.desvio_vbat) {
-            & $add 'FUERA DE LA FLOTA' ("tension $v mV con la flota en {0:0} mV" -f $medV) 'AVISO'
+            & $add 'Fuera de la flota' ("tension $v mV con la flota en {0:0} mV" -f $medV) 'AVISO'
         }
         if ($null -ne $medS -and $tieneSoc -and ($medS - $soc) -gt $cfg.desvio_soc) {
-            & $add 'FUERA DE LA FLOTA' ("SoC $soc % con la flota en {0:0} %" -f $medS) 'AVISO'
+            & $add 'Fuera de la flota' ("SoC $soc % con la flota en {0:0} %" -f $medS) 'AVISO'
         }
     }
     return $r.ToArray()
@@ -7057,7 +7057,7 @@ function Bat-Pintar {
                          $f.Tbat_C, $f.Tpcb_C, $f.Dia, $f.Carga, $f.Estado)) { [void]$item.SubItems.Add("$c") }
         $item.ForeColor = $(if ($f.Estado -eq 'OK') { [System.Drawing.Color]::DarkGreen }
                             elseif ($f.Estado -eq 'sin datos') { [System.Drawing.Color]::Gray }
-                            elseif ($f.Estado -like '*SIN BATERIA*' -or $f.Estado -like '*SOBRETENSION*') { [System.Drawing.Color]::Firebrick }
+                            elseif ($f.Estado -like '*Sin bateria*' -or $f.Estado -like '*Sobretension*') { [System.Drawing.Color]::Firebrick }
                             else { [System.Drawing.Color]::DarkOrange })
         $lvB.Items.Add($item) | Out-Null
     }
@@ -7364,15 +7364,15 @@ $btnGBat.Add_Click({
     $porTipo = @{}
     foreach ($b in $script:UltimaBat) { $porTipo["$($b.Tipo)"] = 1 + [int]$porTipo["$($b.Tipo)"] }
     $afectadas = @(@($script:UltimaBat | ForEach-Object { "$($_.NCU)|$($_.TCU)" }) | Sort-Object -Unique).Count
-    # "6 de 705 TCUs" y luego "1 CARGA BAJA | 3 FUERA DE LA FLOTA | 6 PANEL SIN
-    # TENSION" suman 10 y parecia contradecir el 6: son unidades distintas, TCUs
+    # "6 de 705 TCUs" y luego "1 Carga baja | 3 Fuera de la flota | 6 Panel sin
+    # tension" suman 10 y parecia contradecir el 6: son unidades distintas, TCUs
     # y avisos. Una TCU puede tener tres cosas a la vez.
     $nAv = @($script:UltimaBat).Count
     Con "BATERIAS: $afectadas de $vistos TCUs con algo que mirar, $nAv $(if ($nAv -eq 1) { 'aviso' } else { 'avisos' }) en total: $((@($porTipo.Keys | Sort-Object | ForEach-Object { "$($porTipo[$_]) $_" }) -join ' | '))" ([System.Drawing.Color]::Orange)
     foreach ($b in @($script:UltimaBat | Sort-Object @{Expression={$(if ($_.Gravedad -eq 'ALARMA') { 0 } else { 1 })}}, @{Expression={[int]("0" + "$($_.NCU)")}}, @{Expression={[int]$_.TCU}})) {
         Con ("  NCU{0,-3} TCU {1,3}  {2,-18} {3}" -f $b.NCU, $b.TCU, $b.Tipo, $b.Detalle) $(if ($b.Gravedad -eq 'ALARMA') { [System.Drawing.Color]::Salmon } else { [System.Drawing.Color]::Orange })
     }
-    Con "Las de FUERA DE LA FLOTA no estan fuera de rango: se salen de lo que tienen las demas, que con 754 medidas es la mejor referencia que hay." ([System.Drawing.Color]::Gainsboro)
+    Con "Las de 'Fuera de la flota' no estan fuera de rango: se salen de lo que tienen las demas, que con 754 medidas es la mejor referencia que hay." ([System.Drawing.Color]::Gainsboro)
     Con "La tabla con todas las variables de bateria esta en la pestana Baterias." ([System.Drawing.Color]::Gainsboro)
     Marcar-Bloque 'bat'
     [void](Trabajo-Guardar 'baterias' $script:UltimaBatTabla "$afectadas TCUs con algo que mirar")
