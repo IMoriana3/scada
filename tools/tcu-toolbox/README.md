@@ -89,6 +89,33 @@ Al arrancar se revisa cada `plantas/*.json` y se avisa en la consola de:
 Lo segundo necesita que el export de la plataforma incluya `trackers` por
 entrada; sin ese dato no opina, no se lo inventa.
 
+**Pestaña Estabilidad, y la versión de la NCU (v11.41)** — pedimos «calidad de
+enlace por TCU» y el mapa Modbus de Sunner **no expone RSSI ni LQI**: revisados
+el NCU R7.1 y el TCU v6.1, de la Zigbee solo hay bits de sí/no
+(`AlarmZigbee`, `XbeeDefective`, `CommLostNCU`). No hay potencia de señal que
+leer, y no la vamos a inventar.
+
+Lo que sí se puede es medir la calidad **por su efecto**. Muestreando el
+`lastComm` de cada TCU sale qué porcentaje del tiempo está fresca, cuántas veces
+se cae y cuánto tarda en volver. Una TCU al límite de cobertura no aparece con un
+RSSI bajo: aparece con caídas frecuentes y edades altas.
+
+**MEDIR ESTABILIDAD** durante N minutos con una muestra cada N segundos, y una
+tabla con las **peores primero**: `% fresca`, `caídas`, `edad máxima` y un
+veredicto (`estable` ≥ 99,5 % sin caídas · `intermitente` ≥ 95 % · `mala` ·
+`sin comunicacion`). Solo lee el bloque 502: no toca la Zigbee ni mueve nada, y
+CANCELAR para y se queda con lo medido hasta ese momento.
+
+En el rótulo y en la confirmación se dice que es **calidad inferida, no potencia
+de señal**. Un dato con una etiqueta honesta vale; uno que aparenta ser lo que no
+es, no.
+
+De la **configuración de red de la NCU** (IP, máscara, PAN ID) no hay nada en el
+mapa: no está expuesta por Modbus y se toca desde el propio interfaz de la NCU.
+Lo que sí publica y no leíamos es su **versión de firmware** (registro 50, texto),
+ahora en la columna `FW` de *Comm NCU*: sabíamos el firmware de cada TCU y no el
+de la NCU que las gobierna.
+
 **Pestaña Comm NCU (v11.40)** — lo que cada NCU dice **de sí misma**, una fila
 por NCU: si contesta, sus **gateways**, el **UPS** (batería y alimentación), la
 **seta**, el **reloj** y su desvío, cuántas de sus **TCUs** le hablan y cuántas
