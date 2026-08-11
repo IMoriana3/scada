@@ -89,6 +89,18 @@ Al arrancar se revisa cada `plantas/*.json` y se avisa en la consola de:
 Lo segundo necesita que el export de la plataforma incluya `trackers` por
 entrada; sin ese dato no opina, no se lo inventa.
 
+**La auditoría compara el VALOR del hexadecimal, no el texto (v11.38)** — la
+comparación pasaba a minúsculas *«si alguno empieza por `0x`»*, y
+`"0X0A00".StartsWith("0x")` es **falso** en PowerShell: distingue mayúsculas.
+Con la `X` mayúscula en los dos lados se caía a comparación de texto. Funcionaba
+—porque el valor leído sale siempre del formateo interno, en minúscula— pero por
+casualidad, no por diseño.
+
+Ahora se convierte a número y se comparan valores: `0X0A00`, `0x0a00`, `0xA00` y
+`2560` son **el mismo registro** y ninguno cuenta como desviación. Lo que no es
+un número sigue sin colarse como cero: `0x0A00` contra `AUTO` o contra vacío es
+desviación, como debe ser.
+
 **APLICAR MODO ya no escribe en las que ya están (v11.37)** — antes escribía en
 todas y luego verificaba, y la verificación son hasta **3 s por TCU**. Ahora lee
 primero el modo actual (30001, un registro) y las que ya están en el modo pedido

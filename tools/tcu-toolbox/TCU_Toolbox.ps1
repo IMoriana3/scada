@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.37'
+$VERSION_TOOLBOX = '11.38'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -7843,10 +7843,29 @@ function Aud-Indice($lectura) {
 }
 # Compara el valor del preset con el leido. Normaliza lo que no es diferencia
 # real: mayusculas del hexadecimal y coma/punto decimal. Pura.
+# "0x0A00" -> 2560. Devuelve $null si no es un hexadecimal con prefijo. Pura.
+function Aud-Hex([string]$s) {
+    $t = "$s".Trim()
+    if ($t -notmatch '^0[xX][0-9a-fA-F]+$') { return $null }
+    try { return [Convert]::ToInt64($t.Substring(2), 16) } catch { return $null }
+}
+
 function Aud-Igual([string]$esperado, [string]$leido) {
     $a = "$esperado".Trim(); $b = "$leido".Trim()
     if ($a -eq $b) { return $true }
-    if ($a.StartsWith('0x') -or $b.StartsWith('0x')) { return ($a.ToLower() -eq $b.ToLower()) }
+    # Hexadecimal: se compara el VALOR, no el texto. Ni la mayuscula de la X ni
+    # los ceros a la izquierda son una desviacion, y 2560 es lo mismo que
+    # 0x0A00. Antes se comparaban en minusculas, pero ".StartsWith('0x')"
+    # distingue mayusculas en PowerShell: con "0X0A00" a los dos lados se caia
+    # a comparacion de texto y funcionaba de milagro, porque el valor leido
+    # siempre sale del formateo interno en minuscula.
+    $ha = Aud-Hex $a; $hb = Aud-Hex $b
+    if ($null -ne $ha -or $null -ne $hb) {
+        $x2 = 0L; $y2 = 0L
+        if ($null -eq $ha -and -not [Int64]::TryParse($a, [ref]$x2)) { return $false }
+        if ($null -eq $hb -and -not [Int64]::TryParse($b, [ref]$y2)) { return $false }
+        return (($(if ($null -ne $ha) { $ha } else { $x2 })) -eq ($(if ($null -ne $hb) { $hb } else { $y2 })))
+    }
     $x = 0.0; $y = 0.0
     if ([double]::TryParse($a.Replace(',', '.'), [Globalization.NumberStyles]::Float, $INV, [ref]$x) -and
         [double]::TryParse($b.Replace(',', '.'), [Globalization.NumberStyles]::Float, $INV, [ref]$y)) {

@@ -1664,6 +1664,22 @@ Check 'aud: igual es igual' (Aud-Igual '-10' '-10') $true
 Check 'aud: distinto es distinto' (Aud-Igual '-10' '0') $false
 Check 'aud: el hexadecimal no distingue mayusculas' (Aud-Igual '0x0A00' '0x0a00') $true
 Check 'aud: hexadecimales distintos' (Aud-Igual '0x0A00' '0x0000') $false
+# la X mayuscula: ".StartsWith('0x')" la distingue, asi que con 0X a los DOS
+# lados se caia a comparacion de texto. Funcionaba de milagro.
+Check 'aud: la X mayuscula en los dos lados' (Aud-Igual '0X0A00' '0X0a00') $true
+Check 'aud: X mayuscula contra minuscula' (Aud-Igual '0X0A00' '0x0a00') $true
+Check 'aud: y sigue cazando la diferencia con X mayuscula' (Aud-Igual '0X0A00' '0X0000') $false
+# ceros a la izquierda: mismo registro, distinto texto
+Check 'aud: ceros a la izquierda' (Aud-Igual '0xA00' '0x0A00') $true
+Check 'aud: 0x0 y 0x0000' (Aud-Igual '0x0' '0x0000') $true
+# el mismo valor escrito en decimal
+Check 'aud: decimal contra hexadecimal' (Aud-Igual '2560' '0x0A00') $true
+Check 'aud: y al reves' (Aud-Igual '0x0A00' '2560') $true
+Check 'aud: decimal distinto del hexadecimal' (Aud-Igual '2561' '0x0A00') $false
+# lo que no es numero no se cuela como cero
+Check 'aud: hexadecimal contra texto' (Aud-Igual '0x0A00' 'AUTO') $false
+Check 'aud: hexadecimal contra vacio' (Aud-Igual '0x0A00' '') $false
+Check 'aud: 0x sin digitos no es hexadecimal' (Aud-Hex '0x') $null
 Check 'aud: coma o punto decimal' (Aud-Igual '6,5' '6.5') $true
 Check 'aud: decimales distintos' (Aud-Igual '6,5' '6,6') $false
 Check 'aud: 30 y 30,0 son lo mismo' (Aud-Igual '30' '30,0') $true
