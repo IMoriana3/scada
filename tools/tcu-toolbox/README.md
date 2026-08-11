@@ -89,6 +89,17 @@ Al arrancar se revisa cada `plantas/*.json` y se avisa en la consola de:
 Lo segundo necesita que el export de la plataforma incluya `trackers` por
 entrada; sin ese dato no opina, no se lo inventa.
 
+**Los estados de batería, en minúsculas (v11.39)** — `NO ENTRA CORRIENTE`,
+`FUERA DE LA FLOTA`, `PANEL SIN TENSION`… salían **en mayúsculas** en la columna
+*Estado*. Gritan sin necesidad y ensucian la tabla. Ahora van como `No entra
+corriente`, `Fuera de la flota`, `Panel sin tension`.
+
+Las mayúsculas se quedan donde sí significan algo: `OK`, `AVISO`, `ALARMA`,
+`OFFLINE` y `SIN LECTURA` son vocabulario cerrado, compartido con la plataforma
+y con el CONTRATO, y ahí la forma es parte del dato.
+
+Sin acentos, como el resto de textos de la herramienta.
+
 **La auditoría compara el VALOR del hexadecimal, no el texto (v11.38)** — la
 comparación pasaba a minúsculas *«si alguno empieza por `0x`»*, y
 `"0X0A00".StartsWith("0x")` es **falso** en PowerShell: distingue mayúsculas.
@@ -704,9 +715,9 @@ no están en el mapa de la TCU.
   `EndInvoke` en orden bloqueaba hasta el final; ahora las NCUs se recogen según
   van acabando y cada una avisa, así que la barra sube de NCU en NCU.
 - **De noche la auditoría de baterías marcaba media planta.** Con el sol puesto
-  todos los paneles están a 0 V, y salían seis `PANEL SIN TENSIÓN` de TCUs
+  todos los paneles están a 0 V, y salían seis `Panel sin tension` de TCUs
   sanas. El bit 7 del MSR dice si es de día; sin él —o si no se sabe— no se
-  miran ni el panel ni la corriente de entrada ni el `NO CARGA`.
+  miran ni el panel ni la corriente de entrada ni el `No carga`.
 - **El resumen de baterías mezclaba unidades**: *«6 de 705 TCUs»* seguido de un
   reparto que sumaba 10. Son TCUs y avisos; una TCU puede tener tres cosas a la
   vez. Ahora lo dice: *«6 TCUs con algo que mirar, 10 avisos en total»*.
@@ -729,8 +740,8 @@ entrada** (12, con signo) y las dos de **motor** (8 y 9). Salen gratis, en la
 misma lectura.
 
 Con ellos la auditoría de baterías separa dos cosas que antes eran un genérico
-*«NO CARGA»* y mandan a mirar sitios distintos: **el panel no da** (`PANEL SIN
-TENSIÓN`) y **el panel da pero no llega** (`NO ENTRA CORRIENTE`). Solo se miran
+*«No carga»* y mandan a mirar sitios distintos: **el panel no da** (`Panel sin
+tension`) y **el panel da pero no llega** (`No entra corriente`). Solo se miran
 con la batería a medias: de noche, o con la batería llena, un panel a 0 V es lo
 normal.
 
@@ -885,13 +896,13 @@ mismo barrido. Saca una fila por problema, con su gravedad:
 | `SIN BATERÍA` (ALARMA) | la TCU declara batería desconectada, o la tensión está por debajo de 15 V: no hay batería útil. Es la que deja el bootloader esperando y el firmware a medio instalar |
 | `SOBRETENSIÓN` (ALARMA) | por encima de 30 V en un sistema de 24 V: cargador o medida mal |
 | `TENSIÓN BAJA` (AVISO) | por debajo de 22 V: descargada de verdad |
-| `SALUD BAJA` (AVISO) | SoH por debajo del 60 %: la batería ya no aguanta |
-| `CARGA BAJA` (AVISO) | SoC por debajo del 40 % — por debajo del mínimo del bootloader no se puede actualizar |
-| `NO CARGA` (AVISO) | corriente casi nula con la batería a medias: panel, fusible o cargador |
-| `TEMPERATURA` (AVISO) | por encima de 55 °C o por debajo de −20 °C |
-| `PANEL SIN TENSIÓN` (AVISO) | el panel está por debajo de 2 V con la batería a medias: panel, cableado o fusible |
-| `NO ENTRA CORRIENTE` (AVISO) | el panel da tensión pero entran menos de 30 mA: da y no llega |
-| `FUERA DE LA FLOTA` (AVISO) | está *dentro* de rango pero se sale de lo que tienen las demás (más de 3 V o 30 puntos de SoC por debajo de la mediana) |
+| `Salud baja` (AVISO) | SoH por debajo del 60 %: la batería ya no aguanta |
+| `Carga baja` (AVISO) | SoC por debajo del 40 % — por debajo del mínimo del bootloader no se puede actualizar |
+| `No carga` (AVISO) | corriente casi nula con la batería a medias: panel, fusible o cargador |
+| `Temperatura` (AVISO) | por encima de 55 °C o por debajo de −20 °C |
+| `Panel sin tension` (AVISO) | el panel está por debajo de 2 V con la batería a medias: panel, cableado o fusible |
+| `No entra corriente` (AVISO) | el panel da tensión pero entran menos de 30 mA: da y no llega |
+| `Fuera de la flota` (AVISO) | está *dentro* de rango pero se sale de lo que tienen las demás (más de 3 V o 30 puntos de SoC por debajo de la mediana) |
 
 La última es la que encuentra lo que ningún umbral fijo ve: con 754 medidas del
 mismo día y el mismo sol, la mediana de la flota es mejor referencia que

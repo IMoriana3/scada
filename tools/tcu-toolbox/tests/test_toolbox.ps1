@@ -1749,23 +1749,23 @@ Check 'bat: flota sana no da nada' (@(Bat-Auditar $flota).Count) 0
 # la del log de anoche: sin bateria
 $conMala = @($flota) + @(BatFila '9' 21 0 0 0 0 20 'bateria desconectada; SoC critico')
 $rB = @(Bat-Auditar $conMala)
-Check 'bat: detecta la sin bateria' (@($rB | Where-Object { $_.Tipo -eq 'SIN BATERIA' }).Count) 1
-Check 'bat: y es alarma' (@($rB | Where-Object { $_.Tipo -eq 'SIN BATERIA' })[0].Gravedad) 'ALARMA'
+Check 'bat: detecta la sin bateria' (@($rB | Where-Object { $_.Tipo -eq 'Sin bateria' }).Count) 1
+Check 'bat: y es alarma' (@($rB | Where-Object { $_.Tipo -eq 'Sin bateria' })[0].Gravedad) 'ALARMA'
 Check 'bat: sin bateria no repite mas hallazgos de esa TCU' (@($rB | Where-Object { $_.TCU -eq 21 }).Count) 1
 # no carga: corriente cero con la bateria a medias
 $rC = @(Bat-Auditar (@($flota) + @(BatFila '9' 22 25000 5 60 95 25)))
-Check 'bat: detecta que no carga' (@($rC | Where-Object { $_.Tipo -eq 'NO CARGA' }).Count) 1
+Check 'bat: detecta que no carga' (@($rC | Where-Object { $_.Tipo -eq 'No carga' }).Count) 1
 # pero con la bateria llena, corriente cero es normal
 $rD = @(Bat-Auditar (@($flota) + @(BatFila '9' 23 26000 5 100 95 25)))
-Check 'bat: llena y sin corriente no es problema' (@($rD | Where-Object { $_.Tipo -eq 'NO CARGA' }).Count) 0
+Check 'bat: llena y sin corriente no es problema' (@($rD | Where-Object { $_.Tipo -eq 'No carga' }).Count) 0
 # salud degradada
-Check 'bat: SoH bajo' (@(Bat-Auditar (@($flota) + @(BatFila '9' 24 26000 500 90 45 25))) | Where-Object { $_.Tipo -eq 'SALUD BAJA' }).Count 1
+Check 'bat: SoH bajo' (@(Bat-Auditar (@($flota) + @(BatFila '9' 24 26000 500 90 45 25))) | Where-Object { $_.Tipo -eq 'Salud baja' }).Count 1
 # temperatura
-Check 'bat: temperatura alta' (@(Bat-Auditar (@($flota) + @(BatFila '9' 25 26000 500 90 95 61))) | Where-Object { $_.Tipo -eq 'TEMPERATURA' }).Count 1
+Check 'bat: temperatura alta' (@(Bat-Auditar (@($flota) + @(BatFila '9' 25 26000 500 90 95 61))) | Where-Object { $_.Tipo -eq 'Temperatura' }).Count 1
 # fuera de la flota: 22,5 V esta dentro de rango pero la flota va a 26
 $rE = @(Bat-Auditar (@($flota) + @(BatFila '9' 26 22500 300 88 95 25)))
-Check 'bat: la que se sale de la flota' (@($rE | Where-Object { $_.Tipo -eq 'FUERA DE LA FLOTA' }).Count) 1
-Check 'bat: y no la llama fuera de rango' (@($rE | Where-Object { $_.TCU -eq 26 -and $_.Tipo -eq 'TENSION BAJA' }).Count) 0
+Check 'bat: la que se sale de la flota' (@($rE | Where-Object { $_.Tipo -eq 'Fuera de la flota' }).Count) 1
+Check 'bat: y no la llama fuera de rango' (@($rE | Where-Object { $_.TCU -eq 26 -and $_.Tipo -eq 'Tension baja' }).Count) 0
 # las OFFLINE no cuentan: sus datos son de hace horas
 $rF = @(Bat-Auditar (@($flota) + @(BatFila '9' 27 0 0 0 0 0 '' 'OFFLINE')))
 Check 'bat: las OFFLINE no entran' (@($rF | Where-Object { $_.TCU -eq 27 }).Count) 0
@@ -1781,17 +1781,17 @@ $diagB = @(
                       Vpanel_mV=''; Ientrada_mA=''; Tbat_C=''; Tpcb_C=''; Dia=''; Alarmas='sin datos'}
     [pscustomobject]@{NCU='9'; TCU='NCU'; Salud='OK'; Alarmas='NCU responde'}
 )
-$tb = @(Bat-Tabla $diagB @([pscustomobject]@{NCU='9'; TCU=1; Tipo='CARGA BAJA'}))
+$tb = @(Bat-Tabla $diagB @([pscustomobject]@{NCU='9'; TCU=1; Tipo='Carga baja'}))
 Check 'tabla: una fila por TCU, sin la de la NCU' ($tb.Count) 2
 Check 'tabla: lleva el panel' ($tb[0].Vpanel_mV) '18000'
 Check 'tabla: y la corriente de entrada' ($tb[0].Ientrada_mA) '700'
 Check 'tabla: el dia en claro' ($tb[0].Dia) 'si'
-Check 'tabla: el estado sale de la auditoria' ($tb[0].Estado) 'CARGA BAJA'
+Check 'tabla: el estado sale de la auditoria' ($tb[0].Estado) 'Carga baja'
 Check 'tabla: la muda dice sin datos' ($tb[1].Estado) 'sin datos'
 Check 'tabla: sin hallazgos, OK' ((Bat-Tabla $diagB)[0].Estado) 'OK'
 Check 'tabla: varios hallazgos en la misma TCU' ((Bat-Tabla $diagB @(
-    [pscustomobject]@{NCU='9'; TCU=1; Tipo='CARGA BAJA'}
-    [pscustomobject]@{NCU='9'; TCU=1; Tipo='NO CARGA'}))[0].Estado) 'CARGA BAJA; NO CARGA'
+    [pscustomobject]@{NCU='9'; TCU=1; Tipo='Carga baja'}
+    [pscustomobject]@{NCU='9'; TCU=1; Tipo='No carga'}))[0].Estado) 'Carga baja; No carga'
 Check 'tabla: diagnostico vacio' ((@(Bat-Tabla @())).Count) 0
 # la pestana existe y no vuelve a leer nada
 Check 'tabla: hay pestana' ($src.Contains("tabB.Text = 'Baterias'")) $true
@@ -1830,34 +1830,34 @@ function BatPanel($tcu, $vp, $ie, $soc, $ibat = 5, $dia = 1) {
         Vbat_mV=24000; Ibat_mA=$ibat; Tbat_C='22,0'; Vpanel_mV=$vp; Ientrada_mA=$ie; Dia=$dia}
 }
 $rP = @(Bat-Auditar (@($flota) + @(BatPanel 30 0 0 60)))
-Check 'bat: panel sin tension' (@($rP | Where-Object { $_.Tipo -eq 'PANEL SIN TENSION' }).Count) 1
-Check 'bat: y manda mirar el fusible' ((@($rP | Where-Object { $_.Tipo -eq 'PANEL SIN TENSION' })[0]).Detalle.Contains('fusible')) $true
+Check 'bat: panel sin tension' (@($rP | Where-Object { $_.Tipo -eq 'Panel sin tension' }).Count) 1
+Check 'bat: y manda mirar el fusible' ((@($rP | Where-Object { $_.Tipo -eq 'Panel sin tension' })[0]).Detalle.Contains('fusible')) $true
 $rE = @(Bat-Auditar (@($flota) + @(BatPanel 31 18000 0 60)))
-Check 'bat: el panel da pero no llega' (@($rE | Where-Object { $_.Tipo -eq 'NO ENTRA CORRIENTE' }).Count) 1
+Check 'bat: el panel da pero no llega' (@($rE | Where-Object { $_.Tipo -eq 'No entra corriente' }).Count) 1
 # panel dando, corriente entrando y bateria cargando: no hay nada que decir
 $rB = @(Bat-Auditar (@($flota) + @(BatPanel 32 18000 800 60 700)))
 Check 'bat: cargando de verdad no da ningun aviso' (@($rB | Where-Object { $_.TCU -eq 32 }).Count) 0
 # pero si entra corriente y la bateria no la coge, eso si es raro
 $rN = @(Bat-Auditar (@($flota) + @(BatPanel 35 18000 800 60 5)))
-Check 'bat: entra corriente pero la bateria no carga' ((@($rN | Where-Object { $_.TCU -eq 35 })[0]).Tipo) 'NO CARGA'
+Check 'bat: entra corriente pero la bateria no carga' ((@($rN | Where-Object { $_.TCU -eq 35 })[0]).Tipo) 'No carga'
 # con la bateria llena no mira el panel: de noche o a plena carga es normal
 $rL = @(Bat-Auditar (@($flota) + @(BatPanel 33 0 0 100)))
 Check 'bat: con la bateria llena el panel a 0 es normal' (@($rL | Where-Object { $_.TCU -eq 33 }).Count) 0
 # sin esos datos (modo directo) sigue el aviso generico de siempre
 $rG = @(Bat-Auditar (@($flota) + @([pscustomobject]@{NCU='9'; TCU=34; Salud='OK'; Alarmas=''; SoC=60; SoH=95
     Vbat_mV=24000; Ibat_mA=5; Tbat_C='22,0'; Vpanel_mV=''; Ientrada_mA=''; Dia=1})))
-Check 'bat: sin panel ni entrada, el aviso de antes' (@($rG | Where-Object { $_.Tipo -eq 'NO CARGA' }).Count) 1
+Check 'bat: sin panel ni entrada, el aviso de antes' (@($rG | Where-Object { $_.Tipo -eq 'No carga' }).Count) 1
 # DE NOCHE no se mira nada de eso: todos los paneles estan a 0 V y marcaba media
 # planta. Es lo que se vio en el primer barrido nocturno.
 $rNoche = @(Bat-Auditar (@($flota) + @(BatPanel 40 0 0 64 5 0)))
 Check 'bat: de noche el panel a 0 no dice nada' (@($rNoche | Where-Object { $_.TCU -eq 40 -and $_.Tipo -like '*PANEL*' }).Count) 0
-Check 'bat: ni el no carga' (@($rNoche | Where-Object { $_.TCU -eq 40 -and $_.Tipo -eq 'NO CARGA' }).Count) 0
+Check 'bat: ni el no carga' (@($rNoche | Where-Object { $_.TCU -eq 40 -and $_.Tipo -eq 'No carga' }).Count) 0
 # de dia el mismo caso si avisa
-Check 'bat: de dia el mismo caso si' (@(Bat-Auditar (@($flota) + @(BatPanel 41 0 0 64 5 1)) | Where-Object { $_.Tipo -eq 'PANEL SIN TENSION' }).Count) 1
+Check 'bat: de dia el mismo caso si' (@(Bat-Auditar (@($flota) + @(BatPanel 41 0 0 64 5 1)) | Where-Object { $_.Tipo -eq 'Panel sin tension' }).Count) 1
 # sin saber si es de dia, se calla: mejor eso que un aviso falso
 $rSin = @(Bat-Auditar (@($flota) + @([pscustomobject]@{NCU='9'; TCU=42; Salud='OK'; Alarmas=''; SoC=64; SoH=95
     Vbat_mV=24000; Ibat_mA=5; Tbat_C='22,0'; Vpanel_mV=0; Ientrada_mA=0})))
-Check 'bat: sin saber si es de dia, calla' (@($rSin | Where-Object { $_.TCU -eq 42 -and ($_.Tipo -like '*PANEL*' -or $_.Tipo -eq 'NO CARGA') }).Count) 0
+Check 'bat: sin saber si es de dia, calla' (@($rSin | Where-Object { $_.TCU -eq 42 -and ($_.Tipo -like '*PANEL*' -or $_.Tipo -eq 'No carga') }).Count) 0
 # el bit 7 del MSR es el que lo dice, en los dos caminos
 Check 'bat: el dia sale del bit 7 del MSR' ($src.Contains('(($msr -shr 7) -band 1)')) $true
 Check 'bat: y tambien en el modo directo' ($src.Contains('Dia = (($r1[0] -shr 7) -band 1)')) $true
