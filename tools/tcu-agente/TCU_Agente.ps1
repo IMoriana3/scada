@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '3.2'
+$VERSION_AGENTE = '3.3'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -687,7 +687,7 @@ function Diag-UnaNcu($n) {
     $dm = $null; $hsus = @(); $ns = $null
     try {
         Modbus-Conectar $n.ip $PUERTO_NCU $timeoutMs
-        try { $ns = Ncu-Salud } catch {}
+        try { $ns = Ncu-Salud $n.gws } catch {}
         $dm = Ncu-DiagCompat (Tcus-DeNcu $n)
         try { $hsus = @(Ncu-HsuCompat) } catch {}
         Modbus-Cerrar
@@ -697,7 +697,9 @@ function Diag-UnaNcu($n) {
         continue
     }
     if ($ns) {
-        $f = Fila-Vacia $et 'NCU' $ns.salud ((@($ns.alarmas) + $(if ($ns.fecha) { @("reloj NCU: $($ns.fecha)") } else { @() })) -join '; ')
+        # el reloj solo si esta DESVIADO, como en la toolbox: colgado de cada
+        # alerta de NCU parecia parte del problema y no lo era
+        $f = Fila-Vacia $et 'NCU' $ns.salud ((@($ns.alarmas) + $(Reloj-Nota $ns)) -join '; ')
         $f.Modo = '-'
         $filas += $f
     }

@@ -26,12 +26,16 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.32'
+$VERSION_TOOLBOX = '11.33'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
 $PUERTO_NCU = 502
 $UNIT_NCU   = 1
+# Los dos gateways Zigbee de una NCU. No todas llevan los dos: Ayora va entera
+# con uno solo, y el bit de "desconectado" del que falta esta siempre a 1.
+$PUERTO_GW1 = 503
+$PUERTO_GW2 = 504
 $RELOJ_TOL_S = 120
 
 # ---------------------------------------------------------------------------
@@ -1573,15 +1577,30 @@ function Ncu-HsuCompat {
 
 # Salud de la propia NCU (30100-30105, unit 1 en el puerto 502). Requiere
 # conexion ya abierta. Devuelve @{salud; alarmas; fecha; din; principal}.
-function Ncu-Salud {
+# $gws = los gateways que la topologia declara para esa NCU. Una NCU con un
+# solo gateway tiene el bit del segundo SIEMPRE a 1 -no hay nada conectado ahi
+# porque no existe-, y eso salia como ALARMA. En Ayora eran 15 alarmas falsas
+# por barrido, una por NCU, tapando las de verdad. Sin $gws se comporta como
+# antes: mejor no opinar que inventarse la topologia.
+function Ncu-Salud($gws = $null) {
     $w = FC03-Leer $UNIT_NCU (Dir-Trama 30100) 6
     $din = $w[0]; $principal = $w[1]
-    $alarmas = @(Bits-Texto $din $NCU_DIN) + @(Bits-Texto $principal $NCU_MAIN)
+    $mascGw = 0x30
+    $puertos = @(@($gws) | Where-Object { $_ -and $_.puerto } | ForEach-Object { [int]$_.puerto })
+    if ($puertos.Count -gt 0) {
+        $mascGw = 0
+        if ($puertos -contains $PUERTO_GW1) { $mascGw = $mascGw -bor 0x10 }
+        if ($puertos -contains $PUERTO_GW2) { $mascGw = $mascGw -bor 0x20 }
+    }
+    # se apagan los bits de los gateways que no existen, para el texto y para la salud
+    $gwMal = $principal -band $mascGw
+    $principalVis = ($principal -band (-bnot 0x30)) -bor $gwMal
+    $alarmas = @(Bits-Texto $din $NCU_DIN) + @(Bits-Texto $principalVis $NCU_MAIN)
     for ($b = 3; $b -le 12; $b++) {
         if ($din -band (1 -shl $b)) { $alarmas += "interruptor limpieza $($b-2) activo" }
     }
     $salud = 'OK'
-    if (($principal -band 0x30) -or ($din -band 0x2000)) { $salud = 'ALARMA' }       # GW1/GW2 caidos o seta
+    if ($gwMal -or ($din -band 0x2000)) { $salud = 'ALARMA' }                        # GW1/GW2 caidos o seta
     elseif (($din -band 0x3) -or ($principal -band 0x1)) { $salud = 'AVISO' }        # UPS/bateria
     $fecha = ''; $desvio = $null
     try {
@@ -6509,7 +6528,7 @@ function Diag-Correr {
         $ns = $null; $nsErr = ''
         try {
             Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
-            $ns = Ncu-Salud
+            $ns = Ncu-Salud $tr.cx.gws
             Modbus-Cerrar
         } catch { $nsErr = "$_"; Modbus-Cerrar }
         $dn = [pscustomobject]@{

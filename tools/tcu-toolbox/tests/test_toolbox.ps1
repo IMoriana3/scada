@@ -319,6 +319,21 @@ $ns = Ncu-Salud
 Check 'ncu salud ALARMA' $ns.salud 'ALARMA'
 Check 'ncu gw2 caido' (($ns.alarmas -join ';') -like '*GW2*') 'True'
 Check 'ncu fecha' ($ns.fecha -like '2026-08-05 08:00:00*') 'True'
+# ---------- el GW que no existe no puede estar "desconectado" (v11.33) ----------
+# El simulador tiene el bit 5 (GW2) puesto. Una NCU de un solo gateway lo tiene
+# SIEMPRE puesto: en Ayora eran 15 ALARMAS falsas por barrido, una por NCU,
+# tapando las de verdad.
+$nsUno = Ncu-Salud @(@{puerto=503; ini=1; fin=44})
+Check 'ncu gw: con un solo gateway no hay alarma' $nsUno.salud 'OK'
+Check 'ncu gw: y el GW2 no se menciona' (($nsUno.alarmas -join ';') -like '*GW2*') 'False'
+$nsDos = Ncu-Salud @(@{puerto=503; ini=1; fin=44}, @{puerto=504; ini=45; fin=90})
+Check 'ncu gw: con los dos declarados sigue cantando' $nsDos.salud 'ALARMA'
+Check 'ncu gw: y lo dice' (($nsDos.alarmas -join ';') -like '*GW2*') 'True'
+# sin topologia no se inventa nada: se comporta como siempre
+Check 'ncu gw: sin topologia, como antes' (Ncu-Salud $null).salud 'ALARMA'
+Check 'ncu gw: lista vacia tampoco opina' (Ncu-Salud @()).salud 'ALARMA'
+# el bit de bateria de la NCU no se toca al enmascarar los gateways
+Check 'ncu gw: el enmascarado no borra otras alarmas' (@(Ncu-Salud @(@{puerto=504})).salud) 'ALARMA'
 Check 'runs consecutivos' ((@(Runs-Consecutivos @(1,2,3,7,9,10)) | ForEach-Object { "$($_.ini)-$($_.fin)" }) -join ',') '1-3,7-7,9-10'
 $dm = Ncu-DiagCompat @(1,2,3)
 Check 'via NCU t1 salud' $dm[1].Salud 'OK'
@@ -2796,6 +2811,17 @@ Check 'trab: contar TCUs de varias NCUs' (Cuantas-Tcus $trabPem) 4
 Check 'trab: sin trabajos, cero' (Cuantas-Tcus @()) 0
 # @($null).Count vale 1 en PS 5.1: una NCU sin TCUs no puede sumar
 Check 'trab: una NCU sin TCUs no suma' (Cuantas-Tcus @(@{ncu=9; tcus=$null})) 0
+
+# ---- ningun fichero publicado lleva marcas de conflicto de git ----
+# El README de la release se paso ONCE versiones (v11.22 -> v11.32) con un
+# "<<<<<<< HEAD" dentro, y nadie lo vio porque nada lo miraba.
+$conMarcas = @()
+foreach ($f in @(Get-ChildItem $raizTb -File -Recurse -Include *.ps1, *.md, *.json, *.bat |
+                 Where-Object { $_.FullName -notmatch '[\\/](plantas|informes|logs|registro)[\\/]' })) {
+    $t = Get-Content $f.FullName -Raw
+    if ($t -match '(?m)^(<<<<<<< |>>>>>>> |=======$)') { $conMarcas += $f.Name }
+}
+Check 'release: sin marcas de conflicto de git' ($conMarcas -join ',') ''
 
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }
