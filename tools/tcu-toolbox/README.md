@@ -89,6 +89,29 @@ Al arrancar se revisa cada `plantas/*.json` y se avisa en la consola de:
 Lo segundo necesita que el export de la plataforma incluya `trackers` por
 entrada; sin ese dato no opina, no se lo inventa.
 
+**La HSU puede colgar del SEGUNDO gateway (v11.32)** — la topología dice cuántas
+estaciones tiene cada NCU y con qué esclavos, pero **no de qué gateway cuelga
+cada una**. Hasta ahora las lecturas directas (LEER METEO, LEER CONFIG,
+umbrales, reloj, caja negra) preguntaban siempre por el **puerto más bajo**, así
+que una estación en el GW2 salía muda y parecía averiada. En **Burgo I** cada NCU
+lleva justo eso: una en el GW1 y otra en el GW2 — dos de sus cuatro HSUs no se
+podían leer.
+
+Ahora se **prueban los gateways de esa NCU hasta que uno contesta**, y no hay
+ambigüedad posible porque **el número de esclavo no se repite dentro de una NCU
+aunque sean gateways distintos** (Burgo I: 230 en el GW1, 231 en el GW2). El que
+responda es el suyo. La consola dice por cuál contestó, el gateway bueno se
+recuerda para el resto de la sesión —así no se pagan dos intentos cada vez— y las
+**escrituras usan ese mismo**, que es donde equivocarse dolía de verdad.
+
+Si no contesta por ninguno, la fila lo dice (*«probados los gateways 503 y
+504»*) en vez de dejar caer un «sin respuesta» a secas: no es lo mismo una
+estación muerta que una buscada donde no estaba.
+
+Lo que ya funcionaba y no cambia: **BUSCAR HSUs y el diagnóstico** ven todas las
+estaciones igual, porque van por la caché de la NCU (puerto 502), que no
+distingue gateways.
+
 **El export decía de dónde venía mirando los cuadros, no lo que había leído
 (v11.31)** — un diagnóstico de **planta completa** (724 TCUs) seguido de un
 cambio de modo en la **NCU3** salía exportado como *«Ayora · NCU3 ·

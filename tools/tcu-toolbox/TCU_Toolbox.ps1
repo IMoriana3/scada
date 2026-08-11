@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.31'
+$VERSION_TOOLBOX = '11.32'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -9568,9 +9568,15 @@ function Params-Hsu {
         # entrada de conexion a mano.
         $h = $script:HsuSel
         if ($h -and $h.ip) {
-            $puerto = Hsu-Puerto $h
+            # si ya ha contestado en esta sesion, por ahi: en NCUs con dos
+            # gateways la estacion puede colgar del segundo y una escritura
+            # contra el primero no llega
+            $u = [int](Val-Int $txtHSlave.Text 'Esclavo HSU' 1 255)
+            $puerto = Hsu-PuertoRecordado $h.ip $u
+            $nota = 'el gateway por el que contesto al leerla'
+            if (-not $puerto) { $puerto = Hsu-Puerto $h; $nota = 'el primer gateway de su NCU. Si cuelga del otro, leela antes (LEER METEO) o pon el puerto a mano' }
             $cx = @{ip=$h.ip; puerto=[int]$puerto; gws=$null; multi=$null; etiqueta="$puerto"; to=$cx.to; reint=$cx.reint}
-            Con "HSU $($h.etiqueta): usando $($cx.ip):$($cx.puerto), el primer gateway de su NCU. Si cuelga del otro, pon el puerto a mano." ([System.Drawing.Color]::SteelBlue)
+            Con "HSU $($h.etiqueta): usando $($cx.ip):$($cx.puerto), $nota." ([System.Drawing.Color]::SteelBlue)
         } else {
             throw "elige una HSU en el desplegable (BUSCAR HSUs) o una entrada GW concreta: la HSU cuelga de un gateway"
         }
@@ -9603,15 +9609,37 @@ function Hsu-Objetivos {
         return $lista.ToArray()
     }
     foreach ($h in $hsus) {
-        $puerto = $null
+        # Los gateways de su NCU, en orden. La topologia dice CUANTAS estaciones
+        # tiene la NCU y con que esclavos, pero no de que gateway cuelga cada
+        # una: en Burgo I cada NCU lleva una en el GW1 y otra en el GW2, y hasta
+        # ahora se preguntaba siempre por el puerto mas bajo, asi que la del GW2
+        # salia muda. Como el esclavo NO se repite dentro de una NCU aunque sean
+        # gateways distintos, se pueden probar todos sin ambiguedad: solo puede
+        # contestar el suyo.
+        $puertos = @()
         $gws = $(if ($h.gws) { $h.gws } else { $cx.gws })
-        if ($gws -and @($gws).Count -gt 0) { $puerto = @($gws | Sort-Object { [int]$_.puerto })[0].puerto }
-        if (-not $puerto -and $cx.puerto) { $puerto = $cx.puerto }
-        if (-not $puerto) { $puerto = Hsu-Puerto $h }
+        if ($gws -and @($gws).Count -gt 0) { $puertos = @(@($gws | Sort-Object { [int]$_.puerto } | ForEach-Object { [int]$_.puerto }) | Select-Object -Unique) }
+        if ($puertos.Count -eq 0 -and $cx.puerto) { $puertos = @([int]$cx.puerto) }
+        if ($puertos.Count -eq 0) { $puertos = @([int](Hsu-Puerto $h)) }
         $u = $(if ($h.hsu) { [byte]$h.hsu } else { $unit })
-        [void]$lista.Add(@{etiqueta=$h.etiqueta; ip=$h.ip; puerto=[int]$puerto; unit=$u})
+        # si ya sabemos por cual contesto en esta sesion, ese primero
+        $recordado = Hsu-PuertoRecordado $h.ip $u
+        if ($recordado -and $puertos -contains $recordado) { $puertos = @($recordado) + @($puertos | Where-Object { $_ -ne $recordado }) }
+        [void]$lista.Add(@{etiqueta=$h.etiqueta; ip=$h.ip; puerto=[int]$puertos[0]; puertos=@($puertos); unit=$u})
     }
     return $lista.ToArray()
+}
+
+# Por que gateway contesto cada HSU, para no volver a probar los dos en cada
+# lectura y para que las ESCRITURAS vayan directas al bueno.
+$script:HsuPuertoOk = @{}
+function Hsu-PuertoRecordado([string]$ip, [int]$unit) {
+    $k = "$ip|$unit"
+    if ($script:HsuPuertoOk.ContainsKey($k)) { return [int]$script:HsuPuertoOk[$k] }
+    return 0
+}
+function Hsu-RecordarPuerto([string]$ip, [int]$unit, [int]$puerto) {
+    $script:HsuPuertoOk["$ip|$unit"] = [int]$puerto
 }
 
 # Recorre las HSUs objetivo llamando a $leer (recibe el esclavo) y devuelve
@@ -9621,27 +9649,39 @@ function Hsu-Recorrer($objs, $cx, [scriptblock]$leer, [scriptblock]$resumen) {
     $oks = New-Object System.Collections.ArrayList
     foreach ($o in $objs) {
         if (Chequear-Cancelado) { break }
-        if (@($objs).Count -gt 1) {
-            [void]$filas.Add([pscustomobject]@{Campo="--- $($o.etiqueta) ---"; Valor="$($o.ip):$($o.puerto)  esclavo $($o.unit)"; Nota=''})
-        }
-        $r = $null; $err = ''
-        try { Modbus-Conectar $o.ip $o.puerto $cx.to } catch { $err = "$_" }
-        if (-not $err) {
-            for ($i = 1; $i -le $cx.reint -and $null -eq $r; $i++) {
-                try { $r = & $leer $o.unit }
-                catch {
-                    $err = "$_"
-                    if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
-                    Start-Sleep -Milliseconds (300 * $i)
+        $r = $null; $err = ''; $puertoOk = 0
+        # se prueban los gateways de su NCU hasta que uno conteste (ver
+        # Hsu-Objetivos): el esclavo es unico dentro de la NCU, asi que el que
+        # responda es el suyo y no hay ambiguedad
+        $puertos = @($(if ($o.puertos) { $o.puertos } else { @($o.puerto) }))
+        foreach ($pt in $puertos) {
+            if ($null -ne $r -or (Chequear-Cancelado)) { break }
+            $err = ''
+            try { Modbus-Conectar $o.ip $pt $cx.to } catch { $err = "$_" }
+            if (-not $err) {
+                for ($i = 1; $i -le $cx.reint -and $null -eq $r; $i++) {
+                    try { $r = & $leer $o.unit }
+                    catch {
+                        $err = "$_"
+                        if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+                        Start-Sleep -Milliseconds (300 * $i)
+                    }
                 }
             }
+            Modbus-Cerrar
+            if ($null -ne $r) { $puertoOk = [int]$pt; Hsu-RecordarPuerto $o.ip ([int]$o.unit) ([int]$pt) }
         }
-        Modbus-Cerrar
+        if (@($objs).Count -gt 1) {
+            [void]$filas.Add([pscustomobject]@{Campo="--- $($o.etiqueta) ---"
+                Valor="$($o.ip):$(if ($puertoOk) { $puertoOk } else { $o.puerto })  esclavo $($o.unit)"; Nota=''})
+        }
         if ($null -eq $r) {
-            [void]$filas.Add([pscustomobject]@{Campo=$o.etiqueta; Valor='sin respuesta'; Nota="ALARMA $err"})
-            Con "$($o.etiqueta): sin respuesta: $err" ([System.Drawing.Color]::Salmon)
+            $doble = $(if ($puertos.Count -gt 1) { " (probados los gateways $($puertos -join ' y '))" } else { '' })
+            [void]$filas.Add([pscustomobject]@{Campo=$o.etiqueta; Valor='sin respuesta'; Nota="ALARMA $err$doble"})
+            Con "$($o.etiqueta): sin respuesta$doble : $err" ([System.Drawing.Color]::Salmon)
             continue
         }
+        if ($puertos.Count -gt 1) { Con "$($o.etiqueta): contesta por el gateway $puertoOk." ([System.Drawing.Color]::Gainsboro) }
         foreach ($f in $r.filas) { [void]$filas.Add($f) }
         [void]$oks.Add(@{obj=$o; datos=$r})
         if ($resumen) { & $resumen $o $r }
