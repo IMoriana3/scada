@@ -1386,6 +1386,38 @@ Check 'modo: se comprueba antes de escribir' ($src.Contains('$md = Modo-Actual $
 Check 'modo: y si ya esta, no se escribe' ($src -match "if \(\`$md -eq \`$modo\) \{[\s\S]{0,200}no se ha escrito") $true
 Check 'modo: el resumen dice cuantas ya estaban' ($src.Contains('{0} ya estaban, {1} cambiadas, {2} con fallo')) $true
 
+# ---------- pestana Comm NCU (v11.40) ----------
+# Lo que dice cada NCU de si misma, en una fila. Lo importante: distinguir
+# "no lo tiene" de "lo tiene mal". Un gateway que la topologia no declara no
+# puede estar CAIDO: en Ayora todas las NCUs llevan uno solo.
+$nsOk = @{salud='OK'; alarmas=@(); fecha='2026-08-11 09:00:00 UTC'; desvio=3; din=0; principal=0}
+$commOk = @{tcus=@{1=@{comunica=$true}; 2=@{comunica=$true}; 3=@{comunica=$false}}; hsus=@(@{comunica=$true})}
+$f1 = Comm-FilaNcu '7' '192.168.4.55' $nsOk @(@{puerto=503}) $commOk 22 0
+Check 'comm: la NCU que va bien' $f1.Estado 'OK'
+Check 'comm: su unico gateway' $f1.GW1 'OK'
+Check 'comm: y el que no tiene, ni OK ni CAIDO' $f1.GW2 '-'
+Check 'comm: UPS sin novedad' $f1.UPS 'OK'
+Check 'comm: seta sin pulsar' $f1.Seta '-'
+Check 'comm: reloj en hora' $f1.Reloj 'en hora'
+Check 'comm: cuenta las TCUs que hablan' $f1.TCUs '2/22'
+# con los dos gateways declarados y el segundo caido
+$nsMal = @{salud='ALARMA'; alarmas=@('GW2 DESCONECTADO'); fecha=''; desvio=$null; din=0x2001; principal=0x20}
+$f2 = Comm-FilaNcu '16' '10.0.0.1' $nsMal @(@{puerto=503}, @{puerto=504}) $null 121 2
+Check 'comm: el GW1 sigue bien' $f2.GW1 'OK'
+Check 'comm: y el GW2 caido' $f2.GW2 'CAIDO'
+Check 'comm: la seta pulsada se ve' $f2.Seta 'PULSADA'
+Check 'comm: y el UPS con bateria baja' $f2.UPS 'bateria baja'
+Check 'comm: sin hora de la NCU' $f2.Reloj 'sin hora'
+Check 'comm: sin contar TCUs, la columna va vacia' $f2.TCUs ''
+# la NCU que no contesta: fila igual, pero sin inventarse nada
+$f3 = Comm-FilaNcu '9' '10.0.0.9' $null @(@{puerto=503}) $null 41 0
+Check 'comm: la NCU muda tambien sale' $f3.Estado 'SIN RESPUESTA'
+Check 'comm: y no dice que su gateway este caido' $f3.GW1 'OK'
+Check 'comm: ni inventa el UPS' $f3.UPS ''
+# reloj desviado
+$nsRel = @{salud='OK'; alarmas=@(); fecha='2026-08-11 09:00:00 UTC'; desvio=4000; din=0; principal=0}
+Check 'comm: el reloj desviado lo dice' ((Comm-FilaNcu '1' '1.1.1.1' $nsRel @(@{puerto=503}) $null 10 0).Reloj -like '*RELOJ NCU DESVIADO*') $true
+
 Check 'faltan: sin topologia, ninguna' ((@(Hsu-Faltantes @{ncu='4'; hsus=0} 0)).Count) 0
 Check 'faltan: y si hay mas de las dichas tampoco' ((@(Hsu-Faltantes @{ncu='4'; hsus=1} 3)).Count) 0
 # ---------- la que falta tiene nombre si la topologia lo trae (v11.34) ----------
@@ -1560,7 +1592,7 @@ Check 'cabecera: se marcan al enganchar la tabla' ($src.Contains('# marca las ca
 # las diez tablas de resultados tienen que estar enganchadas
 $engancha = [regex]::Match($src, 'foreach \(\$tabla in @\(([^)]*)\)\) \{ Lv-Filtrable')
 Check 'cabecera: hay linea que engancha las tablas' $engancha.Success $true
-foreach ($t in @('lvL','lvD','lvG','lvA','lvV','lvP','lvFW','lvSat','lvH','lvI')) {
+foreach ($t in @('lvL','lvD','lvG','lvA','lvV','lvP','lvFW','lvSat','lvH','lvN','lvI')) {
     Check "cabecera: ${t} filtrable" ($engancha.Groups[1].Value.Contains("`$$t")) $true
 }
 # y no puede quedarse ninguna fuera: si se crea una tabla nueva hay que anadirla
