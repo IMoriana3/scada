@@ -89,6 +89,23 @@ Al arrancar se revisa cada `plantas/*.json` y se avisa en la consola de:
 Lo segundo necesita que el export de la plataforma incluya `trackers` por
 entrada; sin ese dato no opina, no se lo inventa.
 
+**La NCU que no contesta perdía el motivo (agente v3.7, toolbox v11.42)** — en
+`Diag-UnaNcu`, el `catch` construía la fila *«NCU sin respuesta en 502: …»* y
+después hacía `continue`. En PowerShell, **`continue` dentro de una función pero
+fuera de un bucle salta al siguiente giro del bucle DEL QUE LLAMA** y descarta lo
+que la función devolvía. Esa fila se creaba y se tiraba.
+
+El total seguía cuadrando —`Diag-Completar` reponía esa NCU y sus TCUs como
+`SIN LECTURA`— así que no se notaba en los números. Lo que se perdía era **el
+motivo**: en vez de *«NCU sin respuesta en 502: no se pudo conectar»* llegaba un
+genérico *«declarado en la topología y no leído»*. Y distinguir «el switch está
+caído» de «no he barrido esa NCU» es justo para lo que sirve esa fila.
+
+Ahora es `return`, no `continue`. Y la suite recorre el **árbol sintáctico** de
+la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
+una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
+sitio.
+
 **Pestaña Estabilidad, y la versión de la NCU (v11.41)** — pedimos «calidad de
 enlace por TCU» y el mapa Modbus de Sunner **no expone RSSI ni LQI**: revisados
 el NCU R7.1 y el TCU v6.1, de la Zigbee solo hay bits de sí/no

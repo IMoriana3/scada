@@ -2994,6 +2994,30 @@ foreach ($f in @(Get-ChildItem $raizTb -File -Recurse -Include *.ps1, *.md, *.js
 }
 Check 'release: sin marcas de conflicto de git' ($conMarcas -join ',') ''
 
+# ---- ningun continue/break fuera de un bucle (v11.42) ----
+# En PowerShell, 'continue' dentro de una FUNCION pero fuera de un bucle salta
+# al siguiente giro del bucle DEL QUE LLAMA, y se lleva por delante lo que la
+# funcion habia construido. En el agente, la NCU que no contestaba perdia asi
+# su propia fila -la que decia por que- y el motivo no llegaba a la tabla.
+# A ojo no se ve: hay que mirar el arbol sintactico.
+$fuera = @()
+foreach ($fich in @((Join-Path $raizTb 'TCU_Toolbox.ps1'), (Join-Path (Split-Path $raizTb -Parent) 'tcu-agente/TCU_Agente.ps1'))) {
+    if (-not (Test-Path $fich)) { continue }
+    $arbol = [System.Management.Automation.Language.Parser]::ParseInput((Get-Content $fich -Raw), [ref]$null, [ref]$null)
+    foreach ($fn in $arbol.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst]}, $true)) {
+        foreach ($c in $fn.Body.FindAll({param($n) $n -is [System.Management.Automation.Language.ContinueStatementAst] -or $n -is [System.Management.Automation.Language.BreakStatementAst]}, $true)) {
+            $padre = $c.Parent; $enBucle = $false
+            while ($padre -and $padre -ne $fn) {
+                if ($padre -is [System.Management.Automation.Language.LoopStatementAst] -or
+                    $padre -is [System.Management.Automation.Language.SwitchStatementAst]) { $enBucle = $true; break }
+                $padre = $padre.Parent
+            }
+            if (-not $enBucle) { $fuera += "$($fn.Name):$($c.Extent.StartLineNumber)" }
+        }
+    }
+}
+Check 'ps: ningun continue/break fuera de bucle' ($fuera -join ' ') ''
+
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }
 else { Write-Host "$fallos PRUEBAS FALLIDAS"; exit 1 }
