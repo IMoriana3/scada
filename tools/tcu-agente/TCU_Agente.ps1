@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '3.3'
+$VERSION_AGENTE = '3.4'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -1153,7 +1153,33 @@ $OPS_SAT = @('sat/iniciar', 'sat/parar')
 $OPS_LECTURA_POST = @('auditoria')
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://localhost:$puerto/")
-$listener.Start()
+# Los dos fallos de arranque de siempre, con su explicacion y su solucion en vez
+# de una excepcion de .NET en crudo: el puerto cogido (casi siempre el agente
+# anterior sin cerrar) y la reserva de URL que falta la primera vez en ese PC.
+try { $listener.Start() }
+catch {
+    $m = "$($_.Exception.Message)"
+    Write-Host ''
+    if ($m -match '(?i)conflict|conflicto') {
+        Write-Host "El puerto $puerto ya lo esta usando otro programa - casi seguro, OTRO AGENTE que se quedo abierto." -ForegroundColor Red
+        Write-Host ''
+        Write-Host '  Para ver quien es:   netstat -ano | findstr :' -NoNewline; Write-Host $puerto
+        Write-Host '  Y para cerrarlo:     taskkill /PID <el numero de la ultima columna> /F'
+        Write-Host ''
+        Write-Host "  (o cambia 'puerto' en agente_config.json y arranca en otro)"
+    }
+    elseif ($m -match '(?i)denied|denegado|5') {
+        Write-Host "Windows no deja escuchar en el puerto $puerto con este usuario." -ForegroundColor Red
+        Write-Host ''
+        Write-Host '  Una sola vez en este PC, en una consola COMO ADMINISTRADOR:'
+        Write-Host "    netsh http add urlacl url=http://localhost:$puerto/ user=Todos"
+    }
+    else {
+        Write-Host "No se ha podido abrir el puerto ${puerto}: $m" -ForegroundColor Red
+    }
+    Write-Host ''
+    exit 1
+}
 Write-Host "TCU Agente v$VERSION_AGENTE - planta '$($cfg.planta)' - http://localhost:$puerto  (toolbox v$VERSION_TOOLBOX)"
 Write-Host "Lectura (GET, X-Token): /ping /diagnostico /comisionado /hsus /hsus/meteo /hsus/config /hsus/cajanegra /baterias /inventario /cierre /trabajos /plan-firmware /leer /sincronizar /sat /sat/descargar"
 Write-Host ("Lectura (POST, el preset va en el cuerpo): {0}" -f ($OPS_LECTURA_POST -join ' '))

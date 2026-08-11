@@ -36,7 +36,11 @@ planta, la versión del agente y la de la toolbox, y las dos tienen que ser de l
 1. Copia las carpetas `tcu-toolbox` y `tcu-agente` al PC de planta (las de la release).
 2. En `tcu-agente`, copia `agente_config.ejemplo.json` → `agente_config.json` y rellena: `planta` ("Ayora"), y un `token` largo aleatorio (es la llave: trátalo como una contraseña).
 3. Primera vez en ese PC (una sola vez, como administrador): `netsh http add urlacl url=http://localhost:8585/ user=Todos`
-4. Doble clic en `TCU_Agente.bat` — debe decir `TCU Agente v2.7 - planta 'Ayora'  (toolbox v11.27)`. Las dos versiones tienen que ser las de la **misma release**.
+4. Doble clic en `TCU_Agente.bat` — debe decir `TCU Agente vX.Y - planta 'Ayora'  (toolbox v11.ZZ)`, y **las dos versiones tienen que ser las de la misma release** (el agente extrae la lógica del `.ps1` de la toolbox; si no cuadran, no arranca y te dice qué le falta).
+
+   **Al actualizar, reemplaza solo `TCU_Agente.ps1`, `TCU_Toolbox.ps1` y los JSON de `plantas/`** — no las carpetas enteras, o te llevas por delante `agente_config.json`, `usuarios.json`, `registro/` y los informes.
+
+   Si al arrancar dice *«el puerto 8585 ya lo está usando otro programa»*, es que **el agente anterior sigue abierto**: `netstat -ano | findstr :8585` da el PID en la última columna y `taskkill /PID <pid> /F` lo cierra. Si dice que Windows no deja escuchar, falta el `netsh` del punto 3.
 5. Túnel: instala [cloudflared](https://github.com/cloudflare/cloudflared/releases/latest) (`cloudflared-windows-amd64.exe`, un solo fichero) y en otra ventana:
    `cloudflared.exe tunnel --url http://localhost:8585 --http-host-header localhost:8585`
    ⚠️ **El `--http-host-header` no es opcional.** El agente escucha en `localhost` y Windows (HTTP.SYS) rechaza con **«Bad Request - Invalid Hostname»** cualquier petición cuyo `Host` sea otro — y Cloudflare reenvía con el del túnel. Sin ese parámetro no conecta nada.
