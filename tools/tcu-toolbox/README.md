@@ -106,6 +106,27 @@ la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
 una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
 sitio.
 
+**De qué se alimenta una TCU (v11.45)** — el SCADA quiere marcar en la ficha de
+equipo si una TCU es *string power* o *self power*. **El dato existe y ya lo
+leíamos sin darnos cuenta**: el mapa v6.1 dice que el nibble bajo del **Product
+ID** (30300, y el mismo dato en el offset 0 del bloque compacto que cachea la
+NCU) es *«TCU type (BAT/AC/Unknokn)»* — así, con la errata del fabricante. O
+sea que no hay que deducirlo de la tensión de panel ni de la corriente de
+entrada, que era la heurística que estaba a punto de inventarse alguien.
+
+El nibble sale ahora en cada fila del diagnóstico, en dos campos: `Tipo_raw` (el
+número) y `Tipo_alim` (la etiqueta). Sale **gratis** —el registro ya venía en el
+bloque y lo tirábamos—, así que es toda la planta de una pasada y sin una
+lectura Modbus de más. También en el Inventario, como *Tipo de alimentación*.
+
+⚠️ **Lo que el mapa NO da es la codificación**: no dice qué número es BAT y cuál
+es AC. Lo único medido es que en El Burgo las TCUs contestan 1 a ese nibble y
+las HSUs 2 — con eso sabemos que el 1 es el tipo de las TCUs de allí, pero no
+cuál de los dos. Así que `Tipo_alim` dice **`sin confirmar (tipo N)`** en vez de
+inventarse la etiqueta. Para cerrarlo basta un diagnóstico en una planta que se
+sepa de string y otro en una de self: se mira el número y se rellena la tabla
+`$TCU_TIPO_ALIM`, que está vacía a propósito.
+
 **La meteo de la HSU, también como campos (v11.44)** — la fila de HSU del
 diagnóstico llevaba el viento solo dentro del texto (`viento 1,4 m/s (nivel 0),
 dir 66 deg; nieve 0 m`), y el panel de meteo del SCADA lo sacaba **parseando esa

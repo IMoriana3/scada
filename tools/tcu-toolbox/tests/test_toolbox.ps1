@@ -3062,6 +3062,26 @@ Check 'diag: la RSU cuenta como HSU' (Fila-Tipo $filasNiv[2]) 'HSU'
 Check 'diag: un repetidor no es una TCU' (Fila-Tipo $filasNiv[4]) 'REP'
 
 Write-Host ''
+Write-Host '== de que se alimenta una TCU =='
+# El mapa v6.1 dice que el nibble bajo del Product ID es "TCU type
+# (BAT/AC/Unknokn)". El dato existe y ya lo leemos; lo que NO da el mapa es que
+# numero es cual, asi que la etiqueta se queda en "sin confirmar" hasta que se
+# vea en una planta de string y otra de self. Adivinarlo y pintarlo como dato
+# es justo lo que no se hace.
+Check 'alim: sin tabla, no se inventa la etiqueta' ((Tcu-TipoAlim 1) -like 'sin confirmar*') $true
+Check 'alim: y lleva el numero para poder cerrarla' (Tcu-TipoAlim 1) 'sin confirmar (tipo 1)'
+Check 'alim: una TCU muda no tiene tipo' ($null -eq (Tcu-TipoAlim $null)) $true
+Check 'alim: ni una cadena vacia' ($null -eq (Tcu-TipoAlim '')) $true
+# el dia que se confirme, basta con rellenar la tabla
+$TCU_TIPO_ALIM[9] = 'string power'
+Check 'alim: con la tabla puesta, etiqueta de verdad' (Tcu-TipoAlim 9) 'string power'
+$TCU_TIPO_ALIM.Remove(9)
+# sale del bloque compacto que ya se lee: ni una lectura Modbus de mas
+Check 'alim: el nibble sale del bloque que ya se lee' ($src.Contains('Tipo_raw = $(if ($vacio) { $null } else { ($w[$b+0] -band 0xF) })')) $true
+Check 'alim: con su etiqueta al lado' ($src.Contains('Tipo_alim = $(if ($vacio) { $null } else { Tcu-TipoAlim ($w[$b+0] -band 0xF) })')) $true
+Check 'alim: y tambien en el inventario' ($src.Contains("Campo='Tipo de alimentacion'")) $true
+
+Write-Host ''
 Write-Host '== la meteo de la HSU, tambien como campos =='
 # El SCADA sacaba el viento PARSEANDO el texto de la fila ("viento 1,4 m/s
 # (nivel 0), dir 66 deg"). Una coma decimal o un cambio de redaccion lo dejaba
