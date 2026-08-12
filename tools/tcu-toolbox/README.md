@@ -106,6 +106,28 @@ la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
 una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
 sitio.
 
+**El repetidor es el que lo zanja (v11.46)** — con lo medido hasta ahora, el
+nibble del Product ID admite **dos lecturas que encajan igual de bien**:
+
+| Equipo | Alimentación | Nibble |
+|---|---|---|
+| TCU de El Burgo / Ayora | string con batería | 1 |
+| HSU de El Burgo / Ayora | self power con batería | 2 |
+
+- **A)** el nibble es la **alimentación**, como dice el mapa de la TCU: `1 = AC`, `2 = BAT`
+- **B)** el nibble es la **clase de equipo**: `1 = TCU`, `2 = HSU` — que es lo que asume hoy `Tipo-Producto`
+
+Todo lo visto cuadra con las dos, porque en estas plantas «TCU» y «string» van
+siempre juntos, y «HSU» y «self power» también. **El único equipo que rompe esa
+correlación es el repetidor**: es una TCU por clase —misma placa, mismo mapa—
+pero está atornillado a un poste, sin string del que comer.
+
+Así que la pestaña *Rep. firmware* saca ahora ese nibble en su propia columna,
+sin coste: el registro ya se leía para sacar la versión.
+
+- si el repetidor contesta **2** → gana A, el nibble es la alimentación y queda cerrado
+- si contesta **1** → gana B, y entonces la alimentación **no se puede leer** de la TCU: va como campo de proyecto en el inventario
+
 **De qué se alimenta una TCU (v11.45)** — el SCADA quiere marcar en la ficha de
 equipo si una TCU es *string power* o *self power*. **El dato existe y ya lo
 leíamos sin darnos cuenta**: el mapa v6.1 dice que el nibble bajo del **Product
