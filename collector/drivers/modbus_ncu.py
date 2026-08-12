@@ -55,10 +55,20 @@ class ModbusNCUDriver(NCUDriver):
         if self.client:
             self.client.close()
 
+    # pymodbus renombró el argumento de la unidad en la 3.9: `slave` pasó a `device_id`.
+    # requirements pide >=3.6 sin tope, así que una instalación de hoy trae la 3.14 y la llamada
+    # revienta con TypeError en la primera lectura. Se mira UNA vez la firma real y se usa la que
+    # haya, que es mejor que congelar la versión.
+    def _kw_unidad(self) -> str:
+        if getattr(self, "_kwu", None) is None:
+            import inspect
+            params = inspect.signature(self.client.read_holding_registers).parameters
+            self._kwu = "device_id" if "device_id" in params else "slave"
+        return self._kwu
+
     async def _read(self, addr: int, count: int) -> list[int]:
-        rr = await self.client.read_holding_registers(
-            addr, count=count, slave=self.cfg.get("unit_id", 1)
-        )
+        kw = {"count": count, self._kw_unidad(): self.cfg.get("unit_id", 1)}
+        rr = await self.client.read_holding_registers(addr, **kw)
         if rr.isError():
             raise IOError(f"Modbus error @{addr} x{count}: {rr}")
         return rr.registers

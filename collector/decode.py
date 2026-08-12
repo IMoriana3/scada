@@ -26,6 +26,11 @@ def regs_to_u32(hi: int, lo: int, word_order: str = "big") -> int:
     return (hi << 16) | lo
 
 
+def regs_to_s32(hi: int, lo: int, word_order: str = "big") -> int:
+    v = regs_to_u32(hi, lo, word_order)
+    return v - 0x100000000 if v >= 0x80000000 else v
+
+
 def extract_bits(value: int, lsb: int, msb: int) -> int:
     width = msb - lsb + 1
     return (value >> lsb) & ((1 << width) - 1)
@@ -52,6 +57,13 @@ def decode_tcu_block(regs: list[int], field_map: dict, word_order: str = "big") 
             if spec.get("to_deg"):
                 val = math.degrees(val)
             val = round(val, 2)
+        # s32/u32 se caían por el `else: continue` de abajo, EN SILENCIO. Con ello, las tres
+        # irradiancias del bloque extendido de la HSU (ghi, poa_tracking, poa_diffuse, que el mapa
+        # declara s32 Wm2x100) no llegaban nunca al colector: el campo no salía y nadie se enteraba.
+        elif t == "s32":
+            val = regs_to_s32(regs[offset], regs[offset + 1], word_order)
+        elif t == "u32":
+            val = regs_to_u32(regs[offset], regs[offset + 1], word_order)
         else:
             continue
         if spec.get("to_celsius"):  # Kx10 -> °C
