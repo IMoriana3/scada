@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.43'
+$VERSION_TOOLBOX = '11.44'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1070,6 +1070,43 @@ function Diag-Completar($filas, $declarada) {
 
 # Que es cada fila del diagnostico. Un repetidor NO es un seguidor: contarlo en
 # el porcentaje de seguidores operativos falseaba el dato. Pura.
+# Export-Csv saca las columnas del PRIMER objeto y tira sin avisar lo que las
+# demas filas traigan de mas. En un diagnostico la primera fila es una NCU o una
+# TCU, asi que los campos de meteo que solo llevan las filas de HSU no llegaban
+# al CSV: la columna no existia y nadie decia nada. Esto pone en todas las filas
+# la union de las columnas de todas, en el orden en que aparecen por primera
+# vez. Si ya son todas iguales -el caso normal- devuelve lo mismo que le dieron
+# y no reconstruye 2289 objetos por gusto. Pura.
+function Filas-Normalizar($filas) {
+    $fs = @($filas)
+    if ($fs.Count -eq 0) { return $fs }
+    # las tablas que se exportan como hashtable no pasan por aqui: sus claves no
+    # son propiedades y "normalizarlas" seria destrozarlas
+    if ($fs[0] -is [System.Collections.IDictionary]) { return $fs }
+    $cols = New-Object System.Collections.ArrayList
+    foreach ($f in $fs) {
+        if ($null -eq $f) { continue }
+        foreach ($p in $f.PSObject.Properties) { if (-not $cols.Contains($p.Name)) { [void]$cols.Add($p.Name) } }
+    }
+    # La union hay que tenerla ENTERA antes de decidir si sobra trabajo: mirar
+    # cada fila contra la union a medias daba que todas cuadraban cuando la que
+    # traia columnas de mas era la ultima, que es justo el caso de la HSU.
+    $iguales = $true
+    foreach ($f in $fs) {
+        if ($null -eq $f) { continue }
+        if (@($f.PSObject.Properties).Count -ne $cols.Count) { $iguales = $false; break }
+    }
+    if ($iguales) { return $fs }
+    $out = @()
+    foreach ($f in $fs) {
+        if ($null -eq $f) { continue }
+        $o = [ordered]@{}
+        foreach ($c in $cols) { $o[$c] = $(if ($f.PSObject.Properties[$c]) { $f.$c } else { $null }) }
+        $out += [pscustomobject]$o
+    }
+    return $out
+}
+
 function Fila-Tipo($f) {
     $t = "$($f.TCU)"
     if ($t -eq 'NCU') { return 'NCU' }
@@ -1988,6 +2025,16 @@ function Ncu-HsuCompat {
             NCU=''; TCU=("HSU{0}" -f ($h + 1)); Salud=$salud; Modo='-'
             Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''
             Alarmas=$texto
+            # La meteo tambien como CAMPOS, no solo dentro del texto. El texto es
+            # para leerlo; esto es para graficarlo. Quien consuma el export no
+            # deberia tener que volver a parsear "viento 1,4 m/s (nivel 0)": una
+            # coma decimal o un cambio de redaccion lo dejaba sin dato. Numeros
+            # de verdad, y $null -no cadena vacia- cuando la HSU no contesta:
+            # un 0 en una curva de viento es un dato, y aqui no lo hay.
+            Viento_ms=$(if ($salud -eq 'OFFLINE') { $null } else { [math]::Round($viento, 2) })
+            Dir_deg=$(if ($salud -eq 'OFFLINE') { $null } else { [math]::Round($dir, 1) })
+            Nieve_m=$(if ($salud -eq 'OFFLINE') { $null } else { [math]::Round($nieve, 3) })
+            Nivel=$(if ($salud -eq 'OFFLINE') { $null } else { [int]$nivel })
             main_status=("0x{0:X4}" -f $msr); alarmas_1=("0x{0:X4}" -f $al1); alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
         }
     }
@@ -6684,8 +6731,10 @@ function Exportar-Csv($filas, [string]$pref, [string]$que = 'CSV') {
     $f = Guardar-Como $pref 'csv'
     if ($f -eq '') { return '' }
     try {
-        # ';' siempre: es lo que espera el Excel de los portatiles de campo
-        $filas | Export-Csv $f -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+        # ';' siempre: es lo que espera el Excel de los portatiles de campo.
+        # Normalizar antes: Export-Csv se queda con las columnas de la primera
+        # fila y tira las demas sin decir nada.
+        (Filas-Normalizar $filas) | Export-Csv $f -NoTypeInformation -Encoding UTF8 -Delimiter ';'
         Con "$que exportado: $f  ($(@($filas).Count) filas)" ([System.Drawing.Color]::SteelBlue)
         return $f
     } catch { Con "No se ha podido escribir el CSV: $_" ([System.Drawing.Color]::Salmon); return '' }

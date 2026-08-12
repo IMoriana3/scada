@@ -3062,6 +3062,39 @@ Check 'diag: la RSU cuenta como HSU' (Fila-Tipo $filasNiv[2]) 'HSU'
 Check 'diag: un repetidor no es una TCU' (Fila-Tipo $filasNiv[4]) 'REP'
 
 Write-Host ''
+Write-Host '== la meteo de la HSU, tambien como campos =='
+# El SCADA sacaba el viento PARSEANDO el texto de la fila ("viento 1,4 m/s
+# (nivel 0), dir 66 deg"). Una coma decimal o un cambio de redaccion lo dejaba
+# sin dato, y no se pueden hacer curvas re-parseando texto.
+Check 'hsu: el viento va como campo' ($src.Contains('Viento_ms=$(if ($salud -eq ')) $true
+Check 'hsu: la direccion tambien' ($src.Contains('Dir_deg=$(if ($salud -eq ')) $true
+Check 'hsu: y la nieve' ($src.Contains('Nieve_m=$(if ($salud -eq ')) $true
+Check 'hsu: y el nivel' ($src.Contains('Nivel=$(if ($salud -eq ')) $true
+# el texto sigue estando: es lo que se lee en la tabla
+Check 'hsu: sin quitar el texto' ($src.Contains('viento {0:0.#} m/s (nivel {1}), dir {2:0} deg; nieve {3:0.###} m')) $true
+# una HSU muda no vale 0: un 0 en una curva de viento es un dato, y ahi no hay
+Check 'hsu: la muda va a null, no a cero' ($src.Contains("{ `$null } else { [math]::Round(`$viento, 2) }")) $true
+# Export-Csv se queda con las columnas de la PRIMERA fila; la primera de un
+# diagnostico es una NCU o una TCU, que no llevan meteo
+$mix = @(
+  [pscustomobject]@{NCU='1'; TCU=5;      Salud='OK'; Alarmas=''}
+  [pscustomobject]@{NCU='1'; TCU='HSU1'; Salud='OK'; Alarmas='viento'; Viento_ms=1.4; Nivel=0}
+)
+$norm = @(Filas-Normalizar $mix)
+Check 'csv: la fila de TCU gana las columnas de meteo' ($norm[0].PSObject.Properties.Name -contains 'Viento_ms') $true
+Check 'csv: vacias, no a cero' ($null -eq $norm[0].Viento_ms) $true
+Check 'csv: la HSU conserva su valor' $norm[1].Viento_ms 1.4
+Check 'csv: y el orden de columnas es el de aparicion' (($norm[0].PSObject.Properties.Name) -join ',') 'NCU,TCU,Salud,Alarmas,Viento_ms,Nivel'
+# el caso normal -todas las filas iguales- no se toca
+$homo = @([pscustomobject]@{A=1; B=2}, [pscustomobject]@{A=3; B=4})
+Check 'csv: si ya son iguales, no reconstruye' ([object]::ReferenceEquals((Filas-Normalizar $homo)[0], $homo[0])) $true
+Check 'csv: sin filas, sin ruido' (@(Filas-Normalizar @()).Count) 0
+# las tablas que se exportan como hashtable no deben pasar por el normalizador
+$hash = @(@{a=1}, @{a=2; b=3})
+Check 'csv: las hashtables se dejan en paz' (@(Filas-Normalizar $hash)[1].b) 3
+Check 'csv: y el exportador lo usa' ($src.Contains('(Filas-Normalizar $filas) | Export-Csv')) $true
+
+Write-Host ''
 Write-Host '== una NCU que no comunica no son 24 TCUs caidas =='
 # El resumen decia "NCU14: OK 0 | OFFLINE 24" cuando la que no contestaba era
 # la NCU. Se lee como "las 24 TCUs han perdido la Zigbee", que es otra averia y
