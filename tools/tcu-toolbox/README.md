@@ -106,7 +106,7 @@ la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
 una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
 sitio.
 
-**Una NCU que no comunica no son 24 TCUs caídas (v11.42)** — el resumen por NCU
+**Una NCU que no comunica no son 24 TCUs caídas (v11.43)** — el resumen por NCU
 decía `NCU14: OK 0 | AVISO 0 | ALARMA 0 | OFFLINE 24`. Y eso se lee como *«las
 24 TCUs de la NCU14 han perdido la Zigbee»*, cuando lo que pasaba es que **la
 NCU14 no contestaba por la LAN**. Son dos averías distintas y dos cuadrillas
@@ -120,7 +120,7 @@ NCU14: NO COMUNICA POR LA LAN - 24 TCUs sin leer.  NCU SIN RESPUESTA en 192.168.
 Diagnostico: OK 715 | AVISO 5 | ALARMA 1 | OFFLINE 30 (24 por NCUs sin LAN)
 ```
 
-**La herramienta se ordena por nivel de equipo (v11.42)** — la toolbox creció
+**La herramienta se ordena por nivel de equipo (v11.43)** — la toolbox creció
 por **operaciones** —escribir, leer, diagnosticar, auditar— y las pestañas
 acabaron siendo una fila de quince sin más orden que el de haberse ido
 añadiendo. En planta no se piensa así: se piensa por **nivel de equipo**.
@@ -154,7 +154,7 @@ Detalles que importan:
 - La ventana pasa de 960 a 1142 px de ancho: los 182 de más son la columna. El
   interior de las pestañas no se ha movido ni un píxel.
 
-**Auditoría y firmware de NCU (v11.42)** — dos pestañas nuevas, y conviene
+**Auditoría y firmware de NCU (v11.43)** — dos pestañas nuevas, y conviene
 decir qué se puede y qué no:
 
 - **Firmware NCU es de solo lectura, y no por pereza**: el mapa **R7.1 no expone
@@ -178,7 +178,7 @@ decir qué se puede y qué no:
   Los bitsets se pintan como lista de grupos (`1,3,4`) y no en hexadecimal: un
   `0x000D` no se lee en campo.
 
-**Auditoría y firmware de HSU (v11.42)** — la auditoría es el `LEER CONFIG` de
+**Auditoría y firmware de HSU (v11.43)** — la auditoría es el `LEER CONFIG` de
 siempre pero de toda la planta a la vez y puesto como auditoría: lo que importa
 no es el umbral de una estación, es que las diez lleven el mismo. Un umbral de
 viento distinto en una zona es una zona que se pone a bandera cuando las demás
@@ -197,7 +197,7 @@ constancia en el registro de acciones y **releyendo la versión** después. ⚠�
 se ha probado nunca en campo**, y no sube ningún binario: ordena instalar el que
 la estación ya tenga cargado con el updater de Sunner.
 
-**Bloque de repetidores (v11.42)** — un repetidor es una TCU de verdad —mismo
+**Bloque de repetidores (v11.43)** — un repetidor es una TCU de verdad —mismo
 mapa, misma batería, mismo firmware— pero atornillada a un poste, y hasta ahora
 solo salía como una fila más del diagnóstico. Ahora tiene bloque propio:
 
