@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.42'
+$VERSION_TOOLBOX = '11.43'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -658,6 +658,24 @@ function Hsu-LeerConfig([byte]$unit) {
     return @{filas=$filas; low=$low; mid=$mid; tLow=$tLow; tMid=$tMid}
 }
 
+# Firmware de la HSU. La version es el byte alto del registro 30000 (SoftwareId,
+# mapa R23), no un texto como en la NCU.
+function Hsu-LeerFw([byte]$unit) {
+    $w = FC03-Leer $unit (Dir-Trama 30000) 1
+    $sw = ((($w[0]) -shr 8) -band 0xFF)
+    $filas = @(
+        [pscustomobject]@{Campo='SoftwareId (30000, bits 15..8)'; Valor="$sw"; Nota=("registro completo 0x{0:X4}" -f $w[0])}
+    )
+    return @{filas=$filas; sw=$sw; raw=[int]$w[0]}
+}
+
+# Instalar en la HSU el firmware que ya tiene cargado. El mapa R23 lo dice tal
+# cual: "Master must write 0x55AA to install the new FW" en flagUpdateFW. NO
+# sube el binario -eso es el updater de Sunner-, solo da la orden de instalar
+# lo que ya esta dentro, y la estacion se reinicia para hacerlo.
+$HSU_FLAG_UPDATE_FW = 51019
+$HSU_MAGIC_UPDATE   = 0x55AA
+
 # Una fila de la caja negra de 24 h de la HSU (4 registros por minuto desde 31000)
 function Hsu-CajaFila([int[]]$w, [int]$minuto) {
     return [pscustomobject]@{
@@ -841,6 +859,70 @@ function Ncu-Version {
     return "$($sb.ToString())".Trim()
 }
 
+# Los otros dos identificadores de la NCU: HardwareId en el registro 0 y
+# SoftwareId en el 1 (bits 15..8). El mapa R7.1 los marca "NOT READY", asi que
+# hoy contestan 0; se leen de todas formas para que el dia que Sunner los
+# rellene la herramienta ya los enseñe sin tocar nada. Un 0 se pinta como '-'
+# (ver Fn-FilaNcu): un cero en una columna de version parece un dato bueno.
+function Ncu-Ids {
+    $w = FC03-Leer $UNIT_NCU (Dir-Trama 0) 2
+    return @{hw = [int]$w[0]; sw = ((([int]$w[1]) -shr 8) -band 0xFF)}
+}
+
+# ---------- configuracion propia de la NCU ----------
+# La NCU tiene su propia hoja de registros de escritura ("NCU RW registers"),
+# aparte de la de las TCUs: se lee por el puerto 502 con unidad 1. Es una hoja
+# CORTA, y conviene saber por que:
+#
+#   40001-40007  force_sp_1..7   RW, bitset. Un bit por GRUPO de TCUs (bit 0 =
+#                                grupo 1 ... bit 9 = grupo 10). Son PETICIONES
+#                                de posicion segura: la 1 es viento, la 3 nieve
+#                                y la 4 limpieza. En operacion normal valen 0;
+#                                un bit puesto es un grupo abanderado a mano que
+#                                alguien se dejo, y eso si hay que verlo.
+#   40070/40071  auto_mode /     SOLO ESCRITURA. No se pueden leer, asi que el
+#                manual_mode     auto/manual por grupo NO es auditable: no es
+#                                que falte la direccion, es que el mapa no deja
+#                                leerlo.
+#   40080        custom_position_timeout  RW, U16, en SEGUNDOS.
+#
+# Y eso es toda la hoja. No hay mas configuracion propia de la NCU que auditar.
+$NCU_RW = @(
+    @{n = '40001 force_sp_1 (viento) [grupos]';   addr = 40001; tipo = 'grupos'}
+    @{n = '40002 force_sp_2 [grupos]';            addr = 40002; tipo = 'grupos'}
+    @{n = '40003 force_sp_3 (nieve) [grupos]';    addr = 40003; tipo = 'grupos'}
+    @{n = '40004 force_sp_4 (limpieza) [grupos]'; addr = 40004; tipo = 'grupos'}
+    @{n = '40005 force_sp_5 [grupos]';            addr = 40005; tipo = 'grupos'}
+    @{n = '40006 force_sp_6 [grupos]';            addr = 40006; tipo = 'grupos'}
+    @{n = '40007 force_sp_7 [grupos]';            addr = 40007; tipo = 'grupos'}
+    @{n = '40080 custom_position_timeout [s]';    addr = 40080; tipo = 'u16'}
+)
+
+# Un bitset de grupos, en algo que se pueda leer de un vistazo. 0 es lo normal
+# y se dice "ninguno" en vez de "0", que en una columna de grupos se confunde
+# con "el grupo 0". Pura.
+function Ncu-Grupos([int]$w) {
+    if ($w -eq 0) { return 'ninguno' }
+    $g = @()
+    for ($i = 0; $i -lt 10; $i++) { if ($w -band (1 -shl $i)) { $g += ($i + 1) } }
+    if ($g.Count -eq 0) { return ("0x{0:X4}" -f $w) }
+    return ($g -join ',')
+}
+
+# Lee esa configuracion de la NCU a la que se este conectado. Un registro que
+# no conteste se deja vacio: Aud-Comparar ya sabe que un vacio no vota.
+function Ncu-Config {
+    $v = @{}
+    foreach ($d in $NCU_RW) {
+        try {
+            $w = [int](FC03-Leer $UNIT_NCU (Dir-Trama $d.addr) 1)[0]
+            $v[$d.n] = $(if ($d.tipo -eq 'grupos') { Ncu-Grupos $w } else { "$w" })
+        }
+        catch { $v[$d.n] = '' }
+    }
+    return $v
+}
+
 # ---------- estabilidad de la Zigbee ----------
 # El mapa Modbus de Sunner NO expone RSSI ni LQI: no hay potencia de senal que
 # leer. Lo que si hay es el lastComm de cada TCU, y muestreandolo se ve lo
@@ -994,6 +1076,177 @@ function Fila-Tipo($f) {
     if ($t -like 'HSU*' -or $t -like 'RSU*') { return 'HSU' }
     if ($t -match '^\d+$') { return 'TCU' }
     return 'REP'
+}
+
+# Como se llama cada vista del diagnostico. El barrido es UNO y saca de una
+# pasada las filas de NCU, HSU, repetidor y TCU; lo unico que cambia entre las
+# hojas del arbol es que se enseña. Pura.
+function Diag-NivelNombre([string]$n) {
+    switch ("$n") {
+        'NCU' { return 'solo NCUs' }
+        'HSU' { return 'solo HSUs' }
+        'REP' { return 'solo repetidores' }
+        'TCU' { return 'solo TCUs' }
+        default { return 'todo' }
+    }
+}
+
+# Cuantas filas estan OFFLINE por culpa de SU NCU, no de ellas. Cuando una NCU
+# no contesta por la LAN, todas sus TCUs salen OFFLINE -claro, no hay quien las
+# lea- y el total de planta dice "OFFLINE 30" como si treinta seguidores
+# hubieran perdido la Zigbee. Son dos averias distintas y dos cuadrillas
+# distintas: una es un switch y la otra son treinta equipos. Pura.
+function Diag-OffPorNcu($filas) {
+    $mudas = @{}
+    foreach ($f in @($filas)) {
+        if ("$($f.TCU)" -ne 'NCU') { continue }
+        if ("$($f.Salud)" -eq 'OFFLINE') { $mudas["$($f.NCU)"] = $true }
+    }
+    if ($mudas.Count -eq 0) { return 0 }
+    $n = 0
+    foreach ($f in @($filas)) {
+        if ("$($f.TCU)" -eq 'NCU') { continue }
+        if ("$($f.Salud)" -ne 'OFFLINE') { continue }
+        if ($mudas.ContainsKey("$($f.NCU)")) { $n++ }
+    }
+    return $n
+}
+
+# La linea de resumen de UNA NCU. Devuelve @{texto; nivel} con nivel
+# 'mal'|'ok', para que quien la pinte elija el color sin que esto sepa de
+# ventanas. Pura.
+function Diag-LineaNcu([string]$ncu, $filas, [int]$tcusDecl) {
+    $fs    = @($filas)
+    $fNcu  = @($fs | Where-Object { "$($_.TCU)" -eq 'NCU' })
+    $tcus  = @($fs | Where-Object { "$($_.TCU)" -match '^\d+$' })
+    $otros = @($fs | Where-Object { "$($_.TCU)" -notmatch '^\d+$' -and "$($_.TCU)" -ne 'NCU' })
+    # La NCU misma no contesta: eso es lo que hay que decir. Que sus TCUs salgan
+    # OFFLINE es una consecuencia, no un hallazgo, y leerlo como "las TCUs no
+    # comunican con la NCU" manda a alguien al campo a mirar seguidores buenos.
+    if ($fNcu.Count -gt 0 -and "$($fNcu[0].Salud)" -eq 'OFFLINE') {
+        $cuantas = $(if ($tcus.Count -gt 0) { $tcus.Count } else { $tcusDecl })
+        $motivo = "$($fNcu[0].Alarmas)".Trim()
+        return @{nivel='mal'; texto=("  NCU{0}: NO COMUNICA POR LA LAN - {1} TCUs sin leer{2}" -f
+            $ncu, $cuantas, $(if ($motivo) { ".  $motivo" } else { '' }))}
+    }
+    if ($tcus.Count -eq 0) {
+        return @{nivel='mal'; texto=("  NCU{0}: SIN LECTURA - no se ha podido leer ninguna de sus {1} TCUs" -f $ncu, $tcusDecl)}
+    }
+    $c = @{}
+    foreach ($d in $tcus) { $c["$($d.Salud)"] = 1 + [int]$c["$($d.Salud)"] }
+    $extra = ''
+    if ($otros.Count -gt 0) {
+        $mal = @($otros | Where-Object { "$($_.Salud)" -ne 'OK' }).Count
+        $extra = "   (+{0} HSU/repetidor{1})" -f $otros.Count, $(if ($mal) { ", $mal mal" } else { '' })
+    }
+    return @{nivel='ok'; texto=("  NCU{0}: OK {1} | AVISO {2} | ALARMA {3} | OFFLINE {4}{5}" -f
+        $ncu, [int]$c['OK'], [int]$c['AVISO'], [int]$c['ALARMA'], [int]$c['OFFLINE'], $extra)}
+}
+
+# ---------- auditar comparando equipos iguales entre si ----------
+# Ni el mapa de la NCU ni el de la HSU traen un "valor de fabrica" con el que
+# comparar, asi que no hay contra que auditar... salvo contra los demas. En una
+# planta bien puesta las 16 NCUs llevan la misma configuracion y las 10 HSUs los
+# mismos umbrales: manda la MAYORIA y lo que se marca es la minoria. Con dos
+# equipos no hay mayoria posible y se dice, en vez de senalar a uno al azar.
+#
+# Recibe @(@{equipo='NCU1'; valores=@{'parametro'='valor'}}) y devuelve una fila
+# por parametro. $orden fija en que orden salen; sin el, alfabetico. Pura.
+function Aud-Comparar($lecturas, $orden = $null) {
+    $ls = @(@($lecturas) | Where-Object { $null -ne $_ -and $null -ne $_.valores })
+    $params = @()
+    if ($orden) { $params = @(@($orden) | Where-Object { "$_" -ne '' }) }
+    else {
+        $vistos = @{}
+        foreach ($l in $ls) { foreach ($k in @($l.valores.Keys)) { $vistos["$k"] = $true } }
+        $params = @(@($vistos.Keys) | Sort-Object)
+    }
+    $filas = @()
+    foreach ($p in $params) {
+        $conteo = @{}; $deQuien = @{}
+        foreach ($l in $ls) {
+            if (-not $l.valores.ContainsKey($p)) { continue }
+            $v = "$($l.valores[$p])"
+            if ($v -eq '') { continue }
+            if (-not $conteo.ContainsKey($v)) { $conteo[$v] = 0; $deQuien[$v] = @() }
+            $conteo[$v]++
+            $deQuien[$v] += "$($l.equipo)"
+        }
+        $total = 0; foreach ($k in $conteo.Keys) { $total += $conteo[$k] }
+        if ($total -eq 0) {
+            $filas += [pscustomobject]@{Parametro="$p"; Comun=''; Cuantos=0; Distintos=''; Veredicto='sin datos'}
+            continue
+        }
+        # el mas repetido; a igualdad, el primero por orden de texto para que dos
+        # ejecuciones seguidas no den resultados distintos
+        $comun = @($conteo.Keys | Sort-Object @{e={$conteo[$_]}; Descending=$true}, @{e={"$_"}})[0]
+        $fuera = @()
+        foreach ($k in @($conteo.Keys | Sort-Object)) {
+            if ($k -eq $comun) { continue }
+            foreach ($q in $deQuien[$k]) { $fuera += "$q=$k" }
+        }
+        $ver = 'igual en todos'
+        if ($fuera.Count -gt 0) {
+            if ($total -le 2) { $ver = 'discrepan (sin mayoria: solo ' + $total + ')' }
+            else { $ver = "$($fuera.Count) distinto(s)" }
+        }
+        $filas += [pscustomobject]@{Parametro="$p"; Comun="$comun"; Cuantos=$conteo[$comun]
+                                    Distintos=($fuera -join '  '); Veredicto=$ver}
+    }
+    return $filas
+}
+
+# Los parametros que SI significan algo en un repetidor. Es una TCU de verdad
+# -mismo mapa, misma bateria, mismo firmware- pero esta atornillada a un poste:
+# auditarla contra la referencia de un seguidor sacaba media tabla en rojo por
+# posiciones seguras, limites de eje y viento que en ella no aplican.
+$REP_AUD_PATRON = '^(400(08|09|10|11|12|13|14|15|16|22|29|3[4-9]|4[0-3])|410(0[0-9]|1[0-9]))'
+# Y los que no, aunque casen con el patron. Tres motivos distintos:
+#   - nada de mover ni de posicionar: en un poste no significa nada
+#   - el numero de esclavo es DISTINTO en cada uno por diseno (200, 201, 202),
+#     asi que compararlo sacaria a los tres en rojo y taparia lo de verdad
+#   - los bits 'apply' son ordenes, no configuracion
+$REP_AUD_FUERA_RX = '(safe_pos|tilt|angle|posicion|motor|eje|viento|wind|track|limite|east|west|pitch|azimuth|inclinometro|slave_id|_apply)'
+
+# De la tabla de variables, las que tiene sentido comparar entre repetidores.
+# Pura: se le pasa el diccionario y devuelve los nombres.
+function Rep-VarsAuditables($variables) {
+    $r = @()
+    foreach ($n in @(@($variables.Keys) | Sort-Object)) {
+        $d = $variables[$n]
+        if ($null -eq $d -or $null -eq $d.addr) { continue }
+        if ($ADDR_COMANDO -contains [int]$d.addr) { continue }
+        if ($ADDR_TIEMPO  -contains [int]$d.addr) { continue }
+        if ("$n" -match $REP_AUD_FUERA_RX) { continue }
+        if ("$n" -notmatch $REP_AUD_PATRON) { continue }
+        $r += "$n"
+    }
+    return $r
+}
+
+# Que esclavos barrer buscando un repetidor. La regla de la planta: el primero
+# es el 200 y si la NCU lleva mas van 201, 202... Se barre un poco por encima
+# por si alguno se numero a mano. Pura.
+function Rep-EsclavosBarrido([int]$desde = 200, [int]$hasta = 210) {
+    if ($hasta -lt $desde) { return @() }
+    return @($desde..$hasta)
+}
+
+# Una fila de la tabla de firmware de NCU. El mapa R7.1 marca HardwareId
+# (registro 0) y SoftwareId (registro 1, bits 15..8) como NOT READY: hoy
+# devuelven 0. Se leen igual y se enseña '-' en vez del 0, que parece un dato
+# bueno y no lo es. El dia que Sunner los rellene, la columna ya esta. Pura.
+function Fn-FilaNcu([string]$ncu, [string]$ip, [string]$version, $hw, $sw, [string]$err = '') {
+    $tx = { param($v) if ($null -eq $v -or [int]$v -eq 0) { return '-' } return "$v" }
+    if ($err) {
+        return [pscustomobject]@{NCU=$ncu; IP=$ip; Version=''; HardwareId='-'; SoftwareId='-'
+                                 Estado='SIN RESPUESTA'; Nota=$err}
+    }
+    $nota = ''
+    if ((& $tx $hw) -eq '-' -and (& $tx $sw) -eq '-') { $nota = 'HardwareId/SoftwareId siguen NOT READY en el mapa R7.1' }
+    return [pscustomobject]@{NCU=$ncu; IP=$ip; Version="$version"
+                             HardwareId=(& $tx $hw); SoftwareId=(& $tx $sw)
+                             Estado=$(if ("$version" -ne '') { 'OK' } else { 'sin version' }); Nota=$nota}
 }
 
 function Informe-Html([hashtable]$m) {
@@ -2435,18 +2688,21 @@ function Auditar([string]$accion, [string]$ncu, $tcu, [string]$detalle) {
 # ---------------------------------------------------------------------------
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "TCU Toolbox v$VERSION_TOOLBOX - Sunner  (mapa $VERSION_MAPA)"
-$form.Size = New-Object System.Drawing.Size(960, 820)
+# 1142 y no 960: los 182 de mas son la columna de navegacion de la izquierda.
+# El interior de las pestanas no se ha tocado ni un pixel, asi que todo lo que
+# habia sigue donde estaba; lo que se ensancha es la ventana.
+$form.Size = New-Object System.Drawing.Size(1142, 820)
 $form.StartPosition = 'CenterScreen'
 # Ventana redimensionable y maximizable: los anclajes del final del script
 # hacen que crezcan las listas y la consola. MinimumSize = el diseno original,
 # asi que nunca puede quedar mas pequena de lo que cabe.
 $form.FormBorderStyle = 'Sizable'; $form.MaximizeBox = $true
-$form.MinimumSize = New-Object System.Drawing.Size(960, 820)
+$form.MinimumSize = New-Object System.Drawing.Size(1142, 820)
 
 $gbCon = New-Object System.Windows.Forms.GroupBox
 $gbCon.Text = ' Conexion '
 $gbCon.Location = New-Object System.Drawing.Point(10, 8)
-$gbCon.Size = New-Object System.Drawing.Size(925, 58)
+$gbCon.Size = New-Object System.Drawing.Size(1107, 58)
 $form.Controls.Add($gbCon)
 
 function LG($p, [string]$t, [int]$x, [int]$w, [int]$y = 25) {
@@ -2526,17 +2782,48 @@ function Ncus-Filtro { return "$($txtNcus.Text)" }
 
 $btnCancelar = New-Object System.Windows.Forms.Button
 $btnCancelar.Text = 'CANCELAR'
-$btnCancelar.Location = New-Object System.Drawing.Point(800, 18)
+$btnCancelar.Location = New-Object System.Drawing.Point(982, 18)
 $btnCancelar.Size = New-Object System.Drawing.Size(110, 30)
 $btnCancelar.Enabled = $false
 $btnCancelar.BackColor = [System.Drawing.Color]::FromArgb(150,30,30)
 $btnCancelar.ForeColor = [System.Drawing.Color]::White
 $gbCon.Controls.Add($btnCancelar)
 
+# ---------------------------------------------------------------------------
+#  Navegacion: arbol a la izquierda, contenido a la derecha
+# ---------------------------------------------------------------------------
+# La herramienta crecio por OPERACIONES -escribir, leer, diagnosticar, auditar-
+# y las pestanas acabaron siendo una fila de quince sin mas orden que el de
+# haberse ido anadiendo. En planta no se piensa asi: se piensa por NIVEL DE
+# EQUIPO. Primero si la NCU habla, luego sus HSUs, luego los repetidores de los
+# que cuelga media planta, y al final los seguidores. El arbol de la izquierda
+# es ese orden; las pestanas siguen existiendo por dentro (todo el codigo que
+# salta de una a otra sigue funcionando), pero su cabecera no se ve: quien
+# navega es el arbol.
+$nav = New-Object System.Windows.Forms.TreeView
+$nav.Location = New-Object System.Drawing.Point(10, 72)
+$nav.Size = New-Object System.Drawing.Size(176, 400)
+$nav.HideSelection = $false
+$nav.ShowLines = $false; $nav.ShowRootLines = $false; $nav.ShowPlusMinus = $false
+$nav.FullRowSelect = $true; $nav.ItemHeight = 22
+$nav.BorderStyle = 'FixedSingle'
+$form.Controls.Add($nav)
+
+# El panel es el que RECORTA: la cabecera de pestanas no se puede ocultar con
+# una propiedad, asi que el TabControl se coloca con la cabecera por encima del
+# borde de arriba del panel y el panel se la come. Se hace en Add_Shown, con la
+# altura de la cabecera preguntada en caliente en vez de darla por buena: cambia
+# con el tema y con la fuente.
+$pnlCuerpo = New-Object System.Windows.Forms.Panel
+$pnlCuerpo.Location = New-Object System.Drawing.Point(192, 72)
+$pnlCuerpo.Size = New-Object System.Drawing.Size(925, 400)
+$form.Controls.Add($pnlCuerpo)
+
 $tabs = New-Object System.Windows.Forms.TabControl
-$tabs.Location = New-Object System.Drawing.Point(10, 72)
+$tabs.Name = 'cuerpoTabs'
+$tabs.Location = New-Object System.Drawing.Point(0, 0)
 $tabs.Size = New-Object System.Drawing.Size(925, 400)
-$form.Controls.Add($tabs)
+$pnlCuerpo.Controls.Add($tabs)
 
 # ============================ TAB ESCRIBIR ============================
 $tabW = New-Object System.Windows.Forms.TabPage
@@ -3940,6 +4227,277 @@ $lvH.View = 'Details'; $lvH.FullRowSelect = $true; $lvH.GridLines = $true
 [void]$lvH.Columns.Add('Nota', 480)
 $tabH.Controls.Add($lvH)
 
+# ============================ TAB AUDITORIA NCU ============================
+# La NCU no trae un "valor de fabrica" con el que comparar, asi que se audita
+# como se audita una flota: unas contra otras. Lo que lleva distinto una NCU de
+# las otras quince es lo que hay que mirar.
+$tabAN = New-Object System.Windows.Forms.TabPage
+$tabAN.Text = 'Auditoria NCU'
+$tabs.TabPages.Add($tabAN)
+
+$btnANLeer = New-Object System.Windows.Forms.Button
+$btnANLeer.Text = 'AUDITAR NCUs'
+$btnANLeer.Location = New-Object System.Drawing.Point(10, 18)
+$btnANLeer.Size = New-Object System.Drawing.Size(150, 28)
+$btnANLeer.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnANLeer.ForeColor = [System.Drawing.Color]::White
+$tabAN.Controls.Add($btnANLeer)
+
+$btnANCsv = New-Object System.Windows.Forms.Button
+$btnANCsv.Text = 'CSV'
+$btnANCsv.Location = New-Object System.Drawing.Point(838, 18)
+$btnANCsv.Size = New-Object System.Drawing.Size(70, 28)
+$btnANCsv.Enabled = $false
+$tabAN.Controls.Add($btnANCsv)
+
+$lblANRes = LG $tabAN '' 176 656 24
+$lblANRes.ForeColor = [System.Drawing.Color]::DimGray
+
+$lvAN = New-Object System.Windows.Forms.ListView
+$lvAN.Location = New-Object System.Drawing.Point(10, 56)
+$lvAN.Size = New-Object System.Drawing.Size(898, 288)
+$lvAN.View = 'Details'; $lvAN.FullRowSelect = $true; $lvAN.GridLines = $true
+foreach ($c in @(@('Parametro',260), @('Valor comun',120), @('Cuantas',70), @('NCUs distintas',280), @('Veredicto',150))) {
+    [void]$lvAN.Columns.Add($c[0], $c[1])
+}
+$tabAN.Controls.Add($lvAN)
+$lblANNota = LG $tabAN 'Toda la hoja NCU RW del mapa R7.1: las siete peticiones de posicion segura por grupo (40001-40007, y en operacion normal son "ninguno") y el timeout de posicion personalizada (40080). El auto/manual por grupo (40070/40071) es de SOLO ESCRITURA: no se puede leer en que modo esta un grupo.' 10 890 350
+$lblANNota.ForeColor = [System.Drawing.Color]::Gray
+
+# ============================ TAB FIRMWARE NCU ============================
+# Solo lectura, y no por pereza: el mapa R7.1 no expone ninguna via de
+# actualizacion de la NCU. Lo unico que hay es la version como texto en el
+# registro 50, mas HardwareId y SoftwareId (registros 0 y 1) que el propio mapa
+# marca NOT READY. Se leen los tres para que el dia que Sunner los rellene no
+# haya que tocar nada.
+$tabFN = New-Object System.Windows.Forms.TabPage
+$tabFN.Text = 'Firmware NCU'
+$tabs.TabPages.Add($tabFN)
+
+$btnFNLeer = New-Object System.Windows.Forms.Button
+$btnFNLeer.Text = 'LEER VERSIONES'
+$btnFNLeer.Location = New-Object System.Drawing.Point(10, 18)
+$btnFNLeer.Size = New-Object System.Drawing.Size(150, 28)
+$btnFNLeer.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnFNLeer.ForeColor = [System.Drawing.Color]::White
+$tabFN.Controls.Add($btnFNLeer)
+
+$btnFNCsv = New-Object System.Windows.Forms.Button
+$btnFNCsv.Text = 'CSV'
+$btnFNCsv.Location = New-Object System.Drawing.Point(838, 18)
+$btnFNCsv.Size = New-Object System.Drawing.Size(70, 28)
+$btnFNCsv.Enabled = $false
+$tabFN.Controls.Add($btnFNCsv)
+
+$lblFNRes = LG $tabFN '' 176 656 24
+$lblFNRes.ForeColor = [System.Drawing.Color]::DimGray
+
+$lvFN = New-Object System.Windows.Forms.ListView
+$lvFN.Location = New-Object System.Drawing.Point(10, 56)
+$lvFN.Size = New-Object System.Drawing.Size(898, 288)
+$lvFN.View = 'Details'; $lvFN.FullRowSelect = $true; $lvFN.GridLines = $true
+foreach ($c in @(@('NCU',50), @('IP',120), @('Version (reg 50)',140), @('HardwareId (reg 0)',130),
+                 @('SoftwareId (reg 1)',130), @('Estado',90), @('Nota',230))) {
+    [void]$lvFN.Columns.Add($c[0], $c[1])
+}
+$tabFN.Controls.Add($lvFN)
+$lblFNNota = LG $tabFN 'Solo lectura: el mapa R7.1 no expone ninguna via de actualizar la NCU. HardwareId y SoftwareId salen como - porque el propio mapa los marca NOT READY; la columna ya esta hecha para cuando dejen de estarlo.' 10 890 350
+$lblFNNota.ForeColor = [System.Drawing.Color]::Gray
+
+# ============================ TAB AUDITORIA HSU ============================
+# Es el LEER CONFIG de siempre pero de toda la planta a la vez y puesto como
+# auditoria: lo que importa de verdad no es el umbral de una estacion, es que
+# las diez lleven el mismo. Un umbral de viento distinto en una zona es una
+# zona que se pone a bandera cuando las demas no.
+$tabAH = New-Object System.Windows.Forms.TabPage
+$tabAH.Text = 'Auditoria HSU'
+$tabs.TabPages.Add($tabAH)
+
+$btnAHLeer = New-Object System.Windows.Forms.Button
+$btnAHLeer.Text = 'AUDITAR HSUs'
+$btnAHLeer.Location = New-Object System.Drawing.Point(10, 18)
+$btnAHLeer.Size = New-Object System.Drawing.Size(150, 28)
+$btnAHLeer.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnAHLeer.ForeColor = [System.Drawing.Color]::White
+$tabAH.Controls.Add($btnAHLeer)
+
+$btnAHCsv = New-Object System.Windows.Forms.Button
+$btnAHCsv.Text = 'CSV'
+$btnAHCsv.Location = New-Object System.Drawing.Point(838, 18)
+$btnAHCsv.Size = New-Object System.Drawing.Size(70, 28)
+$btnAHCsv.Enabled = $false
+$tabAH.Controls.Add($btnAHCsv)
+
+$lblAHRes = LG $tabAH '' 176 656 24
+$lblAHRes.ForeColor = [System.Drawing.Color]::DimGray
+
+$lvAH = New-Object System.Windows.Forms.ListView
+$lvAH.Location = New-Object System.Drawing.Point(10, 56)
+$lvAH.Size = New-Object System.Drawing.Size(898, 288)
+$lvAH.View = 'Details'; $lvAH.FullRowSelect = $true; $lvAH.GridLines = $true
+foreach ($c in @(@('Parametro',260), @('Valor comun',120), @('Cuantas',70), @('HSUs distintas',280), @('Veredicto',150))) {
+    [void]$lvAH.Columns.Add($c[0], $c[1])
+}
+$tabAH.Controls.Add($lvAH)
+$lblAHNota = LG $tabAH 'Lee la configuracion de todas las HSUs de la planta y las compara entre si. Pasa antes por BUSCAR HSUs (bloque HSU / Lectura de senales) si la entrada es Planta completa o (auto).' 10 890 350
+$lblAHNota.ForeColor = [System.Drawing.Color]::Gray
+
+# ============================ TAB FIRMWARE HSU ============================
+# Esta si tiene via de actualizacion, al contrario que la NCU: el mapa R23 dice
+# que el maestro escribe 0x55AA en flagUpdateFW (51019) y la estacion instala lo
+# que ya tenga cargado. No sube el binario -eso lo hace el updater de Sunner-, y
+# reinicia la estacion: mientras tanto esa zona se queda sin guarda de viento.
+# Por eso va con confirmacion escrita y de una en una.
+$tabFH = New-Object System.Windows.Forms.TabPage
+$tabFH.Text = 'Firmware HSU'
+$tabs.TabPages.Add($tabFH)
+
+$btnFHLeer = New-Object System.Windows.Forms.Button
+$btnFHLeer.Text = 'LEER VERSIONES'
+$btnFHLeer.Location = New-Object System.Drawing.Point(10, 18)
+$btnFHLeer.Size = New-Object System.Drawing.Size(150, 28)
+$btnFHLeer.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnFHLeer.ForeColor = [System.Drawing.Color]::White
+$tabFH.Controls.Add($btnFHLeer)
+
+[void](LG $tabFH 'Esclavo' 176 52)
+$txtFHSlave = TG $tabFH '' 230 22 50
+
+$btnFHInst = New-Object System.Windows.Forms.Button
+$btnFHInst.Text = 'INSTALAR FW (51019 = 0x55AA)'
+$btnFHInst.Location = New-Object System.Drawing.Point(292, 18)
+$btnFHInst.Size = New-Object System.Drawing.Size(230, 28)
+$btnFHInst.BackColor = [System.Drawing.Color]::FromArgb(160,80,0)
+$btnFHInst.ForeColor = [System.Drawing.Color]::White
+$tabFH.Controls.Add($btnFHInst)
+
+$lblFHRes = LG $tabFH '' 534 374 24
+$lblFHRes.ForeColor = [System.Drawing.Color]::DimGray
+
+$lvFH = New-Object System.Windows.Forms.ListView
+$lvFH.Location = New-Object System.Drawing.Point(10, 56)
+$lvFH.Size = New-Object System.Drawing.Size(898, 288)
+$lvFH.View = 'Details'; $lvFH.FullRowSelect = $true; $lvFH.GridLines = $true
+foreach ($c in @(@('Campo',260), @('Valor',160), @('Nota',460))) { [void]$lvFH.Columns.Add($c[0], $c[1]) }
+$tabFH.Controls.Add($lvFH)
+$lblFHNota = LG $tabFH 'INSTALAR no sube ningun binario: ordena a la estacion instalar el firmware que ya tiene cargado, y la reinicia. Va de una en una, con el esclavo escrito a mano, y comprueba antes que no haya viento. Nunca se ha probado en campo.' 10 890 350
+$lblFHNota.ForeColor = [System.Drawing.Color]::Gray
+
+# ============================ TAB REPETIDORES: AUDITORIA ============================
+# Un repetidor es una TCU con el mismo mapa, la misma bateria y el mismo
+# firmware, pero atornillada a un poste. Auditarla contra la referencia de un
+# seguidor sacaba media tabla en rojo por posiciones seguras y limites de eje
+# que en ella no significan nada: aqui se comparan solo entre repetidores y solo
+# los parametros que les aplican.
+$tabRA = New-Object System.Windows.Forms.TabPage
+$tabRA.Text = 'Rep. auditoria'
+$tabs.TabPages.Add($tabRA)
+
+$btnRALeer = New-Object System.Windows.Forms.Button
+$btnRALeer.Text = 'AUDITAR REPETIDORES'
+$btnRALeer.Location = New-Object System.Drawing.Point(10, 18)
+$btnRALeer.Size = New-Object System.Drawing.Size(180, 28)
+$btnRALeer.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnRALeer.ForeColor = [System.Drawing.Color]::White
+$tabRA.Controls.Add($btnRALeer)
+
+$btnRACsv = New-Object System.Windows.Forms.Button
+$btnRACsv.Text = 'CSV'
+$btnRACsv.Location = New-Object System.Drawing.Point(838, 18)
+$btnRACsv.Size = New-Object System.Drawing.Size(70, 28)
+$btnRACsv.Enabled = $false
+$tabRA.Controls.Add($btnRACsv)
+
+$lblRARes = LG $tabRA '' 206 626 24
+$lblRARes.ForeColor = [System.Drawing.Color]::DimGray
+
+$lvRA = New-Object System.Windows.Forms.ListView
+$lvRA.Location = New-Object System.Drawing.Point(10, 56)
+$lvRA.Size = New-Object System.Drawing.Size(898, 288)
+$lvRA.View = 'Details'; $lvRA.FullRowSelect = $true; $lvRA.GridLines = $true
+foreach ($c in @(@('Parametro',260), @('Valor comun',120), @('Cuantas',70), @('Repetidores distintos',280), @('Veredicto',150))) {
+    [void]$lvRA.Columns.Add($c[0], $c[1])
+}
+$tabRA.Controls.Add($lvRA)
+$lblRANota = LG $tabRA 'Solo los parametros que aplican a un equipo fijo: carga, bateria, calefactor y comunicaciones. Nada de posicion, motor ni viento.' 10 890 350
+$lblRANota.ForeColor = [System.Drawing.Color]::Gray
+
+# ============================ TAB REPETIDORES: FIRMWARE ============================
+# El plan de actualizacion va por tramos de TCU de cada gateway, y el esclavo de
+# un repetidor (200, 201, 202...) queda fuera de ese tramo: hasta ahora los
+# repetidores no entraban en ningun plan y se quedaban con el firmware viejo.
+$tabRF = New-Object System.Windows.Forms.TabPage
+$tabRF.Text = 'Rep. firmware'
+$tabs.TabPages.Add($tabRF)
+
+[void](LG $tabRF 'Version objetivo' 10 100)
+$txtRFObj = TG $tabRF 'v1.6.0' 112 22 90
+
+$btnRFLeer = New-Object System.Windows.Forms.Button
+$btnRFLeer.Text = 'LEER Y PLANIFICAR'
+$btnRFLeer.Location = New-Object System.Drawing.Point(212, 18)
+$btnRFLeer.Size = New-Object System.Drawing.Size(170, 28)
+$btnRFLeer.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnRFLeer.ForeColor = [System.Drawing.Color]::White
+$tabRF.Controls.Add($btnRFLeer)
+
+$btnRFCsv = New-Object System.Windows.Forms.Button
+$btnRFCsv.Text = 'CSV'
+$btnRFCsv.Location = New-Object System.Drawing.Point(838, 18)
+$btnRFCsv.Size = New-Object System.Drawing.Size(70, 28)
+$btnRFCsv.Enabled = $false
+$tabRF.Controls.Add($btnRFCsv)
+
+$lblRFRes = LG $tabRF '' 398 430 24
+$lblRFRes.ForeColor = [System.Drawing.Color]::DimGray
+
+$lvRF = New-Object System.Windows.Forms.ListView
+$lvRF.Location = New-Object System.Drawing.Point(10, 56)
+$lvRF.Size = New-Object System.Drawing.Size(898, 288)
+$lvRF.View = 'Details'; $lvRF.FullRowSelect = $true; $lvRF.GridLines = $true
+foreach ($c in @(@('NCU',50), @('Repetidor',150), @('GW',60), @('Esclavo',70), @('FW',110),
+                 @('SoC',60), @('Estado / nota',380))) {
+    [void]$lvRF.Columns.Add($c[0], $c[1])
+}
+$tabRF.Controls.Add($lvRF)
+$lblRFNota = LG $tabRF 'Una ventana del updater por repetidor: su esclavo esta fuera del tramo de TCUs de su gateway, asi que hay que pegarlo aparte. La toolbox no actualiza: dice cual falta y en que version esta.' 10 890 350
+$lblRFNota.ForeColor = [System.Drawing.Color]::Gray
+
+# ============================ TAB REPETIDORES: BUSCAR ============================
+# La topologia dice cuantos repetidores hay y con que esclavo, pero uno que
+# nunca ha comunicado no aparece por ningun lado: hay que ir a buscarlo. La
+# regla de la planta es que el primero es el 200 y los siguientes 201, 202...
+$tabRB = New-Object System.Windows.Forms.TabPage
+$tabRB.Text = 'Rep. buscar'
+$tabs.TabPages.Add($tabRB)
+
+[void](LG $tabRB 'Esclavos' 10 60)
+$txtRBIni = TG $tabRB '200' 74 22 46
+[void](LG $tabRB 'a' 126 14)
+$txtRBFin = TG $tabRB '210' 144 22 46
+
+$btnRBBuscar = New-Object System.Windows.Forms.Button
+$btnRBBuscar.Text = 'BUSCAR REPETIDOR'
+$btnRBBuscar.Location = New-Object System.Drawing.Point(202, 18)
+$btnRBBuscar.Size = New-Object System.Drawing.Size(170, 28)
+$btnRBBuscar.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnRBBuscar.ForeColor = [System.Drawing.Color]::White
+$tabRB.Controls.Add($btnRBBuscar)
+
+$lblRBRes = LG $tabRB '' 388 520 24
+$lblRBRes.ForeColor = [System.Drawing.Color]::DimGray
+
+$lvRB = New-Object System.Windows.Forms.ListView
+$lvRB.Location = New-Object System.Drawing.Point(10, 56)
+$lvRB.Size = New-Object System.Drawing.Size(898, 288)
+$lvRB.View = 'Details'; $lvRB.FullRowSelect = $true; $lvRB.GridLines = $true
+foreach ($c in @(@('NCU',50), @('IP',120), @('GW',60), @('Esclavo',70), @('Tipo',80), @('Product ID',100), @('Nota',400))) {
+    [void]$lvRB.Columns.Add($c[0], $c[1])
+}
+$tabRB.Controls.Add($lvRB)
+$lblRBNota = LG $tabRB 'Barre ese rango de esclavos por cada gateway de las NCUs seleccionadas arriba. Cada esclavo que no existe cuesta lo que tarde la NCU en rendirse con el Zigbee: acota con el cuadro NCUs. Se para con CANCELAR.' 10 890 350
+$lblRBNota.ForeColor = [System.Drawing.Color]::Gray
+
 # ============================ TAB UTILIDADES ============================
 $tabU = New-Object System.Windows.Forms.TabPage
 $tabU.Text = 'Utilidades'
@@ -4014,7 +4572,7 @@ $gbIdent.Controls.Add($lvI)
 # --- consola comun ---
 $rtb = New-Object System.Windows.Forms.RichTextBox
 $rtb.Location = New-Object System.Drawing.Point(10, 480)
-$rtb.Size = New-Object System.Drawing.Size(925, 255)
+$rtb.Size = New-Object System.Drawing.Size(1107, 255)
 $rtb.ReadOnly = $true
 $rtb.BackColor = [System.Drawing.Color]::FromArgb(20,20,24)
 $rtb.ForeColor = [System.Drawing.Color]::Gainsboro
@@ -4023,33 +4581,33 @@ $form.Controls.Add($rtb)
 
 $btnLog = New-Object System.Windows.Forms.Button
 $btnLog.Text = 'Guardar log'
-$btnLog.Location = New-Object System.Drawing.Point(825, 741)
+$btnLog.Location = New-Object System.Drawing.Point(1007, 741)
 $btnLog.Size = New-Object System.Drawing.Size(110, 28)
 $form.Controls.Add($btnLog)
 
 # Ctrl+K tampoco se ve, asi que el buscador tiene su boton.
 $btnBuscar = New-Object System.Windows.Forms.Button
 $btnBuscar.Text = 'Buscar  Ctrl+K'
-$btnBuscar.Location = New-Object System.Drawing.Point(366, 741)
+$btnBuscar.Location = New-Object System.Drawing.Point(548, 741)
 $btnBuscar.Size = New-Object System.Drawing.Size(104, 28)
 $form.Controls.Add($btnBuscar)
 
 # Limpiar la consola estaba solo en el menu del boton derecho, que no se ve.
 $btnLimpiar = New-Object System.Windows.Forms.Button
 $btnLimpiar.Text = 'Limpiar'
-$btnLimpiar.Location = New-Object System.Drawing.Point(476, 741)
+$btnLimpiar.Location = New-Object System.Drawing.Point(658, 741)
 $btnLimpiar.Size = New-Object System.Drawing.Size(100, 28)
 $form.Controls.Add($btnLimpiar)
 
 $btnUsuarios = New-Object System.Windows.Forms.Button
 $btnUsuarios.Text = 'Usuarios...'
-$btnUsuarios.Location = New-Object System.Drawing.Point(586, 741)
+$btnUsuarios.Location = New-Object System.Drawing.Point(768, 741)
 $btnUsuarios.Size = New-Object System.Drawing.Size(105, 28)
 $form.Controls.Add($btnUsuarios)
 
 $btnInforme = New-Object System.Windows.Forms.Button
 $btnInforme.Text = 'INFORME HTML'
-$btnInforme.Location = New-Object System.Drawing.Point(700, 741)
+$btnInforme.Location = New-Object System.Drawing.Point(882, 741)
 $btnInforme.Size = New-Object System.Drawing.Size(118, 28)
 $form.Controls.Add($btnInforme)
 
@@ -7056,7 +7614,12 @@ function Diag-Correr {
         $(if (($nHOk + $nHMal) -gt 0) { "   |   HSUs: $($nHOk + $nHMal) ($nHOk OK)" } else { '' }) +
         $(if ($reps.Count -gt 0) { "   |   Repetidores: $($reps.Count) ($nROk OK)" } else { '' })
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Diagnostico: OK $nOk | AVISO $nAviso | ALARMA $nAlarma | OFFLINE $nOff" ([System.Drawing.Color]::SteelBlue)
+    # Un OFFLINE no vale lo mismo que otro: los de una NCU que no contesta por la
+    # LAN no son seguidores caidos, son seguidores que no se han podido leer. Sin
+    # esto, un switch de una NCU se lee como treinta averias de campo.
+    $nOffLan = Diag-OffPorNcu $script:UltimoDiag
+    $notaLan = $(if ($nOffLan -gt 0) { " ($nOffLan por NCUs sin LAN)" } else { '' })
+    Con "Diagnostico: OK $nOk | AVISO $nAviso | ALARMA $nAlarma | OFFLINE $nOff$notaLan" ([System.Drawing.Color]::SteelBlue)
     Marcar-Bloque 'diag'
     # copia a disco: si luego lanzas otra cosa, esto no se pierde
     [void](Trabajo-Guardar 'diag' $script:UltimoDiag "OK $nOk | AVISO $nAviso | ALARMA $nAlarma | OFFLINE $nOff")
@@ -7078,25 +7641,10 @@ function Diag-Correr {
         foreach ($k in @($porNcu.Keys | Sort-Object { [int]("0" + $_) })) {
             # las TCUs por un lado; HSUs y repetidores no son seguidores y van
             # aparte, igual que en el total
-            $filas = @($porNcu[$k])
-            $tcus = @($filas | Where-Object { "$($_.TCU)" -match '^\d+$' })
-            $otros = @($filas | Where-Object { "$($_.TCU)" -notmatch '^\d+$' -and "$($_.TCU)" -ne 'NCU' })
-            if ($tcus.Count -eq 0) {
-                # una NCU a la que no se ha podido llegar es LO MAS importante que
-                # hay que decir, y antes desaparecia del resumen sin mas
-                $n = @($trabajos | Where-Object { "$($_.ncu)" -eq $k })
-                $cuantas = $(if ($n.Count -gt 0) { @($n[0].tcus).Count } else { 0 })
-                Con ("  NCU{0}: SIN LECTURA - no se ha podido leer ninguna de sus {1} TCUs" -f $k, $cuantas) ([System.Drawing.Color]::Salmon)
-                continue
-            }
-            $c = @{}
-            foreach ($d in $tcus) { $c[$d.Salud] = 1 + [int]$c[$d.Salud] }
-            $extra = ''
-            if ($otros.Count -gt 0) {
-                $mal = @($otros | Where-Object { "$($_.Salud)" -ne 'OK' }).Count
-                $extra = "   (+{0} HSU/repetidor{1})" -f $otros.Count, $(if ($mal) { ", $mal mal" } else { '' })
-            }
-            Con ("  NCU{0}: OK {1} | AVISO {2} | ALARMA {3} | OFFLINE {4}{5}" -f $k, [int]$c['OK'], [int]$c['AVISO'], [int]$c['ALARMA'], [int]$c['OFFLINE'], $extra) ([System.Drawing.Color]::SteelBlue)
+            $n = @($trabajos | Where-Object { "$($_.ncu)" -eq $k })
+            $decl = $(if ($n.Count -gt 0) { @($n[0].tcus).Count } else { 0 })
+            $ln = Diag-LineaNcu $k @($porNcu[$k]) $decl
+            Con $ln.texto $(if ($ln.nivel -eq 'mal') { [System.Drawing.Color]::Salmon } else { [System.Drawing.Color]::SteelBlue })
         }
     }
     $selV = $cbGVerNcu.SelectedItem
@@ -7107,11 +7655,18 @@ function Diag-Correr {
     Diag-Refrescar
 }
 
+# El nivel de equipo que se esta mirando en el diagnostico. Lo pone el arbol de
+# la izquierda al entrar por una hoja u otra: el barrido es UNO y saca las filas
+# de NCU, HSU, repetidor y TCU de una vez; lo que cambia es que se enseña.
+# 'todo' es la hoja GLOBAL.
+$script:DiagNivel = 'todo'
+
 # Repinta la lista del diagnostico desde el ultimo resultado aplicando los
-# filtros de vista (NCU y salud) - no relanza ninguna lectura. Los exports
-# CSV/JSON siempre llevan el diagnostico completo, sin estos filtros.
+# filtros de vista (nivel de equipo, NCU y salud) - no relanza ninguna lectura.
+# Los exports CSV/JSON siempre llevan el diagnostico completo, sin estos filtros.
 function Diag-Refrescar {
     $fNcu = "$($cbGVerNcu.SelectedItem)"
+    $niv = "$($script:DiagNivel)"
     # saludes marcadas (varias a la vez); ninguna = todas
     $sal = @()
     foreach ($k in @('OK','AVISO','ALARMA','OFFLINE')) { if ($script:ChksSalud[$k].Checked) { $sal += $k } }
@@ -7119,6 +7674,7 @@ function Diag-Refrescar {
     $lvG.Items.Clear()
     $n = 0
     foreach ($d in $script:UltimoDiag) {
+        if ($niv -ne 'todo' -and (Fila-Tipo $d) -ne $niv) { continue }
         if ($fNcu -ne 'NCU - todas' -and ("NCU$($d.NCU)") -ne $fNcu) { continue }
         if ($sal.Count -gt 0 -and $sal -notcontains "$($d.Salud)") { continue }
         $item = New-Object System.Windows.Forms.ListViewItem("$($d.NCU)")
@@ -7134,8 +7690,8 @@ function Diag-Refrescar {
     }
     $lvG.EndUpdate()
     $tot = @($script:UltimoDiag).Count
-    if ($fNcu -eq 'NCU - todas' -and $sal.Count -eq 0) { $lblGVer.Text = "$tot filas" }
-    else { $lblGVer.Text = "$n de $tot filas  ($fNcu / $(if ($sal.Count) { $sal -join '+' } else { 'todas' })) - el CSV/JSON exporta siempre todo" }
+    if ($niv -eq 'todo' -and $fNcu -eq 'NCU - todas' -and $sal.Count -eq 0) { $lblGVer.Text = "$tot filas" }
+    else { $lblGVer.Text = "$n de $tot filas  ($(Diag-NivelNombre $niv) / $fNcu / $(if ($sal.Count) { $sal -join '+' } else { 'todas' })) - el CSV/JSON exporta siempre todo" }
 }
 
 $btnDiag.Add_Click({ Lanzar { $script:UltimoEsComm = $false; Diag-Correr } })
@@ -10813,6 +11369,10 @@ if ($script:TemaNombre -ne 'clasico') { Tema-Aplicar }
 # usa posiciones fijas, asi que sin esto la ventana grande dejaria huecos).
 $gbCon.Anchor      = 'Top,Left,Right'
 $btnCancelar.Anchor = 'Top,Right'
+# La columna de navegacion crece a lo alto pero nunca a lo ancho: es una lista
+# de nombres cortos y ensancharla solo le quita sitio a las tablas.
+$nav.Anchor        = 'Top,Left,Bottom'
+$pnlCuerpo.Anchor  = 'Top,Left,Right,Bottom'
 $tabs.Anchor       = 'Top,Left,Right,Bottom'
 $rtb.Anchor        = 'Left,Right,Bottom'
 $lblLog.Anchor     = 'Left,Bottom'
@@ -10895,6 +11455,9 @@ function Layout-Rescatar($cont) {
     $ancho = $cont.ClientSize.Width; $alto = $cont.ClientSize.Height
     if ($ancho -lt 40 -or $alto -lt 40) { return }
     foreach ($c in $cont.Controls) {
+        # El TabControl se sale de su panel A PROPOSITO: es asi como se recorta
+        # su cabecera (ver Nav-OcultarCabecera). Meterlo dentro la devolveria.
+        if ("$($c.Name)" -eq 'cuerpoTabs') { if ($c.Controls.Count -gt 0) { Layout-Rescatar $c }; continue }
         if ($c.Width  -gt ($ancho - 8)) { $c.Width  = $ancho - 8 }
         if ($c.Height -gt ($alto  - 8)) { $c.Height = $alto  - 8 }
         if (($c.Left + $c.Width)  -gt ($ancho - 4)) { $c.Left = [Math]::Max(4, $ancho - 4 - $c.Width) }
@@ -11015,8 +11578,563 @@ $form.Add_KeyDown({
     if ($e.Control -and $e.KeyCode -eq 'K') { $e.Handled = $true; Buscador-Abrir }
 })
 
+# ---------------------------------------------------------------------------
+#  Auditorias por comparacion (NCU, HSU, repetidores)
+# ---------------------------------------------------------------------------
+# Las tres tablas tienen la misma forma porque la pregunta es la misma: quien se
+# sale de lo que llevan los demas.
+function Aud-Pintar($lv, $filas) {
+    $lv.Items.Clear()
+    foreach ($f in $filas) {
+        $it = New-Object System.Windows.Forms.ListViewItem("$($f.Parametro)")
+        foreach ($c in @($f.Comun, $f.Cuantos, $f.Distintos, $f.Veredicto)) { [void]$it.SubItems.Add("$c") }
+        if ("$($f.Veredicto)" -eq 'igual en todos') { $it.ForeColor = [System.Drawing.Color]::DarkGreen }
+        elseif ("$($f.Veredicto)" -eq 'sin datos')  { $it.ForeColor = [System.Drawing.Color]::Gray }
+        else { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
+        $lv.Items.Add($it) | Out-Null
+    }
+}
+
+# Cuenta cuantas filas se salen, para el rotulo de resumen. Pura.
+function Aud-CuantasFuera($filas) {
+    return @(@($filas) | Where-Object { "$($_.Veredicto)" -ne 'igual en todos' -and "$($_.Veredicto)" -ne 'sin datos' }).Count
+}
+
+# Confirmacion escrita: para lo que reinicia un equipo del que cuelga la
+# seguridad de la planta, un Si/No se pulsa sin leerlo. Devuelve lo tecleado.
+function Pedir-Texto([string]$titulo, [string]$mensaje, [string]$esperado) {
+    $d = New-Object System.Windows.Forms.Form
+    $d.Text = $titulo; $d.Size = New-Object System.Drawing.Size(520, 260)
+    $d.FormBorderStyle = 'FixedDialog'; $d.MaximizeBox = $false; $d.MinimizeBox = $false
+    $d.StartPosition = 'CenterParent'
+    $l = New-Object System.Windows.Forms.Label
+    $l.Location = New-Object System.Drawing.Point(15, 15)
+    $l.Size = New-Object System.Drawing.Size(480, 120)
+    $l.Text = $mensaje
+    $d.Controls.Add($l)
+    $t = New-Object System.Windows.Forms.TextBox
+    $t.Location = New-Object System.Drawing.Point(15, 145)
+    $t.Size = New-Object System.Drawing.Size(480, 24)
+    $d.Controls.Add($t)
+    $bOk = New-Object System.Windows.Forms.Button
+    $bOk.Text = 'Continuar'; $bOk.Location = New-Object System.Drawing.Point(300, 180); $bOk.Size = New-Object System.Drawing.Size(95, 28)
+    $bOk.Enabled = $false
+    $bCa = New-Object System.Windows.Forms.Button
+    $bCa.Text = 'Cancelar'; $bCa.Location = New-Object System.Drawing.Point(400, 180); $bCa.Size = New-Object System.Drawing.Size(95, 28)
+    $bCa.DialogResult = 'Cancel'
+    $d.Controls.Add($bOk); $d.Controls.Add($bCa); $d.CancelButton = $bCa
+    $t.Add_TextChanged({ $bOk.Enabled = ($t.Text.Trim() -eq $esperado) }.GetNewClosure())
+    $bOk.Add_Click({ $d.DialogResult = 'OK'; $d.Close() }.GetNewClosure())
+    $d.Add_Shown({ $t.Focus() }.GetNewClosure())
+    [void]$d.ShowDialog($form)
+    return "$($t.Text)".Trim()
+}
+
+# ------------------------- AUDITORIA NCU -------------------------
+$script:UltimaAudNcu = @()
+$btnANLeer.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
+    if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
+    $lvAN.Items.Clear(); $script:UltimaAudNcu = @(); $lblANRes.Text = ''; $btnANCsv.Enabled = $false
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Auditoria de $($trabajos.Count) NCU(s) por el puerto ${PUERTO_NCU}: $($NCU_RW.Count) parametro(s)." ([System.Drawing.Color]::SteelBlue)
+    Prog-Iniciar $trabajos.Count
+    $lect = @(); $mudas = 0
+    foreach ($tr in $trabajos) {
+        if (Chequear-Cancelado) { break }
+        $script:NcuLog = "$($tr.ncu)"
+        $v = $null
+        try { Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to; $v = Ncu-Config }
+        catch { $v = $null } finally { Modbus-Cerrar }
+        if ($null -eq $v) {
+            $mudas++
+            Con ("NCU{0,-3} {1,-15} sin respuesta" -f $tr.ncu, $tr.ip) ([System.Drawing.Color]::Salmon)
+        } else {
+            $lect += ,@{equipo="NCU$($tr.ncu)"; valores=$v}
+        }
+        Prog-Paso
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    $script:NcuLog = ''
+    $script:UltimaAudNcu = @(Aud-Comparar $lect @($NCU_RW | ForEach-Object { $_.n }))
+    Aud-Pintar $lvAN $script:UltimaAudNcu
+    $btnANCsv.Enabled = ($script:UltimaAudNcu.Count -gt 0)
+    $fuera = Aud-CuantasFuera $script:UltimaAudNcu
+    $lblANRes.Text = "$($lect.Count) NCU(s) leidas, $mudas mudas   |   parametros que discrepan: $fuera"
+    Con ("Auditoria NCU: {0} leidas, {1} mudas, {2} parametro(s) con discrepancia." -f $lect.Count, $mudas, $fuera) ([System.Drawing.Color]::SteelBlue)
+    # lo que hay que mirar de verdad no es que discrepen, es que no sean 'ninguno'
+    $abanderados = @($script:UltimaAudNcu | Where-Object { "$($_.Parametro)" -like '*force_sp*' -and "$($_.Comun)" -ne 'ninguno' })
+    foreach ($f in $abanderados) {
+        Con "ATENCION: $($f.Parametro) esta puesto (grupos $($f.Comun)) en la mayoria de las NCUs. Una peticion de posicion segura activa deja esos grupos abanderados." ([System.Drawing.Color]::Orange)
+    }
+    Con 'El auto/manual por grupo (40070/40071) no sale aqui: el mapa R7.1 los declara de SOLO ESCRITURA, asi que no hay forma de leer en que modo esta cada grupo.' ([System.Drawing.Color]::Gainsboro)
+} })
+$btnANCsv.Add_Click({
+    if (@($script:UltimaAudNcu).Count -eq 0) { return }
+    [void](Exportar-Csv $script:UltimaAudNcu 'auditoria_ncu' 'Auditoria NCU')
+})
+
+# ------------------------- FIRMWARE NCU (solo lectura) -------------------------
+$script:UltimoFwNcu = @()
+$btnFNLeer.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
+    if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
+    $lvFN.Items.Clear(); $script:UltimoFwNcu = @(); $lblFNRes.Text = ''; $btnFNCsv.Enabled = $false
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Versiones de $($trabajos.Count) NCU(s): registro 50 (texto) y registros 0/1." ([System.Drawing.Color]::SteelBlue)
+    Prog-Iniciar $trabajos.Count
+    foreach ($tr in $trabajos) {
+        if (Chequear-Cancelado) { break }
+        $script:NcuLog = "$($tr.ncu)"
+        $ver = ''; $ids = $null; $err = ''
+        try {
+            Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
+            $ver = Ncu-Version
+            try { $ids = Ncu-Ids } catch { $ids = $null }
+        } catch { $err = "$_" } finally { Modbus-Cerrar }
+        $f = Fn-FilaNcu "$($tr.ncu)" "$($tr.ip)" $ver $(if ($ids) { $ids.hw } else { 0 }) $(if ($ids) { $ids.sw } else { 0 }) $err
+        $script:UltimoFwNcu += $f
+        $it = New-Object System.Windows.Forms.ListViewItem("$($f.NCU)")
+        foreach ($c in @($f.IP, $f.Version, $f.HardwareId, $f.SoftwareId, $f.Estado, $f.Nota)) { [void]$it.SubItems.Add("$c") }
+        if ("$($f.Estado)" -eq 'OK') { $it.ForeColor = [System.Drawing.Color]::DarkGreen }
+        elseif ("$($f.Estado)" -eq 'SIN RESPUESTA') { $it.ForeColor = [System.Drawing.Color]::Firebrick }
+        else { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
+        $lvFN.Items.Add($it) | Out-Null
+        Prog-Paso
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    $script:NcuLog = ''
+    $btnFNCsv.Enabled = (@($script:UltimoFwNcu).Count -gt 0)
+    $vers = @(@($script:UltimoFwNcu | Where-Object { "$($_.Version)" -ne '' } | ForEach-Object { "$($_.Version)" }) | Sort-Object -Unique)
+    $lblFNRes.Text = "NCUs: $(@($script:UltimoFwNcu).Count)   |   versiones distintas: $($vers.Count)"
+    if ($vers.Count -gt 1) { Con "ATENCION: conviven $($vers.Count) versiones de NCU en la planta: $($vers -join ', ')" ([System.Drawing.Color]::Orange) }
+    elseif ($vers.Count -eq 1) { Con "Todas las NCUs en $($vers[0])." ([System.Drawing.Color]::LightGreen) }
+} })
+$btnFNCsv.Add_Click({
+    if (@($script:UltimoFwNcu).Count -eq 0) { return }
+    [void](Exportar-Csv $script:UltimoFwNcu 'firmware_ncu' 'Firmware NCU')
+})
+
+# ------------------------- AUDITORIA HSU -------------------------
+$script:UltimaAudHsu = @()
+$btnAHLeer.Add_Click({ Lanzar {
+    $objs = @(Hsu-Objetivos)
+    if ($objs.Count -eq 0) { Con 'No hay ninguna HSU a la que preguntar.' ([System.Drawing.Color]::Orange); return }
+    $lvAH.Items.Clear(); $script:UltimaAudHsu = @(); $lblAHRes.Text = ''; $btnAHCsv.Enabled = $false
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Auditoria de $($objs.Count) HSU(s): se leen y se comparan entre si." ([System.Drawing.Color]::SteelBlue)
+    $r = Hsu-Recorrer $objs (Params-Conexion) { param($u) Hsu-LeerConfig $u } $null
+    $lect = @()
+    foreach ($o in @($r.oks)) {
+        $v = @{}
+        foreach ($f in @($o.datos.filas)) {
+            # el esclavo es distinto en cada estacion POR DISENO: compararlo
+            # sacaria una discrepancia en todas y taparia las de verdad
+            if ("$($f.Campo)" -like 'Esclavo Modbus*') { continue }
+            $v["$($f.Campo)"] = "$($f.Valor)"
+        }
+        $lect += ,@{equipo="$($o.obj.etiqueta)"; valores=$v}
+    }
+    $orden = @()
+    if ($lect.Count -gt 0) { $orden = @(@($r.oks)[0].datos.filas | Where-Object { "$($_.Campo)" -notlike 'Esclavo Modbus*' } | ForEach-Object { "$($_.Campo)" }) }
+    $script:UltimaAudHsu = @(Aud-Comparar $lect $orden)
+    Aud-Pintar $lvAH $script:UltimaAudHsu
+    $btnAHCsv.Enabled = ($script:UltimaAudHsu.Count -gt 0)
+    $fuera = Aud-CuantasFuera $script:UltimaAudHsu
+    $mudas = $objs.Count - $lect.Count
+    $lblAHRes.Text = "$($lect.Count) HSU(s) leidas, $mudas mudas   |   parametros que discrepan: $fuera"
+    Con ("Auditoria HSU: {0} leidas, {1} mudas, {2} parametro(s) con discrepancia." -f $lect.Count, $mudas, $fuera) ([System.Drawing.Color]::SteelBlue)
+} })
+$btnAHCsv.Add_Click({
+    if (@($script:UltimaAudHsu).Count -eq 0) { return }
+    [void](Exportar-Csv $script:UltimaAudHsu 'auditoria_hsu' 'Auditoria HSU')
+})
+
+# ------------------------- FIRMWARE HSU -------------------------
+$btnFHLeer.Add_Click({ Lanzar {
+    $objs = @(Hsu-Objetivos)
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Leyendo la version de $($objs.Count) HSU(s) (SoftwareId, 30000 bits 15..8)." ([System.Drawing.Color]::SteelBlue)
+    $r = Hsu-Recorrer $objs (Params-Conexion) { param($u) Hsu-LeerFw $u } $null
+    $lvFH.Items.Clear()
+    foreach ($f in $r.filas) {
+        $it = New-Object System.Windows.Forms.ListViewItem("$($f.Campo)")
+        [void]$it.SubItems.Add("$($f.Valor)"); [void]$it.SubItems.Add("$($f.Nota)")
+        if ("$($f.Nota)" -match 'ALARMA') { $it.ForeColor = [System.Drawing.Color]::Firebrick }
+        $lvFH.Items.Add($it) | Out-Null
+    }
+    $vs = @(@($r.oks | ForEach-Object { "$($_.datos.sw)" }) | Sort-Object -Unique)
+    $lblFHRes.Text = "$(@($r.oks).Count) de $($objs.Count) HSU(s)   |   versiones distintas: $($vs.Count)"
+    if ($vs.Count -gt 1) { Con "ATENCION: conviven $($vs.Count) versiones de HSU: $($vs -join ', ')" ([System.Drawing.Color]::Orange) }
+    # deja el esclavo de la primera puesto, para no tener que copiarlo a mano
+    if (@($r.oks).Count -gt 0 -and "$($txtFHSlave.Text)".Trim() -eq '') { $txtFHSlave.Text = "$(@($r.oks)[0].obj.unit)" }
+} })
+
+$btnFHInst.Add_Click({ Lanzar {
+    $u = [byte](Val-Int $txtFHSlave.Text 'Esclavo HSU' 1 255)
+    # la estacion cuelga de un gateway concreto: se busca entre las conocidas
+    $obj = @(@(Hsu-Objetivos) | Where-Object { [int]$_.unit -eq [int]$u })
+    if ($obj.Count -eq 0) { throw "no se de que NCU cuelga el esclavo ${u}: pasa antes por BUSCAR HSUs, o elige una entrada GW concreta" }
+    $o = $obj[0]
+    $cx = Params-Conexion
+    # una HSU que se reinicia es una zona sin guarda de viento mientras arranca
+    $m = $null
+    $puertos = @($(if ($o.puertos) { $o.puertos } else { @($o.puerto) }))
+    $puertoOk = 0
+    foreach ($pt in $puertos) {
+        if ($null -ne $m) { break }
+        try { Modbus-Conectar $o.ip $pt $cx.to; $m = Hsu-LeerMeteo $u; $puertoOk = [int]$pt } catch { $m = $null } finally { Modbus-Cerrar }
+    }
+    if ($null -eq $m) { throw "la HSU $($o.etiqueta) (esclavo $u) no contesta: no se actualiza a ciegas" }
+    Con ("$($o.etiqueta): nivel de viento {0}, {1}" -f $m.nivel, $(if ($m.alarmas.Count) { $m.alarmas -join '; ' } else { 'sin alarmas' })) ([System.Drawing.Color]::Gainsboro)
+    if ($m.nivel -gt 0) { throw "hay alarma de viento activa (nivel $($m.nivel)) en $($o.etiqueta): no es momento de reiniciar la estacion" }
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "Vas a ordenar a $($o.etiqueta) (esclavo $u, $($o.ip):$puertoOk) que INSTALE el firmware que ya tiene cargado.`r`n`r`n" +
+        "- Se escribe 0x55AA en flagUpdateFW (51019), que es lo que dice el mapa R23.`r`n" +
+        "- La estacion se REINICIA para instalarlo.`r`n" +
+        "- Mientras arranca, esa zona se queda sin guarda de viento.`r`n" +
+        "- Esto NO sube ningun binario: si no se ha cargado antes con el updater de Sunner, no hay nada nuevo que instalar.`r`n`r`n" +
+        "Esta orden no se ha probado nunca en campo.`r`n`r`nContinuar?",
+        'INSTALAR FIRMWARE DE HSU', 'YesNo', 'Warning')
+    if ($r -ne 'Yes') { return }
+    $eti = "$($o.etiqueta)"
+    $tec = Pedir-Texto 'Confirmacion escrita' ("Para confirmar, escribe el nombre de la estacion tal cual:`r`n`r`n    $eti`r`n`r`nEsclavo $u en $($o.ip):$puertoOk. Se reiniciara.") $eti
+    if ($tec -ne $eti) { Con 'Cancelado: la confirmacion escrita no coincide.' ([System.Drawing.Color]::Orange); return }
+    $antes = $null
+    try {
+        Modbus-Conectar $o.ip $puertoOk $cx.to
+        try { $antes = Hsu-LeerFw $u } catch { $antes = $null }
+        FC16-Escribir $u $HSU_FLAG_UPDATE_FW @([int]$HSU_MAGIC_UPDATE)
+        Con ("Orden enviada: 51019 = 0x{0:X4} a $eti." -f $HSU_MAGIC_UPDATE) ([System.Drawing.Color]::LightGreen)
+    } catch {
+        Modbus-Cerrar
+        Con "ERROR al enviar la orden: $_" ([System.Drawing.Color]::Salmon)
+        return
+    } finally { Modbus-Cerrar }
+    Auditar 'HSU install FW' "$($o.ip)" $u "51019=0x55AA en $eti"
+    Con 'Esperando 30 s a que reinicie...' ([System.Drawing.Color]::Gainsboro)
+    for ($i = 0; $i -lt 30; $i++) {
+        if (Chequear-Cancelado) { break }
+        Start-Sleep -Seconds 1
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    $ahora = $null
+    try { Modbus-Conectar $o.ip $puertoOk $cx.to; $ahora = Hsu-LeerFw $u } catch { $ahora = $null } finally { Modbus-Cerrar }
+    if ($null -eq $ahora) {
+        Con "$eti todavia no contesta. Dale un minuto y vuelve a LEER VERSIONES antes de dar nada por perdido." ([System.Drawing.Color]::Orange)
+        return
+    }
+    $vAntes = $(if ($antes) { "$($antes.sw)" } else { '?' })
+    if ($antes -and $ahora.sw -eq $antes.sw) {
+        Con "$eti responde, pero sigue en SoftwareId $($ahora.sw): no habia firmware nuevo cargado, o no lo ha instalado." ([System.Drawing.Color]::Orange)
+    } else {
+        Con "${eti}: SoftwareId $vAntes -> $($ahora.sw)." ([System.Drawing.Color]::LightGreen)
+    }
+} })
+
+# ------------------------- REPETIDORES: AUDITORIA -------------------------
+$script:UltimaAudRep = @()
+$btnRALeer.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    $reps = @(Reps-Nombrar (Reps-DeCx $cx ''))
+    if ($reps.Count -eq 0) { Con 'La topologia no declara repetidores en esta seleccion.' ([System.Drawing.Color]::Orange); return }
+    $vars = @(Rep-VarsAuditables $VARIABLES)
+    if ($vars.Count -eq 0) { Con 'No hay parametros auditables definidos para un repetidor.' ([System.Drawing.Color]::Orange); return }
+    $lvRA.Items.Clear(); $script:UltimaAudRep = @(); $lblRARes.Text = ''; $btnRACsv.Enabled = $false
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Auditoria de $($reps.Count) repetidor(es), $($vars.Count) parametros cada uno. Solo lo que aplica a un equipo fijo." ([System.Drawing.Color]::SteelBlue)
+    Prog-Iniciar $reps.Count
+    $lect = @(); $mudos = 0
+    foreach ($rp in $reps) {
+        if (Chequear-Cancelado) { break }
+        $script:NcuLog = "$($rp.ncu)"
+        $ip = ''
+        foreach ($n in @($cx.multi)) { if ("$($n.ncu)" -eq "$($rp.ncu)") { $ip = "$($n.ip)"; break } }
+        if ($ip -eq '') { $ip = "$($cx.ip)" }
+        $v = @{}
+        $vivo = $false
+        try {
+            Modbus-Conectar $ip ([int]$rp.puerto) $cx.to
+            foreach ($n in $vars) {
+                if (Chequear-Cancelado) { break }
+                try { $v[$n] = "$(Leer-Decodificado ([byte]$rp.esclavo) $VARIABLES[$n])"; $vivo = $true }
+                catch { $v[$n] = '' }
+            }
+        } catch { $vivo = $false } finally { Modbus-Cerrar }
+        if ($vivo) { $lect += ,@{equipo="$($rp.nombre)"; valores=$v} }
+        else {
+            $mudos++
+            Con "$($rp.nombre) (NCU$($rp.ncu), GW $($rp.puerto), esclavo $($rp.esclavo)): sin respuesta." ([System.Drawing.Color]::Salmon)
+        }
+        Prog-Paso
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    $script:NcuLog = ''
+    $script:UltimaAudRep = @(Aud-Comparar $lect $vars)
+    Aud-Pintar $lvRA $script:UltimaAudRep
+    $btnRACsv.Enabled = ($script:UltimaAudRep.Count -gt 0)
+    $fuera = Aud-CuantasFuera $script:UltimaAudRep
+    $lblRARes.Text = "$($lect.Count) repetidor(es) leidos, $mudos mudos   |   parametros que discrepan: $fuera"
+    Con ("Auditoria de repetidores: {0} leidos, {1} mudos, {2} parametro(s) con discrepancia." -f $lect.Count, $mudos, $fuera) ([System.Drawing.Color]::SteelBlue)
+} })
+$btnRACsv.Add_Click({
+    if (@($script:UltimaAudRep).Count -eq 0) { return }
+    [void](Exportar-Csv $script:UltimaAudRep 'auditoria_repetidores' 'Auditoria repetidores')
+})
+
+# ------------------------- REPETIDORES: FIRMWARE -------------------------
+$script:UltimoFwRep = @()
+$btnRFLeer.Add_Click({ Lanzar {
+    $obj = "$($txtRFObj.Text)".Trim()
+    if (-not $obj) { throw 'indica la version objetivo (p. ej. v1.6.0)' }
+    $cx = Params-Conexion
+    $reps = @(Reps-Nombrar (Reps-DeCx $cx ''))
+    if ($reps.Count -eq 0) { Con 'La topologia no declara repetidores en esta seleccion.' ([System.Drawing.Color]::Orange); return }
+    $lvRF.Items.Clear(); $script:UltimoFwRep = @(); $lblRFRes.Text = ''; $btnRFCsv.Enabled = $false
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Firmware de $($reps.Count) repetidor(es); objetivo $obj." ([System.Drawing.Color]::SteelBlue)
+    Prog-Iniciar $reps.Count
+    $nAlDia = 0; $nPend = 0; $nMudo = 0
+    foreach ($rp in $reps) {
+        if (Chequear-Cancelado) { break }
+        $script:NcuLog = "$($rp.ncu)"
+        $ip = ''
+        foreach ($n in @($cx.multi)) { if ("$($n.ncu)" -eq "$($rp.ncu)") { $ip = "$($n.ip)"; break } }
+        if ($ip -eq '') { $ip = "$($cx.ip)" }
+        $fw = ''; $soc = ''; $nota = ''
+        try {
+            Modbus-Conectar $ip ([int]$rp.puerto) $cx.to
+            $w = FC03-Leer ([byte]$rp.esclavo) (Dir-Trama 30300) 3
+            $fw = "v{0}.{1}.{2}" -f ((($w[1] -shr 8) -band 0xFF), ($w[1] -band 0xFF), (($w[2] -shr 8) -band 0xFF))
+            try { $soc = "$((FC03-Leer ([byte]$rp.esclavo) (Dir-Trama 30013) 1)[0])" } catch { $soc = '' }
+        } catch { $nota = "sin respuesta: $_" } finally { Modbus-Cerrar }
+        $estado = ''
+        if ($fw -eq '') { $nMudo++; $estado = 'SIN RESPUESTA' }
+        elseif ($fw -like "*$obj*") { $nAlDia++; $estado = 'al dia' }
+        else {
+            $nPend++
+            $estado = 'PENDIENTE'
+            # el updater trabaja por tramos de TCU; el esclavo de un repetidor
+            # cae fuera del tramo de su gateway, asi que va en ventana aparte
+            $nota = "ventana propia del updater: NCU$($rp.ncu), GW $($rp.puerto), tramo $($rp.esclavo)-$($rp.esclavo)"
+            $ns = 0
+            if ($soc -ne '' -and [int]::TryParse($soc, [ref]$ns) -and $ns -lt $SOC_MIN_OTA) { $nota += "  -  BATERIA BAJA ($ns %), no actualizar" }
+        }
+        $f = [pscustomobject]@{NCU="$($rp.ncu)"; Repetidor="$($rp.nombre)"; GW="$($rp.puerto)"
+                               Esclavo="$($rp.esclavo)"; FW=$fw; SoC=$soc; Estado=$estado; Nota=$nota}
+        $script:UltimoFwRep += $f
+        $it = New-Object System.Windows.Forms.ListViewItem("$($f.NCU)")
+        foreach ($c in @($f.Repetidor, $f.GW, $f.Esclavo, $f.FW, $f.SoC, "$($f.Estado)$(if ($f.Nota) { "  -  $($f.Nota)" })")) { [void]$it.SubItems.Add("$c") }
+        if ($estado -eq 'al dia') { $it.ForeColor = [System.Drawing.Color]::DarkGreen }
+        elseif ($estado -eq 'PENDIENTE') { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
+        else { $it.ForeColor = [System.Drawing.Color]::Firebrick }
+        $lvRF.Items.Add($it) | Out-Null
+        Prog-Paso
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    $script:NcuLog = ''
+    $btnRFCsv.Enabled = (@($script:UltimoFwRep).Count -gt 0)
+    $lblRFRes.Text = "al dia: $nAlDia   |   pendientes: $nPend   |   sin respuesta: $nMudo"
+    Con ("Repetidores: {0} al dia, {1} pendientes, {2} sin respuesta. Cada pendiente necesita su propia ventana del updater." -f $nAlDia, $nPend, $nMudo) ([System.Drawing.Color]::SteelBlue)
+} })
+$btnRFCsv.Add_Click({
+    if (@($script:UltimoFwRep).Count -eq 0) { return }
+    [void](Exportar-Csv $script:UltimoFwRep 'firmware_repetidores' 'Firmware repetidores')
+})
+
+# ------------------------- REPETIDORES: BUSCAR -------------------------
+$btnRBBuscar.Add_Click({ Lanzar {
+    $ini = Val-Int $txtRBIni.Text 'Esclavo inicial' 1 247
+    $fin = Val-Int $txtRBFin.Text 'Esclavo final' 1 247
+    if ($fin -lt $ini) { throw "el esclavo final ($fin) no puede ser menor que el inicial ($ini)" }
+    $cx = Params-Conexion
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
+    if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
+    $lista = @(Rep-EsclavosBarrido $ini $fin)
+    $nGw = 0
+    foreach ($tr in $trabajos) { $nGw += [Math]::Max(1, @($tr.cx.gws).Count) }
+    $tot = $lista.Count * $nGw
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        "Buscar repetidores en $($trabajos.Count) NCU(s), esclavos $ini-$fin por cada gateway.`r`n`r`n$tot consultas. Cada esclavo que no existe cuesta lo que tarde la NCU en rendirse con el Zigbee.`r`n`r`nSe puede parar con CANCELAR y lo encontrado se queda en la lista.`r`n`r`nContinuar?",
+        'Buscar repetidor', 'YesNo', 'Warning')
+    if ($r -ne 'Yes') { return }
+    $lvRB.Items.Clear(); $lblRBRes.Text = ''
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Barrido de repetidores: esclavos $ini-$fin en $($trabajos.Count) NCU(s), $tot consultas." ([System.Drawing.Color]::SteelBlue)
+    Prog-Iniciar $tot
+    $hallados = 0
+    foreach ($tr in $trabajos) {
+        if (Chequear-Cancelado) { break }
+        $script:NcuLog = "$($tr.ncu)"
+        $gws = @($(if (@($tr.cx.gws).Count -gt 0) { @($tr.cx.gws | ForEach-Object { [int]$_.puerto }) }
+                   elseif ($tr.cx.puerto) { @([int]$tr.cx.puerto) }
+                   else { @($PUERTO_GW1, $PUERTO_GW2) }))
+        # los declarados en la topologia, para poder decir cual falta
+        $decl = @{}
+        foreach ($x in @(Reps-DeCx $tr.cx '')) { $decl["$($x.puerto)|$($x.esclavo)"] = "$($x.nombre)" }
+        foreach ($puerto in $gws) {
+            if (Chequear-Cancelado) { break }
+            try { Modbus-Conectar "$($tr.ip)" $puerto $tr.cx.to }
+            catch { Con "NCU$($tr.ncu): no conecta con $($tr.ip):${puerto}: $_" ([System.Drawing.Color]::Salmon); continue }
+            foreach ($u in $lista) {
+                if (Chequear-Cancelado) { break }
+                Prog-Paso
+                $prod = $null
+                try { $prod = (FC03-Leer ([byte]$u) (Dir-Trama 30300) 1)[0] } catch { }
+                [System.Windows.Forms.Application]::DoEvents()
+                if ($null -eq $prod) { continue }
+                $t = Tipo-Producto $prod
+                $hallados++
+                $k = "$puerto|$u"
+                $nota = $(if ($decl.ContainsKey($k)) { "declarado en la topologia como $($decl[$k])" } else { 'NO esta en la topologia: anotalo en el JSON de planta' })
+                $it = New-Object System.Windows.Forms.ListViewItem("$($tr.ncu)")
+                foreach ($c in @("$($tr.ip)", "$puerto", "$u", "$($t.nombre)", ("0x{0:X4}" -f $prod), $nota)) { [void]$it.SubItems.Add("$c") }
+                $it.ForeColor = $(if ($decl.ContainsKey($k)) { [System.Drawing.Color]::DarkGreen } else { [System.Drawing.Color]::DarkOrange })
+                $lvRB.Items.Add($it) | Out-Null
+                Con ("NCU{0}  GW {1}  esclavo {2,3}  ->  {3}   ({4})" -f $tr.ncu, $puerto, $u, $t.nombre, $nota) ([System.Drawing.Color]::LightGreen)
+            }
+            Modbus-Cerrar
+        }
+        Modbus-Cerrar
+    }
+    $script:NcuLog = ''
+    $lblRBRes.Text = "encontrados: $hallados de $tot consultas"
+    Con "Barrido terminado: $hallados equipo(s) encontrado(s) en el rango $ini-$fin." ([System.Drawing.Color]::SteelBlue)
+} })
+
+# ---------------------------------------------------------------------------
+#  El arbol de navegacion
+# ---------------------------------------------------------------------------
+# Una hoja = una pestana, y a veces tambien una VISTA de esa pestana. El
+# diagnostico es UN barrido que saca de una pasada las filas de NCU, HSU,
+# repetidor y TCU, asi que sus cinco hojas llevan a la misma pestana con
+# distinto filtro: correrlo cinco veces seria cinco veces el mismo trabajo
+# contra los mismos equipos, y en San Jose eso son horas.
+#
+# El orden no es el historico: es el de planta. Primero si la NCU habla, luego
+# sus estaciones meteo, luego los repetidores de los que cuelga media planta, y
+# al final los seguidores. Antes se abria en Escribir, que es la unica pestana
+# capaz de dejar una TCU peor de como estaba.
+$NAV_ARBOL = @(
+    @{bloque = 'GLOBAL'; hojas = @(
+        @{txt='Diagnostico de planta'; tab=$tabG; vista='todo'}
+        @{txt='SAT';                   tab=$tabSAT})}
+    @{bloque = 'NCU'; hojas = @(
+        @{txt='Diagnostico'; tab=$tabG; vista='NCU'}
+        @{txt='Comm NCU';    tab=$tabN}
+        @{txt='Estabilidad'; tab=$tabE}
+        @{txt='Auditoria';   tab=$tabAN}
+        @{txt='Firmware';    tab=$tabFN})}
+    @{bloque = 'HSU'; hojas = @(
+        @{txt='Diagnostico';        tab=$tabG; vista='HSU'}
+        @{txt='Auditoria';          tab=$tabAH}
+        @{txt='Firmware';           tab=$tabFH}
+        @{txt='Lectura de senales'; tab=$tabH})}
+    @{bloque = 'REPETIDORES'; hojas = @(
+        @{txt='Diagnostico y bateria'; tab=$tabG; vista='REP'}
+        @{txt='Auditoria';             tab=$tabRA}
+        @{txt='Firmware';              tab=$tabRF}
+        @{txt='Buscar repetidor';      tab=$tabRB})}
+    @{bloque = 'TCUs'; hojas = @(
+        @{txt='Diagnostico';   tab=$tabG; vista='TCU'}
+        @{txt='Auditoria';     tab=$tabF}
+        @{txt='Baterias';      tab=$tabB}
+        @{txt='Firmware';      tab=$tabFW}
+        @{txt='Leer variable'; tab=$tabL}
+        @{txt='Volcar TCU';    tab=$tabD}
+        @{txt='Escribir';      tab=$tabW}
+        @{txt='Trabajos';      tab=$tabT}
+        @{txt='PEM';           tab=$tabP}
+        @{txt='Cierre';        tab=$tabC}
+        @{txt='Utilidades';    tab=$tabU})}
+)
+
+# De pestana a nodo, para que el arbol siga a los saltos que hace el propio
+# codigo ($tabs.SelectedTab = ... desde la auditoria, el cierre o Ctrl+K). La
+# primera hoja que apunte a una pestana es la que se marca: asi el diagnostico
+# se resalta en GLOBAL, que es su vista completa.
+$script:NavDe = @{}
+$script:NavAplicando = $false
+
+foreach ($b in $NAV_ARBOL) {
+    $nb = New-Object System.Windows.Forms.TreeNode($b.bloque)
+    if ($script:FuenteNeg) { $nb.NodeFont = $script:FuenteNeg }
+    foreach ($h in $b.hojas) {
+        $nh = New-Object System.Windows.Forms.TreeNode($h.txt)
+        $nh.Tag = $h
+        [void]$nb.Nodes.Add($nh)
+        if ($h.tab -and -not $script:NavDe.ContainsKey($h.tab)) { $script:NavDe[$h.tab] = $nh }
+    }
+    [void]$nav.Nodes.Add($nb)
+}
+if ($script:Tema) {
+    $nav.BackColor = $script:Tema.Tarjeta
+    $nav.ForeColor = $script:Tema.Texto
+    $nav.LineColor = $script:Tema.Suave
+}
+
+$nav.Add_AfterSelect({
+    param($s, $e)
+    if ($script:NavAplicando) { return }
+    $n = $e.Node
+    # pulsar el nombre del bloque lleva a su primera hoja: un bloque no es un
+    # sitio al que se pueda ir, pero es lo que la gente pulsa
+    if ($null -eq $n.Tag -and $n.Nodes.Count -gt 0) {
+        $script:NavAplicando = $true
+        try { $nav.SelectedNode = $n.Nodes[0] } finally { $script:NavAplicando = $false }
+        $n = $nav.SelectedNode
+    }
+    $h = $n.Tag
+    if ($null -eq $h -or $null -eq $h.tab) { return }
+    $script:NavAplicando = $true
+    try {
+        if ($h.vista) {
+            $script:DiagNivel = "$($h.vista)"
+            # repintar es filtrar lo ya leido; si hay una lectura en curso, no
+            # se toca la tabla por debajo
+            if (-not $script:Ocupado) { Diag-Refrescar }
+        }
+        $tabs.SelectedTab = $h.tab
+    } finally { $script:NavAplicando = $false }
+})
+
+# El arbol es un menu, no un explorador: siempre abierto.
+$nav.Add_BeforeCollapse({ param($s, $e) $e.Cancel = $true })
+
+# Y al reves: cuando el codigo salta de pestana por su cuenta, que el arbol lo
+# refleje en vez de quedarse marcando otra cosa.
+$tabs.Add_SelectedIndexChanged({
+    if ($script:NavAplicando) { return }
+    $t = $tabs.SelectedTab
+    if ($null -eq $t -or -not $script:NavDe.ContainsKey($t)) { return }
+    $script:NavAplicando = $true
+    try { $nav.SelectedNode = $script:NavDe[$t] } finally { $script:NavAplicando = $false }
+})
+
+$nav.ExpandAll()
+if ($nav.Nodes.Count -gt 0 -and $nav.Nodes[0].Nodes.Count -gt 0) { $nav.SelectedNode = $nav.Nodes[0].Nodes[0] }
+
 # Todas las tablas de resultados filtran y ordenan al pulsar su cabecera.
-foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvSat, $lvH, $lvN, $lvE, $lvI, $lvC, $lvB, $lvT)) { Lv-Filtrable $tabla }
+foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvSat, $lvH, $lvN, $lvE, $lvI, $lvC, $lvB, $lvT,
+                     $lvAN, $lvFN, $lvAH, $lvFH, $lvRA, $lvRF, $lvRB)) { Lv-Filtrable $tabla }
+
+# La cabecera de pestanas no se puede ocultar con una propiedad: no existe. Lo
+# que si se puede es sacarla fuera del panel, que recorta lo que se sale. La
+# altura se pregunta en caliente (GetTabRect) en vez de darla por buena, porque
+# cambia con el tema, con la fuente y con el DPI de la pantalla. Con los cuatro
+# anclajes puestos, al agrandar la ventana el TabControl crece con el panel y el
+# desplazamiento de arriba se mantiene.
+function Nav-OcultarCabecera {
+    if ($tabs.TabPages.Count -eq 0) { return }
+    $hCab = $tabs.GetTabRect(0).Bottom + 2
+    if ($hCab -lt 4) { return }
+    $tabs.Left   = -2
+    $tabs.Top    = -$hCab
+    $tabs.Width  = $pnlCuerpo.ClientSize.Width + 4
+    $tabs.Height = $pnlCuerpo.ClientSize.Height + $hCab + 2
+}
 
 $form.Add_Shown({
     try {
@@ -11024,6 +12142,9 @@ $form.Add_Shown({
         $anchoTab = $tabs.DisplayRectangle.Width - 10
         foreach ($tp in $tabs.TabPages) { Anclar-Contenedor $tp $anchoTab }
         Layout-Rescatar $form
+        # lo ultimo: Layout-Rescatar mide contenedores y esto deja el TabControl
+        # a proposito fuera del suyo
+        Nav-OcultarCabecera
     } catch {
         Con "AVISO: no se pudo ajustar el diseno de la ventana ($_)" ([System.Drawing.Color]::Orange)
     }

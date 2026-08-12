@@ -1880,7 +1880,7 @@ Check 'leer: y manda a Auditoria' ($src.Contains("pestana Auditoria con 'Usar la
 # pero la propiedad sigue siendo Estado: el CSV y la auditoria van por ella
 Check 'leer: la propiedad no cambia' ($src.Contains("@('NCU','TCU','Estado') -contains `$pr.Name")) $true
 Check 'cabeceras: y los filtros viejos se tiran' ($src.Contains('if (@($e.cab).Count -ne $lv.Columns.Count) { $e.filtros = @{} }')) $true
-Check 'tabla: filtrable como las demas' ($src.Contains('$lvC, $lvB, $lvT)) { Lv-Filtrable')) $true
+Check 'tabla: filtrable como las demas' ($src.Contains('$lvRA, $lvRF, $lvRB)) { Lv-Filtrable')) $true
 Check 'tabla: sale del ultimo diagnostico' ($src.Contains('Bat-Tabla $script:UltimoDiag $script:UltimaBat')) $true
 # y el modo directo ya trae panel y corriente de panel, que estan en el mapa
 Check 'directo: lee desde el 30091' ($src.Contains('$r2 = FC03-Leer $tcu (Dir-Trama 30091) 8')) $true
@@ -3019,5 +3019,190 @@ foreach ($fich in @((Join-Path $raizTb 'TCU_Toolbox.ps1'), (Join-Path (Split-Pat
 Check 'ps: ningun continue/break fuera de bucle' ($fuera -join ' ') ''
 
 Write-Host ''
+Write-Host '== navegacion por nivel de equipo =='
+# El arbol de la izquierda sustituye a la fila de pestanas. Lo que se comprueba
+# aqui es que sigue habiendo un sitio al que ir para cada pestana y que las
+# pestanas siguen existiendo por dentro: todo el codigo que salta de una a otra
+# ($tabs.SelectedTab = ...) depende de ello.
+Check 'nav: hay arbol' ($src.Contains('$nav = New-Object System.Windows.Forms.TreeView')) $true
+Check 'nav: y un panel que recorta la cabecera' ($src.Contains('$pnlCuerpo = New-Object System.Windows.Forms.Panel')) $true
+Check 'nav: el TabControl cuelga del panel, no del form' ($src.Contains('$pnlCuerpo.Controls.Add($tabs)')) $true
+Check 'nav: la cabecera se mide en caliente' ($src.Contains('$tabs.GetTabRect(0).Bottom')) $true
+Check 'nav: y el rescate de maqueta no la devuelve dentro' ($src.Contains("if (`"`$(`$c.Name)`" -eq 'cuerpoTabs')")) $true
+foreach ($b in @('GLOBAL', 'NCU', 'HSU', 'REPETIDORES', 'TCUs')) {
+    Check "nav: bloque ${b}" ($src.Contains("@{bloque = '$b'")) $true
+}
+# ya no se abre en Escribir, que es la unica pestana que puede dejar una TCU
+# peor de como estaba
+Check 'nav: abre en el diagnostico de planta' ($src.Contains("@{txt='Diagnostico de planta'; tab=`$tabG; vista='todo'}")) $true
+Check 'nav: el arbol sigue a los saltos del codigo' ($src.Contains('$tabs.Add_SelectedIndexChanged(')) $true
+# cada pestana tiene que ser alcanzable: una pestana sin hoja es una pestana a
+# la que ya no se puede llegar, porque la cabecera no se ve
+$tabsCreadas = @([regex]::Matches($src, '\$(tab\w*) = New-Object System\.Windows\.Forms\.TabPage') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+$mArbol = [regex]::Match($src, '\$NAV_ARBOL = @\((?<c>[\s\S]*?)\r?\n\)')
+$enArbol = @([regex]::Matches($mArbol.Groups['c'].Value, 'tab=\$(\w+)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+Check 'nav: ninguna pestana inalcanzable' (@($tabsCreadas | Where-Object { $enArbol -notcontains $_ }) -join ',') ''
+Check 'nav: y ninguna hoja apunta a nada' (@($enArbol | Where-Object { $tabsCreadas -notcontains $_ }) -join ',') ''
+
+Write-Host ''
+Write-Host '== el diagnostico es una pasada y varias vistas =='
+Check 'diag: nombre de la vista completa' (Diag-NivelNombre 'todo') 'todo'
+Check 'diag: solo NCUs' (Diag-NivelNombre 'NCU') 'solo NCUs'
+Check 'diag: solo repetidores' (Diag-NivelNombre 'REP') 'solo repetidores'
+Check 'diag: una vista que no existe no filtra' (Diag-NivelNombre 'loquesea') 'todo'
+# el filtro se aplica sobre lo ya leido: nada de relanzar el barrido
+Check 'diag: filtra por nivel al repintar' ($src.Contains("if (`$niv -ne 'todo' -and (Fila-Tipo `$d) -ne `$niv) { continue }")) $true
+Check 'diag: y el CSV/JSON sigue exportando todo' ($src.Contains('el CSV/JSON exporta siempre todo')) $true
+$filasNiv = @(
+  [pscustomobject]@{TCU='NCU'}, [pscustomobject]@{TCU='HSU3'}, [pscustomobject]@{TCU='RSU2'}
+  [pscustomobject]@{TCU=14}, [pscustomobject]@{TCU='Repetidor 1'}
+)
+Check 'diag: la NCU es NCU' (Fila-Tipo $filasNiv[0]) 'NCU'
+Check 'diag: la RSU cuenta como HSU' (Fila-Tipo $filasNiv[2]) 'HSU'
+Check 'diag: un repetidor no es una TCU' (Fila-Tipo $filasNiv[4]) 'REP'
+
+Write-Host ''
+Write-Host '== una NCU que no comunica no son 24 TCUs caidas =='
+# El resumen decia "NCU14: OK 0 | OFFLINE 24" cuando la que no contestaba era
+# la NCU. Se lee como "las 24 TCUs han perdido la Zigbee", que es otra averia y
+# otra cuadrilla: una es un switch, la otra son veinticuatro equipos.
+$filasLan = @(
+  [pscustomobject]@{NCU='14'; TCU='NCU'; Salud='OFFLINE'; Alarmas='NCU SIN RESPUESTA en 192.168.4.14:502 - timeout'}
+  [pscustomobject]@{NCU='14'; TCU=1;  Salud='OFFLINE'; Alarmas=''}
+  [pscustomobject]@{NCU='14'; TCU=2;  Salud='OFFLINE'; Alarmas=''}
+  [pscustomobject]@{NCU='14'; TCU='HSU1'; Salud='OFFLINE'; Alarmas=''}
+)
+$lnLan = Diag-LineaNcu '14' $filasLan 24
+Check 'lan: se dice que la NCU no comunica' ($lnLan.texto -like '*NO COMUNICA POR LA LAN*') $true
+# cuenta las filas que hay, que es lo que se ve en la tabla...
+Check 'lan: y cuantas TCUs quedaron sin leer' ($lnLan.texto -like '*2 TCUs sin leer*') $true
+# ...y si el barrido no llego a emitir ninguna, lo que dice la topologia
+$lnLan0 = Diag-LineaNcu '14' @($filasLan[0]) 24
+Check 'lan: sin filas, las que declara la topologia' ($lnLan0.texto -like '*24 TCUs sin leer*') $true
+Check 'lan: con el motivo que dio la NCU' ($lnLan.texto -like '*timeout*') $true
+# el motivo ya dice de sobra lo que pasa: en una consola de campo, una linea
+# que hay que leer entera es una linea que no se lee
+Check 'lan: sin explicaciones de mas' ($lnLan.texto.Length -lt 110) $true
+Check 'lan: y no cuenta OFFLINEs como hallazgo' ($lnLan.texto -like '*OK 0*') $false
+Check 'lan: en rojo' $lnLan.nivel 'mal'
+# una NCU normal sigue dando su linea de siempre
+$filasOk = @(
+  [pscustomobject]@{NCU='1'; TCU='NCU';  Salud='OK'; Alarmas=''}
+  [pscustomobject]@{NCU='1'; TCU=1; Salud='OK'; Alarmas=''}
+  [pscustomobject]@{NCU='1'; TCU=2; Salud='ALARMA'; Alarmas='eje bloqueado'}
+  [pscustomobject]@{NCU='1'; TCU='Repetidor 1'; Salud='OK'; Alarmas=''}
+)
+$lnOk = Diag-LineaNcu '1' $filasOk 2
+Check 'lan: la NCU sana da su recuento' ($lnOk.texto -like '*OK 1 | AVISO 0 | ALARMA 1 | OFFLINE 0*') $true
+Check 'lan: con sus HSU/repetidores aparte' ($lnOk.texto -like '*+1 HSU/repetidor*') $true
+Check 'lan: y en azul' $lnOk.nivel 'ok'
+# una NCU que no se llego a barrer no es lo mismo que una que no contesta
+$lnNada = Diag-LineaNcu '9' @() 44
+Check 'lan: sin ninguna fila, SIN LECTURA' ($lnNada.texto -like '*SIN LECTURA*') $true
+# y en el total de planta, los OFFLINE de una NCU muda se separan
+Check 'lan: los OFFLINE de una NCU muda se cuentan aparte' (Diag-OffPorNcu $filasLan) 3
+Check 'lan: si la NCU contesta, no se descuenta nada' (Diag-OffPorNcu $filasOk) 0
+Check 'lan: mezcla de las dos' (Diag-OffPorNcu (@($filasLan) + @($filasOk))) 3
+
+Write-Host ''
+Write-Host '== la hoja NCU RW del mapa R7.1 =='
+# Direcciones sacadas del mapa (cobertura-zigbee/tools/modbus_src/ncu_r7_hsu_r23.json)
+$nombresRw = @($NCU_RW | ForEach-Object { $_.n })
+Check 'ncu-rw: las siete posiciones seguras por grupo' (@($NCU_RW | Where-Object { $_.addr -ge 40001 -and $_.addr -le 40007 }).Count) 7
+Check 'ncu-rw: y el timeout de posicion personalizada' (@($NCU_RW | Where-Object { $_.addr -eq 40080 }).Count) 1
+# 40070/40071 son de SOLO ESCRITURA en el mapa: no es que falte la direccion,
+# es que no hay forma de leer en que modo esta un grupo
+Check 'ncu-rw: el auto/manual por grupo no se puede leer' (@($NCU_RW | Where-Object { $_.addr -eq 40070 -or $_.addr -eq 40071 }).Count) 0
+Check 'ncu-rw: y se dice por que' ($src.Contains('declara de SOLO ESCRITURA')) $true
+Check 'ncu-rw: el timeout va en segundos' (@($nombresRw | Where-Object { $_ -like '*custom_position_timeout*' })[0] -like '*[s]*') $true
+# un bitset de grupos se lee de un vistazo, no en hexadecimal
+Check 'grupos: cero es "ninguno", no 0' (Ncu-Grupos 0) 'ninguno'
+Check 'grupos: el bit 0 es el grupo 1' (Ncu-Grupos 1) '1'
+Check 'grupos: el bit 9 es el grupo 10' (Ncu-Grupos 512) '10'
+Check 'grupos: varios a la vez' (Ncu-Grupos 13) '1,3,4'
+Check 'grupos: bits por encima del 10 no se inventan grupos' (Ncu-Grupos 0x8000) '0x8000'
+
+Write-Host ''
+Write-Host '== auditar comparando equipos iguales entre si =='
+# No hay valor de fabrica con el que comparar ni en el mapa de la NCU ni en el
+# de la HSU: el criterio es que en una planta bien puesta todos llevan lo mismo.
+$audA = @(
+  @{equipo='NCU1'; valores=@{'40080 custom_position_timeout'='30'; 'otro'='5'}}
+  @{equipo='NCU2'; valores=@{'40080 custom_position_timeout'='30'; 'otro'='5'}}
+  @{equipo='NCU3'; valores=@{'40080 custom_position_timeout'='55'; 'otro'='5'}}
+)
+$rA = @(Aud-Comparar $audA @('40080 custom_position_timeout', 'otro'))
+Check 'aud-cmp: una fila por parametro' $rA.Count 2
+Check 'aud-cmp: manda la mayoria' $rA[0].Comun '30'
+Check 'aud-cmp: y se cuenta' $rA[0].Cuantos 2
+Check 'aud-cmp: se senala al que se sale' $rA[0].Distintos 'NCU3=55'
+Check 'aud-cmp: con su veredicto' $rA[0].Veredicto '1 distinto(s)'
+Check 'aud-cmp: lo igual se dice igual' $rA[1].Veredicto 'igual en todos'
+Check 'aud-cmp: respeta el orden pedido' ($rA[0].Parametro) '40080 custom_position_timeout'
+# con dos equipos no hay mayoria: senalar a uno seria echarlo a suertes
+$rDos = @(Aud-Comparar @(@{equipo='A'; valores=@{'x'='1'}}, @{equipo='B'; valores=@{'x'='2'}}) @('x'))
+Check 'aud-cmp: con dos no hay mayoria' ($rDos[0].Veredicto -like 'discrepan*') $true
+# un registro que no contesta se deja vacio, y un vacio no vota
+$rVac = @(Aud-Comparar @(@{equipo='A'; valores=@{'x'=''}}, @{equipo='B'; valores=@{'x'=''}}) @('x'))
+Check 'aud-cmp: sin datos se dice' $rVac[0].Veredicto 'sin datos'
+Check 'aud-cmp: sin lecturas, sin filas raras' (@(Aud-Comparar @() @('x'))[0].Veredicto) 'sin datos'
+Check 'aud-cmp: aguanta un nulo por medio' (@(Aud-Comparar @($null, @{equipo='A'; valores=@{'x'='1'}}) @('x'))[0].Comun) '1'
+
+Write-Host ''
+Write-Host '== firmware de la NCU: solo lectura =='
+# El mapa R7.1 marca HardwareId (reg 0) y SoftwareId (reg 1) como NOT READY:
+# hoy contestan 0. Un 0 en una columna de version parece un dato bueno y no lo
+# es, asi que se pinta '-'.
+$fN = Fn-FilaNcu '7' '192.168.4.70' 'v1.2.3' 0 0
+Check 'fw-ncu: la version sale' $fN.Version 'v1.2.3'
+Check 'fw-ncu: HardwareId a cero se pinta guion' $fN.HardwareId '-'
+Check 'fw-ncu: SoftwareId a cero tambien' $fN.SoftwareId '-'
+Check 'fw-ncu: y se dice por que' ($fN.Nota -like '*NOT READY*') $true
+Check 'fw-ncu: estado OK' $fN.Estado 'OK'
+$fN2 = Fn-FilaNcu '8' '192.168.4.80' 'v1.2.3' 4660 22
+Check 'fw-ncu: el dia que contesten, se enseñan' $fN2.HardwareId '4660'
+Check 'fw-ncu: y ya no hace falta la nota' $fN2.Nota ''
+$fN3 = Fn-FilaNcu '9' '192.168.4.90' '' 0 0 'timeout'
+Check 'fw-ncu: una NCU muda se dice' $fN3.Estado 'SIN RESPUESTA'
+Check 'fw-ncu: con el motivo' $fN3.Nota 'timeout'
+
+Write-Host ''
+Write-Host '== repetidores =='
+# Un repetidor es una TCU atornillada a un poste: auditarla contra la
+# referencia de un seguidor sacaba media tabla en rojo por posiciones seguras y
+# limites de eje que en ella no significan nada.
+$varsRep = @(Rep-VarsAuditables $VARIABLES)
+Check 'rep: hay parametros que auditar' ($varsRep.Count -gt 0) $true
+Check 'rep: ninguno de posicion' (@($varsRep | Where-Object { $_ -match 'safe_pos|tilt|posicion' }).Count) 0
+Check 'rep: ninguno de motor' (@($varsRep | Where-Object { $_ -match 'motor|eje' }).Count) 0
+Check 'rep: ninguno de viento' (@($varsRep | Where-Object { $_ -match 'viento|wind' }).Count) 0
+# el esclavo es distinto en cada repetidor POR DISENO (200, 201, 202): si se
+# compara, salen los tres en rojo y tapan lo que si importa
+Check 'rep: ni el numero de esclavo' (@($varsRep | Where-Object { $_ -match 'slave_id' }).Count) 0
+Check 'rep: ni los bits de aplicar' (@($varsRep | Where-Object { $_ -match '_apply' }).Count) 0
+Check 'rep: ni el inclinometro' (@($varsRep | Where-Object { $_ -match 'inclinometro|azimuth' }).Count) 0
+Check 'rep: ningun registro de comando' (@($varsRep | Where-Object { $VARIABLES[$_].addr -in $ADDR_COMANDO }).Count) 0
+Check 'rep: ni de fecha/hora' (@($varsRep | Where-Object { $VARIABLES[$_].addr -in $ADDR_TIEMPO }).Count) 0
+Check 'rep: si los de carga' (@($varsRep | Where-Object { $_ -like '*carga*' }).Count -gt 0) $true
+# la regla de la planta: el primero es el 200 y los siguientes 201, 202...
+Check 'rep: el barrido empieza en 200' (@(Rep-EsclavosBarrido)[0]) 200
+Check 'rep: y llega al 210' (@(Rep-EsclavosBarrido)[-1]) 210
+Check 'rep: un rango de uno solo vale' (@(Rep-EsclavosBarrido 200 200).Count) 1
+Check 'rep: un rango del reves no revienta' (@(Rep-EsclavosBarrido 210 200).Count) 0
+# el updater va por tramos de TCU y el esclavo de un repetidor cae fuera
+Check 'rep: el plan le da ventana propia' ($src.Contains('ventana propia del updater')) $true
+
+Write-Host ''
+Write-Host '== firmware de la HSU =='
+# El mapa R23 lo dice tal cual: "Master must write 0x55AA to install the new FW"
+Check 'fw-hsu: el registro es el 51019' ($src.Contains('$HSU_FLAG_UPDATE_FW = 51019')) $true
+Check 'fw-hsu: y la palabra magica 0x55AA' ($src.Contains('$HSU_MAGIC_UPDATE   = 0x55AA')) $true
+Check 'fw-hsu: la version es el byte alto de 30000' ($src.Contains('function Hsu-LeerFw')) $true
+# reinicia la estacion de la que cuelga la guarda de viento de esa zona
+Check 'fw-hsu: no se instala con viento' ($src.Contains('hay alarma de viento activa')) $true
+Check 'fw-hsu: confirmacion escrita' ($src.Contains('Pedir-Texto')) $true
+Check 'fw-hsu: y queda en el registro de acciones' ($src.Contains("Auditar 'HSU install FW'")) $true
+Check 'fw-hsu: se relee la version despues' ($src.Contains('SoftwareId $vAntes ->')) $true
+
 if ($fallos -eq 0) { Write-Host 'TODAS LAS PRUEBAS OK'; exit 0 }
 else { Write-Host "$fallos PRUEBAS FALLIDAS"; exit 1 }

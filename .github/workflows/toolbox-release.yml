@@ -39,6 +39,8 @@ jobs:
           cd tools
           zip -r "../TCU_Toolbox_v${VER}.zip" tcu-toolbox -x "tcu-toolbox/logs/*" "tcu-toolbox/backups/*" "tcu-toolbox/informes/*" "tcu-toolbox/config_local.json" "tcu-toolbox/tests/*"
           VAG=$(grep -oP "VERSION_AGENTE = '\K[0-9.]+" tcu-agente/TCU_Agente.ps1)
+          test -n "$VAG"
+          echo "vag=$VAG" >> "$GITHUB_OUTPUT"
           zip -r "../TCU_Agente_v${VAG}.zip" tcu-agente -x "tcu-agente/agente_config.json" "tcu-agente/*.log"
           cd ..
           unzip -l "TCU_Toolbox_v${VER}.zip"
@@ -68,6 +70,19 @@ jobs:
           fi
           # las fichas pueden no estar (el paso de arriba no corta la release)
           gh release upload "$TAG" "TCU_Toolbox_v${VER}.zip" TCU_Agente_v*.zip --clobber
+          # Un solo ZIP de agente por Release. La etiqueta la marca la version de
+          # la TOOLBOX, asi que si el agente sube de version y la toolbox no, el
+          # ZIP nuevo entra en la misma Release con OTRO nombre: --clobber solo
+          # reemplaza mismo nombre, y en la pagina de descarga aparecian dos
+          # agentes sin decir cual era el bueno. Se borran los que no son el de
+          # este run.
+          VAG="${{ steps.v.outputs.vag }}"
+          for a in $(gh release view "$TAG" --json assets -q '.assets[].name' | grep '^TCU_Agente_v' || true); do
+            if [ "$a" != "TCU_Agente_v${VAG}.zip" ]; then
+              echo "Quitando de la release un agente viejo: $a"
+              gh release delete-asset "$TAG" "$a" --yes
+            fi
+          done
           if compgen -G "fichas/Seguimiento_PEM_*.xlsx" > /dev/null; then
             gh release upload "$TAG" fichas/Seguimiento_PEM_*.xlsx --clobber
           fi
