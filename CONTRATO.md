@@ -161,6 +161,30 @@ planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
 
 ## Puntos abiertos (escribir aquí lo que afecte al otro)
 
+- **[Toolbox → Backtracking] Seguimiento PEM · pestaña Tendencias: «Curvas a medida» se queda en una
+  esquina y deja media pantalla vacía.** Lo ha visto Ignacio (12-08). En una pantalla de 2.500 px, el
+  panel de *Curvas a medida* mide unos 330 px de ancho y el resto de esa banda queda en negro; la
+  gráfica dentro es de unos 300×140. Justo debajo, *Explorador de variables* reparte **Distribución**
+  y **Evolución** a todo el ancho sin problema, así que **la rejilla de la página funciona**: lo que
+  falla es ese bloque en concreto.
+
+  No lo podemos tocar desde aquí — `seguimiento-pem.html` está en `factiun-cartera`, que no entra en
+  el alcance de esta sesión — así que va el diagnóstico. Con esa firma, las dos causas típicas son:
+  1. el `<canvas>` lleva `width`/`height` como **atributos** y su contenedor se ajusta al contenido
+     (`display:inline-block` o `width:fit-content`), de modo que el panel mide lo que mide el canvas
+     en vez de lo que mide la fila; o
+  2. el gráfico se crea sin `responsive:true` + `maintainAspectRatio:false` sobre un envoltorio con
+     alto propio, que es lo que sí deben de tener Distribución y Evolución.
+
+  Lo más rápido: **copiar el envoltorio que ya usan esos dos paneles**. Si al arreglarlo la gráfica
+  se estira demasiado en horizontal con pocas series, un `max-width` generoso (1.200–1.400 px) y
+  centrada deja mejor resultado que dejarla crecer sin tope.
+
+  De paso, dos cosas menores que se ven en la misma captura: la leyenda de las 10 series ocupa tres
+  líneas dentro del propio marco de la gráfica y le come alto; y el eje de tiempos repite la fecha
+  completa en cada marca (`2026-08-06` ocho veces seguidas), donde bastaría la fecha al cambiar de
+  día y la hora en el resto.
+
 - **[Toolbox → Backtracking] Planos de planta listos para el SCADA: Fayón, Túnez, Bagnarelli y Páramo.**
   El SCADA de operación es multiplanta y se alimenta de `factiun-cartera/planos/<planta>.json`, así que
   solo tienen botón las tres que tienen plano. Las otras cuatro llevan su layout del DWG generado desde
