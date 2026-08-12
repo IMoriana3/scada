@@ -3062,6 +3062,60 @@ Check 'diag: la RSU cuenta como HSU' (Fila-Tipo $filasNiv[2]) 'HSU'
 Check 'diag: un repetidor no es una TCU' (Fila-Tipo $filasNiv[4]) 'REP'
 
 Write-Host ''
+Write-Host '== una NCU que no comunica no son 24 TCUs caidas =='
+# El resumen decia "NCU14: OK 0 | OFFLINE 24" cuando la que no contestaba era
+# la NCU. Se lee como "las 24 TCUs han perdido la Zigbee", que es otra averia y
+# otra cuadrilla: una es un switch, la otra son veinticuatro equipos.
+$filasLan = @(
+  [pscustomobject]@{NCU='14'; TCU='NCU'; Salud='OFFLINE'; Alarmas='NCU SIN RESPUESTA en 192.168.4.14:502 - timeout'}
+  [pscustomobject]@{NCU='14'; TCU=1;  Salud='OFFLINE'; Alarmas=''}
+  [pscustomobject]@{NCU='14'; TCU=2;  Salud='OFFLINE'; Alarmas=''}
+  [pscustomobject]@{NCU='14'; TCU='HSU1'; Salud='OFFLINE'; Alarmas=''}
+)
+$lnLan = Diag-LineaNcu '14' $filasLan 24
+Check 'lan: se dice que la NCU no comunica' ($lnLan.texto -like '*NO COMUNICA POR LA LAN*') $true
+Check 'lan: y que no es cosa de la Zigbee' ($lnLan.texto -like '*no es que hayan perdido la Zigbee*') $true
+Check 'lan: con el motivo que dio la NCU' ($lnLan.texto -like '*timeout*') $true
+Check 'lan: y no cuenta OFFLINEs como hallazgo' ($lnLan.texto -like '*OK 0*') $false
+Check 'lan: en rojo' $lnLan.nivel 'mal'
+# una NCU normal sigue dando su linea de siempre
+$filasOk = @(
+  [pscustomobject]@{NCU='1'; TCU='NCU';  Salud='OK'; Alarmas=''}
+  [pscustomobject]@{NCU='1'; TCU=1; Salud='OK'; Alarmas=''}
+  [pscustomobject]@{NCU='1'; TCU=2; Salud='ALARMA'; Alarmas='eje bloqueado'}
+  [pscustomobject]@{NCU='1'; TCU='Repetidor 1'; Salud='OK'; Alarmas=''}
+)
+$lnOk = Diag-LineaNcu '1' $filasOk 2
+Check 'lan: la NCU sana da su recuento' ($lnOk.texto -like '*OK 1 | AVISO 0 | ALARMA 1 | OFFLINE 0*') $true
+Check 'lan: con sus HSU/repetidores aparte' ($lnOk.texto -like '*+1 HSU/repetidor*') $true
+Check 'lan: y en azul' $lnOk.nivel 'ok'
+# una NCU que no se llego a barrer no es lo mismo que una que no contesta
+$lnNada = Diag-LineaNcu '9' @() 44
+Check 'lan: sin ninguna fila, SIN LECTURA' ($lnNada.texto -like '*SIN LECTURA*') $true
+# y en el total de planta, los OFFLINE de una NCU muda se separan
+Check 'lan: los OFFLINE de una NCU muda se cuentan aparte' (Diag-OffPorNcu $filasLan) 3
+Check 'lan: si la NCU contesta, no se descuenta nada' (Diag-OffPorNcu $filasOk) 0
+Check 'lan: mezcla de las dos' (Diag-OffPorNcu (@($filasLan) + @($filasOk))) 3
+
+Write-Host ''
+Write-Host '== la hoja NCU RW del mapa R7.1 =='
+# Direcciones sacadas del mapa (cobertura-zigbee/tools/modbus_src/ncu_r7_hsu_r23.json)
+$nombresRw = @($NCU_RW | ForEach-Object { $_.n })
+Check 'ncu-rw: las siete posiciones seguras por grupo' (@($NCU_RW | Where-Object { $_.addr -ge 40001 -and $_.addr -le 40007 }).Count) 7
+Check 'ncu-rw: y el timeout de posicion personalizada' (@($NCU_RW | Where-Object { $_.addr -eq 40080 }).Count) 1
+# 40070/40071 son de SOLO ESCRITURA en el mapa: no es que falte la direccion,
+# es que no hay forma de leer en que modo esta un grupo
+Check 'ncu-rw: el auto/manual por grupo no se puede leer' (@($NCU_RW | Where-Object { $_.addr -eq 40070 -or $_.addr -eq 40071 }).Count) 0
+Check 'ncu-rw: y se dice por que' ($src.Contains('declara de SOLO ESCRITURA')) $true
+Check 'ncu-rw: el timeout va en segundos' (@($nombresRw | Where-Object { $_ -like '*custom_position_timeout*' })[0] -like '*[s]*') $true
+# un bitset de grupos se lee de un vistazo, no en hexadecimal
+Check 'grupos: cero es "ninguno", no 0' (Ncu-Grupos 0) 'ninguno'
+Check 'grupos: el bit 0 es el grupo 1' (Ncu-Grupos 1) '1'
+Check 'grupos: el bit 9 es el grupo 10' (Ncu-Grupos 512) '10'
+Check 'grupos: varios a la vez' (Ncu-Grupos 13) '1,3,4'
+Check 'grupos: bits por encima del 10 no se inventan grupos' (Ncu-Grupos 0x8000) '0x8000'
+
+Write-Host ''
 Write-Host '== auditar comparando equipos iguales entre si =='
 # No hay valor de fabrica con el que comparar ni en el mapa de la NCU ni en el
 # de la HSU: el criterio es que en una planta bien puesta todos llevan lo mismo.

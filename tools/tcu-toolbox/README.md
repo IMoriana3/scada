@@ -106,6 +106,18 @@ la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
 una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
 sitio.
 
+**Una NCU que no comunica no son 24 TCUs caídas (v11.42)** — el resumen por NCU
+decía `NCU14: OK 0 | AVISO 0 | ALARMA 0 | OFFLINE 24`. Y eso se lee como *«las
+24 TCUs de la NCU14 han perdido la Zigbee»*, cuando lo que pasaba es que **la
+NCU14 no contestaba por la LAN**. Son dos averías distintas y dos cuadrillas
+distintas: una es un switch y la otra son veinticuatro equipos en el campo.
+
+Ahora, cuando la fila de la propia NCU sale OFFLINE, su línea dice lo que pasa
+—`NCU14: NO COMUNICA POR LA LAN - sus 24 TCUs no se pueden leer desde aquí (no
+es que hayan perdido la Zigbee)`, con el motivo que dio la conexión— y el total
+de planta separa esos OFFLINE del resto: `OFFLINE 30 (24 de los OFFLINE son de
+NCUs que no contestan por la LAN: no se han podido leer)`.
+
 **La herramienta se ordena por nivel de equipo (v11.42)** — la toolbox creció
 por **operaciones** —escribir, leer, diagnosticar, auditar— y las pestañas
 acabaron siendo una fila de quince sin más orden que el de haberse ido
@@ -153,11 +165,16 @@ decir qué se puede y qué no:
 - **Auditoría NCU** compara las NCUs **entre sí**: no hay valor de fábrica con
   el que contrastar en ningún sitio, así que el criterio es que en una planta
   bien puesta las 16 llevan lo mismo, manda la mayoría y se marca la minoría.
-  Hoy solo audita **`custom_position_timeout` (40080)**, que es el único
-  parámetro de la hoja *NCU RW registers* del que tenemos la dirección
-  confirmada. Las **posiciones seguras por grupo** y el **auto/manual por
-  grupo** faltan por dirección: en cuanto estén se añaden a la tabla `NCU_RW` y
-  la pestaña las audita sola, sin tocar nada más.
+  Lleva **toda** la hoja *NCU RW registers* del mapa R7.1, que es corta:
+
+  | Registro | Qué es |
+  |---|---|
+  | **40001–40007** `force_sp_1..7` | RW, un bit por **grupo** de TCUs (bit 0 = grupo 1 … bit 9 = grupo 10). Son **peticiones** de posición segura: la 1 es viento, la 3 nieve, la 4 limpieza. En operación normal valen `ninguno`; un bit puesto es un grupo abanderado a mano que alguien se dejó, y la consola lo canta aparte. |
+  | **40070 / 40071** `auto_mode` / `manual_mode` | **Solo escritura.** No es que falte la dirección: el mapa no deja leerlos, así que **el auto/manual por grupo no es auditable**. Se dice en la consola en vez de callarlo. |
+  | **40080** `custom_position_timeout` | RW, U16, en **segundos**. |
+
+  Los bitsets se pintan como lista de grupos (`1,3,4`) y no en hexadecimal: un
+  `0x000D` no se lee en campo.
 
 **Auditoría y firmware de HSU (v11.42)** — la auditoría es el `LEER CONFIG` de
 siempre pero de toda la planta a la vez y puesto como auditoría: lo que importa

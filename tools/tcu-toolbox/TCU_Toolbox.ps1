@@ -870,21 +870,54 @@ function Ncu-Ids {
 }
 
 # ---------- configuracion propia de la NCU ----------
-# La NCU tiene su propia hoja de registros de escritura, aparte de la de las
-# TCUs: se lee por el puerto 502 con unidad 1. Aqui solo estan los que estan
-# confirmados contra el mapa; las posiciones seguras por grupo y el auto/manual
-# por grupo faltan por direccion, y meter una direccion a ojo en una tabla que
-# luego se lee como "configuracion de la planta" es peor que no tenerla.
+# La NCU tiene su propia hoja de registros de escritura ("NCU RW registers"),
+# aparte de la de las TCUs: se lee por el puerto 502 con unidad 1. Es una hoja
+# CORTA, y conviene saber por que:
+#
+#   40001-40007  force_sp_1..7   RW, bitset. Un bit por GRUPO de TCUs (bit 0 =
+#                                grupo 1 ... bit 9 = grupo 10). Son PETICIONES
+#                                de posicion segura: la 1 es viento, la 3 nieve
+#                                y la 4 limpieza. En operacion normal valen 0;
+#                                un bit puesto es un grupo abanderado a mano que
+#                                alguien se dejo, y eso si hay que verlo.
+#   40070/40071  auto_mode /     SOLO ESCRITURA. No se pueden leer, asi que el
+#                manual_mode     auto/manual por grupo NO es auditable: no es
+#                                que falte la direccion, es que el mapa no deja
+#                                leerlo.
+#   40080        custom_position_timeout  RW, U16, en SEGUNDOS.
+#
+# Y eso es toda la hoja. No hay mas configuracion propia de la NCU que auditar.
 $NCU_RW = @(
-    @{n = '40080 custom_position_timeout'; addr = 40080; tipo = 'u16'}
+    @{n = '40001 force_sp_1 (viento) [grupos]';   addr = 40001; tipo = 'grupos'}
+    @{n = '40002 force_sp_2 [grupos]';            addr = 40002; tipo = 'grupos'}
+    @{n = '40003 force_sp_3 (nieve) [grupos]';    addr = 40003; tipo = 'grupos'}
+    @{n = '40004 force_sp_4 (limpieza) [grupos]'; addr = 40004; tipo = 'grupos'}
+    @{n = '40005 force_sp_5 [grupos]';            addr = 40005; tipo = 'grupos'}
+    @{n = '40006 force_sp_6 [grupos]';            addr = 40006; tipo = 'grupos'}
+    @{n = '40007 force_sp_7 [grupos]';            addr = 40007; tipo = 'grupos'}
+    @{n = '40080 custom_position_timeout [s]';    addr = 40080; tipo = 'u16'}
 )
+
+# Un bitset de grupos, en algo que se pueda leer de un vistazo. 0 es lo normal
+# y se dice "ninguno" en vez de "0", que en una columna de grupos se confunde
+# con "el grupo 0". Pura.
+function Ncu-Grupos([int]$w) {
+    if ($w -eq 0) { return 'ninguno' }
+    $g = @()
+    for ($i = 0; $i -lt 10; $i++) { if ($w -band (1 -shl $i)) { $g += ($i + 1) } }
+    if ($g.Count -eq 0) { return ("0x{0:X4}" -f $w) }
+    return ($g -join ',')
+}
 
 # Lee esa configuracion de la NCU a la que se este conectado. Un registro que
 # no conteste se deja vacio: Aud-Comparar ya sabe que un vacio no vota.
 function Ncu-Config {
     $v = @{}
     foreach ($d in $NCU_RW) {
-        try { $v[$d.n] = "$((FC03-Leer $UNIT_NCU (Dir-Trama $d.addr) 1)[0])" }
+        try {
+            $w = [int](FC03-Leer $UNIT_NCU (Dir-Trama $d.addr) 1)[0]
+            $v[$d.n] = $(if ($d.tipo -eq 'grupos') { Ncu-Grupos $w } else { "$w" })
+        }
         catch { $v[$d.n] = '' }
     }
     return $v
@@ -1056,6 +1089,58 @@ function Diag-NivelNombre([string]$n) {
         'TCU' { return 'solo TCUs' }
         default { return 'todo' }
     }
+}
+
+# Cuantas filas estan OFFLINE por culpa de SU NCU, no de ellas. Cuando una NCU
+# no contesta por la LAN, todas sus TCUs salen OFFLINE -claro, no hay quien las
+# lea- y el total de planta dice "OFFLINE 30" como si treinta seguidores
+# hubieran perdido la Zigbee. Son dos averias distintas y dos cuadrillas
+# distintas: una es un switch y la otra son treinta equipos. Pura.
+function Diag-OffPorNcu($filas) {
+    $mudas = @{}
+    foreach ($f in @($filas)) {
+        if ("$($f.TCU)" -ne 'NCU') { continue }
+        if ("$($f.Salud)" -eq 'OFFLINE') { $mudas["$($f.NCU)"] = $true }
+    }
+    if ($mudas.Count -eq 0) { return 0 }
+    $n = 0
+    foreach ($f in @($filas)) {
+        if ("$($f.TCU)" -eq 'NCU') { continue }
+        if ("$($f.Salud)" -ne 'OFFLINE') { continue }
+        if ($mudas.ContainsKey("$($f.NCU)")) { $n++ }
+    }
+    return $n
+}
+
+# La linea de resumen de UNA NCU. Devuelve @{texto; nivel} con nivel
+# 'mal'|'ok', para que quien la pinte elija el color sin que esto sepa de
+# ventanas. Pura.
+function Diag-LineaNcu([string]$ncu, $filas, [int]$tcusDecl) {
+    $fs    = @($filas)
+    $fNcu  = @($fs | Where-Object { "$($_.TCU)" -eq 'NCU' })
+    $tcus  = @($fs | Where-Object { "$($_.TCU)" -match '^\d+$' })
+    $otros = @($fs | Where-Object { "$($_.TCU)" -notmatch '^\d+$' -and "$($_.TCU)" -ne 'NCU' })
+    # La NCU misma no contesta: eso es lo que hay que decir. Que sus TCUs salgan
+    # OFFLINE es una consecuencia, no un hallazgo, y leerlo como "las TCUs no
+    # comunican con la NCU" manda a alguien al campo a mirar seguidores buenos.
+    if ($fNcu.Count -gt 0 -and "$($fNcu[0].Salud)" -eq 'OFFLINE') {
+        $cuantas = $(if ($tcus.Count -gt 0) { $tcus.Count } else { $tcusDecl })
+        $motivo = "$($fNcu[0].Alarmas)".Trim()
+        return @{nivel='mal'; texto=("  NCU{0}: NO COMUNICA POR LA LAN - sus {1} TCUs no se pueden leer desde aqui (no es que hayan perdido la Zigbee){2}" -f
+            $ncu, $cuantas, $(if ($motivo) { ".  $motivo" } else { '' }))}
+    }
+    if ($tcus.Count -eq 0) {
+        return @{nivel='mal'; texto=("  NCU{0}: SIN LECTURA - no se ha podido leer ninguna de sus {1} TCUs" -f $ncu, $tcusDecl)}
+    }
+    $c = @{}
+    foreach ($d in $tcus) { $c["$($d.Salud)"] = 1 + [int]$c["$($d.Salud)"] }
+    $extra = ''
+    if ($otros.Count -gt 0) {
+        $mal = @($otros | Where-Object { "$($_.Salud)" -ne 'OK' }).Count
+        $extra = "   (+{0} HSU/repetidor{1})" -f $otros.Count, $(if ($mal) { ", $mal mal" } else { '' })
+    }
+    return @{nivel='ok'; texto=("  NCU{0}: OK {1} | AVISO {2} | ALARMA {3} | OFFLINE {4}{5}" -f
+        $ncu, [int]$c['OK'], [int]$c['AVISO'], [int]$c['ALARMA'], [int]$c['OFFLINE'], $extra)}
 }
 
 # ---------- auditar comparando equipos iguales entre si ----------
@@ -4176,7 +4261,7 @@ foreach ($c in @(@('Parametro',260), @('Valor comun',120), @('Cuantas',70), @('N
     [void]$lvAN.Columns.Add($c[0], $c[1])
 }
 $tabAN.Controls.Add($lvAN)
-$lblANNota = LG $tabAN 'Compara entre si la configuracion propia de cada NCU (puerto 502, unidad 1). Faltan por direccion las posiciones seguras por grupo y el auto/manual por grupo: en cuanto esten las filas del mapa se anaden a la tabla NCU_RW.' 10 890 350
+$lblANNota = LG $tabAN 'Toda la hoja NCU RW del mapa R7.1: las siete peticiones de posicion segura por grupo (40001-40007, y en operacion normal son "ninguno") y el timeout de posicion personalizada (40080). El auto/manual por grupo (40070/40071) es de SOLO ESCRITURA: no se puede leer en que modo esta un grupo.' 10 890 350
 $lblANNota.ForeColor = [System.Drawing.Color]::Gray
 
 # ============================ TAB FIRMWARE NCU ============================
@@ -7529,7 +7614,12 @@ function Diag-Correr {
         $(if (($nHOk + $nHMal) -gt 0) { "   |   HSUs: $($nHOk + $nHMal) ($nHOk OK)" } else { '' }) +
         $(if ($reps.Count -gt 0) { "   |   Repetidores: $($reps.Count) ($nROk OK)" } else { '' })
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con "Diagnostico: OK $nOk | AVISO $nAviso | ALARMA $nAlarma | OFFLINE $nOff" ([System.Drawing.Color]::SteelBlue)
+    # Un OFFLINE no vale lo mismo que otro: los de una NCU que no contesta por la
+    # LAN no son seguidores caidos, son seguidores que no se han podido leer. Sin
+    # esto, un switch de una NCU se lee como treinta averias de campo.
+    $nOffLan = Diag-OffPorNcu $script:UltimoDiag
+    $notaLan = $(if ($nOffLan -gt 0) { "   ($nOffLan de los OFFLINE son de NCUs que no contestan por la LAN: no se han podido leer)" } else { '' })
+    Con "Diagnostico: OK $nOk | AVISO $nAviso | ALARMA $nAlarma | OFFLINE $nOff$notaLan" ([System.Drawing.Color]::SteelBlue)
     Marcar-Bloque 'diag'
     # copia a disco: si luego lanzas otra cosa, esto no se pierde
     [void](Trabajo-Guardar 'diag' $script:UltimoDiag "OK $nOk | AVISO $nAviso | ALARMA $nAlarma | OFFLINE $nOff")
@@ -7551,25 +7641,10 @@ function Diag-Correr {
         foreach ($k in @($porNcu.Keys | Sort-Object { [int]("0" + $_) })) {
             # las TCUs por un lado; HSUs y repetidores no son seguidores y van
             # aparte, igual que en el total
-            $filas = @($porNcu[$k])
-            $tcus = @($filas | Where-Object { "$($_.TCU)" -match '^\d+$' })
-            $otros = @($filas | Where-Object { "$($_.TCU)" -notmatch '^\d+$' -and "$($_.TCU)" -ne 'NCU' })
-            if ($tcus.Count -eq 0) {
-                # una NCU a la que no se ha podido llegar es LO MAS importante que
-                # hay que decir, y antes desaparecia del resumen sin mas
-                $n = @($trabajos | Where-Object { "$($_.ncu)" -eq $k })
-                $cuantas = $(if ($n.Count -gt 0) { @($n[0].tcus).Count } else { 0 })
-                Con ("  NCU{0}: SIN LECTURA - no se ha podido leer ninguna de sus {1} TCUs" -f $k, $cuantas) ([System.Drawing.Color]::Salmon)
-                continue
-            }
-            $c = @{}
-            foreach ($d in $tcus) { $c[$d.Salud] = 1 + [int]$c[$d.Salud] }
-            $extra = ''
-            if ($otros.Count -gt 0) {
-                $mal = @($otros | Where-Object { "$($_.Salud)" -ne 'OK' }).Count
-                $extra = "   (+{0} HSU/repetidor{1})" -f $otros.Count, $(if ($mal) { ", $mal mal" } else { '' })
-            }
-            Con ("  NCU{0}: OK {1} | AVISO {2} | ALARMA {3} | OFFLINE {4}{5}" -f $k, [int]$c['OK'], [int]$c['AVISO'], [int]$c['ALARMA'], [int]$c['OFFLINE'], $extra) ([System.Drawing.Color]::SteelBlue)
+            $n = @($trabajos | Where-Object { "$($_.ncu)" -eq $k })
+            $decl = $(if ($n.Count -gt 0) { @($n[0].tcus).Count } else { 0 })
+            $ln = Diag-LineaNcu $k @($porNcu[$k]) $decl
+            Con $ln.texto $(if ($ln.nivel -eq 'mal') { [System.Drawing.Color]::Salmon } else { [System.Drawing.Color]::SteelBlue })
         }
     }
     $selV = $cbGVerNcu.SelectedItem
@@ -11588,9 +11663,12 @@ $btnANLeer.Add_Click({ Lanzar {
     $fuera = Aud-CuantasFuera $script:UltimaAudNcu
     $lblANRes.Text = "$($lect.Count) NCU(s) leidas, $mudas mudas   |   parametros que discrepan: $fuera"
     Con ("Auditoria NCU: {0} leidas, {1} mudas, {2} parametro(s) con discrepancia." -f $lect.Count, $mudas, $fuera) ([System.Drawing.Color]::SteelBlue)
-    if ($NCU_RW.Count -le 1) {
-        Con 'Solo hay un parametro confirmado en el mapa (40080). Las posiciones seguras por grupo y el auto/manual por grupo faltan por direccion: en cuanto esten, se anaden a NCU_RW y esta pestana las audita sola.' ([System.Drawing.Color]::Orange)
+    # lo que hay que mirar de verdad no es que discrepen, es que no sean 'ninguno'
+    $abanderados = @($script:UltimaAudNcu | Where-Object { "$($_.Parametro)" -like '*force_sp*' -and "$($_.Comun)" -ne 'ninguno' })
+    foreach ($f in $abanderados) {
+        Con "ATENCION: $($f.Parametro) esta puesto (grupos $($f.Comun)) en la mayoria de las NCUs. Una peticion de posicion segura activa deja esos grupos abanderados." ([System.Drawing.Color]::Orange)
     }
+    Con 'El auto/manual por grupo (40070/40071) no sale aqui: el mapa R7.1 los declara de SOLO ESCRITURA, asi que no hay forma de leer en que modo esta cada grupo.' ([System.Drawing.Color]::Gainsboro)
 } })
 $btnANCsv.Add_Click({
     if (@($script:UltimaAudNcu).Count -eq 0) { return }
