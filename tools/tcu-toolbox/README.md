@@ -113,10 +113,12 @@ NCU14 no contestaba por la LAN**. Son dos averías distintas y dos cuadrillas
 distintas: una es un switch y la otra son veinticuatro equipos en el campo.
 
 Ahora, cuando la fila de la propia NCU sale OFFLINE, su línea dice lo que pasa
-—`NCU14: NO COMUNICA POR LA LAN - sus 24 TCUs no se pueden leer desde aquí (no
-es que hayan perdido la Zigbee)`, con el motivo que dio la conexión— y el total
-de planta separa esos OFFLINE del resto: `OFFLINE 30 (24 de los OFFLINE son de
-NCUs que no contestan por la LAN: no se han podido leer)`.
+y el total de planta separa esos OFFLINE del resto:
+
+```
+NCU14: NO COMUNICA POR LA LAN - 24 TCUs sin leer.  NCU SIN RESPUESTA en 192.168.4.14:502 - timeout
+Diagnostico: OK 715 | AVISO 5 | ALARMA 1 | OFFLINE 30 (24 por NCUs sin LAN)
+```
 
 **La herramienta se ordena por nivel de equipo (v11.42)** — la toolbox creció
 por **operaciones** —escribir, leer, diagnosticar, auditar— y las pestañas

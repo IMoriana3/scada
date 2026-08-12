@@ -1126,7 +1126,7 @@ function Diag-LineaNcu([string]$ncu, $filas, [int]$tcusDecl) {
     if ($fNcu.Count -gt 0 -and "$($fNcu[0].Salud)" -eq 'OFFLINE') {
         $cuantas = $(if ($tcus.Count -gt 0) { $tcus.Count } else { $tcusDecl })
         $motivo = "$($fNcu[0].Alarmas)".Trim()
-        return @{nivel='mal'; texto=("  NCU{0}: NO COMUNICA POR LA LAN - sus {1} TCUs no se pueden leer desde aqui (no es que hayan perdido la Zigbee){2}" -f
+        return @{nivel='mal'; texto=("  NCU{0}: NO COMUNICA POR LA LAN - {1} TCUs sin leer{2}" -f
             $ncu, $cuantas, $(if ($motivo) { ".  $motivo" } else { '' }))}
     }
     if ($tcus.Count -eq 0) {
@@ -7618,7 +7618,7 @@ function Diag-Correr {
     # LAN no son seguidores caidos, son seguidores que no se han podido leer. Sin
     # esto, un switch de una NCU se lee como treinta averias de campo.
     $nOffLan = Diag-OffPorNcu $script:UltimoDiag
-    $notaLan = $(if ($nOffLan -gt 0) { "   ($nOffLan de los OFFLINE son de NCUs que no contestan por la LAN: no se han podido leer)" } else { '' })
+    $notaLan = $(if ($nOffLan -gt 0) { " ($nOffLan por NCUs sin LAN)" } else { '' })
     Con "Diagnostico: OK $nOk | AVISO $nAviso | ALARMA $nAlarma | OFFLINE $nOff$notaLan" ([System.Drawing.Color]::SteelBlue)
     Marcar-Bloque 'diag'
     # copia a disco: si luego lanzas otra cosa, esto no se pierde

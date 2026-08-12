@@ -3074,8 +3074,15 @@ $filasLan = @(
 )
 $lnLan = Diag-LineaNcu '14' $filasLan 24
 Check 'lan: se dice que la NCU no comunica' ($lnLan.texto -like '*NO COMUNICA POR LA LAN*') $true
-Check 'lan: y que no es cosa de la Zigbee' ($lnLan.texto -like '*no es que hayan perdido la Zigbee*') $true
+# cuenta las filas que hay, que es lo que se ve en la tabla...
+Check 'lan: y cuantas TCUs quedaron sin leer' ($lnLan.texto -like '*2 TCUs sin leer*') $true
+# ...y si el barrido no llego a emitir ninguna, lo que dice la topologia
+$lnLan0 = Diag-LineaNcu '14' @($filasLan[0]) 24
+Check 'lan: sin filas, las que declara la topologia' ($lnLan0.texto -like '*24 TCUs sin leer*') $true
 Check 'lan: con el motivo que dio la NCU' ($lnLan.texto -like '*timeout*') $true
+# el motivo ya dice de sobra lo que pasa: en una consola de campo, una linea
+# que hay que leer entera es una linea que no se lee
+Check 'lan: sin explicaciones de mas' ($lnLan.texto.Length -lt 110) $true
 Check 'lan: y no cuenta OFFLINEs como hallazgo' ($lnLan.texto -like '*OK 0*') $false
 Check 'lan: en rojo' $lnLan.nivel 'mal'
 # una NCU normal sigue dando su linea de siempre
