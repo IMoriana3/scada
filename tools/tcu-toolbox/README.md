@@ -106,6 +106,98 @@ la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
 una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
 sitio.
 
+**La herramienta se ordena por nivel de equipo (v11.42)** — la toolbox creció
+por **operaciones** —escribir, leer, diagnosticar, auditar— y las pestañas
+acabaron siendo una fila de quince sin más orden que el de haberse ido
+añadiendo. En planta no se piensa así: se piensa por **nivel de equipo**.
+Primero si la NCU habla, luego sus estaciones meteo, luego los repetidores de
+los que cuelga media planta, y al final los seguidores.
+
+La fila de pestañas se sustituye por una **columna de navegación a la
+izquierda** con cinco bloques:
+
+| Bloque | Qué lleva |
+|---|---|
+| **GLOBAL** | Diagnóstico de planta · SAT |
+| **NCU** | Diagnóstico · Comm NCU · Estabilidad · Auditoría · Firmware |
+| **HSU** | Diagnóstico · Auditoría · Firmware · Lectura de señales |
+| **REPETIDORES** | Diagnóstico y batería · Auditoría · Firmware · Buscar repetidor |
+| **TCUs** | Diagnóstico · Auditoría · Batería · Firmware · Leer variable · Volcar TCU · Escribir · Trabajos · PEM · Cierre · Utilidades |
+
+Detalles que importan:
+
+- **El diagnóstico sigue siendo UN barrido.** Sus cinco hojas —global, NCU, HSU,
+  repetidores, TCUs— son **vistas** del mismo resultado, no cinco lecturas. Una
+  pasada ya saca las filas de los cuatro niveles; correrla cinco veces sería
+  cinco veces el mismo trabajo contra los mismos equipos, y en San José eso son
+  horas. Los exports CSV/JSON siguen llevando siempre el diagnóstico completo.
+- **Ya no se abre en «Escribir»**, que es la única pestaña capaz de dejar una
+  TCU peor de como estaba. Abre en el diagnóstico de planta.
+- Por dentro **las pestañas siguen existiendo**: todo el código que salta de una
+  a otra (la auditoría que manda a Escribir, el cierre que manda a PEM, Ctrl+K)
+  funciona igual, y el árbol se mueve solo cuando eso pasa. Lo que no se ve es
+  su cabecera.
+- La ventana pasa de 960 a 1142 px de ancho: los 182 de más son la columna. El
+  interior de las pestañas no se ha movido ni un píxel.
+
+**Auditoría y firmware de NCU (v11.42)** — dos pestañas nuevas, y conviene
+decir qué se puede y qué no:
+
+- **Firmware NCU es de solo lectura, y no por pereza**: el mapa **R7.1 no expone
+  ninguna vía de actualización de la NCU**. Lo único que hay es la versión como
+  texto en el registro 50. Se leen además **HardwareId (registro 0)** y
+  **SoftwareId (registro 1, bits 15..8)**, que el propio mapa marca *NOT READY*
+  y hoy contestan 0: se pintan como `-` en vez de 0, porque un cero en una
+  columna de versión parece un dato bueno y no lo es. El día que Sunner los
+  rellene, la columna ya está hecha.
+- **Auditoría NCU** compara las NCUs **entre sí**: no hay valor de fábrica con
+  el que contrastar en ningún sitio, así que el criterio es que en una planta
+  bien puesta las 16 llevan lo mismo, manda la mayoría y se marca la minoría.
+  Hoy solo audita **`custom_position_timeout` (40080)**, que es el único
+  parámetro de la hoja *NCU RW registers* del que tenemos la dirección
+  confirmada. Las **posiciones seguras por grupo** y el **auto/manual por
+  grupo** faltan por dirección: en cuanto estén se añaden a la tabla `NCU_RW` y
+  la pestaña las audita sola, sin tocar nada más.
+
+**Auditoría y firmware de HSU (v11.42)** — la auditoría es el `LEER CONFIG` de
+siempre pero de toda la planta a la vez y puesto como auditoría: lo que importa
+no es el umbral de una estación, es que las diez lleven el mismo. Un umbral de
+viento distinto en una zona es una zona que se pone a bandera cuando las demás
+no. El número de esclavo se excluye de la comparación: es distinto en cada una
+**por diseño**, y compararlo sacaría una discrepancia en todas tapando las de
+verdad.
+
+El firmware de HSU **sí tiene vía de actualización**, al contrario que el de la
+NCU: el mapa **R23** dice literalmente *«Master must write 0x55AA to install the
+new FW»* en **`flagUpdateFW` (51019)**. La pestaña lo hace, con todas las
+cautelas: una estación cada vez, con el esclavo escrito a mano, comprobando
+antes que **no haya alarma de viento** (la orden reinicia la estación y esa zona
+se queda sin guarda mientras arranca), con **confirmación escrita** —hay que
+teclear el nombre de la estación, un Sí/No se pulsa sin leerlo—, dejando
+constancia en el registro de acciones y **releyendo la versión** después. ⚠️ **No
+se ha probado nunca en campo**, y no sube ningún binario: ordena instalar el que
+la estación ya tenga cargado con el updater de Sunner.
+
+**Bloque de repetidores (v11.42)** — un repetidor es una TCU de verdad —mismo
+mapa, misma batería, mismo firmware— pero atornillada a un poste, y hasta ahora
+solo salía como una fila más del diagnóstico. Ahora tiene bloque propio:
+
+- **Auditoría** con su propio juego de parámetros. Auditarlos contra la
+  referencia de un seguidor sacaba media tabla en rojo por posiciones seguras,
+  límites de eje y viento que en ellos no significan nada. Se comparan solo
+  entre repetidores y solo lo que aplica a un equipo fijo: carga, batería,
+  calefactor y comunicaciones. Fuera también el **número de esclavo** (200, 201,
+  202: distinto en cada uno por diseño) y los bits de *apply*, que son órdenes.
+- **Firmware**. El plan de actualización va por **tramos de TCU** de cada
+  gateway, y el esclavo de un repetidor cae **fuera** de ese tramo: hasta ahora
+  no entraban en ningún plan y se quedaban con el firmware viejo. Cada uno sale
+  con su **ventana propia del updater**, y con su SoC al lado (no se actualiza
+  un equipo por debajo del 50 %).
+- **Buscar repetidor**: barre los esclavos 200–210 por cada gateway de las NCUs
+  seleccionadas y dice cuál contesta y si está o no en la topología. Es lo que
+  hace falta para la **RSU 10 de la NCU16 de Ayora**, que no ha comunicado
+  nunca.
+
 **Pestaña Estabilidad, y la versión de la NCU (v11.41)** — pedimos «calidad de
 enlace por TCU» y el mapa Modbus de Sunner **no expone RSSI ni LQI**: revisados
 el NCU R7.1 y el TCU v6.1, de la Zigbee solo hay bits de sí/no
