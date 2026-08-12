@@ -98,15 +98,21 @@ function Leer-Topologia([string]$ruta) {
   [pscustomobject]@{ Planta = $planta; Ncus = $ncus }
 }
 
-# Nombres tal y como los graba la NCU: NCU2_TCU_001_20260812.csv
+# Nombres tal y como los sirve la NCU. Se generan las DOS formas vistas:
+#   [NCU2]_TCU_001_2026-08-12.csv   <- la que sirve el webserver
+#   NCU2_TCU_001_20260812.csv       <- sin corchetes y con fecha compacta
+# Se piden ambas y la que no exista simplemente falla, que ya se cuenta aparte.
 function Nombres-De([pscustomobject]$n, [string]$yyyymmdd) {
-  $out = @("NCU$($n.Ncu)_NCU_$yyyymmdd.csv", "NCU$($n.Ncu)_NCU_SENSORS_$yyyymmdd.csv")
-  if ($n.TcuFin -ge $n.TcuIni -and $n.TcuFin -gt 0) {
-    $n.TcuIni..$n.TcuFin | ForEach-Object {
-      $out += ('NCU{0}_TCU_{1:D3}_{2}.csv' -f $n.Ncu, $_, $yyyymmdd)
+  $iso = '{0}-{1}-{2}' -f $yyyymmdd.Substring(0,4), $yyyymmdd.Substring(4,2), $yyyymmdd.Substring(6,2)
+  $out = @()
+  foreach ($fmt in @(@{P="[NCU$($n.Ncu)]"; F=$iso}, @{P="NCU$($n.Ncu)"; F=$yyyymmdd})) {
+    $out += "$($fmt.P)_NCU_$($fmt.F).csv"
+    $out += "$($fmt.P)_NCU_SENSORS_$($fmt.F).csv"
+    if ($n.TcuFin -ge $n.TcuIni -and $n.TcuFin -gt 0) {
+      $n.TcuIni..$n.TcuFin | ForEach-Object { $out += ('{0}_TCU_{1:D3}_{2}.csv' -f $fmt.P, $_, $fmt.F) }
     }
+    foreach ($h in $n.Hsus) { if ($h) { $out += "$($fmt.P)_HSU_$($h)_$($fmt.F).csv" } }
   }
-  foreach ($h in $n.Hsus) { if ($h) { $out += "NCU$($n.Ncu)_HSU_$($h)_$yyyymmdd.csv" } }
   $out
 }
 
@@ -211,7 +217,7 @@ foreach ($f in $fechas) {
   New-Item -ItemType Directory -Force -Path $carpeta | Out-Null
   foreach ($n in $topo.Ncus) {
     foreach ($arch in (Nombres-De $n $f)) {
-      $dest = Join-Path $carpeta $arch
+      $dest = Join-Path $carpeta $arch     # se conserva el nombre ORIGINAL: el importador lo entiende con y sin corchetes
       if (Test-Path $dest) { $saltados++; continue }        # ya lo tenemos: no se vuelve a pedir
       $u = Url-De $patron $n.Ip $arch $f
       if (Descargar $u $dest) {
