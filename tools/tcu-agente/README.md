@@ -31,6 +31,29 @@ En planta, antes de dar la URL a nadie: **PING** desde la web debe decir la
 planta, la versión del agente y la de la toolbox, y las dos tienen que ser de la
 **misma release**.
 
+## Arrancarlo: un solo doble clic
+
+`TCU_Agente.bat` levanta **el túnel y el agente en la misma ventana**. Antes
+hacían falta dos consolas y copiar la URL de una a otra a mano, y cada arranque
+tropezaba en lo mismo: un agente anterior sin cerrar ocupando el puerto,
+`cloudflared` que no está en el PATH, o la URL perdida entre el log.
+
+Lo que hace, por orden:
+
+1. **cierra el agente anterior** si quedó abierto — es lo que provocaba
+   *«el puerto 8585 ya lo está usando otro programa»*;
+2. **busca `cloudflared`** en esta carpeta, en Descargas, en el PATH, o donde
+   diga el campo `cloudflared` de `agente_config.json`;
+3. levanta el túnel con el `--http-host-header` puesto y **espera a que
+   Cloudflare dé la URL** (hasta 40 s);
+4. la imprime en verde, la deja en el **portapapeles** y la guarda en
+   **`ultima_url.txt`**, para no tener que ir a buscarla scrolleando;
+5. arranca el agente en esa misma ventana;
+6. al cerrar, **cierra también el túnel**.
+
+Si no encuentra `cloudflared`, arranca solo el agente y lo dice: en un PC de
+planta sin acceso remoto el túnel no siempre hace falta.
+
 ## Puesta en marcha (piloto Ayora)
 
 1. Copia las carpetas `tcu-toolbox` y `tcu-agente` al PC de planta (las de la release).

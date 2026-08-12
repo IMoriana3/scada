@@ -274,6 +274,41 @@ finally {
     Start-Sleep -Milliseconds 300
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
+# ---------- Arrancar.ps1: tunel + agente en una sola ventana ----------
+$fArr = Join-Path (Split-Path $PSScriptRoot -Parent) '../tcu-agente/Arrancar.ps1'
+Check 'arrancar: existe el lanzador' (Test-Path $fArr) $true
+$srcArr = Get-Content $fArr -Raw
+$eArr = $null
+[void][System.Management.Automation.Language.Parser]::ParseInput($srcArr, [ref]$null, [ref]$eArr)
+Check 'arrancar: parsea' (@($eArr).Count) 0
+# la URL sale dentro de un recuadro, no en una linea suelta
+$i = $srcArr.IndexOf('function Url-DeLog'); $f = $srcArr.IndexOf('# ---- 1.')
+Invoke-Expression $srcArr.Substring($i, $f - $i)
+$logReal = @'
+2026-08-11T15:04:07Z INF Requesting new quick Tunnel on trycloudflare.com...
+2026-08-11T15:04:09Z INF +--------------------------------------------------------------------------------------------+
+2026-08-11T15:04:09Z INF |  Your quick Tunnel has been created! Visit it at (it may take some time to be reachable):   |
+2026-08-11T15:04:09Z INF |  https://held-convinced-site-workshops.trycloudflare.com                                    |
+2026-08-11T15:04:09Z INF +--------------------------------------------------------------------------------------------+
+'@
+Check 'arrancar: saca la URL del recuadro' (Url-DeLog $logReal) 'https://held-convinced-site-workshops.trycloudflare.com'
+Check 'arrancar: sin URL todavia, cadena vacia' (Url-DeLog 'INF Requesting new quick Tunnel...') ''
+Check 'arrancar: no se cuela un dominio parecido' (Url-DeLog 'https://malo.trycloudflare.com.example.org/x') 'https://malo.trycloudflare.com'
+Check 'arrancar: log vacio' (Url-DeLog '') ''
+# el --http-host-header no es opcional: sin el, Windows responde 400
+Check 'arrancar: pasa el http-host-header' ($srcArr.Contains("'--http-host-header'")) $true
+# cerrar el agente anterior es lo que evita el 'puerto ya en uso'
+Check 'arrancar: cierra el agente anterior' ($srcArr.Contains('TCU_Agente.ps1*') -and $srcArr.Contains('Stop-Process')) $true
+Check 'arrancar: y no se mata a si mismo' ($srcArr.Contains('$_.ProcessId -ne $PID')) $true
+# el .bat tiene que llamar al lanzador, no al agente a pelo
+$srcBat = Get-Content (Join-Path (Split-Path $PSScriptRoot -Parent) '../tcu-agente/TCU_Agente.bat') -Raw
+Check 'arrancar: el .bat llama al lanzador' ($srcBat.Contains('Arrancar.ps1')) $true
+# la URL se guarda: sin esto hay que ir a buscarla scrolleando
+Check 'arrancar: deja la URL en un fichero' ($srcArr.Contains('ultima_url.txt')) $true
+Check 'arrancar: y en el portapapeles' ($srcArr.Contains('Set-Clipboard')) $true
+# ese fichero no puede acabar en el repo
+Check 'arrancar: ultima_url.txt esta ignorado' ((Get-Content (Join-Path (Split-Path $PSScriptRoot -Parent) '../tcu-agente/.gitignore') -Raw).Contains('ultima_url.txt')) $true
+
 Write-Host ''
 if ($fallos -eq 0) { Write-Host 'AGENTE: TODAS LAS PRUEBAS OK'; exit 0 }
 Write-Host "AGENTE: $fallos PRUEBAS FALLIDAS"; exit 1
