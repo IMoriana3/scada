@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.44'
+$VERSION_TOOLBOX = '11.45'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1107,6 +1107,33 @@ function Filas-Normalizar($filas) {
     return $out
 }
 
+# ---------- de que se alimenta una TCU ----------
+# El mapa v6.1 dice que el nibble bajo del Product ID (30300, y el mismo dato en
+# el bloque compacto que cachea la NCU) es "TCU type (BAT/AC/Unknokn)" -asi, con
+# la errata-. O sea: el dato EXISTE, esta en un registro que ya leemos, y no hay
+# que deducirlo de la tension de panel ni de la corriente de entrada.
+#
+# Lo que el mapa NO da es la codificacion: no dice que numero es BAT y cual es
+# AC. Lo unico medido en campo es que en El Burgo las TCUs contestan 1 a ese
+# nibble y las HSUs 2. Con eso sabemos que el 1 es el tipo de las TCUs de alli,
+# pero no cual de los dos. Escribir "STRING POWER" a partir de ahi seria
+# adivinarlo y enseñarlo como si lo supieramos.
+#
+# Asi que se devuelve lo que se sabe y nada mas. Para cerrar la tabla basta un
+# diagnostico en una planta que se sepa de string y otro en una de self: se mira
+# el numero que sale y se rellena aqui. Pura.
+$TCU_TIPO_ALIM = @{
+    # <numero> = 'string power' | 'self power'
+    # Pendiente de confirmar contra una planta de cada tipo. Mientras este
+    # vacio, Tcu-TipoAlim dice "sin confirmar" en vez de inventarse la etiqueta.
+}
+function Tcu-TipoAlim($nibble) {
+    if ($null -eq $nibble -or "$nibble" -eq '') { return $null }
+    $n = [int]$nibble
+    if ($TCU_TIPO_ALIM.ContainsKey($n)) { return "$($TCU_TIPO_ALIM[$n])" }
+    return "sin confirmar (tipo $n)"
+}
+
 function Fila-Tipo($f) {
     $t = "$($f.TCU)"
     if ($t -eq 'NCU') { return 'NCU' }
@@ -1947,6 +1974,14 @@ function Ncu-DiagCompat([int[]]$tcus) {
                     Tbat_C = $(if ($vacio) { '' } else { [math]::Round(($w[$b+20] / 10.0) - 273.15, 1) })
                     Tpcb_C = $(if ($vacio) { '' } else { [math]::Round(($w[$b+19] / 10.0) - 273.15, 1) })
                     Alarmas = (($alarmas + $notas) -join '; ')
+                    # Nibble bajo del Product ID (offset 0 del bloque, que es el
+                    # 30300 de la TCU): el mapa v6.1 lo llama "TCU type
+                    # (BAT/AC/Unknown)". Ya venia en el bloque y lo tirabamos,
+                    # asi que sale gratis: ni una lectura de mas y toda la planta
+                    # de una pasada. Va el numero CRUDO ademas de la etiqueta
+                    # porque el mapa no da la codificacion (ver Tcu-TipoAlim).
+                    Tipo_raw = $(if ($vacio) { $null } else { ($w[$b+0] -band 0xF) })
+                    Tipo_alim = $(if ($vacio) { $null } else { Tcu-TipoAlim ($w[$b+0] -band 0xF) })
                     main_status = ("0x{0:X4}" -f $msr); alarmas_1 = ("0x{0:X4}" -f $al1); alarmas_2 = ("0x{0:X4}" -f $al2)
                     alarmas_3 = ''; alarmas_4 = ''; system_status = ("0x{0:X4}" -f $fl)
                 }
@@ -7096,6 +7131,7 @@ function Ident-Leer([byte]$tcu) {
     $campos = New-Object System.Collections.ArrayList
     $prod = $w[0]
     [void]$campos.Add([pscustomobject]@{Campo='Product ID (30300)';        Valor=("0x{0:X4}  (tipo {1}, HW {2}, FW corto {3})" -f $prod, ($prod -band 0xF), (($prod -shr 4) -band 0xF), (($prod -shr 8) -band 0xFF))})
+    [void]$campos.Add([pscustomobject]@{Campo='Tipo de alimentacion';      Valor=(Tcu-TipoAlim ($prod -band 0xF))})
     [void]$campos.Add([pscustomobject]@{Campo='FW principal';              Valor=("v{0}.{1}.{2} (map {3})" -f (($w[1] -shr 8) -band 0xFF), ($w[1] -band 0xFF), (($w[2] -shr 8) -band 0xFF), ($w[2] -band 0xFF))})
     [void]$campos.Add([pscustomobject]@{Campo='FW de fabrica';             Valor=("v{0}.{1}.{2} (map {3})" -f (($w[23] -shr 8) -band 0xFF), ($w[23] -band 0xFF), (($w[24] -shr 8) -band 0xFF), ($w[24] -band 0xFF))})
     [void]$campos.Add([pscustomobject]@{Campo='FW MCU secundario';         Valor="$($w[3])"})
