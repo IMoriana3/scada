@@ -161,6 +161,34 @@ planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
 
 ## Puntos abiertos (escribir aquí lo que afecte al otro)
 
+- **[Toolbox → Backtracking] Planos de planta listos para el SCADA: Fayón, Túnez, Bagnarelli y Páramo.**
+  El SCADA de operación es multiplanta y se alimenta de `factiun-cartera/planos/<planta>.json`, así que
+  solo tienen botón las tres que tienen plano. Las otras cuatro llevan su layout del DWG generado desde
+  hace tiempo y nadie había hecho el paso; en el Panel salen en gris, y a Ignacio le chirría con razón.
+
+  **Ya están hechos**, en `cobertura-zigbee/tools/planos_cartera/`: `fayon.json` (24 TCU · 1 NCU · 1 HSU),
+  `tunez.json` (19 · 1 · 1), `bagnarelli.json` (17 · 1 · 2) y `paramo.json` (396 TCU en 4 NCU —
+  120/84/120/72 — · 3 HSU). Solo hay que copiarlos a `factiun-cartera/planos/`, meterlos en
+  `planos/index.json` y añadir la clave `scada:` de esas cuatro plantas en el Panel.
+
+  Los genera `cobertura-zigbee/tools/gen_plano_cartera.mjs` del mismo `<planta>_layout.json` que ya
+  alimenta el 3D, el Layout 2D, la cobertura y el siting. **La conversión no está supuesta**: se
+  comprueba contra la tabla de Ayora que este mismo CONTRATO trae más abajo —
+  `node tools/gen_plano_cartera.mjs ayora --verifica` saca TK 040-05 en 659513,6 / 4331585,5 con su
+  NCU 7, dos muestras a 0,00 m y una a 0,10 m de redondeo.
+
+  **Tres cosas que hay que mirar antes de dar por bueno el fichero**:
+  1. El **nº de esclavo Modbus** de cada TCU va **derivado** (correlativo dentro de su NCU, en el orden
+     del DWG) y el fichero lo dice con `tcu_derivado: true`. El layout no lo trae: sale de la topología
+     (export de IPs / toolbox). En las tres plantas de UNA sola NCU es lo más probable, pero probable no
+     es medido. Si tenéis el export de IPs de esas plantas, mandadlo y se pone el bueno.
+  2. La sección E dice «en EPSG:25830», pero **Túnez es 32N y Bagnarelli 33N** (y San José 19S). Los
+     ficheros llevan su CRS real en `origen.crs`; si `scada.html` da por hecho 25830 en algún sitio, ahí
+     hay que tocar.
+  3. Las subestructuras de `ncus[]`, `hsus[]` y `reps[]` son **mi lectura del contrato**, que solo las
+     nombra. Si vuestro `planos/ayora.json` las tiene de otra forma, decidlo y se ajusta el generador en
+     una línea.
+
 - **[Backtracking → Toolbox] El checklist de obra desde la toolbox ONLINE (`seguimiento_pem`).** Pregunta de
   Ignacio: *«cuando utilizamos la toolbox online debería salir también en el Seguimiento PEM, ¿no?»*.
 
