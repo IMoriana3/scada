@@ -3080,6 +3080,13 @@ $TCU_TIPO_ALIM.Remove(9)
 Check 'alim: el nibble sale del bloque que ya se lee' ($src.Contains('Tipo_raw = $(if ($vacio) { $null } else { ($w[$b+0] -band 0xF) })')) $true
 Check 'alim: con su etiqueta al lado' ($src.Contains('Tipo_alim = $(if ($vacio) { $null } else { Tcu-TipoAlim ($w[$b+0] -band 0xF) })')) $true
 Check 'alim: y tambien en el inventario' ($src.Contains("Campo='Tipo de alimentacion'")) $true
+# El repetidor es el unico equipo donde las dos lecturas posibles del nibble dan
+# resultados distintos: es una TCU por clase de equipo y esta autoalimentado por
+# instalacion, como una HSU. Si contesta lo que una TCU, el nibble es la clase;
+# si contesta lo que una HSU, es la alimentacion.
+Check 'alim: el repetidor lleva su nibble' ($src.Contains('$tipoRaw = ($w[0] -band 0xF)')) $true
+Check 'alim: y sale en su tabla' ($src.Contains("Tipo_raw=`$tipoRaw; Tipo_alim=(Tcu-TipoAlim `$tipoRaw)")) $true
+Check 'alim: con columna propia' ($src.Contains("@('Tipo',48)")) $true
 
 Write-Host ''
 Write-Host '== la meteo de la HSU, tambien como campos =='

@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.45'
+$VERSION_TOOLBOX = '11.46'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -4538,11 +4538,11 @@ $lvRF.Location = New-Object System.Drawing.Point(10, 56)
 $lvRF.Size = New-Object System.Drawing.Size(898, 288)
 $lvRF.View = 'Details'; $lvRF.FullRowSelect = $true; $lvRF.GridLines = $true
 foreach ($c in @(@('NCU',50), @('Repetidor',150), @('GW',60), @('Esclavo',70), @('FW',110),
-                 @('SoC',60), @('Estado / nota',380))) {
+                 @('SoC',60), @('Tipo',48), @('Estado / nota',332))) {
     [void]$lvRF.Columns.Add($c[0], $c[1])
 }
 $tabRF.Controls.Add($lvRF)
-$lblRFNota = LG $tabRF 'Una ventana del updater por repetidor: su esclavo esta fuera del tramo de TCUs de su gateway, asi que hay que pegarlo aparte. La toolbox no actualiza: dice cual falta y en que version esta.' 10 890 350
+$lblRFNota = LG $tabRF 'Una ventana del updater por repetidor: su esclavo esta fuera del tramo de TCUs de su gateway, asi que hay que pegarlo aparte. La toolbox no actualiza: dice cual falta y en que version esta. La columna Tipo es el nibble del Product ID: en un repetidor -TCU por clase, autoalimentado por instalacion- es donde se ve si ese nibble dice la CLASE de equipo o la ALIMENTACION.' 10 890 350
 $lblRFNota.ForeColor = [System.Drawing.Color]::Gray
 
 # ============================ TAB REPETIDORES: BUSCAR ============================
@@ -11988,10 +11988,17 @@ $btnRFLeer.Add_Click({ Lanzar {
         $ip = ''
         foreach ($n in @($cx.multi)) { if ("$($n.ncu)" -eq "$($rp.ncu)") { $ip = "$($n.ip)"; break } }
         if ($ip -eq '') { $ip = "$($cx.ip)" }
-        $fw = ''; $soc = ''; $nota = ''
+        $fw = ''; $soc = ''; $nota = ''; $tipoRaw = $null
         try {
             Modbus-Conectar $ip ([int]$rp.puerto) $cx.to
             $w = FC03-Leer ([byte]$rp.esclavo) (Dir-Trama 30300) 3
+            # El nibble bajo del Product ID, que es el que zanja para que sirve.
+            # Un repetidor es una TCU por clase de equipo y esta autoalimentado
+            # por instalacion -no cuelga de ningun string-, asi que es el unico
+            # equipo de la planta donde las dos lecturas posibles del nibble dan
+            # resultados distintos: si contesta lo mismo que una TCU, el nibble
+            # es la CLASE; si contesta lo mismo que una HSU, es la ALIMENTACION.
+            $tipoRaw = ($w[0] -band 0xF)
             $fw = "v{0}.{1}.{2}" -f ((($w[1] -shr 8) -band 0xFF), ($w[1] -band 0xFF), (($w[2] -shr 8) -band 0xFF))
             try { $soc = "$((FC03-Leer ([byte]$rp.esclavo) (Dir-Trama 30013) 1)[0])" } catch { $soc = '' }
         } catch { $nota = "sin respuesta: $_" } finally { Modbus-Cerrar }
@@ -12008,10 +12015,12 @@ $btnRFLeer.Add_Click({ Lanzar {
             if ($soc -ne '' -and [int]::TryParse($soc, [ref]$ns) -and $ns -lt $SOC_MIN_OTA) { $nota += "  -  BATERIA BAJA ($ns %), no actualizar" }
         }
         $f = [pscustomobject]@{NCU="$($rp.ncu)"; Repetidor="$($rp.nombre)"; GW="$($rp.puerto)"
-                               Esclavo="$($rp.esclavo)"; FW=$fw; SoC=$soc; Estado=$estado; Nota=$nota}
+                               Esclavo="$($rp.esclavo)"; FW=$fw; SoC=$soc
+                               Tipo_raw=$tipoRaw; Tipo_alim=(Tcu-TipoAlim $tipoRaw)
+                               Estado=$estado; Nota=$nota}
         $script:UltimoFwRep += $f
         $it = New-Object System.Windows.Forms.ListViewItem("$($f.NCU)")
-        foreach ($c in @($f.Repetidor, $f.GW, $f.Esclavo, $f.FW, $f.SoC, "$($f.Estado)$(if ($f.Nota) { "  -  $($f.Nota)" })")) { [void]$it.SubItems.Add("$c") }
+        foreach ($c in @($f.Repetidor, $f.GW, $f.Esclavo, $f.FW, $f.SoC, "$($f.Tipo_raw)", "$($f.Estado)$(if ($f.Nota) { "  -  $($f.Nota)" })")) { [void]$it.SubItems.Add("$c") }
         if ($estado -eq 'al dia') { $it.ForeColor = [System.Drawing.Color]::DarkGreen }
         elseif ($estado -eq 'PENDIENTE') { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
         else { $it.ForeColor = [System.Drawing.Color]::Firebrick }
