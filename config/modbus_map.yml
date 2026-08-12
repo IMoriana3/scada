@@ -1,5 +1,11 @@
 # Mapa Modbus de la NCU — derivado de NCU_Modbus_Map_R7.xlsx
 # SOLO LECTURA. El rango 40000+ (comandos) se excluye deliberadamente.
+#
+# OJO: esto es el SUBCONJUNTO que lee el colector, no el mapa entero. El R7 trae ademas los
+# registros de identidad (0/1/50), los forzados de posicion segura (40001..40080), el bloque
+# completo de cada TCU en 50000+(id-1)*50 y las marcas de tiempo de las HSU (29320/29380/29440).
+# El mapa completo, con la descripcion de cada registro, esta publicado en la ficha:
+#   cobertura-zigbee/modbus.html  (generado del documento por tools/gen_modbus_map.mjs)
 
 tcu_compat:
   # Bloque compacto: 22 registros por TCU, contiguo para 200 TCUs.
@@ -52,7 +58,13 @@ alarm_bits:
 ncu:
   registers:
     hsu_global:   {addr: 30002, type: u16, bits: {alarm_any_wind: [1,1], wind_highest_level: [2,4], alarm_any_snow: [5,5], alarm_any_gust: [6,6], global_ws_fail: [7,7], global_ss_fail: [8,8]}}
-    digital_input: {addr: 30100, type: u16, bits: {battery_low: [0,0], ups_power_fault: [1,1], stop_button: [13,13]}}
+    # Los 10 CLEANING SWITCH (bits 3..12) faltaban: son los interruptores de limpieza por grupo, uno
+    # por cada uno de los 10 grupos del R7. El registro ya se leia, asi que esto no cambia lo que se
+    # pregunta a la NCU: solo se decodifica lo que ya venia en la misma palabra.
+    digital_input: {addr: 30100, type: u16, bits: {battery_low: [0,0], ups_power_fault: [1,1],
+      cleaning_switch_1: [3,3], cleaning_switch_2: [4,4], cleaning_switch_3: [5,5], cleaning_switch_4: [6,6],
+      cleaning_switch_5: [7,7], cleaning_switch_6: [8,8], cleaning_switch_7: [9,9], cleaning_switch_8: [10,10],
+      cleaning_switch_9: [11,11], cleaning_switch_10: [12,12], stop_button: [13,13]}}
     main_status:  {addr: 30101, type: u16, bits: {alarm_battery_low: [0,0], gw1_alarm: [4,4], gw2_alarm: [5,5]}}
     date_time:    {addr: 30104, type: u32}
 
