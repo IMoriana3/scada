@@ -106,6 +106,25 @@ la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
 una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
 sitio.
 
+**La meteo de la HSU, también como campos (v11.44)** — la fila de HSU del
+diagnóstico llevaba el viento solo dentro del texto (`viento 1,4 m/s (nivel 0),
+dir 66 deg; nieve 0 m`), y el panel de meteo del SCADA lo sacaba **parseando esa
+frase**. Una coma decimal o un cambio de redacción lo dejaba sin dato, y con
+texto no se hacen curvas. Ahora la fila lleva además cuatro campos:
+`Viento_ms`, `Dir_deg`, `Nieve_m` y `Nivel`, como números. El texto sigue igual:
+es lo que se lee en la tabla.
+
+Una HSU que no contesta va a **`null`**, no a 0: un cero en una curva de viento
+es un dato, y ahí no lo hay.
+
+Y de paso, una trampa que llevaba ahí desde siempre: **`Export-Csv` se queda con
+las columnas del primer objeto** y tira sin avisar lo que las demás filas
+traigan de más. La primera fila de un diagnóstico es una NCU o una TCU, así que
+las columnas de meteo no habrían llegado nunca al CSV. Todos los exports pasan
+ahora por un normalizador que pone en cada fila la unión de las columnas de
+todas; si ya son iguales —el caso normal— devuelve lo mismo que le dieron y no
+reconstruye 2289 objetos por gusto.
+
 **Una NCU que no comunica no son 24 TCUs caídas (v11.43)** — el resumen por NCU
 decía `NCU14: OK 0 | AVISO 0 | ALARMA 0 | OFFLINE 24`. Y eso se lee como *«las
 24 TCUs de la NCU14 han perdido la Zigbee»*, cuando lo que pasaba es que **la
