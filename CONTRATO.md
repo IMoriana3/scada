@@ -161,6 +161,38 @@ planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
 
 ## Puntos abiertos (escribir aquí lo que afecte al otro)
 
+- **[Backtracking → Toolbox] Los logs diarios que graban las NCUs ya entran al SCADA — y necesitamos
+  bajarlos sin ir a mano.** Cada NCU guarda en su disco un CSV por equipo y día, que hoy se descarga
+  **uno a uno desde el webserver de la NCU**:
+
+  | Fichero | Equipo | Cadencia medida (El Burgo, NCU2, 12-08) |
+  |---|---|---|
+  | `NCU<n>_TCU_<nnn>_<AAAAMMDD>.csv` | un seguidor | ~10 s (real 11,7 s) |
+  | `NCU<n>_HSU_<nnn>_<AAAAMMDD>.csv` | estación meteo | ~5 s |
+  | `NCU<n>_NCU_SENSORS_<AAAAMMDD>.csv` | cabezal de sensores de la NCU | ~5 s |
+  | `NCU<n>_NCU_<AAAAMMDD>.csv` | la NCU (MQTT, GW1/GW2, SAI, seta, BT) | **1 s** |
+
+  Traen **variables que por Modbus no leemos**: `motor_state/voltage/current/current_peak/pwm`,
+  `daily_motor_power_consumption`, `backtracking`, `wind_from_east`, `active_security_position`,
+  `remaining_capacity`, `hw_alarms`, `power_section_alarms`, y el estado de la NCU a 1 Hz.
+  El importador (`factiun-cartera/importar-logs.html`) los destila a la tabla `telemetria`
+  (series submuestreadas + eventos a resolución completa + resumen del día): 4,7 MB de CSV → 177 KB.
+
+  **Lo que pedimos**, porque cae de vuestro lado: una ruta en el agente (algo como
+  `GET /logs?fecha=AAAA-MM-DD[&ncus=]`) que recorra las NCUs de la topología, se baje sus CSV de ese
+  día del webserver y los deje en el PC de planta / los devuelva en un ZIP. A mano no escala: una
+  planta de 750 seguidores son 750 ficheros al día. **Nos falta el dato de partida: la URL exacta que
+  usa el webserver de la NCU para servir un log** (y si pide sesión). Con eso lo enganchamos.
+
+  Tres cosas medidas que os pueden servir ya, todas de la NCU2 de El Burgo del 12-08:
+  1. **`ps_voltage` a 48,2 V mantenidos con 1,28 A de pico** ⇒ esa TCU es **string power**. Es el
+     indicio que faltaba para resolver el punto abierto de string vs self power sin registro nuevo.
+  2. **El cabezal de sensores de la NCU2 no mide**: `wind_speed` 0,00 y `wind_direction` 0,50 clavados
+     todo el día, `irradiance` 0 y `main_battery` congelada en 18299. La HSU_230 sí mide (máx 24 km/h).
+     Ojo si en algún momento el diagnóstico toma el viento del registro de la NCU: leería calma.
+  3. **El log de la TCU pierde 61 min del día en 64 huecos (cobertura 92,8 %) y el de la NCU, a 1 Hz,
+     no pierde ni uno.** El agujero es del enlace de radio, no del registrador.
+
 - **[Toolbox → Backtracking] Seguimiento PEM · pestaña Tendencias: «Curvas a medida» se queda en una
   esquina y deja media pantalla vacía.** Lo ha visto Ignacio (12-08). En una pantalla de 2.500 px, el
   panel de *Curvas a medida* mide unos 330 px de ancho y el resto de esa banda queda en negro; la
@@ -541,3 +573,4 @@ planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
 | 2026-08-10 | Toolbox | **v11.29**: el aviso de gateways solapados compara los esclavos de verdad, no los extremos del rango — en San José varias NCUs alternan los dos gateways por bloques y salía un falso positivo. Y publicada aquí la topología completa de San José sacada del Excel de coordenadas. |
 | 2026-08-10 | Toolbox | **agente v3.1**: nueva ruta `/trabajo/diagnostico` (trocea por NCU) y campo `unidad` en el estado del trabajo. San José son 21 NCUs y ~2300 TCUs: el diagnóstico de una petición se sale del corte de ~100 s. El `/diagnostico` síncrono sigue igual. |
 | 2026-08-10 | Toolbox | Revisada la sección B contra el código de v3.0 (faltaban las rutas de trabajos, los POST de escritura y los parámetros de selección) y la tabla A (campos reales de `inventario_tcu`, `baterias_tcu` y `comisionado`). **Avisos nuevos que os afectan**: `diagnostico_tcu` puede traer `TCU` no numérico (`NCU`, `HSU<n>`, `Repetidor <n>`) y `Salud = SIN LECTURA`; el diagnóstico trae siempre la flota declarada completa (782 filas en Ayora). Respondido el punto de los 751/754 con las etiquetas TK. |
+| 2026-08-12 | Backtracking | Los CSV diarios de las NCUs entran al SCADA: importador `importar-logs.html` → tabla `telemetria` (series submuestreadas + eventos + resumen) y pestaña **Telemetría**. Ver Puntos abiertos: hace falta bajarlos del webserver de la NCU sin ir a mano. |
