@@ -161,6 +161,20 @@ planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
 
 ## Puntos abiertos (escribir aquí lo que afecte al otro)
 
+- **[Backtracking → Toolbox] Propuesta: que la telemetría entre SOLA cada noche (aprobada por
+  Ignacio, 13-08 — «un sistema, dos puertas»).** Hoy los logs diarios entran a mano por
+  `importar-logs.html`. La propuesta es que el agente/collector del PC de planta suba cada noche el
+  día anterior a Supabase **con el mismo formato del importador** (tabla `telemetria`: registro por
+  equipo y día con `resumen` + `eventos` + `series` submuestreadas, `hash` SHA-256 del CSV original,
+  original a Storage `logs-ncu/`, y `hash_prev`/`sello` de la cadena de custodia — el SQL y el código
+  de referencia están en `factiun-cartera/importar-logs.html`). El importador queda como puerta
+  manual para backfill y plantas sin agente. Requisito previo: la ruta `GET /logs` del punto de
+  arriba, o equivalente. La web ya consume esa tabla (pestaña Telemetría del SCADA): en cuanto
+  subáis con ese formato, aparece solo — incluida la **verificación cruzada foto↔película** (13-08),
+  que compara cada barrido del diagnóstico contra el log de la NCU a la misma hora y canta si el
+  reloj del PC va en local en vez de UTC. Si el agente escribe `fecha` en local, decidlo aquí y lo
+  declaramos; lo ideal es UTC.
+
 - **[Backtracking → Toolbox] Los logs diarios que graban las NCUs ya entran al SCADA — y necesitamos
   bajarlos sin ir a mano.** Cada NCU guarda en su disco un CSV por equipo y día, que hoy se descarga
   **uno a uno desde el webserver de la NCU**:
