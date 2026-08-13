@@ -195,8 +195,19 @@ planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
   **Lo que pedimos**, porque cae de vuestro lado: una ruta en el agente (algo como
   `GET /logs?fecha=AAAA-MM-DD[&ncus=]`) que recorra las NCUs de la topología, se baje sus CSV de ese
   día del webserver y los deje en el PC de planta / los devuelva en un ZIP. A mano no escala: una
-  planta de 750 seguidores son 750 ficheros al día. **Nos falta el dato de partida: la URL exacta que
-  usa el webserver de la NCU para servir un log** (y si pide sesión). Con eso lo enganchamos.
+  planta de 750 seguidores son 750 ficheros al día.
+
+  **La API del webserver ya está descubierta** (capturada por Ignacio con DevTools, 13-08, NCU05):
+  - `GET http://<ip>/private_api/csv/<AAAA-MM-DD>` → índice del día (JSON, ~1,4 kB)
+  - `GET http://<ip>/private_api/csv/<AAAA-MM-DD>/download` → **ZIP con todos los CSV del día**
+    (3,1 MB / 13,7 s medidos) — una petición por NCU y día, nada de ir fichero a fichero
+  - sesión por cookie `sunner_auth=<token>` (la emite el login ADMINISTRATOR del panel;
+    **el cURL del login está pendiente de capturar** — sin él, el token se renueva a mano)
+
+  Hay pieza de descarga ya hecha y probada (stdlib pura, corre en el PC de planta o donde sea):
+  `scada/tools/descarga_logs_ncu.py` — login pendiente aparte, hace índice + ZIP con reintentos,
+  validación del ZIP, escritura atómica, backfill por rango y log de descargas. Os la podéis llevar
+  al agente tal cual como pieza de la subida nocturna; los ZIP que deja se arrastran al importador.
 
   Tres cosas medidas que os pueden servir ya, todas de la NCU2 de El Burgo del 12-08:
   1. **`ps_voltage` a 48,2 V mantenidos con 1,28 A de pico** ⇒ esa TCU es **string power**. Es el
