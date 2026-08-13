@@ -2414,8 +2414,65 @@ Check 'resumen: sin mixtas no lo menciona' ((Aud-Resumen $fMix2 42 5 6 0).Contai
 # y la linea por TCU tiene que salir aunque la TCU ademas tenga variables mudas
 Check 'auditoria: la linea sale aunque haya mudas' ($src.Contains('y $errTcu variables sin respuesta')) $true
 Check 'auditoria: cuenta las mixtas' ($src.Contains('if ($desvTcu -gt 0) { $nMixtas++ }')) $true
-# y la linea de descolocacion tiene que decir que NO esta en la tabla
-Check 'resumen: la descolocacion se explica' ($src.Contains('NO estan en la tabla ni cuentan como desviacion')) $true
+
+Write-Host ''
+Write-Host '== el relleno de flota solo cubre lo que se ha barrido =='
+# Pedir la TCU 24 de la NCU11 devolvia una fila buena y 64 SIN LECTURA de
+# equipos por los que nadie habia preguntado. Con un filtro de salud puesto
+# encima, la tabla se quedaba en blanco y parecia que no habia hecho nada.
+$declPl = @(
+  @{NCU='11'; Tipo='NCU'; TCU='NCU'}
+  @{NCU='11'; Tipo='TCU'; TCU='24'}
+  @{NCU='11'; Tipo='TCU'; TCU='25'}
+  @{NCU='11'; Tipo='TCU'; TCU='26'}
+  @{NCU='11'; Tipo='REP'; TCU='Repetidor 1'}
+  @{NCU='11'; Tipo='HSU'; TCU='HSU1'}
+  @{NCU='12'; Tipo='TCU'; TCU='1'}
+)
+$trabUno = @(@{ncu='11'; tcus=@(24)})
+$enUno = @(Flota-EnAlcance $declPl $trabUno)
+Check 'alcance: la TCU pedida entra' (@($enUno | Where-Object { $_.Tipo -eq 'TCU' }).Count) 1
+Check 'alcance: y es la que se pidio' (@($enUno | Where-Object { $_.Tipo -eq 'TCU' })[0].TCU) '24'
+# HSUs y repetidores se leen por NCU entera, no por rango de TCU: si la NCU
+# estaba en el barrido, ellos tambien estaban
+Check 'alcance: el repetidor de esa NCU si' (@($enUno | Where-Object { $_.Tipo -eq 'REP' }).Count) 1
+Check 'alcance: la HSU de esa NCU tambien' (@($enUno | Where-Object { $_.Tipo -eq 'HSU' }).Count) 1
+Check 'alcance: y la propia NCU' (@($enUno | Where-Object { $_.Tipo -eq 'NCU' }).Count) 1
+# nada de otra NCU que no se ha tocado
+Check 'alcance: nada de NCUs no barridas' (@($enUno | Where-Object { $_.NCU -eq '12' }).Count) 0
+# un barrido de la NCU entera si completa todas sus TCUs
+$enTodo = @(Flota-EnAlcance $declPl @(@{ncu='11'; tcus=@(24,25,26)}))
+Check 'alcance: la NCU entera completa las tres' (@($enTodo | Where-Object { $_.Tipo -eq 'TCU' }).Count) 3
+# y la planta entera, todo
+$enPlanta = @(Flota-EnAlcance $declPl @(@{ncu='11'; tcus=@(24,25,26)}, @{ncu='12'; tcus=@(1)}))
+Check 'alcance: la planta entera, todo' $enPlanta.Count 7
+Check 'alcance: sin trabajos, nada' (@(Flota-EnAlcance $declPl @()).Count) 0
+Check 'alcance: el diagnostico lo usa' ($src.Contains('$decl = @(Flota-EnAlcance (Flota-Declarada $cx) $trabajos)')) $true
+
+Write-Host ''
+Write-Host '== la auditoria compara valores, no bits =='
+# Comparar-Escritura compara los 16 bits crudos de cada palabra uno a uno. En
+# los registros f32deg la TCU guarda RADIANES en coma flotante, y hay cientos
+# de patrones de bits que se imprimen todos como el mismo valor en grados: 55
+# son 0,9599310885968813 rad, y a 3 decimales de grado eso son ~293 float32
+# distintos. Cualquier valor que no hubieramos escrito nosotros difiere en los
+# ultimos bits de la mantisa, la comparacion cruda falla y la decodificada
+# acierta. Eso NO es una respuesta descolocada -esa daria un valor distinto, no
+# el mismo-: es redondeo.
+Check 'aud: la auditoria lee decodificado' ($src.Contains('$cmp = @{leido = (Leer-Decodificado $tcu $VARIABLES[$refv.nombre])}')) $true
+Check 'aud: y compara con tolerancia' ($src.Contains('} elseif (Aud-Igual $refv.texto $cmp.leido) {')) $true
+Check 'aud: se acabo el aviso de descolocacion' ($src.Contains('descolocacion, no desviacion')) $false
+Check 'aud: y su contador' ($src.Contains('$nFalsas')) $false
+# sin la doble lectura: era una lectura Modbus de mas por variable y por TCU
+Check 'aud: sin releer para desmentirse' ($src.Contains('try { $leidoDec = Leer-Decodificado $tcu $VARIABLES[$refv.nombre] } catch { $leidoDec = "raw')) $false
+# la comparacion exacta se queda donde tiene sentido: verificar una escritura,
+# que ahi los bits los hemos puesto nosotros
+Check 'aud: Comparar-Escritura sigue existiendo' ($src.Contains('function Comparar-Escritura')) $true
+Check 'aud: y la usa la verificacion de escritura' ($src.Contains('$cmp = Comparar-Escritura $cx.unitHsu $t.esc')) $true
+# la tolerancia de Aud-Igual es la que decide: dos textos que representan el
+# mismo numero son iguales aunque no se escriban igual
+Check 'aud: 55 y 55,000 son lo mismo' (Aud-Igual '55' '55.000') $true
+Check 'aud: 55 y 54,9 no' (Aud-Igual '55' '54.9') $false
 
 Write-Host ''
 Write-Host '== de la auditoria a escribir =='

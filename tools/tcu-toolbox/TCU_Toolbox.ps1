@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.47'
+$VERSION_TOOLBOX = '11.48'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1008,6 +1008,32 @@ function Diag-FilaNcu([string]$ncu, $ns, [string]$err) {
                   else { "NCU sin respuesta en ${PUERTO_NCU}: $err" })
         main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
     }
+}
+
+# Lo declarado que ENTRABA en este barrido. Si pides una TCU suelta, lo demas de
+# la planta no es "declarado y no leido": es que no lo has pedido. Preguntar por
+# la TCU 24 de la NCU11 devolvia una fila buena y 64 SIN LECTURA de equipos por
+# los que nadie habia preguntado, y con un filtro de salud puesto encima la
+# tabla se quedaba en blanco y parecia que el diagnostico no habia hecho nada.
+#
+# Las HSUs y los repetidores se leen por NCU entera, no por rango de TCU: si la
+# NCU estaba en el barrido, ellos tambien estaban, aunque solo pidieras una TCU.
+# Pura: se prueba sin planta.
+function Flota-EnAlcance($declarada, $trabajos) {
+    $ncus = @{}; $tcus = @{}
+    foreach ($t in @($trabajos)) {
+        $k = "$($t.ncu)"
+        $ncus[$k] = $true
+        foreach ($n in @(Lista $t.tcus)) { $tcus["$k|$n"] = $true }
+    }
+    $r = @()
+    foreach ($d in @($declarada)) {
+        $k = "$($d.NCU)"
+        if (-not $ncus.ContainsKey($k)) { continue }
+        if ("$($d.Tipo)" -ne 'TCU') { $r += ,$d; continue }
+        if ($tcus.ContainsKey("$k|$($d.TCU)")) { $r += ,$d }
+    }
+    return $r
 }
 
 function Diag-Completar($filas, $declarada) {
@@ -7693,7 +7719,8 @@ function Diag-Correr {
     # la plataforma se quedaban con lo leido: en Ayora faltaba la HSU de la
     # NCU16, que no ha comunicado nunca, y desaparecer no es informacion.
     try {
-        $decl = @(Flota-Declarada $cx)
+        # solo lo que entraba en ESTE barrido: ver Flota-EnAlcance
+        $decl = @(Flota-EnAlcance (Flota-Declarada $cx) $trabajos)
         if ($decl.Count -gt 0) {
             $antes = @($script:UltimoDiag).Count
             $script:UltimoDiag = @(Diag-Completar $script:UltimoDiag $decl)
@@ -8960,7 +8987,7 @@ $btnAud.Add_Click({ Lanzar {
     } else {
         Con "Auditoria de $(Eti-Rango @($trabajos).tcus) contra '$($script:PresetRefNombre)' ($($script:PresetRef.Count) variables)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     }
-    $nOk = 0; $nTcusOk = 0; $nDesv = 0; $nErr = 0; $nFalsas = 0; $nCache = 0; $nMixtas = 0
+    $nOk = 0; $nTcusOk = 0; $nDesv = 0; $nErr = 0; $nCache = 0; $nMixtas = 0
     $nAudTot = 0; foreach ($tr in $trabajos) { $nAudTot += @($tr.tcus).Count }
     Prog-Iniciar ($nAudTot * @($script:PresetRef).Count)
     # Lo ya leido en esta sesion no se vuelve a pedir: antes, venir de un
@@ -9003,9 +9030,24 @@ $btnAud.Add_Click({ Lanzar {
                     $lvA.Items.Add($itemC) | Out-Null
                     continue
                 }
+                # 2) leer el valor DECODIFICADO y compararlo con el del preset.
+                # Antes esto se hacia con Comparar-Escritura, que compara los 16
+                # bits crudos de cada palabra uno a uno, y al fallar se releia
+                # decodificado y se llamaba "respuesta descolocada". No lo era:
+                # una respuesta descolocada da un valor DISTINTO, no el mismo.
+                # Lo que pasaba es que en los registros f32deg la TCU guarda
+                # radianes en coma flotante, y hay 293 patrones de bits que se
+                # imprimen todos como "55" al pasar a grados. Cualquier valor
+                # que no hubieramos escrito nosotros -el de fabrica, el del
+                # instalador- difiere en los ultimos bits de la mantisa: la
+                # comparacion cruda fallaba, la decodificada acertaba, y el log
+                # se llenaba de un aviso que no significaba nada y enterraba a
+                # los que si. Ademas costaba una lectura de mas por variable.
+                # La comparacion exacta se queda donde tiene sentido: verificar
+                # una escritura, que ahi los bits los hemos puesto nosotros.
                 if ($segOk) {
                     for ($i = 1; $i -le $tr.cx.reint -and $null -eq $cmp; $i++) {
-                        try { $cmp = Comparar-Escritura $tcu $refv.esc }
+                        try { $cmp = @{leido = (Leer-Decodificado $tcu $VARIABLES[$refv.nombre])} }
                         catch {
                             if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
                             Start-Sleep -Milliseconds 150
@@ -9019,20 +9061,10 @@ $btnAud.Add_Click({ Lanzar {
                     [void]$item.SubItems.Add("$tcu"); [void]$item.SubItems.Add($refv.nombre); [void]$item.SubItems.Add($refv.texto); [void]$item.SubItems.Add('-'); [void]$item.SubItems.Add('sin respuesta')
                     $item.ForeColor = [System.Drawing.Color]::Gray
                     $lvA.Items.Add($item) | Out-Null
-                } elseif (-not $cmp.ok) {
-                    $leidoDec = ''
-                    try { $leidoDec = Leer-Decodificado $tcu $VARIABLES[$refv.nombre] } catch { $leidoDec = "raw $($cmp.leidoRaw)" }
-                    # La comparacion cruda puede fallar por una respuesta
-                    # descolocada. Si al releer el valor coincide con el preset,
-                    # no habia desviacion: la mala era la primera lectura. Sin
-                    # esto salian filas absurdas de "esperado -10, leido -10,
-                    # DESVIACION", que es como se descubrio.
-                    if (Aud-Igual $refv.texto $leidoDec) {
-                        $nFalsas++
-                        Con ((Eti-Tcu $tcu) + "  $($refv.nombre): la primera lectura no cuadraba pero al releer da $leidoDec, que es el valor del preset: descolocacion, no desviacion") ([System.Drawing.Color]::Orange)
-                        $nOk++
-                        continue
-                    }
+                } elseif (Aud-Igual $refv.texto $cmp.leido) {
+                    $nOk++
+                } else {
+                    $leidoDec = "$($cmp.leido)"
                     $desvTcu++
                     # no solo distinto del preset: ademas puede ser imposible
                     $sosp = Rango-Sospechoso $refv.nombre $leidoDec
@@ -9070,7 +9102,6 @@ $btnAud.Add_Click({ Lanzar {
     Cierre-Guardar (Nombre-Planta); Cierre-Pintar
     Con (Aud-Resumen $script:UltimaAud $nTcusOk $nDesv $nErr $nMixtas) ([System.Drawing.Color]::SteelBlue)
     if ($nCache -gt 0) { Con "  $nCache valores salieron de la ultima lectura, sin volver a preguntar a la planta." ([System.Drawing.Color]::Gainsboro) }
-    if ($nFalsas -gt 0) { Con "  $nFalsas comparaciones fallaron y al releer daban el valor bueno: eran respuestas descolocadas de la NCU, no desviaciones. NO estan en la tabla ni cuentan como desviacion: la TCU que sale arriba en esas lineas quedo conforme." ([System.Drawing.Color]::Orange) }
     $btnAudEscr.Enabled = (@(Aud-ConDesviacion $script:UltimaAud).Count -gt 0)
     if ($script:UltimaAud.Count -eq 0) {
         Con 'Toda la flota coincide con el preset de referencia.' ([System.Drawing.Color]::LightGreen)

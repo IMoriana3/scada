@@ -106,6 +106,44 @@ la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
 una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
 sitio.
 
+**La auditoría compara valores, no bits (v11.48)** — al auditar salía esto, y
+con razón no inspiraba confianza:
+
+```
+NCU15 TCU 39  41111 max_tilt_west_r1 [deg]: la primera lectura no cuadraba
+pero al releer da 55, que es el valor del preset: descolocacion, no desviacion
+```
+
+**No había ninguna descolocación.** La comparación se hacía con
+`Comparar-Escritura`, que compara los 16 bits crudos de cada palabra uno a uno.
+En los registros `f32deg` la TCU guarda **radianes en coma flotante**: 55° son
+0,9599310885968813 rad, y a 3 decimales de grado hay **~293 patrones de bits
+distintos que se imprimen todos como `55`**. Cualquier valor que no hubiéramos
+escrito nosotros —el de fábrica, el del instalador— difiere en los últimos bits
+de la mantisa: la comparación cruda falla y la decodificada acierta.
+
+Que los dos lados se impriman igual es la firma del **redondeo**, no la de una
+trama mal alineada — una respuesta descolocada daría un valor *distinto*, no el
+mismo. El apaño funcionaba por casualidad, y el precio era una lectura Modbus de
+más por variable y por TCU, más un aviso naranja que no significaba nada y que
+enterraba a los que sí.
+
+Ahora la auditoría lee el valor decodificado y lo compara con tolerancia, que es
+lo que ya hacía en la segunda pasada. Mismos veredictos, la mitad de lecturas en
+las variables afectadas, y se acabó el mensaje. La comparación exacta se queda
+donde tiene sentido: **verificar una escritura**, que ahí los bits los hemos
+puesto nosotros.
+
+**El relleno de flota solo cubre lo barrido (v11.48)** — pedir el diagnóstico de
+la TCU 24 de la NCU11 devolvía una fila buena y **64 filas SIN LECTURA** de
+equipos por los que nadie había preguntado. Con un filtro de salud puesto
+encima, la tabla se quedaba en blanco y parecía que el diagnóstico no había
+hecho nada.
+
+Lo declarado y no leído solo se completa si **entraba en ese barrido**: las TCUs
+que pediste, más las HSUs y repetidores de las NCUs recorridas (esos se leen por
+NCU entera, no por rango de TCU, así que si la NCU estaba, ellos estaban).
+
 **Una fila por equipo, y las ventanas aparte (v11.47)** — el plan de firmware
 metía tres cosas en la misma tabla: la **ventana** del updater que hay que
 abrir, los **rangos** que se le pegan dentro y las **TCUs pendientes** una a
