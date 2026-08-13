@@ -94,6 +94,12 @@ def descarga_dia(ip, ncu, fecha, cookie, destino, log):
                 log("FALLO %s: sesión rechazada (%s) — la cookie sunner_auth ha caducado; "
                     "renueva con --cookie (login automático pendiente de capturar)" % (etiqueta, e.code))
                 return False                     # sin sesión no hay reintento que valga
+            if e.code == 404:
+                # la retención de la NCU tiene huecos (visto en el panel: días que ya no
+                # están); un 404 en backfill es "ese día ya no existe", no un error a reintentar
+                log("NO ESTÁ %s: la NCU ya no guarda ese día (404) — lo que no se baja a tiempo, se pierde"
+                    % etiqueta)
+                return False
             log("intento %d/3 %s: HTTP %s" % (intento, etiqueta, e.code))
         except Exception as e:
             log("intento %d/3 %s: %s" % (intento, etiqueta, e))
