@@ -76,6 +76,23 @@ El estado de comunicaciones lo da la propia NCU mediante el registro `lastComm` 
 
 El resto de controles del plano (pan/zoom, asignación, regla, mesas a tamaño real, exportaciones) siguen funcionando igual. No requiere build; es un único fichero HTML autocontenido.
 
+#### Plantas
+
+Las **siete** plantas con layout: El Burgo I 23003, Ayora 24025, San José 24019, Páramo 25019, Fayón 24007, Bagnarelli 24030 y Túnez 24021. Se abren con su botón o directamente con `?planta=burgo|ayora|sanjose|paramo|fayon|bagnarelli|tunez` (mismo parámetro que el siting, la Cobertura y el Layout 2D).
+
+Los datos de planta **no se editan aquí**. El origen es el layout del DWG, en `cobertura-zigbee/<planta>_layout.json`:
+
+```
+layout del DWG ──gen_siting.mjs──> Siting/index.html ──sync_plantas.mjs──> SCADA/index.html
+```
+
+- `node tools/sync_plantas.mjs` — dice qué difiere respecto al siting; con `--write`, lo iguala.
+- `node tools/test_plantas.mjs` — abre las dos apps en un navegador headless y exige que las siete plantas carguen con las mismas cifras (motores, NCU, HSU, repetidores, bloques, cotas de mesa y giro). Necesita `playwright-core`.
+
+Cuando cambie un layout, `Siting/tools/gen_siting.mjs <planta> --write --destino=ambos` escribe en las dos a la vez.
+
+La librería de Excel (SheetJS) va en `lib/`, no en un CDN: esto se abre en la LAN de una planta, que normalmente no tiene salida a internet.
+
 ### Puesta en marcha
 
 **Prueba sin hardware (recomendado para empezar):**
@@ -168,6 +185,9 @@ Backend Docker (`tracker-scada.tar.gz`) + frontend de un solo fichero (`index.ht
 | `api/main.py` | API FastAPI: `/live`, `/history/{ncu}/{tcu}`, `/meteo` |
 | `api/Dockerfile`, `requirements.txt` | Imagen de la API |
 | `index.html` | Frontend: herramienta de siting + capa SCADA (botón "SCADA") |
+| `lib/xlsx.full.min.js` | SheetJS local (sin CDN: la LAN de planta no tiene internet) |
+| `tools/sync_plantas.mjs` | Trae al SCADA las plantas del siting (mismo plano, mismos datos) |
+| `tools/test_plantas.mjs` | Banco: las 7 plantas cargan y cargan igual que en el siting |
 
 ### API REST
 
