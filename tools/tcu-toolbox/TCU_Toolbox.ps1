@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.46'
+$VERSION_TOOLBOX = '11.47'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -3853,26 +3853,37 @@ $tabFW.Controls.Add($btnFwCsv)
 $lblFw = LG $tabFW 'Haz primero un Inventario (pestana Flota) y luego el plan.' 590 318 56
 $lblFw.ForeColor = [System.Drawing.Color]::Gray
 
-$lblFwNota = LG $tabFW 'El plan sale por VENTANAS del updater (una por NCU + gateway, y se abren a la vez): cada una dice que rangos pegarle y cuanto tarda, y al final el total. PREPARAR comprueba viento, comunicacion y alarmas, y hace backup antes de actualizar/capturar una TCU.' 10 898 82
+$lblFwNota = LG $tabFW 'Arriba, las VENTANAS del updater: una por NCU + gateway, y se abren a la vez. Abajo, un equipo por fila. PREPARAR comprueba viento, comunicacion y alarmas, y hace backup antes de tocar una TCU.' 10 898 82
 $lblFwNota.ForeColor = [System.Drawing.Color]::Gray
 
+# Dos tablas, no una. Antes esta llevaba tres cosas mezcladas -la ventana que
+# hay que abrir, los rangos que se le pegan dentro y las TCUs pendientes una a
+# una-, y una ventana de una sola TCU salia dos veces: la fila de la ventana y
+# la de la TCU, iguales columna a columna. Se metio una columna 'Fila' para
+# distinguirlas, que es tapar el problema: lo que hacia falta era separar el
+# QUE HAY QUE HACER (arriba) de QUE EQUIPOS ESTAN PENDIENTES (abajo).
 $lvFW = New-Object System.Windows.Forms.ListView
 $lvFW.Location = New-Object System.Drawing.Point(10, 104)
-$lvFW.Size = New-Object System.Drawing.Size(898, 256)
+$lvFW.Size = New-Object System.Drawing.Size(898, 112)
 $lvFW.View = 'Details'; $lvFW.FullRowSelect = $true; $lvFW.GridLines = $true
-[void]$lvFW.Columns.Add('NCU', 50)
-# La tabla lleva tres cosas a la vez: la VENTANA del updater que hay que abrir,
-# los rangos que se le PEGAN dentro y las TCUs pendientes una a una. Sin esta
-# columna, una ventana de una sola TCU salia identica columna a columna a la
-# fila de esa TCU y parecia la misma repetida.
-[void]$lvFW.Columns.Add('Fila', 88)
-[void]$lvFW.Columns.Add('IP', 110)
-[void]$lvFW.Columns.Add('Gateway', 70)
-[void]$lvFW.Columns.Add('Desde', 60)
-[void]$lvFW.Columns.Add('Hasta', 60)
-[void]$lvFW.Columns.Add('TCUs', 55)
-[void]$lvFW.Columns.Add('Estado / nota', 400)
+foreach ($c in @(@('Ventana',62), @('NCU',50), @('IP',110), @('GW',55), @('Add from...to',250),
+                 @('TCUs',55), @('Tiempo',80), @('Nota',225))) {
+    [void]$lvFW.Columns.Add($c[0], $c[1])
+}
 $tabFW.Controls.Add($lvFW)
+
+$lblFwDet = LG $tabFW 'Equipos pendientes, uno por fila:' 10 898 222
+$lblFwDet.ForeColor = [System.Drawing.Color]::Gray
+
+$lvFWd = New-Object System.Windows.Forms.ListView
+$lvFWd.Location = New-Object System.Drawing.Point(10, 244)
+$lvFWd.Size = New-Object System.Drawing.Size(898, 116)
+$lvFWd.View = 'Details'; $lvFWd.FullRowSelect = $true; $lvFWd.GridLines = $true
+foreach ($c in @(@('NCU',50), @('TCU',55), @('GW',55), @('Ventana',62), @('FW actual',110),
+                 @('Objetivo',95), @('SoC',55), @('Estado / nota',395))) {
+    [void]$lvFWd.Columns.Add($c[0], $c[1])
+}
+$tabFW.Controls.Add($lvFWd)
 
 # ============================ TAB CIERRE ============================
 # Una TCU actualizada no esta terminada. Aqui se ve que le falta y desde aqui se
@@ -4460,7 +4471,11 @@ $lvFH = New-Object System.Windows.Forms.ListView
 $lvFH.Location = New-Object System.Drawing.Point(10, 56)
 $lvFH.Size = New-Object System.Drawing.Size(898, 288)
 $lvFH.View = 'Details'; $lvFH.FullRowSelect = $true; $lvFH.GridLines = $true
-foreach ($c in @(@('Campo',260), @('Valor',160), @('Nota',460))) { [void]$lvFH.Columns.Add($c[0], $c[1]) }
+# Una fila por estacion, no una por campo leido. Con "(todas)" en el desplegable
+# la tabla de Campo/Valor sacaba una cabecera y un dato por cada HSU: veinte
+# filas para diez estaciones, y para comparar versiones hay que ir saltando.
+foreach ($c in @(@('HSU',210), @('IP',110), @('GW',55), @('Esclavo',65),
+                 @('SoftwareId',90), @('Estado / nota',350))) { [void]$lvFH.Columns.Add($c[0], $c[1]) }
 $tabFH.Controls.Add($lvFH)
 $lblFHNota = LG $tabFH 'INSTALAR no sube ningun binario: ordena a la estacion instalar el firmware que ya tiene cargado, y la reinicia. Va de una en una, con el esclavo escrito a mano, y comprueba antes que no haya viento. Nunca se ha probado en campo.' 10 890 350
 $lblFHNota.ForeColor = [System.Drawing.Color]::Gray
@@ -9626,7 +9641,7 @@ $btnFwPlan.Add_Click({ Lanzar {
     $plan = Plan-Firmware $script:UltimoInv $txtFwObj.Text $gws $script:UltimoDiag
     $script:PlanFw = @($plan.tramos)
     $script:PlanFwDetalle = @($plan.detalle)
-    $lvFW.Items.Clear()
+    $lvFW.Items.Clear(); $lvFWd.Items.Clear()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "PLAN DE FIRMWARE hacia $($txtFwObj.Text.Trim()): $($plan.pendientes) TCUs pendientes, $($plan.al_dia) ya al dia, $(@($plan.sin_respuesta).Count) sin respuesta en el inventario" ([System.Drawing.Color]::SteelBlue)
     # El plan sale por VENTANAS del updater (una por NCU+gateway, y se abren a la
@@ -9658,47 +9673,40 @@ $btnFwPlan.Add_Click({ Lanzar {
         $detPorV[$kk] += ,$d
         if ($d.SoC_bajo) { $bajasV[$kk] = 1 + [int]$bajasV[$kk] }
     }
+    # Arriba: QUE HAY QUE HACER. Una fila por ventana del updater y nada mas.
     foreach ($v in $ventanas) {
         $k = "$($v.NCU)|$($v.Puerto)"
         $colaB = $(if ([int]$bajasV[$k] -gt 0) { "  -  $($bajasV[$k]) con bateria baja" } else { '' })
-        $marca = $(if ($ventanas.Count -gt 1 -and $v.Orden -eq 1) { ' Es la mas larga: es la que marca el total, arrancala primero.' } else { '' })
-        # Desde-Hasta solo si la ventana es UN tramo seguido. Con huecos, poner
-        # el primero y el ultimo dibuja un rango que no existe: en la NCU10 con
-        # 10-16 y 18-22 salia "de 10 a 22", la TCU 17 parecia estar dentro y
-        # abajo no tenia fila porque no esta pendiente. Y ademas el 12 de la
-        # columna TCUs no cuadraba con las 13 que van del 10 al 22. Los rangos
-        # de verdad van en las filas PEGAR, que con mas de un tramo si salen.
-        $unTramo = (@($v.Tramos).Count -eq 1)
-        $item = New-Object System.Windows.Forms.ListViewItem("$($v.NCU)")
-        foreach ($c in @('VENTANA', $v.IP, $v.Puerto,
-                         $(if ($unTramo) { $v.Tramos[0].Desde } else { '(varios)' }),
-                         $(if ($unTramo) { $v.Tramos[-1].Hasta } else { '(varios)' }), $v.TCUs,
-                         ("Ventana $($v.Orden) de $($ventanas.Count): abrela con esta IP y este puerto. Add from...to: $($v.Rangos). $($v.TCUs) TCUs, ~$(Horas-Texto ([double]$v.Horas)).$marca$colaB$(if (@($mudasPorNcu["$($v.NCU)"]).Count -gt 0 -and $mudasPorNcu.ContainsKey("$($v.NCU)")) { "  -  $(@($mudasPorNcu[""$($v.NCU)""]).Count) sin respuesta, debajo" } else { '' })"))) { [void]$item.SubItems.Add("$c") }
+        $marca = $(if ($ventanas.Count -gt 1 -and $v.Orden -eq 1) { ' Es la mas larga: marca el total, arrancala primero.' } else { '' })
+        $mudasN = @($mudasPorNcu["$($v.NCU)"]).Count
+        $colaM = $(if ($mudasN -gt 0) { "  -  $mudasN sin respuesta, abajo" } else { '' })
+        $item = New-Object System.Windows.Forms.ListViewItem("$($v.Orden) de $($ventanas.Count)")
+        # Los rangos van enteros en su columna, tal como se pegan en el updater.
+        # Antes se intentaba resumirlos en Desde/Hasta y con huecos dibujaba un
+        # rango que no existe: en la NCU10 con 10-16 y 18-22 salia "de 10 a 22",
+        # la TCU 17 parecia estar dentro, y el 12 de la columna TCUs no cuadraba
+        # con las 13 que van del 10 al 22.
+        foreach ($c in @($v.NCU, $v.IP, $v.Puerto, $v.Rangos, $v.TCUs, (Horas-Texto ([double]$v.Horas)),
+                         "abrela con esta IP y este puerto.$marca$colaB$colaM")) { [void]$item.SubItems.Add("$c") }
         $item.ForeColor = [System.Drawing.Color]::DarkOrange
         $lvFW.Items.Add($item) | Out-Null
-        # los rangos, uno por fila, solo cuando hay mas de uno: con uno solo la
-        # fila de la ventana ya lleva ese Desde-Hasta y seria repetirla
-        if (@($v.Tramos).Count -gt 1) {
-            foreach ($t in $v.Tramos) {
-                $itemT = New-Object System.Windows.Forms.ListViewItem("$($v.NCU)")
-                foreach ($c in @('PEGAR', $v.IP, $v.Puerto, $t.Desde, $t.Hasta, $t.TCUs, "en la ventana $($v.Orden): Add from $($t.Desde) to $($t.Hasta)")) { [void]$itemT.SubItems.Add("$c") }
-                $itemT.ForeColor = [System.Drawing.Color]::SaddleBrown
-                $lvFW.Items.Add($itemT) | Out-Null
-            }
-        }
-        # y debajo, los equipos de esa ventana: que version tienen y con que SoC
+    }
+    # Abajo: QUE EQUIPOS ESTAN PENDIENTES. Una fila por TCU, ni una mas.
+    foreach ($v in $ventanas) {
+        $k = "$($v.NCU)|$($v.Puerto)"
         foreach ($d in @($detPorV[$k] | Sort-Object { [int]$_.TCU })) {
-            $eSoc = $(if ("$($d.SoC)" -ne '') { ", SoC $($d.SoC) %" } else { ', SoC desconocido' })
-            $aviso = $(if ($d.SoC_bajo) { " - BATERIA BAJA: por debajo del $SOC_MIN_OTA % el bootloader puede no instalarlo" } else { '' })
+            $aviso = $(if ($d.SoC_bajo) { "BATERIA BAJA: por debajo del $SOC_MIN_OTA % el bootloader puede no instalarlo" } else { 'pendiente' })
             $itemD = New-Object System.Windows.Forms.ListViewItem("$($d.NCU)")
-            foreach ($c in @('TCU', $ips["$($d.NCU)"], $d.Puerto, $d.TCU, $d.TCU, 1, "pendiente: tiene $($d.FW), objetivo $($d.Objetivo)$eSoc$aviso")) { [void]$itemD.SubItems.Add("$c") }
+            foreach ($c in @($d.TCU, $d.Puerto, $v.Orden, $d.FW, $d.Objetivo,
+                             $(if ("$($d.SoC)" -ne '') { "$($d.SoC) %" } else { '?' }), $aviso)) { [void]$itemD.SubItems.Add("$c") }
             $itemD.ForeColor = $(if ($d.SoC_bajo) { [System.Drawing.Color]::Firebrick } else { [System.Drawing.Color]::DarkOrange })
-            $lvFW.Items.Add($itemD) | Out-Null
+            $lvFWd.Items.Add($itemD) | Out-Null
         }
-        # y las mudas de ESA NCU, aqui mismo
+        # las mudas de ESA NCU, detras de sus pendientes: una TCU reiniciandose
+        # con el FW nuevo sale muda, y buscarla al final de la lista es no verla
         if ($mudasPorNcu.ContainsKey("$($v.NCU)") -and -not $mudasPuestas.ContainsKey("$($v.NCU)")) {
             $mudasPuestas["$($v.NCU)"] = 1
-            foreach ($m in @($mudasPorNcu["$($v.NCU)"])) { $lvFW.Items.Add((Fw-FilaMuda $m $ips)) | Out-Null }
+            foreach ($m in @($mudasPorNcu["$($v.NCU)"])) { $lvFWd.Items.Add((Fw-FilaMuda $m $v.Orden)) | Out-Null }
         }
     }
     foreach ($linea in @(Plan-Texto $ventanas $minTcu)) {
@@ -9726,44 +9734,40 @@ $btnFwPlan.Add_Click({ Lanzar {
     # las de NCUs que no tienen ninguna ventana (todo lo suyo al dia, o mudo)
     foreach ($k in @($mudasPorNcu.Keys | Sort-Object { [int]("0" + "$_") })) {
         if ($mudasPuestas.ContainsKey($k)) { continue }
-        foreach ($m in @($mudasPorNcu[$k])) { $lvFW.Items.Add((Fw-FilaMuda $m $ips)) | Out-Null }
+        foreach ($m in @($mudasPorNcu[$k])) { $lvFWd.Items.Add((Fw-FilaMuda $m '')) | Out-Null }
     }
     $lblFw.Text = $(if ($ventanas.Count -gt 0) { "$($ventanas.Count) ventana(s) | " } else { '' }) +
                   "$($plan.pendientes) pendientes | $($plan.al_dia) al dia | $(@($plan.sin_respuesta).Count) sin respuesta"
     if ($script:PlanFw.Count -eq 0 -and $plan.al_dia -gt 0) { Con "Toda la flota inventariada ya esta en $($txtFwObj.Text.Trim())." ([System.Drawing.Color]::LightGreen) }
     else { Con 'Abre una ventana del TCU Updater por cada VENTANA del plan (NCU IP + Gateway port + Add from...to) y al terminar pulsa VERIFICAR TRAS ACTUALIZAR.' ([System.Drawing.Color]::Gainsboro) }
-    $btnFwCsv.Enabled = ($lvFW.Items.Count -gt 0)
+    $btnFwCsv.Enabled = (($lvFW.Items.Count + $lvFWd.Items.Count) -gt 0)
     $btnFwVerif.Enabled = ($script:PlanFw.Count -gt 0)
 } })
 
 # Una TCU que no contesto al inventario. No se puede actualizar lo que no
 # comunica, pero tiene que verse -y al lado de su NCU-.
-function Fw-FilaMuda($m, $ips) {
+function Fw-FilaMuda($m, $ventana) {
     $item = New-Object System.Windows.Forms.ListViewItem("$($m.ncu)")
-    foreach ($c in @('SIN RESPUESTA', $ips["$($m.ncu)"], '-', $m.tcu, $m.tcu, 1, "sin respuesta en el inventario: $($m.nota)")) { [void]$item.SubItems.Add("$c") }
+    foreach ($c in @($m.tcu, '-', "$ventana", '', '', '?', "sin respuesta en el inventario: $($m.nota)")) { [void]$item.SubItems.Add("$c") }
     $item.ForeColor = [System.Drawing.Color]::Gray
     return $item
 }
 
-# Repinta en la tabla del plan la fila (o filas) de una TCU concreta. Hay que
+# Repinta la fila de una TCU concreta en la tabla de equipos pendientes. Hay que
 # tocar tambien las guardadas por el filtro de columnas: si el usuario tiene una
 # columna filtrada, las que no se ven viven solo ahi.
+# Ya no hace falta distinguir tipos de fila ni mirar Desde/Hasta: en esta tabla
+# cada fila ES un equipo, asi que basta con NCU + TCU.
 function Fw-Marcar([string]$ncu, [int]$tcu, [string]$nota, $color) {
-    $listas = @(,@($lvFW.Items))
-    if ($lvFW.Tag -is [hashtable] -and @($lvFW.Tag.orig).Count -gt 0) { $listas += ,@($lvFW.Tag.orig) }
+    $listas = @(,@($lvFWd.Items))
+    if ($lvFWd.Tag -is [hashtable] -and @($lvFWd.Tag.orig).Count -gt 0) { $listas += ,@($lvFWd.Tag.orig) }
     foreach ($lista in $listas) {
         foreach ($it in $lista) {
             if ("$($it.Text)" -ne "$ncu") { continue }
             if ($it.SubItems.Count -lt 8) { continue }
-            # solo las filas de TCU: la del carril habla de todo el tramo, y con
-            # un carril de una sola TCU se le borraba el reparto de horas
-            if ("$($it.SubItems[1].Text)" -ne 'TCU') { continue }
-            $de = 0; $a = 0
-            if (-not [int]::TryParse("$($it.SubItems[4].Text)", [ref]$de)) { continue }
-            if (-not [int]::TryParse("$($it.SubItems[5].Text)", [ref]$a)) { continue }
-            # solo las filas que son exactamente esa TCU: en un tramo de varias
-            # no se puede decir cual de ellas se ha actualizado
-            if ($de -ne $tcu -or $a -ne $tcu) { continue }
+            $n = 0
+            if (-not [int]::TryParse("$($it.SubItems[1].Text)", [ref]$n)) { continue }
+            if ($n -ne $tcu) { continue }
             $it.SubItems[7].Text = $nota
             $it.ForeColor = $color
         }
@@ -11843,11 +11847,21 @@ $btnFHLeer.Add_Click({ Lanzar {
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Leyendo la version de $($objs.Count) HSU(s) (SoftwareId, 30000 bits 15..8)." ([System.Drawing.Color]::SteelBlue)
     $r = Hsu-Recorrer $objs (Params-Conexion) { param($u) Hsu-LeerFw $u } $null
+    # una fila por estacion: la que no contesta tambien tiene la suya, con su
+    # motivo. Desaparecer no es informacion.
+    $leidas = @{}
+    foreach ($o in @($r.oks)) { $leidas["$($o.obj.ip)|$($o.obj.unit)"] = $o }
     $lvFH.Items.Clear()
-    foreach ($f in $r.filas) {
-        $it = New-Object System.Windows.Forms.ListViewItem("$($f.Campo)")
-        [void]$it.SubItems.Add("$($f.Valor)"); [void]$it.SubItems.Add("$($f.Nota)")
-        if ("$($f.Nota)" -match 'ALARMA') { $it.ForeColor = [System.Drawing.Color]::Firebrick }
+    foreach ($o in $objs) {
+        $k = "$($o.ip)|$($o.unit)"
+        $ok = $leidas[$k]
+        $pt = Hsu-PuertoRecordado "$($o.ip)" ([int]$o.unit)
+        if (-not $pt) { $pt = $o.puerto }
+        $it = New-Object System.Windows.Forms.ListViewItem("$($o.etiqueta)")
+        foreach ($c in @("$($o.ip)", "$pt", "$($o.unit)",
+                         $(if ($ok) { "$($ok.datos.sw)" } else { '-' }),
+                         $(if ($ok) { "registro completo 0x{0:X4}" -f $ok.datos.raw } else { 'sin respuesta' }))) { [void]$it.SubItems.Add("$c") }
+        $it.ForeColor = $(if ($ok) { [System.Drawing.Color]::DarkGreen } else { [System.Drawing.Color]::Firebrick })
         $lvFH.Items.Add($it) | Out-Null
     }
     $vs = @(@($r.oks | ForEach-Object { "$($_.datos.sw)" }) | Sort-Object -Unique)
@@ -12211,7 +12225,7 @@ $nav.ExpandAll()
 if ($nav.Nodes.Count -gt 0 -and $nav.Nodes[0].Nodes.Count -gt 0) { $nav.SelectedNode = $nav.Nodes[0].Nodes[0] }
 
 # Todas las tablas de resultados filtran y ordenan al pulsar su cabecera.
-foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvSat, $lvH, $lvN, $lvE, $lvI, $lvC, $lvB, $lvT,
+foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvFWd, $lvSat, $lvH, $lvN, $lvE, $lvI, $lvC, $lvB, $lvT,
                      $lvAN, $lvFN, $lvAH, $lvFH, $lvRA, $lvRF, $lvRB)) { Lv-Filtrable $tabla }
 
 # La cabecera de pestanas no se puede ocultar con una propiedad: no existe. Lo

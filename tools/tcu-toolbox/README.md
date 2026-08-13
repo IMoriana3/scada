@@ -106,6 +106,34 @@ la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
 una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
 sitio.
 
+**Una fila por equipo, y las ventanas aparte (v11.47)** — el plan de firmware
+metía tres cosas en la misma tabla: la **ventana** del updater que hay que
+abrir, los **rangos** que se le pegan dentro y las **TCUs pendientes** una a
+una. Con una ventana de una sola TCU salían dos filas idénticas columna a
+columna. En su día se añadió una columna *Fila* para distinguirlas, que es tapar
+el problema en vez de resolverlo.
+
+Ahora son dos tablas:
+
+| | Qué lleva |
+|---|---|
+| **Arriba** | Una fila por ventana del updater: con qué IP y puerto abrirla, el `Add from…to` entero, cuántas TCUs y cuánto tarda |
+| **Abajo** | Una fila por equipo pendiente: NCU, TCU, gateway, a qué ventana pertenece, versión actual, objetivo, SoC y estado |
+
+Los rangos van **enteros** en su columna, tal como se pegan en el updater.
+Antes se intentaban resumir en Desde/Hasta, y con huecos dibujaba un rango que
+no existe: en la NCU10 con 10-16 y 18-22 salía «de 10 a 22», la TCU 17 parecía
+estar dentro, y el 12 de la columna TCUs no cuadraba con las 13 que van del 10
+al 22.
+
+De paso, verificar tras actualizar se simplifica: en la tabla de abajo cada fila
+**es** un equipo, así que basta con NCU + TCU. Antes había que mirar Desde y
+Hasta para no repintar un tramo entero por culpa de una sola TCU.
+
+La misma regla en **Firmware HSU**: una fila por estación en vez de una cabecera
+y un dato por cada una —veinte filas para diez HSUs—, y la que no contesta
+también tiene la suya, porque desaparecer no es información.
+
 **El repetidor es el que lo zanja (v11.46)** — con lo medido hasta ahora, el
 nibble del Product ID admite **dos lecturas que encajan igual de bien**:
 
