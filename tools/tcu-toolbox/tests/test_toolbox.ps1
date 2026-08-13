@@ -2269,24 +2269,26 @@ Check 'verif: la pinta en la tabla' ($src.Contains('ACTUALIZADA: ya en $fw')) $t
 Check 'verif: y la que sigue pendiente' ($src.Contains('SIGUE PENDIENTE: en $fw')) $true
 Check 'verif: tambien las que no responden' ($src.Contains('sin respuesta al verificar')) $true
 # la marca tiene que llegar a las filas escondidas por un filtro de columna
-Check 'verif: marca tambien lo filtrado' ($src.Contains('$lvFW.Tag.orig')) $true
-# y solo a la TCU exacta, no a un tramo que la contenga
-Check 'verif: no marca tramos de varias' ($src.Contains('if ($de -ne $tcu -or $a -ne $tcu) { continue }')) $true
-# La tabla del plan lleva VENTANAS, los rangos que se PEGAN en cada una y las
-# TCUs sueltas. Con una ventana de una sola TCU las dos filas salian identicas
-# columna a columna y parecian repetidas: la columna Fila dice que es cada una.
-Check 'plan: columna que separa las filas' ($src.Contains("lvFW.Columns.Add('Fila'")) $true
-Check 'plan: fila de ventana etiquetada' ($src.Contains("@('VENTANA', `$v.IP, `$v.Puerto")) $true
-Check 'plan: fila de rango que pegar' ($src.Contains("@('PEGAR', `$v.IP, `$v.Puerto")) $true
-Check 'plan: fila de TCU etiquetada' ($src.Contains("@('TCU', `$ips[`"`$(`$d.NCU)`"]")) $true
-Check 'plan: y las que no responden' ($src.Contains("@('SIN RESPUESTA', `$ips[`"`$(`$m.ncu)`"]")) $true
-# con un solo rango la fila de la ventana YA lo lleva: repetirlo era el ruido
-Check 'plan: los rangos solo si hay mas de uno' ($src.Contains('if (@($v.Tramos).Count -gt 1) {')) $true
-# Desde-Hasta con huecos dibujaba un rango que no existe: con 10-16 y 18-22
-# ponia "de 10 a 22", la TCU 17 parecia estar dentro y abajo no tenia fila
-# porque no esta pendiente. Y el 12 de la columna TCUs no cuadraba con 13.
-Check 'plan: con huecos no inventa un rango seguido' ($src.Contains("`$unTramo = (@(`$v.Tramos).Count -eq 1)")) $true
-Check 'plan: y lo dice en las columnas' ($src.Contains("`$(if (`$unTramo) { `$v.Tramos[0].Desde } else { '(varios)' })")) $true
+Check 'verif: marca tambien lo filtrado' ($src.Contains('$lvFWd.Tag.orig')) $true
+# DOS TABLAS: arriba lo que hay que hacer (ventanas del updater), abajo los
+# equipos pendientes, UNO POR FILA. Antes iba todo junto y una ventana de una
+# sola TCU salia dos veces, identica columna a columna: se metio una columna
+# 'Fila' para distinguirlas, que era tapar el problema en vez de resolverlo.
+Check 'plan: ya no hay columna que distinga tipos de fila' ($src.Contains("lvFW.Columns.Add('Fila'")) $false
+Check 'plan: la tabla de arriba es de ventanas' ($src.Contains("@('Ventana',62), @('NCU',50), @('IP',110), @('GW',55), @('Add from...to',250)")) $true
+Check 'plan: y la de abajo, de equipos' ($src.Contains('$lvFWd = New-Object System.Windows.Forms.ListView')) $true
+Check 'plan: una fila por ventana' ($src.Contains('$lvFW.Items.Add($item) | Out-Null')) $true
+Check 'plan: una fila por TCU pendiente' ($src.Contains('$lvFWd.Items.Add($itemD) | Out-Null')) $true
+# ninguna fila de la tabla de equipos se genera desde los tramos: si volviera a
+# haber una fila por rango, la TCU saldria dos veces otra vez
+Check 'plan: nada de filas PEGAR' ($src.Contains("@('PEGAR'")) $false
+Check 'plan: ni filas VENTANA mezcladas' ($src.Contains("@('VENTANA'")) $false
+# los rangos van enteros en su columna, tal como se pegan en el updater: nada
+# de resumirlos en Desde/Hasta, que con huecos dibujaba un rango inexistente
+Check 'plan: los rangos, enteros y en su columna' ($src.Contains('$v.Rangos, $v.TCUs, (Horas-Texto ([double]$v.Horas))')) $true
+Check 'plan: sin Desde/Hasta que se inventen tramos' ($src.Contains("'(varios)'")) $false
+# cada equipo dice a que ventana pertenece, para saber donde pegarlo
+Check 'plan: el equipo dice de que ventana es' ($src.Contains('$d.TCU, $d.Puerto, $v.Orden, $d.FW, $d.Objetivo')) $true
 # la ventana con hueco sigue diciendo los rangos de verdad en su nota
 $vHueco = @(Plan-Ventanas @([pscustomobject]@{NCU='10'; Puerto='503'; Desde=10; Hasta=16; TCUs=7},
                             [pscustomobject]@{NCU='10'; Puerto='503'; Desde=18; Hasta=22; TCUs=5}) $ipsFw 20)[0]
@@ -2298,18 +2300,31 @@ Check 'plan: cada TCU bajo su ventana' ($src.Contains('foreach ($d in @($detPorV
 # y las mudas tambien: una TCU reiniciandose con el FW nuevo salia muda y su
 # fila caia al final de la tabla, detras de las otras quince NCUs
 Check 'plan: las mudas van por NCU' ($src.Contains('$mudasPorNcu = @{}')) $true
-Check 'plan: y se pintan con su ventana' ($src.Contains('foreach ($m in @($mudasPorNcu["$($v.NCU)"])) { $lvFW.Items.Add((Fw-FilaMuda $m $ips)) | Out-Null }')) $true
+Check 'plan: y se pintan con su ventana' ($src.Contains('foreach ($m in @($mudasPorNcu["$($v.NCU)"])) { $lvFWd.Items.Add((Fw-FilaMuda $m $v.Orden)) | Out-Null }')) $true
 Check 'plan: una sola vez por NCU' ($src.Contains('$mudasPuestas["$($v.NCU)"] = 1')) $true
 Check 'plan: las de NCUs sin ventana, al final' ($src.Contains('if ($mudasPuestas.ContainsKey($k)) { continue }')) $true
 Check 'plan: la fila muda sale de un solo sitio' ($src.Contains('function Fw-FilaMuda')) $true
-Check 'plan: la ventana avisa de cuantas hay' ($src.Contains('sin respuesta, debajo')) $true
+Check 'plan: la ventana avisa de cuantas hay' ($src.Contains('sin respuesta, abajo')) $true
 # el plan tambien en texto, para leerlo mientras se teclea en el updater
 Check 'plan: lo escribe en la consola' ($src.Contains('foreach ($linea in @(Plan-Texto $ventanas $minTcu))')) $true
 # y el CSV que te llevas es el de ventanas, no los tramos sueltos
 Check 'plan: el CSV exporta las ventanas' ($src.Contains("Exportar-Csv `$(if (`$vv.Count -gt 0) { `$vv } else { `$script:PlanFw }) 'plan_firmware'")) $true
-# verificar solo puede repintar filas de TCU: la del carril habla del tramo
-Check 'verif: no toca la fila del carril' ($src.Contains("if (`"`$(`$it.SubItems[1].Text)`" -ne 'TCU') { continue }")) $true
-Check 'verif: nota en la columna nueva' ($src.Contains('$it.SubItems[7].Text = $nota')) $true
+# Ya no hay que distinguir tipos de fila al verificar: en la tabla de abajo
+# cada fila ES un equipo, asi que basta con NCU + TCU. Antes habia que mirar
+# Desde y Hasta para no repintar el tramo entero por una sola TCU.
+Check 'verif: le basta con NCU y TCU' ($src.Contains('if ($n -ne $tcu) { continue }')) $true
+Check 'verif: sin mirar Desde/Hasta' ($src.Contains('if ($de -ne $tcu -or $a -ne $tcu) { continue }')) $false
+Check 'verif: nota en la ultima columna' ($src.Contains('$it.SubItems[7].Text = $nota')) $true
+
+Write-Host ''
+Write-Host '== una fila por equipo, tambien en firmware de HSU =='
+# Con "(todas)" la tabla de Campo/Valor sacaba una cabecera y un dato por cada
+# estacion: veinte filas para diez HSUs, y para comparar versiones hay que ir
+# saltando. Ahora una fila por estacion, y la que no contesta tambien tiene la
+# suya: desaparecer no es informacion.
+Check 'fw-hsu: la tabla es de estaciones' ($src.Contains("@('HSU',210), @('IP',110), @('GW',55), @('Esclavo',65)")) $true
+Check 'fw-hsu: se recorre por objetivo, no por fila leida' ($src.Contains('$leidas["$($o.obj.ip)|$($o.obj.unit)"] = $o')) $true
+Check 'fw-hsu: la muda tambien sale' ($src.Contains("{ 'sin respuesta' }")) $true
 
 Write-Host ''
 Write-Host '== via NCU sin respuesta no inventa OFFLINEs =='
