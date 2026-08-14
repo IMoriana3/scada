@@ -3049,6 +3049,23 @@ Check 'ctx: y ya no hay export que lea el cuadro de IP' ($src -match "(?m)^\s+ip
 Check 'ctx: el JSON lleva el alcance' ([regex]::Matches($src, [regex]::Escape('alcance = $ctx.alcance')).Count) 4
 Check 'ctx: y las NCUs del barrido' ([regex]::Matches($src, [regex]::Escape('ncus    = @($ctx.ncus)')).Count) 4
 
+# Las estaciones y repetidores declarados tienen que viajar CON el trabajo: la
+# columna HSUs de Comm NCU dice "leidas/declaradas", y sin esto las declaradas
+# salian 0 en TODAS las NCUs -"1/0", "2/0"- justo en la columna que existe para
+# avisar de la que falta. Se vio en una captura de Ayora, no en los tests.
+$cxHs = @{ip='NA'; puerto=$null; gws=$null; etiqueta='PLANTA'; to=3000; reint=1; multi=@(
+    @{ncu=15; ip='10.0.0.15'; gws=@(@{puerto=503; ini=1; fin=3}); hsuLista=@(230,231); rsuLista=@(200)},
+    @{ncu=16; ip='10.0.0.16'; gws=@(@{puerto=503; ini=1; fin=2}); hsuLista=@(230); rsuLista=@()}
+)}
+$tjHs = @(Trabajos-Planta $cxHs $null)
+Check 'trab: el trabajo lleva las HSUs declaradas' (@($tjHs[0].hsuLista) -join ',') '230,231'
+Check 'trab: la NCU16 declara una' (@($tjHs[1].hsuLista) -join ',') '230'
+Check 'trab: y su cx tambien' (@($tjHs[0].cx.hsuLista) -join ',') '230,231'
+Check 'trab: los repetidores igual' (@($tjHs[0].rsuLista) -join ',') '200'
+# asi la columna cuenta bien: 2 declaradas en la NCU15, no 0
+Check 'trab: cuantas declara la NCU15' (@(Lista $tjHs[0].hsuLista).Count) 2
+Check 'trab: la columna HSUs lee esa lista' ($src.Contains('$nHsu = @(Lista $(if ($null -ne $tr.hsuLista) { $tr.hsuLista } else { $tr.cx.hsuLista })).Count')) $true
+
 $trabPem = @(@{ncu=3; tcus=@(1,2,3)}, @{ncu=4; tcus=@(7)}, @{ncu=5; tcus=@()})
 Check 'trab: contar TCUs de varias NCUs' (Cuantas-Tcus $trabPem) 4
 Check 'trab: sin trabajos, cero' (Cuantas-Tcus @()) 0
