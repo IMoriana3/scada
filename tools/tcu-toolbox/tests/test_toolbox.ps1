@@ -2416,13 +2416,57 @@ Check 'auditoria: la linea sale aunque haya mudas' ($src.Contains('y $errTcu var
 Check 'auditoria: cuenta las mixtas' ($src.Contains('if ($desvTcu -gt 0) { $nMixtas++ }')) $true
 
 Write-Host ''
+Write-Host '== el SAT, por NCU y por TCU =='
+# El ensayo se monto pensando solo en la planta entera, que es lo que pide el
+# anexo. Pero en obra hace falta lo otro: comprobar el montaje de una NCU antes
+# de arrancar los siete dias, y sobre todo REEMITIR el veredicto de la NCU que
+# incumplio sin volver a medir nada.
+$satFilas = @(
+  [pscustomobject]@{ts='1'; dia='2026-08-12'; ncu='7';  tcu='10'; desv='0,2'}
+  [pscustomobject]@{ts='1'; dia='2026-08-12'; ncu='7';  tcu='11'; desv='0,3'}
+  [pscustomobject]@{ts='1'; dia='2026-08-12'; ncu='15'; tcu='10'; desv='0,4'}
+)
+Check 'sat: sin filtro, todo' (@(Sat-Filtrar $satFilas '' '').Count) 3
+Check 'sat: por NCU' (@(Sat-Filtrar $satFilas '7' '').Count) 2
+Check 'sat: por rango de NCUs' (@(Sat-Filtrar $satFilas '7-15' '').Count) 3
+Check 'sat: por TCU' (@(Sat-Filtrar $satFilas '' '10').Count) 2
+Check 'sat: por NCU y TCU a la vez' (@(Sat-Filtrar $satFilas '7' '10').Count) 1
+Check 'sat: y es la que toca' (@(Sat-Filtrar $satFilas '7' '10')[0].tcu) '10'
+Check 'sat: un filtro que no casa deja cero' (@(Sat-Filtrar $satFilas '99' '').Count) 0
+# las filas de equipo (RSU, NCU) no llevan numero de TCU: un filtro de TCUs no
+# les aplica, entran si su NCU entra. Si no, filtrar por TCU se cargaba D.3.4.2
+$satEq = @(
+  [pscustomobject]@{ts='1'; dia='2026-08-12'; ncu='7';  equipo='RSU1'}
+  [pscustomobject]@{ts='1'; dia='2026-08-12'; ncu='15'; equipo='NCU'}
+)
+Check 'sat: el RSU no lo tumba un filtro de TCUs' (@(Sat-Filtrar $satEq '7' '10').Count) 1
+Check 'sat: pero si el de NCUs' (@(Sat-Filtrar $satEq '15' '')[0].equipo) 'NCU'
+# el alcance se dice, y sufija los RESULTADO_*: reemitir por NCU no puede pisar
+# el de la planta entera
+Check 'sat: alcance completo' (Sat-Alcance '' '') 'planta completa'
+Check 'sat: alcance por NCU' (Sat-Alcance '7' '') 'NCU 7'
+Check 'sat: alcance por las dos' (Sat-Alcance '7' '10-20') 'NCU 7 / TCU 10-20'
+Check 'sat: la planta entera no lleva sufijo' (Sat-Sufijo '' '') ''
+Check 'sat: y un trozo si' (Sat-Sufijo '7' '10-20') '_NCU_7___TCU_10-20'
+# registrar acotado: el alcance se congela al arrancar
+Check 'sat: el registro usa el alcance congelado' ($src.Contains('Trabajos-Planta $cx $null $script:SatNcus $script:SatSel')) $true
+Check 'sat: y avisa de que no es el 100% de la planta' ($src.Contains('este ensayo va a medir solo')) $true
+Check 'sat: hay cuadro de TCUs' ($src.Contains('$txtSatTcus = TG $tabSAT')) $true
+# analizar acotado
+Check 'sat: el analisis filtra' ($src.Contains('$filas = @(Sat-Filtrar $filas $anNcus $anTcus)')) $true
+Check 'sat: los equipos tambien' ($src.Contains('$fq = @(Sat-Filtrar $fq $anNcus $anTcus)')) $true
+# los PASE son el denominador de D.4 y no llevan NCU: filtrarlos dejaria la
+# disponibilidad de comunicaciones sin contra que dividir
+Check 'sat: los PASE no se filtran' ($src.Contains("@(`$ev | Where-Object { `$_.equipo -eq 'PASE' }) + @(Sat-Filtrar")) $true
+
+Write-Host ''
 Write-Host '== una NCU tiene DOS diagnosticos =='
 # El suyo -sus alarmas, su SAI, su seta, sus gateways, su reloj- y el de sus
 # esclavos -cuantas TCUs y HSUs le hablan-. Iban mezclados en una sola tabla
 # llamada "Comm NCU", que ni era solo comm ni era solo de la NCU.
 Check 'ncu2: hay pestana de diagnostico propio' ($src.Contains("`$tabND.Text = 'Diagnostico NCU'")) $true
 Check 'ncu2: y la de comm es de esclavos' ($src.Contains("`$tabN.Text = 'Comm esclavos'")) $true
-Check 'ncu2: el arbol lleva a las dos' ($src.Contains("@{txt='Diagnostico propio'; tab=`$tabND}")) $true
+Check 'ncu2: el arbol lleva a las dos' ($src.Contains("@{txt='Diagnóstico propio'; tab=`$tabND}")) $true
 Check 'ncu2: y ya no manda a las filas NCU del barrido' ($src.Contains("@{txt='Diagnostico'; tab=`$tabG; vista='NCU'}")) $false
 # el diagnostico propio no lee ni un esclavo
 Check 'ncu2: no cuenta TCUs' ($src.Contains('$f = Ncu-FilaPropia "$($tr.ncu)" "$($tr.ip)" $ns $gws $fwN $stow')) $true
@@ -3003,7 +3047,19 @@ Check 'ncus: no lo lee Trabajos-Planta, que reusa el agente' ($src -match '(?s)f
 Check 'ncus: Diagnostico ya no tiene el suyo aparte' ($src.Contains('$txtGNcus')) $false
 Check 'ncus: con una sola NCU se apaga' ($src.Contains('$txtNcus.Enabled = $false')) $true
 # ninguna llamada se queda sin el filtro: si una lo olvida, esa pestana ignora las NCUs
-Check 'ncus: todas las llamadas lo pasan' (([regex]::Matches($src, [regex]::Escape('Trabajos-Planta $cx')).Count) -eq ([regex]::Matches($src, [regex]::Escape('(Ncus-Filtro)')).Count)) $true
+# Contar apariciones era un proxy fragil: el SAT congela el filtro al arrancar
+# el ensayo -si alguien toca el cuadro a mitad de siete dias, el registro se
+# parte- y usa esa copia, asi que los dos numeros dejaron de cuadrar sin que
+# hubiera nada mal. Ahora se mira llamada por llamada.
+$sinFiltro = @()
+foreach ($m in [regex]::Matches($src, '(?m)^.*Trabajos-Planta \$cx.*$')) {
+    $l = $m.Value
+    if ($l.Contains('(Ncus-Filtro)') -or $l.Contains('$script:SatNcus')) { continue }
+    $sinFiltro += $l.Trim()
+}
+Check 'ncus: todas las llamadas lo pasan' ($sinFiltro -join ' | ') ''
+# y el que congela el SAT sale del mismo sitio
+Check 'ncus: el SAT congela el del cuadro' ($src.Contains('$script:SatNcus = (Ncus-Filtro)')) $true
 # la planta completa ya no ignora el cuadro: antes solo miraba el filtro de NCUs
 Check 'sel: planta completa mira la seleccion' ($src.Contains("Trabajos-Planta `$cx `$null (Ncus-Filtro) (Parse-Seleccion `$txtGTcus.Text 'Diagnostico')")) $true
 # de que gateway cuelga cada TCU, en la tabla y en los exports
@@ -3162,7 +3218,17 @@ foreach ($b in @('GLOBAL', 'NCU', 'HSU', 'REPETIDORES', 'TCUs')) {
 }
 # ya no se abre en Escribir, que es la unica pestana que puede dejar una TCU
 # peor de como estaba
-Check 'nav: abre en el diagnostico de planta' ($src.Contains("@{txt='Diagnostico de planta'; tab=`$tabG; vista='todo'}")) $true
+Check 'nav: abre en el diagnostico de planta' ($src.Contains("@{txt='Diagnóstico de planta'; tab=`$tabG; vista='todo'}")) $true
+# El arbol es lo unico que se lee en pantalla: va con tildes y con ñ.
+Check 'nav: las etiquetas van bien escritas' ($src.Contains("@{txt='Lectura de señales'; tab=`$tabH})")) $true
+Check 'nav: y sin "senales" sin ñ' ($src.Contains("Lectura de senales'; tab")) $false
+# y tienen que caber todas sin barra de scroll: 31 lineas a 20 px son 620, y el
+# arbol llega hasta abajo del todo (663). Con 400 px se veian 18 de 31.
+$mNav = [regex]::Match($src, '\$nav\.Size = New-Object System\.Drawing\.Size\(\d+, (?<h>\d+)\)')
+$mIt  = [regex]::Match($src, '\$nav\.ItemHeight = (?<h>\d+)')
+$mArb = [regex]::Match($src, '\$NAV_ARBOL = @\((?<c>[\s\S]*?)\r?\n\)')
+$lineasNav = ([regex]::Matches($mArb.Groups['c'].Value, '@\{txt=')).Count + ([regex]::Matches($mArb.Groups['c'].Value, '@\{bloque')).Count
+Check 'nav: caben todas las lineas sin scroll' (($lineasNav * [int]$mIt.Groups['h'].Value) -le [int]$mNav.Groups['h'].Value) $true
 Check 'nav: el arbol sigue a los saltos del codigo' ($src.Contains('$tabs.Add_SelectedIndexChanged(')) $true
 # cada pestana tiene que ser alcanzable: una pestana sin hoja es una pestana a
 # la que ya no se puede llegar, porque la cabecera no se ve

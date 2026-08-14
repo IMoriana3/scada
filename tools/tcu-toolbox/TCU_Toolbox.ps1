@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.50'
+$VERSION_TOOLBOX = '11.51'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2648,6 +2648,65 @@ function Leer-Decodificado([byte]$unit, [hashtable]$vdef) {
 # $estables muestras sin cambiar: asi se descartan los transitorios en los que
 # el seguidor aun va de camino, y las activaciones de posicion de seguridad,
 # que es justo lo que pide el anexo.
+# ---------- acotar el SAT a unas NCUs o unas TCUs ----------
+# El ensayo se monto pensando solo en la planta entera, que es lo que pide el
+# anexo. Pero en obra hace falta lo otro constantemente: comprobar el montaje de
+# una NCU antes de arrancar los siete dias, o repetir el veredicto de la NCU que
+# incumplio sin volver a medir la planta.
+#
+# Son dos cosas distintas y las dos hacen falta:
+#   - REGISTRAR acotado: se mide solo lo que se pide (menos trafico, menos rato)
+#   - ANALIZAR acotado: el registro es el que es -son dias de medida- pero el
+#     veredicto se reemite sobre un trozo. Esto es lo que evita repetir ensayos.
+#
+# Filtra las filas ya registradas. Las columnas de los CSV son 'ncu' y 'tcu'
+# (las de equipos traen 'equipo' en vez de 'tcu': un RSU o la propia NCU no
+# tienen numero de TCU, asi que un filtro de TCUs no les aplica y se quedan si
+# su NCU entra). Pura.
+function Sat-Filtrar($filas, [string]$ncus, [string]$tcus) {
+    $nums = @(Parse-ListaNums $ncus)
+    $sel = $null
+    if ("$tcus".Trim() -ne '') { $sel = Parse-Seleccion $tcus 'SAT' }
+    $r = @()
+    foreach ($f in @($filas)) {
+        if ($null -eq $f) { continue }
+        $ncu = "$($f.ncu)".Trim()
+        if ($nums -and $nums.Count -gt 0) {
+            $n = 0
+            if (-not [int]::TryParse($ncu, [ref]$n)) { continue }
+            if (-not ($nums -contains $n)) { continue }
+        }
+        if ($null -ne $sel -and -not $sel.todas) {
+            # las filas de equipo (RSU, NCU) no llevan numero de TCU: el filtro
+            # de TCUs no les aplica y entran si su NCU ha entrado
+            $tieneTcu = ($null -ne $f.PSObject.Properties['tcu'])
+            if ($tieneTcu) {
+                $t = 0
+                if (-not [int]::TryParse("$($f.tcu)".Trim(), [ref]$t)) { continue }
+                $lista = $(if ($sel.porNcu.Count -gt 0) { @($sel.porNcu["$ncu"]) } else { @($sel.lista) })
+                if (-not ($lista -contains $t)) { continue }
+            }
+        }
+        $r += ,$f
+    }
+    return $r
+}
+
+# Como se llama el alcance de un analisis, para el log y para el nombre de los
+# ficheros de resultado: reemitir por NCU no puede pisar el de la planta. Pura.
+function Sat-Alcance([string]$ncus, [string]$tcus) {
+    $p = @()
+    if ("$ncus".Trim() -ne '') { $p += "NCU $("$ncus".Trim())" }
+    if ("$tcus".Trim() -ne '') { $p += "TCU $("$tcus".Trim())" }
+    if ($p.Count -eq 0) { return 'planta completa' }
+    return ($p -join ' / ')
+}
+function Sat-Sufijo([string]$ncus, [string]$tcus) {
+    $a = Sat-Alcance $ncus $tcus
+    if ($a -eq 'planta completa') { return '' }
+    return ('_' + ($a -replace '[^\w\-]', '_'))
+}
+
 function Sat-Precision($filas, [double]$tol = 1.0, [int]$estables = 2) {
     $porTcu = @{}
     foreach ($f in $filas) {
@@ -2960,12 +3019,16 @@ $gbCon.Controls.Add($btnCancelar)
 # es ese orden; las pestanas siguen existiendo por dentro (todo el codigo que
 # salta de una a otra sigue funcionando), pero su cabecera no se ve: quien
 # navega es el arbol.
+# Alto: hasta abajo del todo, a la altura de la consola. Con 400 px cabian 18 de
+# las 31 lineas del arbol y las demas quedaban debajo de una barra de scroll:
+# los bloques REPETIDORES y TCUs no se veian sin arrastrar, que es justo lo que
+# el arbol venia a evitar. La consola se corre a su derecha.
 $nav = New-Object System.Windows.Forms.TreeView
 $nav.Location = New-Object System.Drawing.Point(10, 72)
-$nav.Size = New-Object System.Drawing.Size(176, 400)
+$nav.Size = New-Object System.Drawing.Size(176, 663)
 $nav.HideSelection = $false
 $nav.ShowLines = $false; $nav.ShowRootLines = $false; $nav.ShowPlusMinus = $false
-$nav.FullRowSelect = $true; $nav.ItemHeight = 22
+$nav.FullRowSelect = $true; $nav.ItemHeight = 20
 $nav.BorderStyle = 'FixedSingle'
 $form.Controls.Add($nav)
 
@@ -4142,6 +4205,12 @@ $btnSatAnal.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
 $btnSatAnal.ForeColor = [System.Drawing.Color]::White
 $tabSAT.Controls.Add($btnSatAnal)
 
+# Acotar el ensayo. Vale para las dos cosas: al REGISTRAR se mide solo eso, y al
+# ANALIZAR se reemite el veredicto sobre ese trozo del registro ya hecho -que es
+# lo que evita repetir dias de medida-. Vacio = planta completa, como el anexo.
+[void](LG $tabSAT 'TCUs' 700 36 22)
+$txtSatTcus = TG $tabSAT '' 740 21 168
+
 [void](LG $tabSAT 'Ensayo' 10 44 57)
 $cbSatEnsayo = New-Object System.Windows.Forms.ComboBox
 $cbSatEnsayo.Location = New-Object System.Drawing.Point(58, 53)
@@ -4785,8 +4854,8 @@ $gbIdent.Controls.Add($lvI)
 
 # --- consola comun ---
 $rtb = New-Object System.Windows.Forms.RichTextBox
-$rtb.Location = New-Object System.Drawing.Point(10, 480)
-$rtb.Size = New-Object System.Drawing.Size(1107, 255)
+$rtb.Location = New-Object System.Drawing.Point(192, 480)
+$rtb.Size = New-Object System.Drawing.Size(925, 255)
 $rtb.ReadOnly = $true
 $rtb.BackColor = [System.Drawing.Color]::FromArgb(20,20,24)
 $rtb.ForeColor = [System.Drawing.Color]::Gainsboro
@@ -10079,6 +10148,8 @@ $script:SatHasta = $null
 $script:SatProxTcu = [datetime]::MinValue
 $script:SatProxCom = [datetime]::MinValue
 $script:SatPasesT = 0; $script:SatPasesC = 0; $script:SatFallos = 0
+# alcance del ensayo en curso, congelado al arrancarlo
+$script:SatNcus = ''; $script:SatSel = $null; $script:SatAlcance = 'planta completa'
 
 function Sat-Log([string]$ensayo, [string]$detalle) {
     $item = New-Object System.Windows.Forms.ListViewItem((Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
@@ -10207,7 +10278,9 @@ $tmrSat.Add_Tick({
     $script:Ocupado = $true
     try {
         $cx = Params-Conexion
-        $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
+        # el alcance se congela al arrancar el ensayo: cambiar los cuadros a
+        # mitad de una medida de siete dias partiria el registro en dos
+        $trabajos = @(Trabajos-Planta $cx $null $script:SatNcus $script:SatSel)
         if ($ahora -ge $script:SatProxCom) {
             $script:SatProxCom = $ahora.AddSeconds([double]$script:SatIntCom)
             $r = Sat-PaseComms $trabajos
@@ -10234,9 +10307,14 @@ $btnSatIni.Add_Click({
         $dur = Val-Int $txtSatDur.Text 'Duracion' 1 100000
         $unid = "$($cbSatUnid.SelectedItem)"
         $cx = Params-Conexion
-        if (-not $cx.multi) {
+        # el alcance se congela aqui: si a mitad de una medida de siete dias
+        # alguien toca el cuadro de NCUs, el registro se parte en dos
+        $script:SatNcus = (Ncus-Filtro)
+        $script:SatSel = $(if ("$($txtSatTcus.Text)".Trim() -ne '') { Parse-Seleccion $txtSatTcus.Text 'SAT' } else { $null })
+        $script:SatAlcance = Sat-Alcance $script:SatNcus $txtSatTcus.Text
+        if (-not $cx.multi -or $script:SatAlcance -ne 'planta completa') {
             $r0 = [System.Windows.Forms.MessageBox]::Show(
-                "El anexo pide el 100% de la planta y ahora mismo hay una NCU suelta seleccionada.`r`n`r`nContinuar de todas formas?",
+                "El anexo pide el 100% de la planta y este ensayo va a medir solo: $($script:SatAlcance).`r`n`r`nPara el entregable del SAT hace falta la planta entera; acotado vale para comprobar un montaje antes de arrancar los siete dias.`r`n`r`nContinuar de todas formas?",
                 'Alcance del ensayo', 'YesNo', 'Warning')
             if ($r0 -ne 'Yes') { return }
         }
@@ -10252,7 +10330,7 @@ $btnSatIni.Add_Click({
         $script:SatOn = $true
         $btnSatIni.Enabled = $false; $btnSatFin.Enabled = $true
         $tmrSat.Start()
-        Sat-Log 'INICIO' "$dur ${unid}: cada $($script:SatIntTcu)s (TCU) y $($script:SatIntCom)s (comms), hasta $($script:SatHasta.ToString('yyyy-MM-dd HH:mm')). Carpeta: $script:SatDir"
+        Sat-Log 'INICIO' "$($script:SatAlcance). $dur ${unid}: cada $($script:SatIntTcu)s (TCU) y $($script:SatIntCom)s (comms), hasta $($script:SatHasta.ToString('yyyy-MM-dd HH:mm')). Carpeta: $script:SatDir"
         Con "Registro SAT iniciado. NO CIERRES ESTA VENTANA hasta que termine el ensayo. Carpeta: $script:SatDir" ([System.Drawing.Color]::Orange)
     } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon) }
 })
@@ -10445,18 +10523,29 @@ $btnSatAnal.Add_Click({ Lanzar {
     $fc = @(Get-ChildItem (Join-Path $dir 'comm_*.csv') -ErrorAction SilentlyContinue)
     if ($fp.Count -eq 0 -and $fc.Count -eq 0) { Con 'No hay ficheros de registro en esa carpeta.' ([System.Drawing.Color]::Orange); return }
     $lvSat.Items.Clear()
+    # El registro es el que es -son dias de medida- pero el veredicto se puede
+    # reemitir sobre un trozo: por una NCU, por unas TCUs. Asi se contesta "y la
+    # NCU7 sola, cumple?" sin volver a medir nada. El sufijo evita que reemitir
+    # por NCU pise el RESULTADO de la planta entera.
+    $anNcus = (Ncus-Filtro); $anTcus = "$($txtSatTcus.Text)"
+    $alc = Sat-Alcance $anNcus $anTcus
+    $suf = Sat-Sufijo $anNcus $anTcus
+    Con "  Alcance del analisis: $alc" ([System.Drawing.Color]::Gainsboro)
 
     if ($fp.Count -gt 0) {
         $filas = @()
         foreach ($f in $fp) { $filas += @(Import-Csv $f.FullName -Delimiter ';') }
-        Con "  D.1.1 / D.3.4: $($filas.Count) registros de $($fp.Count) dia(s)" ([System.Drawing.Color]::Gainsboro)
+        $brutas = $filas.Count
+        $filas = @(Sat-Filtrar $filas $anNcus $anTcus)
+        Con "  D.1.1 / D.3.4: $($filas.Count) registros de $($fp.Count) dia(s)$(if ($filas.Count -ne $brutas) { " (de $brutas, filtrados por $alc)" })" ([System.Drawing.Color]::Gainsboro)
+        if ($filas.Count -eq 0) { Con "  El filtro no deja ningun registro de precision: revisa el cuadro NCUs/TCUs." ([System.Drawing.Color]::Orange) }
         $pr = @(Sat-Precision $filas $tolPrec 2)
         $malP = @($pr | Where-Object { $_.Cumple -eq 'NO' })
-        $pr | Export-Csv (Join-Path $dir 'RESULTADO_D1.1_precision.csv') -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+        $pr | Export-Csv (Join-Path $dir ("RESULTADO_D1.1_precision$suf.csv")) -NoTypeInformation -Encoding UTF8 -Delimiter ';'
         Sat-Log 'D.1.1' ("Precision <=$tolPrec deg: {0} de {1} TCUs cumplen{2}" -f ($pr.Count - $malP.Count), $pr.Count, $(if ($malP.Count) { " - INCUMPLEN: " + (($malP | ForEach-Object { "NCU$($_.NCU)/$($_.TCU)" }) -join ', ') } else { '' }))
         $do = @(Sat-DispOperacion $filas $minTcu)
         $malO = @($do | Where-Object { $_.Cumple -eq 'NO' })
-        $do | Export-Csv (Join-Path $dir 'RESULTADO_D3.4.1_disp_operacion.csv') -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+        $do | Export-Csv (Join-Path $dir ("RESULTADO_D3.4.1_disp_operacion$suf.csv")) -NoTypeInformation -Encoding UTF8 -Delimiter ';'
         Sat-Log 'D.3.4.1' ("Disponibilidad >=$minTcu%: {0} de {1} TCU-dia cumplen{2}" -f ($do.Count - $malO.Count), $do.Count, $(if ($malO.Count) { " - INCUMPLEN: " + (($malO | Select-Object -First 20 | ForEach-Object { "$($_.Dia) NCU$($_.NCU)/$($_.Equipo) $($_.Disponibilidad_pct)%" }) -join ', ') } else { '' }))
     }
 
@@ -10464,18 +10553,19 @@ $btnSatAnal.Add_Click({ Lanzar {
     if ($fe.Count -gt 0) {
         $fq = @()
         foreach ($f in $fe) { $fq += @(Import-Csv $f.FullName -Delimiter ';') }
+        $fq = @(Sat-Filtrar $fq $anNcus $anTcus)
         $rsu = @($fq | Where-Object { "$($_.equipo)" -like 'RSU*' })
         $ncu = @($fq | Where-Object { "$($_.equipo)" -eq 'NCU' })
         if ($rsu.Count) {
             $dr = @(Sat-DispOperacion $rsu $minRsu)
             $malR = @($dr | Where-Object { $_.Cumple -eq 'NO' })
-            $dr | Export-Csv (Join-Path $dir 'RESULTADO_D3.4.2_disp_RSU.csv') -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+            $dr | Export-Csv (Join-Path $dir ("RESULTADO_D3.4.2_disp_RSU$suf.csv")) -NoTypeInformation -Encoding UTF8 -Delimiter ';'
             Sat-Log 'D.3.4.2' ("RSU >=$minRsu%: {0} de {1} RSU-dia cumplen" -f ($dr.Count - $malR.Count), $dr.Count)
         }
         if ($ncu.Count) {
             $dn = @(Sat-DispOperacion $ncu $minRsu)
             $malN = @($dn | Where-Object { $_.Cumple -eq 'NO' })
-            $dn | Export-Csv (Join-Path $dir 'RESULTADO_D3.4.3_disp_NCU.csv') -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+            $dn | Export-Csv (Join-Path $dir ("RESULTADO_D3.4.3_disp_NCU$suf.csv")) -NoTypeInformation -Encoding UTF8 -Delimiter ';'
             Sat-Log 'D.3.4.3' ("NCU >=$minRsu%: {0} de {1} NCU-dia cumplen" -f ($dn.Count - $malN.Count), $dn.Count)
         }
     }
@@ -10483,6 +10573,9 @@ $btnSatAnal.Add_Click({ Lanzar {
     if ($fc.Count -gt 0) {
         $ev = @()
         foreach ($f in $fc) { $ev += @(Import-Csv $f.FullName -Delimiter ';') }
+        # los PASE son el denominador (cuantos intentos hubo) y no llevan NCU:
+        # se filtran solo los eventos de equipo
+        $ev = @(@($ev | Where-Object { $_.equipo -eq 'PASE' }) + @(Sat-Filtrar @($ev | Where-Object { $_.equipo -ne 'PASE' }) $anNcus $anTcus))
         $intentos = @{}
         foreach ($e in $ev) { if ($e.equipo -eq 'PASE') { $intentos["$($e.fecha)"] = [int]$intentos["$($e.fecha)"] + [int]$e.evento } }
         $fallos = @($ev | Where-Object { $_.evento -eq 'FALLO' } | ForEach-Object {
@@ -10490,10 +10583,10 @@ $btnSatAnal.Add_Click({ Lanzar {
         Con "  D.4: $($ev.Count) eventos, $($fallos.Count) fallos brutos" ([System.Drawing.Color]::Gainsboro)
         $dc = @(Sat-DispComms $fallos $intentos $minCTcu $ventD4 $minCRsu)
         $malC = @($dc | Where-Object { $_.Cumple -eq 'NO' })
-        $dc | Export-Csv (Join-Path $dir 'RESULTADO_D4_disp_comunicaciones.csv') -NoTypeInformation -Encoding UTF8 -Delimiter ';'
+        $dc | Export-Csv (Join-Path $dir ("RESULTADO_D4_disp_comunicaciones$suf.csv")) -NoTypeInformation -Encoding UTF8 -Delimiter ';'
         Sat-Log 'D.4' ("Comunicaciones TCU >=$minCTcu% / RSU >=$minCRsu%: {0} de {1} equipo-dia cumplen{2}" -f ($dc.Count - $malC.Count), $dc.Count, $(if ($malC.Count) { " - INCUMPLEN: " + (($malC | Select-Object -First 20 | ForEach-Object { "$($_.Dia) NCU$($_.NCU)/$($_.Equipo) $($_.Disponibilidad_pct)%" }) -join ', ') } else { '' }))
     }
-    Con "Resultados escritos en $dir (ficheros RESULTADO_*.csv)." ([System.Drawing.Color]::LightGreen)
+    Con "Resultados escritos en $dir (ficheros RESULTADO_*$suf.csv). Alcance: $alc." ([System.Drawing.Color]::LightGreen)
 } })
 
 # ------------------------- COMM NCU -------------------------
@@ -12318,33 +12411,36 @@ $btnRBBuscar.Add_Click({ Lanzar {
 # al final los seguidores. Antes se abria en Escribir, que es la unica pestana
 # capaz de dejar una TCU peor de como estaba.
 $NAV_ARBOL = @(
+    # El fichero va sin tildes por costumbre, pero esto es lo UNICO que se lee en
+    # pantalla: aqui van bien escritas. El .ps1 esta en UTF-8 con BOM, asi que
+    # PowerShell 5.1 las lee sin mezclarlas.
     @{bloque = 'GLOBAL'; hojas = @(
-        @{txt='Diagnostico de planta'; tab=$tabG; vista='todo'}
+        @{txt='Diagnóstico de planta'; tab=$tabG; vista='todo'}
         @{txt='SAT';                   tab=$tabSAT})}
     # Una NCU tiene dos diagnosticos y antes iban mezclados: el suyo -sus
     # alarmas, su SAI, su seta, sus gateways, su reloj- y el de sus esclavos.
     # La hoja "Diagnostico" apuntaba a las filas NCU del barrido de planta, que
     # es lo mismo que ahora hace la pestana propia pero peor y de rebote.
     @{bloque = 'NCU'; hojas = @(
-        @{txt='Diagnostico propio'; tab=$tabND}
+        @{txt='Diagnóstico propio'; tab=$tabND}
         @{txt='Comm esclavos';      tab=$tabN}
         @{txt='Estabilidad';        tab=$tabE}
-        @{txt='Auditoria';          tab=$tabAN}
+        @{txt='Auditoría';          tab=$tabAN}
         @{txt='Firmware';           tab=$tabFN})}
     @{bloque = 'HSU'; hojas = @(
-        @{txt='Diagnostico';        tab=$tabG; vista='HSU'}
-        @{txt='Auditoria';          tab=$tabAH}
+        @{txt='Diagnóstico';        tab=$tabG; vista='HSU'}
+        @{txt='Auditoría';          tab=$tabAH}
         @{txt='Firmware';           tab=$tabFH}
-        @{txt='Lectura de senales'; tab=$tabH})}
+        @{txt='Lectura de señales'; tab=$tabH})}
     @{bloque = 'REPETIDORES'; hojas = @(
-        @{txt='Diagnostico y bateria'; tab=$tabG; vista='REP'}
-        @{txt='Auditoria';             tab=$tabRA}
+        @{txt='Diagnóstico y batería'; tab=$tabG; vista='REP'}
+        @{txt='Auditoría';             tab=$tabRA}
         @{txt='Firmware';              tab=$tabRF}
         @{txt='Buscar repetidor';      tab=$tabRB})}
     @{bloque = 'TCUs'; hojas = @(
-        @{txt='Diagnostico';   tab=$tabG; vista='TCU'}
-        @{txt='Auditoria';     tab=$tabF}
-        @{txt='Baterias';      tab=$tabB}
+        @{txt='Diagnóstico';   tab=$tabG; vista='TCU'}
+        @{txt='Auditoría';     tab=$tabF}
+        @{txt='Baterías';      tab=$tabB}
         @{txt='Firmware';      tab=$tabFW}
         @{txt='Leer variable'; tab=$tabL}
         @{txt='Volcar TCU';    tab=$tabD}
