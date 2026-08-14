@@ -7,17 +7,23 @@ API descubierta en El Burgo/Ayora (13-08-2026, capturada con DevTools):
   GET http://<ip>/private_api/csv/<AAAA-MM-DD>/download   -> ZIP con TODOS los CSV del día
   Autenticación: cookie de sesión  sunner_auth=<token>  (la da el login del panel).
 
-El login automático está PENDIENTE de capturar (cierra sesión y vuelve a entrar
-con la pestaña Red abierta y copia el cURL del POST). Hasta entonces, el token
-se pasa con --cookie o con la variable de entorno SUNNER_AUTH.
+LOGIN AUTOMÁTICO: usuario admin, contraseña NCU<nn> (el número de la NCU,
+p.ej. NCU05) — el esquema lo dio Ignacio el 14-08 (en el panel "ADMINISTRATOR"
+es el rol, no el usuario). La ruta exacta del POST
+no está capturada, así que se prueban las candidatas habituales y la buena se
+reconoce por la señal inequívoca: la respuesta trae Set-Cookie sunner_auth.
+Si el panel usara otra ruta, pasa el token a mano con --cookie / SUNNER_AUTH
+(y captura el cURL del login para añadir la ruta a CANDIDATOS).
 
 Uso:
-  python3 descarga_logs_ncu.py --ncus ncus.json --cookie <token>          # ayer
+  python3 descarga_logs_ncu.py --ncus ncus.json                           # ayer, login solo
   python3 descarga_logs_ncu.py --ncus ncus.json --fecha 2026-08-13
   python3 descarga_logs_ncu.py --ncus ncus.json --desde 2026-08-01 --hasta 2026-08-13
   python3 descarga_logs_ncu.py --ip 192.168.4.45 --ncu 05 --fecha 2026-08-13
+  python3 descarga_logs_ncu.py --ncus ncus.json --cookie <token>          # sesión a mano
 
 ncus.json:  [{"ncu":"05","ip":"192.168.4.45"}, {"ncu":"06","ip":"192.168.4.46"}]
+            (admite "usuario" y "pass" por NCU si alguna no sigue el esquema)
 
 Salida (en --destino, por defecto ./logs-ncu):
   NCU05_2026-08-13.zip          el ZIP tal cual lo sirve la NCU (sin tocar: el hash
@@ -31,7 +37,35 @@ nocturna (CONTRATO), este script es su pieza de descarga.
 
 Solo librería estándar: corre en el PC de planta, en un portátil o en el collector.
 """
-import argparse, datetime as dt, io, json, os, sys, time, urllib.request, urllib.error, zipfile
+import argparse, datetime as dt, io, json, os, re, sys, time, urllib.parse, urllib.request, urllib.error, zipfile
+
+# rutas de login candidatas: la buena se reconoce porque responde con la cookie
+CANDIDATOS=[("/private_api/login","json"),("/private_api/auth","json"),
+            ("/api/login","json"),("/login","form")]
+CLAVES=[("username","password"),("user","password")]
+
+def login(ip, usuario, clave, log):
+    for ruta,forma in CANDIDATOS:
+        for ku,kp in CLAVES:
+            try:
+                if forma=="json":
+                    datos=json.dumps({ku:usuario,kp:clave}).encode();ct="application/json"
+                else:
+                    datos=urllib.parse.urlencode({ku:usuario,kp:clave}).encode();ct="application/x-www-form-urlencoded"
+                req=urllib.request.Request("http://%s%s"%(ip,ruta),data=datos,
+                    headers={"Content-Type":ct,"Accept":"application/json, */*",
+                             "User-Agent":"factiun-descarga-logs/1.0"})
+                with urllib.request.urlopen(req,timeout=15) as r:
+                    for sc in (r.headers.get_all("Set-Cookie") or []):
+                        m=re.search(r"sunner_auth=([^;]+)",sc)
+                        if m:
+                            log("login OK en %s (%s como %s)"%(ip,ruta,usuario))
+                            return m.group(1)
+            except Exception:
+                continue
+    log("FALLO login en %s como %s: ninguna ruta candidata devolvió sunner_auth — "
+        "captura el cURL del login del panel (o pasa --cookie)"%(ip,usuario))
+    return None
 
 def peticion(url, cookie, timeout=120):
     req = urllib.request.Request(url, headers={
@@ -91,9 +125,8 @@ def descarga_dia(ip, ncu, fecha, cookie, destino, log):
             return True
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
-                log("FALLO %s: sesión rechazada (%s) — la cookie sunner_auth ha caducado; "
-                    "renueva con --cookie (login automático pendiente de capturar)" % (etiqueta, e.code))
-                return False                     # sin sesión no hay reintento que valga
+                # sesión rechazada: que el llamante haga login y reintente una vez
+                return "auth"
             if e.code == 404:
                 # la retención de la NCU tiene huecos (visto en el panel: días que ya no
                 # están); un 404 en backfill es "ese día ya no existe", no un error a reintentar
@@ -114,15 +147,17 @@ def main():
     p.add_argument("--fecha", help="AAAA-MM-DD (por defecto: ayer)")
     p.add_argument("--desde"), p.add_argument("--hasta", help="rango para backfill")
     p.add_argument("--cookie", default=os.environ.get("SUNNER_AUTH", ""),
-                   help="token sunner_auth (o variable de entorno SUNNER_AUTH)")
+                   help="token sunner_auth a mano (si no, el script hace login solo)")
+    p.add_argument("--usuario", default="admin")
+    p.add_argument("--password", help="contraseña común (por defecto NCU<nn> por cada NCU)")
     p.add_argument("--destino", default="logs-ncu")
     a = p.parse_args()
 
-    if not a.cookie:
-        sys.exit("Falta la sesión: --cookie <token> o SUNNER_AUTH (es la cookie sunner_auth del panel)")
     ncus = json.load(open(a.ncus, encoding="utf-8")) if a.ncus else \
            [{"ncu": a.ncu or "?", "ip": a.ip}] if a.ip else \
            sys.exit("Di las NCUs: --ncus fichero.json  o  --ip ... --ncu ...")
+    def usuarioDe(n): return n.get("usuario") or a.usuario
+    def claveDe(n):   return n.get("pass") or a.password or ("NCU"+str(n.get("ncu","")).zfill(2))
 
     if a.desde or a.hasta:
         d0 = dt.date.fromisoformat(a.desde or a.hasta)
@@ -137,11 +172,27 @@ def main():
         linea = "%s %s" % (dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), msg)
         print(linea); flog.write(linea + "\n"); flog.flush()
 
+    galletas = {}                         # sesión por IP, para no re-loguear en cada día
+    def sesion(n, forzar=False):
+        ip = n["ip"]
+        if forzar or ip not in galletas:
+            galletas[ip] = a.cookie or login(ip, usuarioDe(n), claveDe(n), log)
+            if forzar and a.cookie:       # la cookie a mano caducó: probar el login igualmente
+                galletas[ip] = login(ip, usuarioDe(n), claveDe(n), log)
+        return galletas[ip]
+
     bien = mal = 0
     for fecha in fechas:
         for n in ncus:
-            ok = descarga_dia(n["ip"], str(n["ncu"]), fecha, a.cookie, a.destino, log)
-            bien, mal = bien + ok, mal + (not ok)
+            tok = sesion(n)
+            res = tok and descarga_dia(n["ip"], str(n["ncu"]), fecha, tok, a.destino, log)
+            if res == "auth":             # sesión caducada a mitad: re-login y un reintento
+                tok = sesion(n, forzar=True)
+                res = tok and descarga_dia(n["ip"], str(n["ncu"]), fecha, tok, a.destino, log)
+                if res == "auth":
+                    log("FALLO NCU%s_%s: la NCU rechaza la sesión incluso recién logueada" % (n["ncu"], fecha))
+                    res = False
+            bien, mal = bien + (res is True), mal + (res is not True)
     log("fin: %d bien, %d mal" % (bien, mal))
     sys.exit(1 if mal else 0)
 

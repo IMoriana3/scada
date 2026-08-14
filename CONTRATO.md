@@ -201,13 +201,18 @@ planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
   - `GET http://<ip>/private_api/csv/<AAAA-MM-DD>` → índice del día (JSON, ~1,4 kB)
   - `GET http://<ip>/private_api/csv/<AAAA-MM-DD>/download` → **ZIP con todos los CSV del día**
     (3,1 MB / 13,7 s medidos) — una petición por NCU y día, nada de ir fichero a fichero
-  - sesión por cookie `sunner_auth=<token>` (la emite el login ADMINISTRATOR del panel;
-    **el cURL del login está pendiente de capturar** — sin él, el token se renueva a mano)
+  - sesión por cookie `sunner_auth=<token>`, que caduca a ~1 día. Credenciales (Ignacio, 14-08):
+    usuario **admin**, contraseña **NCU<nn>** (el número de la NCU: NCU05, NCU16…) — en el panel
+    "ADMINISTRATOR" es el rol, no el usuario. La ruta exacta del POST de login no está capturada:
+    el descargador prueba las candidatas habituales y reconoce la buena por el `Set-Cookie
+    sunner_auth` de la respuesta; si vuestro panel usa otra, añadidla a `CANDIDATOS`.
 
-  Hay pieza de descarga ya hecha y probada (stdlib pura, corre en el PC de planta o donde sea):
-  `scada/tools/descarga_logs_ncu.py` — login pendiente aparte, hace índice + ZIP con reintentos,
-  validación del ZIP, escritura atómica, backfill por rango y log de descargas. Os la podéis llevar
-  al agente tal cual como pieza de la subida nocturna; los ZIP que deja se arrastran al importador.
+  Pieza de descarga hecha y probada (stdlib pura, corre en el PC de planta o donde sea):
+  `scada/tools/descarga_logs_ncu.py` — login automático con re-login si la sesión caduca a mitad,
+  índice + ZIP con reintentos, validación del ZIP, escritura atómica, 404 = "día ya no guardado"
+  (la retención de la NCU tiene huecos: lo que no se baja, se pierde), backfill por rango,
+  idempotente, log de descargas. Os la podéis llevar al agente tal cual como pieza de la subida
+  nocturna; los ZIP que deja se arrastran al importador.
 
   Tres cosas medidas que os pueden servir ya, todas de la NCU2 de El Burgo del 12-08:
   1. **`ps_voltage` a 48,2 V mantenidos con 1,28 A de pico** ⇒ esa TCU es **string power**. Es el
