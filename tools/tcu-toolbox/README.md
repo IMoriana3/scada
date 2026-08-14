@@ -106,6 +106,19 @@ la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
 una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
 sitio.
 
+**Las HSUs declaradas no llegaban a Comm NCU (v11.49)** — la columna **HSUs**
+dice `leídas/declaradas`, y en Ayora salía `1/0` en la NCU3, `2/0` en la NCU15…
+**0 declaradas en las dieciséis**, cuando la topología declara 10 estaciones.
+Justo la columna que existe para avisar de la que falta era la que no podía
+hacerlo.
+
+`Trabajos-Planta` construía cada trabajo con NCU, IP, TCUs y conexión, pero se
+dejaba fuera `hsuLista` y `rsuLista`, así que quien contaba las declaradas
+contaba sobre una lista vacía. Ahora viajan con el trabajo y con su conexión.
+
+Se vio en una captura de campo, no en la suite — de ahí que ahora haya un test
+con dos NCUs y sus estaciones declaradas.
+
 **La auditoría compara valores, no bits (v11.48)** — al auditar salía esto, y
 con razón no inspiraba confianza:
 

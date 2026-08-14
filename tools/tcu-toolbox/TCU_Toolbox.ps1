@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.48'
+$VERSION_TOOLBOX = '11.49'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -5492,7 +5492,12 @@ function Trabajos-Planta([hashtable]$cx, [int[]]$tcus, [string]$filtro = '', $se
             else { $t = @($sel.lista) }
         }
         return @{ncu=$(if ($n -ne '') { [int]$n } else { $null }); ip=$cx.ip; tcus=@($t)
-                 cx=$(if ($null -ne $g) { @{ip=$cx.ip; puerto=$cx.puerto; gws=$g; multi=$null; etiqueta=$cx.etiqueta; to=$cx.to; reint=$cx.reint} } else { $cx })}
+                 # las estaciones y los repetidores que la topologia declara para
+                 # esta NCU viajan con el trabajo: quien lo recibe necesita saber
+                 # cuantos DEBERIA haber, no solo cuantos ha leido
+                 hsuLista=@($cx.hsuLista); rsuLista=@($cx.rsuLista)
+                 cx=$(if ($null -ne $g) { @{ip=$cx.ip; puerto=$cx.puerto; gws=$g; multi=$null; etiqueta=$cx.etiqueta; to=$cx.to; reint=$cx.reint
+                                            hsuLista=@($cx.hsuLista); rsuLista=@($cx.rsuLista)} } else { $cx })}
     }
     $lista = @()
     $nums = Parse-ListaNums $filtro
@@ -5505,7 +5510,9 @@ function Trabajos-Planta([hashtable]$cx, [int[]]$tcus, [string]$filtro = '', $se
         $lt = @(Sel-TcusDe $sel $g "$($n.ncu)")
         if ($lt.Count -eq 0) { continue }
         $lista += ,@{ncu=[int]$n.ncu; ip=$n.ip; tcus=$lt
-            cx=@{ip=$n.ip; puerto=$null; gws=$g; multi=$null; etiqueta='auto'; to=$cx.to; reint=$cx.reint}}
+            hsuLista=@($n.hsuLista); rsuLista=@($n.rsuLista)
+            cx=@{ip=$n.ip; puerto=$null; gws=$g; multi=$null; etiqueta='auto'; to=$cx.to; reint=$cx.reint
+                 hsuLista=@($n.hsuLista); rsuLista=@($n.rsuLista)}}
     }
     return $lista
 }
