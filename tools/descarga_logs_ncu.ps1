@@ -31,6 +31,7 @@ param(
   [string]$Destino = "logs-ncu"
 )
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"   # en PowerShell 5.1 la barra de progreso ralentiza x10 las descargas
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 function Log($msg){
