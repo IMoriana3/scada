@@ -127,11 +127,11 @@ def descarga_dia(ip, ncu, fecha, cookie, destino, log):
             if e.code in (401, 403):
                 # sesión rechazada: que el llamante haga login y reintente una vez
                 return "auth"
-            if e.code == 404:
-                # la retención de la NCU tiene huecos (visto en el panel: días que ya no
-                # están); un 404 en backfill es "ese día ya no existe", no un error a reintentar
-                log("NO ESTÁ %s: la NCU ya no guarda ese día (404) — lo que no se baja a tiempo, se pierde"
-                    % etiqueta)
+            if e.code in (404, 500):
+                # la retención de la NCU tiene huecos, y la NCU05 real responde 500 (no
+                # 404) para los días que ya no guarda (medido 14-08): ninguno se reintenta
+                log("NO ESTÁ %s: la NCU no tiene ese día (responde %s) — lo que no se baja a tiempo, se pierde"
+                    % (etiqueta, e.code))
                 return False
             log("intento %d/3 %s: HTTP %s" % (intento, etiqueta, e.code))
         except Exception as e:

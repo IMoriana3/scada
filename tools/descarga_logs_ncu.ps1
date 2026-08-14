@@ -85,7 +85,10 @@ function DescargaDia($ip,$ncu,$fecha,$tok){
   catch{
     $cod=CodigoHttp $_
     if($cod -eq 401 -or $cod -eq 403){ return "auth" }
-    if($cod -eq 404){ Log ("NO ESTA {0}: la NCU ya no guarda ese dia (404) - lo que no se baja a tiempo, se pierde" -f $etq); return $false }
+    if($cod -eq 404 -or $cod -eq 500){
+      # medido en la NCU05 real (14-08): los dias que ya no guarda responden 500,
+      # no 404 - reintentar seria perder minutos por cada dia vacio del rango
+      Log ("NO ESTA {0}: la NCU no tiene ese dia (responde {1}) - lo que no se baja a tiempo, se pierde" -f $etq,$cod); return $false }
     Log ("AVISO {0}: indice no disponible ({1})" -f $etq,$_.Exception.Message)
   }
   for($intento=1;$intento -le 3;$intento++){
@@ -102,7 +105,8 @@ function DescargaDia($ip,$ncu,$fecha,$tok){
       if(Test-Path $tmp){ Remove-Item -Force $tmp }
       $cod=CodigoHttp $_
       if($cod -eq 401 -or $cod -eq 403){ return "auth" }
-      if($cod -eq 404){ Log ("NO ESTA {0}: la NCU ya no guarda ese dia (404) - lo que no se baja a tiempo, se pierde" -f $etq); return $false }
+      if($cod -eq 404 -or $cod -eq 500){
+        Log ("NO ESTA {0}: la NCU no tiene ese dia (responde {1}) - lo que no se baja a tiempo, se pierde" -f $etq,$cod); return $false }
       Log ("intento {0}/3 {1}: {2}" -f $intento,$etq,$_.Exception.Message)
       Start-Sleep -Seconds (5*$intento)
     }
