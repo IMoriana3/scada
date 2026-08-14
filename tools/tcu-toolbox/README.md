@@ -106,6 +106,37 @@ la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
 una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
 sitio.
 
+**El SAT, por NCU y por TCU (v11.51)** — el ensayo se montó pensando solo en la
+planta entera, que es lo que pide el anexo. Pero en obra hace falta lo otro
+constantemente: comprobar el montaje de una NCU antes de arrancar los siete
+días, y sobre todo **reemitir el veredicto de la NCU que incumplió sin volver a
+medir nada**.
+
+Son dos cosas distintas y ahora están las dos:
+
+- **Registrar acotado**: el cuadro de NCUs de arriba y un cuadro de TCUs nuevo
+  en la pestaña. El alcance se **congela al arrancar** — si alguien toca el
+  cuadro a mitad de una medida de siete días, el registro se partiría en dos —
+  y el aviso de «esto no es el 100 % de la planta» dice exactamente qué se va a
+  medir.
+- **Analizar acotado**: el registro es el que es, pero el veredicto se reemite
+  sobre un trozo. Los ficheros `RESULTADO_*` salen con el alcance en el nombre,
+  así que reemitir por NCU no pisa el de la planta entera.
+
+Dos detalles que importan para que el veredicto siga siendo correcto: las filas
+de **equipo** (RSU y la propia NCU) no llevan número de TCU, así que un filtro
+de TCUs no les aplica y entran si su NCU entra — si no, filtrar por TCU se
+cargaba el D.3.4.2. Y los eventos **PASE** son el denominador de D.4 (cuántos
+intentos hubo) y no llevan NCU: no se filtran, o la disponibilidad de
+comunicaciones se quedaría sin contra qué dividir.
+
+**El árbol, entero y bien escrito (v11.51)** — cabían 18 de las 31 líneas y los
+bloques REPETIDORES y TCUs quedaban debajo de una barra de scroll, que es justo
+lo que el árbol venía a evitar. Ahora llega hasta abajo del todo, a la altura de
+la consola, que se corre a su derecha. Y las etiquetas van con tildes y con ñ:
+*Diagnóstico*, *Auditoría*, *Baterías*, *Lectura de señales*. El `.ps1` está en
+UTF-8 con BOM, así que PowerShell 5.1 las lee sin mezclarlas.
+
 **Una NCU tiene DOS diagnósticos (v11.50)** — el suyo propio —sus alarmas, su
 SAI, su seta, sus gateways, su reloj— y el de sus **esclavos** —cuántas TCUs y
 HSUs le hablan—. Son preguntas distintas: la primera la contesta ella sola por
