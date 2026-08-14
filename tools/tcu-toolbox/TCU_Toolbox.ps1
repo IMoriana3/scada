@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.49'
+$VERSION_TOOLBOX = '11.50'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -964,6 +964,58 @@ function Estab-Resumen($acc) {
 # Una fila de la pestana Comm NCU. Traduce los bits del bloque 502 a algo que
 # se lee de un vistazo, y sobre todo distingue "no lo tiene" de "lo tiene mal":
 # un gateway que la topologia no declara sale '-', no 'CAIDO'. Pura.
+# El diagnostico de la NCU EN SI: lo que ella declara de si misma por el puerto
+# 502, sin tocar la Zigbee ni preguntar por un solo esclavo. Es la mitad que
+# faltaba: hasta ahora esto vivia dentro de la tabla de comunicaciones, mezclado
+# con el recuento de TCUs, y "diagnosticar la NCU" y "ver cuantos esclavos le
+# hablan" son dos preguntas distintas.
+# $stow son los force_sp por grupo (40001-40007) ya pasados por Ncu-Grupos: un
+# grupo abanderado a mano que alguien se dejo es una condicion de ESTA NCU, no
+# una discrepancia de configuracion. Pura.
+# Cuantos esclavos faltan en una celda "leidas/declaradas". Un vacio o un '-'
+# no es un fallo: es que no se ha contado. Pura.
+function Comm-Faltan([string]$celda) {
+    $p = "$celda" -split '/'
+    if ($p.Count -ne 2) { return 0 }
+    $ok = 0; $de = 0
+    if (-not [int]::TryParse($p[0].Trim(), [ref]$ok)) { return 0 }
+    if (-not [int]::TryParse($p[1].Trim(), [ref]$de)) { return 0 }
+    if ($de -le $ok) { return 0 }
+    return ($de - $ok)
+}
+
+function Ncu-FilaPropia([string]$ncu, [string]$ip, $ns, $gws, [string]$fw = '', $stow = $null) {
+    $puertos = @(@($gws) | Where-Object { $_ -and $_.puerto } | ForEach-Object { [int]$_.puerto })
+    $hay1 = ($puertos.Count -eq 0 -or $puertos -contains $PUERTO_GW1)
+    $hay2 = ($puertos.Count -gt 0 -and $puertos -contains $PUERTO_GW2)
+    $din = $(if ($ns) { [int]$ns.din } else { 0 })
+    $pri = $(if ($ns) { [int]$ns.principal } else { 0 })
+    $gw = { param($hay, $bit) $(if (-not $hay) { '-' } elseif ($pri -band (1 -shl $bit)) { 'CAIDO' } else { 'OK' }) }
+    $ups = @()
+    if ($din -band 0x1) { $ups += 'bateria baja' }
+    if ($din -band 0x2) { $ups += 'sin alimentacion' }
+    if ($pri -band 0x1) { $ups += 'alarma de bateria' }
+    # que grupos estan pidiendo posicion segura, si alguno
+    $puestos = @()
+    foreach ($k in @($stow.Keys | Sort-Object)) {
+        $v = "$($stow[$k])"
+        if ($v -eq '' -or $v -eq 'ninguno') { continue }
+        $puestos += ("{0}: {1}" -f ("$k" -replace '^\d+\s+', '' -replace '\s*\[grupos\]$', ''), $v)
+    }
+    return [pscustomobject]@{
+        NCU = $ncu; IP = $ip; FW = "$fw"
+        Estado = $(if ($ns) { "$($ns.salud)" } else { 'SIN RESPUESTA' })
+        GW1 = (& $gw $hay1 4); GW2 = (& $gw $hay2 5)
+        UPS = $(if (-not $ns) { '' } elseif ($ups.Count -eq 0) { 'OK' } else { ($ups -join '; ') })
+        Seta = $(if (-not $ns) { '' } elseif ($din -band 0x2000) { 'PULSADA' } else { '-' })
+        Reloj = $(if (-not $ns) { '' } elseif ("$($ns.fecha)" -eq '') { 'sin hora' }
+                  elseif ($null -ne $ns.desvio -and $ns.desvio -gt $RELOJ_TOL_S) { (Reloj-Nota $ns) -join '' }
+                  else { 'en hora' })
+        Stow = $(if ($null -eq $stow) { '' } elseif ($puestos.Count -eq 0) { 'ninguno' } else { ($puestos -join '; ') })
+        Notas = $(if ($ns) { (@($ns.alarmas) -join '; ') } else { '' })
+    }
+}
+
 function Comm-FilaNcu([string]$ncu, [string]$ip, $ns, $gws, $comm, [int]$tcusDecl, [int]$hsusDecl, [string]$fw = '') {
     $puertos = @(@($gws) | Where-Object { $_ -and $_.puerto } | ForEach-Object { [int]$_.puerto })
     $hay1 = ($puertos.Count -eq 0 -or $puertos -contains $PUERTO_GW1)
@@ -4164,8 +4216,48 @@ $tabSAT.Controls.Add($lvSat)
 # el reloj y cuantas de sus TCUs le hablan. Estaba todo, pero repartido entre el
 # diagnostico, las alertas del vigilante y la consola, y una NCU se mira entera
 # o no se mira. Es el bloque 502: ~5 lecturas por NCU, la planta en segundos.
+# Una NCU tiene DOS diagnosticos y hasta ahora iban mezclados: el suyo propio
+# -sus alarmas, su SAI, su seta, su reloj, sus gateways- y el de sus esclavos
+# -cuantas TCUs y HSUs le hablan-. Son preguntas distintas: la primera la
+# contesta ella sola por el puerto 502 sin tocar la Zigbee, y la segunda habla
+# de otros equipos. Aqui van separadas, una pestana cada una.
+# ============================ TAB DIAGNOSTICO PROPIO DE LA NCU ============================
+$tabND = New-Object System.Windows.Forms.TabPage
+$tabND.Text = 'Diagnostico NCU'
+$tabs.TabPages.Add($tabND)
+
+$btnNDiag = New-Object System.Windows.Forms.Button
+$btnNDiag.Text = 'DIAGNOSTICAR NCUs'
+$btnNDiag.Location = New-Object System.Drawing.Point(10, 18)
+$btnNDiag.Size = New-Object System.Drawing.Size(170, 28)
+$btnNDiag.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnNDiag.ForeColor = [System.Drawing.Color]::White
+$tabND.Controls.Add($btnNDiag)
+
+$btnNDCsv = New-Object System.Windows.Forms.Button
+$btnNDCsv.Text = 'CSV'
+$btnNDCsv.Location = New-Object System.Drawing.Point(838, 18)
+$btnNDCsv.Size = New-Object System.Drawing.Size(70, 28)
+$btnNDCsv.Enabled = $false
+$tabND.Controls.Add($btnNDCsv)
+
+$lblNDRes = LG $tabND '' 196 630 24
+$lblNDRes.ForeColor = [System.Drawing.Color]::DimGray
+
+$lvND = New-Object System.Windows.Forms.ListView
+$lvND.Location = New-Object System.Drawing.Point(10, 56)
+$lvND.Size = New-Object System.Drawing.Size(898, 304)
+$lvND.View = 'Details'; $lvND.FullRowSelect = $true; $lvND.GridLines = $true
+foreach ($c in @(@('NCU',45), @('IP',110), @('FW',70), @('Estado',86), @('GW1',56), @('GW2',56),
+                 @('UPS',92), @('Seta',56), @('Reloj',92), @('Stow por grupo',120), @('Notas',200))) {
+    [void]$lvND.Columns.Add($c[0], $c[1])
+}
+$tabND.Controls.Add($lvND)
+[void](LG $tabND 'Solo la NCU: lo que ella misma declara por el puerto 502 (30100-30105, version en el 50 y las peticiones de posicion segura por grupo en 40001-40007). No lee ninguna TCU. El cuadro NCUs de arriba acota cuales.' 10 890 366)
+
+# ============================ TAB COMM ESCLAVOS ============================
 $tabN = New-Object System.Windows.Forms.TabPage
-$tabN.Text = 'Comm NCU'
+$tabN.Text = 'Comm esclavos'
 $tabs.TabPages.Add($tabN)
 
 $btnNComm = New-Object System.Windows.Forms.Button
@@ -4196,12 +4288,11 @@ $lvN = New-Object System.Windows.Forms.ListView
 $lvN.Location = New-Object System.Drawing.Point(10, 56)
 $lvN.Size = New-Object System.Drawing.Size(898, 304)
 $lvN.View = 'Details'; $lvN.FullRowSelect = $true; $lvN.GridLines = $true
-foreach ($c in @(@('NCU',45), @('IP',110), @('FW',70), @('Estado',86), @('GW1',56), @('GW2',56),
-                 @('UPS',92), @('Seta',56), @('Reloj',92), @('TCUs',62), @('HSUs',52), @('Notas',200))) {
+foreach ($c in @(@('NCU',45), @('IP',110), @('NCU responde',110), @('TCUs',90), @('HSUs',90), @('Notas',420))) {
     [void]$lvN.Columns.Add($c[0], $c[1])
 }
 $tabN.Controls.Add($lvN)
-[void](LG $tabN 'Una fila por NCU con lo que ella misma declara (puerto 502). El cuadro NCUs de arriba acota cuales.' 10 890 366)
+[void](LG $tabN 'Cuantos ESCLAVOS le hablan a cada NCU: TCUs y HSUs, como leidas/declaradas. Lo que le pasa a la NCU en si -SAI, seta, gateways, reloj- esta en Diagnostico NCU.' 10 890 366)
 
 # ============================ TAB ESTABILIDAD ============================
 # El mapa Modbus de Sunner no expone RSSI ni LQI, asi que no hay potencia de
@@ -10438,25 +10529,88 @@ $btnNComm.Add_Click({ Lanzar {
         $f = Comm-FilaNcu "$($tr.ncu)" "$($tr.ip)" $ns $gws $comm $nDecl $nHsu $fwN
         $script:UltimoComm += $f
         $it = New-Object System.Windows.Forms.ListViewItem("$($f.NCU)")
-        foreach ($c in @($f.IP, $f.FW, $f.Estado, $f.GW1, $f.GW2, $f.UPS, $f.Seta, $f.Reloj, $f.TCUs, $f.HSUs, $f.Notas)) { [void]$it.SubItems.Add("$c") }
+        # esta tabla habla de ESCLAVOS: lo que le pasa a la NCU en si esta en
+        # Diagnostico NCU. Aqui de la NCU solo interesa si contesta, porque si
+        # no contesta no se puede saber nada de sus esclavos.
+        $resp = $(if ("$($f.Estado)" -eq 'SIN RESPUESTA') { 'NO' } else { 'si' })
+        foreach ($c in @($f.IP, $resp, $f.TCUs, $f.HSUs, $f.Notas)) { [void]$it.SubItems.Add("$c") }
+        # el color lo marca lo que falta, no la salud de la NCU
+        $falta = (Comm-Faltan "$($f.TCUs)") + (Comm-Faltan "$($f.HSUs)")
+        if ($resp -eq 'NO') { $it.ForeColor = [System.Drawing.Color]::Gray; $nMal++ }
+        elseif ($falta -gt 0) { $it.ForeColor = [System.Drawing.Color]::Firebrick; $nMal++ }
+        else { $it.ForeColor = [System.Drawing.Color]::DarkGreen; $nOk++ }
+        $lvN.Items.Add($it) | Out-Null
+        if ($resp -eq 'NO') {
+            Con ("NCU{0,-3} {1,-15} no contesta: no se puede saber nada de sus esclavos" -f $f.NCU, $f.IP) ([System.Drawing.Color]::Salmon)
+        } elseif ($falta -gt 0) {
+            Con ("NCU{0,-3} {1,-15} faltan {2} esclavo(s): TCUs {3}, HSUs {4}" -f $f.NCU, $f.IP, $falta, $f.TCUs, $f.HSUs) ([System.Drawing.Color]::Orange)
+        }
+        Prog-Paso
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    $script:NcuLog = ''
+    $lblNRes.Text = "NCUs: $($nOk + $nMal)   |   con todos sus esclavos: $nOk   |   con algo que mirar: $nMal"
+    Con "Comm esclavos: $nOk NCUs con todos sus esclavos, $nMal con algo que mirar." ([System.Drawing.Color]::SteelBlue)
+    Marcar-Bloque 'comm'
+} })
+
+# ------------------------- DIAGNOSTICO PROPIO DE LA NCU -------------------------
+$script:UltimoNcuDiag = @()
+$btnNDiag.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
+    if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
+    $lvND.Items.Clear(); $script:UltimoNcuDiag = @(); $lblNDRes.Text = ''; $btnNDCsv.Enabled = $false
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Diagnostico de $($trabajos.Count) NCU(s) por el puerto ${PUERTO_NCU}: solo la NCU, ningun esclavo." ([System.Drawing.Color]::SteelBlue)
+    Prog-Iniciar $trabajos.Count
+    $nOk = 0; $nMal = 0; $nStow = 0
+    foreach ($tr in $trabajos) {
+        if (Chequear-Cancelado) { break }
+        $script:NcuLog = "$($tr.ncu)"
+        $ns = $null; $fwN = ''; $stow = $null
+        $gws = $(if ($tr.cx.gws) { $tr.cx.gws }
+                 elseif ($tr.cx.puerto -and $tr.cx.puerto -ne $PUERTO_NCU) { @(@{puerto=[int]$tr.cx.puerto}) }
+                 else { $null })
+        try {
+            Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
+            $ns = Ncu-Salud $gws
+            try { $fwN = Ncu-Version } catch { $fwN = '' }
+            try { $stow = Ncu-Config } catch { $stow = $null }
+        } catch { } finally { Modbus-Cerrar }
+        $f = Ncu-FilaPropia "$($tr.ncu)" "$($tr.ip)" $ns $gws $fwN $stow
+        $script:UltimoNcuDiag += $f
+        $it = New-Object System.Windows.Forms.ListViewItem("$($f.NCU)")
+        foreach ($c in @($f.IP, $f.FW, $f.Estado, $f.GW1, $f.GW2, $f.UPS, $f.Seta, $f.Reloj, $f.Stow, $f.Notas)) { [void]$it.SubItems.Add("$c") }
         switch ("$($f.Estado)") {
             'OK'     { $it.ForeColor = [System.Drawing.Color]::DarkGreen; $nOk++ }
             'AVISO'  { $it.ForeColor = [System.Drawing.Color]::DarkOrange; $nMal++ }
             'ALARMA' { $it.ForeColor = [System.Drawing.Color]::Firebrick; $nMal++ }
             default  { $it.ForeColor = [System.Drawing.Color]::Gray; $nMal++ }
         }
-        $lvN.Items.Add($it) | Out-Null
+        $lvND.Items.Add($it) | Out-Null
         if ("$($f.Estado)" -ne 'OK') {
             Con ("NCU{0,-3} {1,-15} {2,-13} {3}" -f $f.NCU, $f.IP, $f.Estado, $f.Notas) ([System.Drawing.Color]::Orange)
+        }
+        # un grupo abanderado a mano que alguien se dejo puesto no es un aviso
+        # de la NCU -ella esta bien-, pero son seguidores parados
+        if ("$($f.Stow)" -ne '' -and "$($f.Stow)" -ne 'ninguno') {
+            $nStow++
+            Con ("NCU{0,-3} POSICION SEGURA FORZADA -> {1}" -f $f.NCU, $f.Stow) ([System.Drawing.Color]::Orange)
         }
         Prog-Paso
         [System.Windows.Forms.Application]::DoEvents()
     }
     $script:NcuLog = ''
-    $lblNRes.Text = "NCUs: $($nOk + $nMal)   |   OK: $nOk   |   con algo que mirar: $nMal"
-    Con "Comm NCU: $nOk NCUs OK, $nMal con algo que mirar." ([System.Drawing.Color]::SteelBlue)
-    Marcar-Bloque 'comm'
+    $btnNDCsv.Enabled = (@($script:UltimoNcuDiag).Count -gt 0)
+    $lblNDRes.Text = "NCUs: $($nOk + $nMal)   |   OK: $nOk   |   con algo que mirar: $nMal" +
+                     $(if ($nStow -gt 0) { "   |   con stow forzado: $nStow" } else { '' })
+    Con "Diagnostico NCU: $nOk OK, $nMal con algo que mirar$(if ($nStow -gt 0) { ", $nStow con posicion segura forzada" })." ([System.Drawing.Color]::SteelBlue)
 } })
+$btnNDCsv.Add_Click({
+    if (@($script:UltimoNcuDiag).Count -eq 0) { return }
+    [void](Exportar-Csv $script:UltimoNcuDiag 'diagnostico_ncu' 'Diagnostico NCU')
+})
 
 $btnNCsv.Add_Click({
     if (@($script:UltimoComm).Count -eq 0) { return }
@@ -12167,12 +12321,16 @@ $NAV_ARBOL = @(
     @{bloque = 'GLOBAL'; hojas = @(
         @{txt='Diagnostico de planta'; tab=$tabG; vista='todo'}
         @{txt='SAT';                   tab=$tabSAT})}
+    # Una NCU tiene dos diagnosticos y antes iban mezclados: el suyo -sus
+    # alarmas, su SAI, su seta, sus gateways, su reloj- y el de sus esclavos.
+    # La hoja "Diagnostico" apuntaba a las filas NCU del barrido de planta, que
+    # es lo mismo que ahora hace la pestana propia pero peor y de rebote.
     @{bloque = 'NCU'; hojas = @(
-        @{txt='Diagnostico'; tab=$tabG; vista='NCU'}
-        @{txt='Comm NCU';    tab=$tabN}
-        @{txt='Estabilidad'; tab=$tabE}
-        @{txt='Auditoria';   tab=$tabAN}
-        @{txt='Firmware';    tab=$tabFN})}
+        @{txt='Diagnostico propio'; tab=$tabND}
+        @{txt='Comm esclavos';      tab=$tabN}
+        @{txt='Estabilidad';        tab=$tabE}
+        @{txt='Auditoria';          tab=$tabAN}
+        @{txt='Firmware';           tab=$tabFN})}
     @{bloque = 'HSU'; hojas = @(
         @{txt='Diagnostico';        tab=$tabG; vista='HSU'}
         @{txt='Auditoria';          tab=$tabAH}
@@ -12263,7 +12421,7 @@ $nav.ExpandAll()
 if ($nav.Nodes.Count -gt 0 -and $nav.Nodes[0].Nodes.Count -gt 0) { $nav.SelectedNode = $nav.Nodes[0].Nodes[0] }
 
 # Todas las tablas de resultados filtran y ordenan al pulsar su cabecera.
-foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvFWd, $lvSat, $lvH, $lvN, $lvE, $lvI, $lvC, $lvB, $lvT,
+foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvFWd, $lvSat, $lvND, $lvH, $lvN, $lvE, $lvI, $lvC, $lvB, $lvT,
                      $lvAN, $lvFN, $lvAH, $lvFH, $lvRA, $lvRF, $lvRB)) { Lv-Filtrable $tabla }
 
 # La cabecera de pestanas no se puede ocultar con una propiedad: no existe. Lo
