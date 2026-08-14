@@ -2416,6 +2416,45 @@ Check 'auditoria: la linea sale aunque haya mudas' ($src.Contains('y $errTcu var
 Check 'auditoria: cuenta las mixtas' ($src.Contains('if ($desvTcu -gt 0) { $nMixtas++ }')) $true
 
 Write-Host ''
+Write-Host '== una NCU tiene DOS diagnosticos =='
+# El suyo -sus alarmas, su SAI, su seta, sus gateways, su reloj- y el de sus
+# esclavos -cuantas TCUs y HSUs le hablan-. Iban mezclados en una sola tabla
+# llamada "Comm NCU", que ni era solo comm ni era solo de la NCU.
+Check 'ncu2: hay pestana de diagnostico propio' ($src.Contains("`$tabND.Text = 'Diagnostico NCU'")) $true
+Check 'ncu2: y la de comm es de esclavos' ($src.Contains("`$tabN.Text = 'Comm esclavos'")) $true
+Check 'ncu2: el arbol lleva a las dos' ($src.Contains("@{txt='Diagnostico propio'; tab=`$tabND}")) $true
+Check 'ncu2: y ya no manda a las filas NCU del barrido' ($src.Contains("@{txt='Diagnostico'; tab=`$tabG; vista='NCU'}")) $false
+# el diagnostico propio no lee ni un esclavo
+Check 'ncu2: no cuenta TCUs' ($src.Contains('$f = Ncu-FilaPropia "$($tr.ncu)" "$($tr.ip)" $ns $gws $fwN $stow')) $true
+$nsOk = @{salud='OK'; alarmas=@(); fecha='2026-08-12 09:00'; desvio=0; din=0; principal=0}
+$fp = Ncu-FilaPropia '7' '192.168.4.55' $nsOk @(@{puerto=503}) 'v1.17.0' @{'40001 force_sp_1 (viento) [grupos]'='ninguno'}
+Check 'ncu2: la NCU sana' $fp.Estado 'OK'
+Check 'ncu2: con un solo gateway, el otro no se inventa' $fp.GW2 '-'
+Check 'ncu2: SAI OK' $fp.UPS 'OK'
+Check 'ncu2: seta sin pulsar' $fp.Seta '-'
+Check 'ncu2: sin stow forzado' $fp.Stow 'ninguno'
+# las alarmas propias salen de 30100 y 30101
+$nsMal = @{salud='ALARMA'; alarmas=@('SETA DE EMERGENCIA'); fecha='2026-08-12 09:00'; desvio=0; din=0x2003; principal=0x11}
+$fm = Ncu-FilaPropia '9' '192.168.4.65' $nsMal @(@{puerto=503}, @{puerto=504}) 'v1.17.0' $null
+Check 'ncu2: seta pulsada' $fm.Seta 'PULSADA'
+Check 'ncu2: el SAI canta las tres' $fm.UPS 'bateria baja; sin alimentacion; alarma de bateria'
+Check 'ncu2: GW1 caido' $fm.GW1 'CAIDO'
+Check 'ncu2: y GW2 existe y esta bien' $fm.GW2 'OK'
+# un grupo abanderado a mano es condicion de ESA NCU, no una discrepancia
+$fs = Ncu-FilaPropia '3' '10.0.0.3' $nsOk @(@{puerto=503}) 'v1.17.0' @{
+    '40001 force_sp_1 (viento) [grupos]' = '2,5'
+    '40003 force_sp_3 (nieve) [grupos]'  = 'ninguno'}
+Check 'ncu2: el stow forzado sale con sus grupos' $fs.Stow 'force_sp_1 (viento): 2,5'
+Check 'ncu2: y la NCU muda se dice' (Ncu-FilaPropia '4' '10.0.0.4' $null $null '' $null).Estado 'SIN RESPUESTA'
+# la tabla de esclavos colorea por lo que FALTA, no por la salud de la NCU
+Check 'ncu2: faltan dos' (Comm-Faltan '64/66') 2
+Check 'ncu2: no falta ninguna' (Comm-Faltan '66/66') 0
+Check 'ncu2: una celda vacia no es un fallo' (Comm-Faltan '') 0
+Check 'ncu2: ni un guion' (Comm-Faltan '-') 0
+Check 'ncu2: ni un texto raro' (Comm-Faltan 'a/b') 0
+Check 'ncu2: mas leidas que declaradas no es negativo' (Comm-Faltan '3/1') 0
+
+Write-Host ''
 Write-Host '== el relleno de flota solo cubre lo que se ha barrido =='
 # Pedir la TCU 24 de la NCU11 devolvia una fila buena y 64 SIN LECTURA de
 # equipos por los que nadie habia preguntado. Con un filtro de salud puesto

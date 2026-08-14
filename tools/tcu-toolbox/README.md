@@ -106,6 +106,36 @@ la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
 una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
 sitio.
 
+**Una NCU tiene DOS diagnósticos (v11.50)** — el suyo propio —sus alarmas, su
+SAI, su seta, sus gateways, su reloj— y el de sus **esclavos** —cuántas TCUs y
+HSUs le hablan—. Son preguntas distintas: la primera la contesta ella sola por
+el puerto 502 sin tocar la Zigbee, y la segunda habla de otros equipos. Iban
+mezcladas en una sola tabla llamada *Comm NCU*, que ni era solo comunicaciones
+ni era solo de la NCU.
+
+| Pestaña | Qué contesta |
+|---|---|
+| **Diagnóstico NCU** | Versión, estado, GW1/GW2, SAI, seta, reloj, los diez interruptores de limpieza y **el stow forzado por grupo** |
+| **Comm esclavos** | Si la NCU contesta, y cuántas TCUs y HSUs le hablan, como `leídas/declaradas` |
+
+Las alarmas propias de la NCU no son un invento nuestro: están en el mapa R7.1,
+en `30100` (batería baja del SAI, fallo de alimentación, seta de emergencia,
+interruptores de limpieza) y `30101` (alarma de batería, GW1 y GW2
+desconectados).
+
+El **stow forzado por grupo** (`40001`–`40007`) baja aquí desde Auditoría NCU.
+Estaba comparándose entre NCUs como si fuera configuración, y no lo es: un grupo
+abanderado a mano que alguien se dejó puesto es una condición **de esa NCU** —y
+son seguidores parados—, no una discrepancia.
+
+La tabla de esclavos colorea ahora por **lo que falta**, no por la salud de la
+NCU: una NCU perfecta a la que no le habla una estación sale en rojo, que es lo
+que interesa ver.
+
+Y del árbol desaparece la hoja *NCU · Diagnóstico*, que llevaba a las filas NCU
+del barrido de planta: era lo mismo que la pestaña propia, pero peor y de
+rebote.
+
 **Las HSUs declaradas no llegaban a Comm NCU (v11.49)** — la columna **HSUs**
 dice `leídas/declaradas`, y en Ayora salía `1/0` en la NCU3, `2/0` en la NCU15…
 **0 declaradas en las dieciséis**, cuando la topología declara 10 estaciones.
