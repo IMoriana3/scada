@@ -78,7 +78,17 @@ def peticion(url, cookie, timeout=120):
 def descarga_dia(ip, ncu, fecha, cookie, destino, log):
     base = "http://%s/private_api/csv/%s" % (ip, fecha)
     etiqueta = "NCU%s_%s" % (ncu, fecha)
-    zpath = os.path.join(destino, etiqueta + ".zip")
+    # organizado por NCU y luego por día: logs-ncu/NCU05/NCU05_2026-08-13.zip
+    # (el nombre conserva el prefijo NCU: el importador lee de ahí la etiqueta)
+    carpeta = os.path.join(destino, "NCU%s" % ncu)
+    os.makedirs(carpeta, exist_ok=True)
+    for suf in (".zip", ".indice.json"):        # lo bajado ANTES en plano se recoloca solo
+        viejo = os.path.join(destino, etiqueta + suf)
+        nuevo = os.path.join(carpeta, etiqueta + suf)
+        if os.path.exists(viejo) and not os.path.exists(nuevo):
+            os.replace(viejo, nuevo)
+            log("ORDENADO %s%s -> NCU%s/" % (etiqueta, suf, ncu))
+    zpath = os.path.join(carpeta, etiqueta + ".zip")
     if os.path.exists(zpath) and os.path.getsize(zpath) > 0:
         log("YA %s (existe, %d bytes) — no se re-descarga" % (etiqueta, os.path.getsize(zpath)))
         return True
