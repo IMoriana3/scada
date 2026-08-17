@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.53'
+$VERSION_TOOLBOX = '11.54'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -818,6 +818,53 @@ function Portada-Bloques($m) {
 # Devuelve @{obj; error; candidatos}. Sin ambiguedad, obj. Con ambiguedad, error
 # y la lista, para que quien llame diga cuales son en vez de elegir por su
 # cuenta. Pura.
+# ---------- el HSU Id no hay que teclearlo: la NCU ya lo dice ----------
+# Una estacion tiene DOS numeros y no son lo mismo:
+#   - Modbus Id: su direccion en la Zigbee del gateway. En Ayora las diez son la
+#     230, porque cada NCU tiene su propia red. No distingue nada.
+#   - HSU Id: el hueco que ocupa en la cache de su NCU (bloque 30200). Es el
+#     unico nombre real que tienen, y es el que sale en la pagina web de la NCU
+#     y en los planos.
+# Como el hueco ES el HSU Id, una estacion que contesta ya lo esta diciendo:
+# Ncu-HsuCompat la etiqueta HSU<hueco>. Solo la que no ha comunicado nunca hay
+# que ir a mirarla a la pagina de su NCU.
+#
+# Saca de un diagnostico los HSU Id LEIDOS por NCU, para contrastarlos con los
+# declarados en la topologia. Pura.
+function Hsu-IdsLeidos($filas) {
+    $r = @{}
+    foreach ($f in @($filas)) {
+        if ($null -eq $f) { continue }
+        if ("$($f.Salud)" -eq 'SIN LECTURA') { continue }
+        if ("$($f.TCU)" -notmatch '^HSU(\d+)$') { continue }
+        $k = "$($f.NCU)"
+        if (-not $r.ContainsKey($k)) { $r[$k] = @() }
+        $r[$k] += [int]$Matches[1]
+    }
+    foreach ($k in @($r.Keys)) { $r[$k] = @(@($r[$k]) | Sort-Object -Unique) }
+    return $r
+}
+
+# Que decir de cada NCU al comparar lo leido con lo declarado. Devuelve una
+# linea por NCU que tenga algo que contar, y nada de las que cuadran. Pura.
+function Hsu-IdsAvisos($leidos, $declaradosPorNcu) {
+    $av = @()
+    foreach ($k in @($leidos.Keys | Sort-Object { [int]("0" + "$_") })) {
+        $ids = @($leidos[$k])
+        if ($ids.Count -eq 0) { continue }
+        $dec = @(@($declaradosPorNcu[$k]) | Where-Object { "$_" -match '^\d+$' } | ForEach-Object { [int]$_ })
+        if ($dec.Count -eq 0) {
+            $av += ("NCU{0}: HSU Id leido {1}. La topologia no lo declara: anade `"rsu`": [{1}] a esa NCU y las tablas la llamaran por su nombre." -f $k, ($ids -join ', '))
+            continue
+        }
+        $fuera = @($ids | Where-Object { $dec -notcontains $_ })
+        if ($fuera.Count -gt 0) {
+            $av += ("NCU{0}: HSU Id leido {1} pero la topologia declara {2}. Uno de los dos esta mal." -f $k, ($ids -join ', '), ($dec -join ', '))
+        }
+    }
+    return $av
+}
+
 function Hsu-Resolver($objs, [int]$unit, [string]$ncu) {
     $c = @(@($objs) | Where-Object { $_ -and [int]$_.unit -eq $unit })
     if ("$ncu".Trim() -ne '') {
@@ -7971,6 +8018,16 @@ function Diag-Correr {
                     $lvG.Items.Add($itS) | Out-Null
                 }
                 Con "$nuevas equipos que la topologia declara y no han contestado en este barrido: van como SIN LECTURA." ([System.Drawing.Color]::Orange)
+            }
+            # El HSU Id de las que contestan sale gratis: es el hueco que ocupan
+            # en la cache de su NCU. Si la topologia no lo trae, las tablas las
+            # numeran 1..n y no coinciden con la pagina de la NCU ni con los
+            # planos, que es de donde salio el lio de llamar HSU1 a la HSU10.
+            $decPorNcu = @{}
+            foreach ($n in @($cx.multi)) { $decPorNcu["$($n.ncu)"] = @($n.rsuLista) }
+            if (-not $cx.multi) { $decPorNcu["$(Ncu-DeNombre $cx.nombre)"] = @($cx.rsuLista) }
+            foreach ($linea in @(Hsu-IdsAvisos (Hsu-IdsLeidos $script:UltimoDiag) $decPorNcu)) {
+                Con $linea ([System.Drawing.Color]::Orange)
             }
         }
     } catch { Con "AVISO: no se ha podido completar la flota declarada ($_)" ([System.Drawing.Color]::Orange) }
