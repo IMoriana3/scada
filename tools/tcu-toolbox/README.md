@@ -106,6 +106,32 @@ la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
 una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
 sitio.
 
+**El esclavo NO identifica una estación en la planta (v11.53)** — revisando el
+resto de pantallas por lo mismo que la v11.52, apareció algo peor que fricción.
+
+Cada NCU tiene su **propia red Zigbee**, así que el número de esclavo solo es
+único *dentro* de una NCU. En Ayora el **230 está en casi todas**: `hsu_esclavos:
+[230]` en la NCU2, la NCU3, la NCU4… `INSTALAR FW` filtraba por número de
+esclavo y se quedaba con **el primero de la lista**. Es decir: escribías 230,
+pulsabas instalar, y podía reiniciar la estación de otra NCU. Lo mismo en las
+escrituras de la pestaña HSU (umbrales de viento, reloj, nieve, NVM).
+
+Ahora, o no hay duda, o no se hace. Si el esclavo existe en varias NCUs, el
+error las nombra:
+
+```
+el esclavo 230 existe en 3 NCUs (2, 3, 16): cada NCU tiene su propia Zigbee y el
+numero se repite. Pon la NCU en el cuadro de al lado para decir cual
+```
+
+Firmware HSU tiene un cuadro **NCU** al lado del de esclavo para resolverlo. Un
+esclavo que solo existe en una NCU sigue sin pedir nada.
+
+Esto ya estaba antes de la v11.52 — el desplegable de BUSCAR HSUs lo tapaba
+porque se elegía una estación concreta — pero al poder trabajar sin escanear
+quedaba a un clic. Va con test, incluido uno que falla si alguien vuelve a
+escribir `$obj[0]`.
+
 **Las HSUs salen de la topología, sin escanear (v11.52)** — con *Planta
 completa* seleccionada, cualquier lectura de HSU se paraba con:
 
