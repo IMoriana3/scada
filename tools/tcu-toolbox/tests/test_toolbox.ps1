@@ -2416,6 +2416,31 @@ Check 'auditoria: la linea sale aunque haya mudas' ($src.Contains('y $errTcu var
 Check 'auditoria: cuenta las mixtas' ($src.Contains('if ($desvTcu -gt 0) { $nMixtas++ }')) $true
 
 Write-Host ''
+Write-Host '== las HSUs salen de la topologia, sin escanear =='
+# "pulsa BUSCAR HSUs primero" era pedir dos veces lo mismo: la topologia ya dice
+# cuantas estaciones tiene cada NCU y con que esclavo, y es lo que pinta la
+# columna HSUs del diagnostico. BUSCAR HSUs sigue valiendo para encontrar las
+# que NO estan declaradas, que es otra cosa.
+$cxTopo = @{multi = @(
+    @{ncu='15'; ip='192.168.4.100'; gws=@(@{puerto=503}, @{puerto=504}); hsuLista=@(230, 231); rsuLista=@(8, 9)}
+    @{ncu='16'; ip='192.168.4.110'; gws=@(@{puerto=503});                hsuLista=@(230);      rsuLista=@(10)}
+    @{ncu='6';  ip='192.168.4.50';  gws=@(@{puerto=503});                hsuLista=@()})}
+$oTopo = @(Hsu-ObjetivosDeTopologia $cxTopo)
+Check 'hsutopo: salen las declaradas' $oTopo.Count 3
+Check 'hsutopo: con el numero de la columna RSU' ($oTopo[0].etiqueta) 'HSU8 (NCU15)'
+Check 'hsutopo: y la de la NCU16 es la 10' (@($oTopo | Where-Object { $_.ncu -eq '16' })[0].etiqueta) 'HSU10 (NCU16)'
+Check 'hsutopo: con su esclavo' ([int]@($oTopo | Where-Object { $_.ncu -eq '16' })[0].unit) 230
+Check 'hsutopo: y los dos gateways de su NCU' (@($oTopo[0].puertos) -join ',') '503,504'
+Check 'hsutopo: una NCU sin estaciones no inventa ninguna' (@($oTopo | Where-Object { $_.ncu -eq '6' }).Count) 0
+# sin columna RSU se numeran 1..n dentro de la NCU, sin adivinar
+$oSinRsu = @(Hsu-ObjetivosDeTopologia @{multi=@(@{ncu='3'; ip='10.0.0.3'; gws=@(@{puerto=503}); hsuLista=@(185, 186)})})
+Check 'hsutopo: sin columna RSU, 1..n' (($oSinRsu | ForEach-Object { $_.etiqueta }) -join ' ') 'HSU1 (NCU3) HSU2 (NCU3)'
+Check 'hsutopo: una planta sin HSUs declaradas da cero' (@(Hsu-ObjetivosDeTopologia @{multi=@(@{ncu='1'; ip='10.0.0.1'; gws=@(@{puerto=503})})}).Count) 0
+Check 'hsutopo: y un cx nulo no revienta' (@(Hsu-ObjetivosDeTopologia $null).Count) 0
+Check 'hsutopo: Hsu-Objetivos tira de ella antes de rendirse' ($src.Contains('$deTopo = @(Hsu-ObjetivosDeTopologia $cx)')) $true
+Check 'hsutopo: y ya no manda a BUSCAR HSUs sin motivo' ($src.Contains("throw 'pulsa BUSCAR HSUs primero")) $false
+
+Write-Host ''
 Write-Host '== el SAT, por NCU y por TCU =='
 # El ensayo se monto pensando solo en la planta entera, que es lo que pide el
 # anexo. Pero en obra hace falta lo otro: comprobar el montaje de una NCU antes
