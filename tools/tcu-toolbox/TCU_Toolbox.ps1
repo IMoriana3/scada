@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.51'
+$VERSION_TOOLBOX = '11.52'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -796,6 +796,44 @@ function Portada-Bloques($m) {
 # El informe se hacia solo con lo leido, asi que una NCU a la que no se llega
 # desaparecia con todas sus TCUs -en Ayora, 78 seguidores- y los totales no
 # cuadraban con la planta. Pura.
+# Los objetivos que salen de la TOPOLOGIA, sin haber escaneado nada.
+#
+# La topologia ya dice cuantas estaciones tiene cada NCU y con que esclavo: es
+# lo que pinta la columna HSUs del diagnostico y lo que usa Flota-Declarada.
+# Exigir un BUSCAR HSUs antes de poder leerlas era pedir dos veces lo mismo, y
+# encima el barrido cuesta un rato. BUSCAR HSUs sigue haciendo falta para
+# encontrar las que NO estan declaradas, que es otra cosa.
+#
+# El numero de cada una es el hueco que ocupa en la cache de su NCU -la columna
+# RSU del Excel-, igual que en Flota-Declarada: si las dos listas no cuadran no
+# se adivina, se numeran 1..n. Pura.
+function Hsu-ObjetivosDeTopologia($cx) {
+    $r = @()
+    if ($null -eq $cx) { return $r }
+    $ncus = @()
+    if ($cx.multi) { $ncus = @($cx.multi) }
+    elseif (@(Lista $cx.hsuLista).Count -gt 0) {
+        $ncus = @(@{ncu=(Ncu-DeNombre $cx.nombre); ip=$cx.ip; gws=$cx.gws
+                    hsuLista=@($cx.hsuLista); rsuLista=@($cx.rsuLista)})
+    }
+    foreach ($n in $ncus) {
+        $puertos = @(@(@($n.gws) | Where-Object { $_ -and $_.puerto } | ForEach-Object { [int]$_.puerto }) | Sort-Object -Unique)
+        if ($puertos.Count -eq 0 -and $cx.puerto) { $puertos = @([int]$cx.puerto) }
+        if ($puertos.Count -eq 0) { $puertos = @($PUERTO_GW1, $PUERTO_GW2) }
+        $escl = @(@(Lista $n.hsuLista) | Where-Object { "$_" -match '^\d+$' })
+        $rsu  = @(@(Lista $n.rsuLista) | Where-Object { "$_" -match '^\d+$' })
+        $h = 0
+        foreach ($e in $escl) {
+            $h++
+            $num = $(if ($rsu.Count -eq $escl.Count) { $rsu[$h - 1] } else { $h })
+            $r += ,@{etiqueta = ("HSU{0} (NCU{1})" -f $num, $n.ncu); ip = "$($n.ip)"
+                     puerto = [int]$puertos[0]; puertos = @($puertos)
+                     unit = [byte][int]$e; ncu = "$($n.ncu)"}
+        }
+    }
+    return $r
+}
+
 function Flota-Declarada($cx) {
     $r = @()
     if ($null -eq $cx) { return $r }
@@ -11065,8 +11103,15 @@ function Hsu-Objetivos {
     $hsus = @($script:HsusPlanta)
     if ($script:HsuSel -and $script:HsuSel.ip) { $hsus = @($script:HsuSel) }
     if ($hsus.Count -eq 0) {
+        # Antes esto lanzaba "pulsa BUSCAR HSUs primero". No hace falta: la
+        # topologia ya dice de que NCU cuelga cada estacion y con que esclavo.
+        $deTopo = @(Hsu-ObjetivosDeTopologia $cx)
+        if ($deTopo.Count -gt 0) {
+            Con "$($deTopo.Count) HSU(s) segun la topologia. Si falta alguna que no este declarada, usa BUSCAR HSUs." ([System.Drawing.Color]::Gainsboro)
+            return $deTopo
+        }
         if ($cx.multi -or -not $cx.puerto) {
-            throw 'pulsa BUSCAR HSUs primero: con Planta completa o (auto) hay que saber de que NCU cuelga cada HSU'
+            throw 'la topologia de esta planta no declara ninguna HSU: pulsa BUSCAR HSUs para encontrarlas, o anadelas al JSON de planta'
         }
         [void]$lista.Add(@{etiqueta="HSU esclavo $unit"; ip=$cx.ip; puerto=[int]$cx.puerto; unit=$unit})
         return $lista.ToArray()

@@ -106,6 +106,26 @@ la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
 una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
 sitio.
 
+**Las HSUs salen de la topología, sin escanear (v11.52)** — con *Planta
+completa* seleccionada, cualquier lectura de HSU se paraba con:
+
+```
+ERROR: pulsa BUSCAR HSUs primero: con Planta completa o (auto) hay que saber de
+que NCU cuelga cada HSU
+```
+
+Era pedir dos veces lo mismo. **La topología ya lo sabe**: dice cuántas
+estaciones tiene cada NCU y con qué esclavo, y es exactamente lo que usa
+`Flota-Declarada` para pintar la columna HSUs del diagnóstico. Obligar a un
+barrido antes de poder leer lo que ya está declarado era fricción y un rato de
+espera.
+
+Ahora los objetivos se construyen de la topología, con el número que da la
+columna RSU del Excel (la de la NCU16 sale como **HSU10**, no como HSU1) y con
+los dos gateways de su NCU para probar por el que conteste. **BUSCAR HSUs sigue
+haciendo falta** para encontrar las que *no* están declaradas — que es otra
+pregunta —, y el error solo salta ahora si la planta no declara ninguna.
+
 **El SAT, por NCU y por TCU (v11.51)** — el ensayo se montó pensando solo en la
 planta entera, que es lo que pide el anexo. Pero en obra hace falta lo otro
 constantemente: comprobar el montaje de una NCU antes de arrancar los siete
