@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.52'
+$VERSION_TOOLBOX = '11.53'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -807,6 +807,35 @@ function Portada-Bloques($m) {
 # El numero de cada una es el hueco que ocupa en la cache de su NCU -la columna
 # RSU del Excel-, igual que en Flota-Declarada: si las dos listas no cuadran no
 # se adivina, se numeran 1..n. Pura.
+# A que estacion se refiere un numero de esclavo.
+#
+# OJO, que esto es lo que puede acabar escribiendo en el equipo equivocado: cada
+# NCU tiene su PROPIA red Zigbee, asi que el esclavo NO es unico en la planta.
+# En Ayora el 230 esta en casi todas: filtrar por numero de esclavo y quedarse
+# con el primero es escribir en la HSU de otra NCU. Dentro de una NCU si es
+# unico, por eso basta con acotar la NCU.
+#
+# Devuelve @{obj; error; candidatos}. Sin ambiguedad, obj. Con ambiguedad, error
+# y la lista, para que quien llame diga cuales son en vez de elegir por su
+# cuenta. Pura.
+function Hsu-Resolver($objs, [int]$unit, [string]$ncu) {
+    $c = @(@($objs) | Where-Object { $_ -and [int]$_.unit -eq $unit })
+    if ("$ncu".Trim() -ne '') {
+        $n = "$ncu".Trim()
+        $c = @($c | Where-Object { "$($_.ncu)" -eq $n })
+        if ($c.Count -eq 0) {
+            return @{obj=$null; candidatos=@(); error="la NCU$n no declara ninguna estacion con el esclavo ${unit}"}
+        }
+    }
+    if ($c.Count -eq 0) { return @{obj=$null; candidatos=@(); error="ninguna estacion declarada con el esclavo $unit"} }
+    if ($c.Count -gt 1) {
+        $ncus = @(@($c | ForEach-Object { "$($_.ncu)" }) | Sort-Object { [int]("0" + $_) } -Unique)
+        return @{obj=$null; candidatos=$c
+                 error=("el esclavo $unit existe en $($c.Count) NCUs (" + ($ncus -join ', ') + "): cada NCU tiene su propia Zigbee y el numero se repite. Pon la NCU en el cuadro de al lado para decir cual")}
+    }
+    return @{obj=$c[0]; candidatos=$c; error=''}
+}
+
 function Hsu-ObjetivosDeTopologia($cx) {
     $r = @()
     if ($null -eq $cx) { return $r }
@@ -4679,16 +4708,20 @@ $tabFH.Controls.Add($btnFHLeer)
 
 [void](LG $tabFH 'Esclavo' 176 52)
 $txtFHSlave = TG $tabFH '' 230 22 50
+# El esclavo no basta para saber a que estacion se escribe: se repite en cada
+# NCU porque cada una tiene su propia Zigbee.
+[void](LG $tabFH 'NCU' 288 32)
+$txtFHNcu = TG $tabFH '' 322 22 42
 
 $btnFHInst = New-Object System.Windows.Forms.Button
 $btnFHInst.Text = 'INSTALAR FW (51019 = 0x55AA)'
-$btnFHInst.Location = New-Object System.Drawing.Point(292, 18)
+$btnFHInst.Location = New-Object System.Drawing.Point(372, 18)
 $btnFHInst.Size = New-Object System.Drawing.Size(230, 28)
 $btnFHInst.BackColor = [System.Drawing.Color]::FromArgb(160,80,0)
 $btnFHInst.ForeColor = [System.Drawing.Color]::White
 $tabFH.Controls.Add($btnFHInst)
 
-$lblFHRes = LG $tabFH '' 534 374 24
+$lblFHRes = LG $tabFH '' 610 298 24
 $lblFHRes.ForeColor = [System.Drawing.Color]::DimGray
 
 $lvFH = New-Object System.Windows.Forms.ListView
@@ -11079,7 +11112,18 @@ function Params-Hsu {
             $cx = @{ip=$h.ip; puerto=[int]$puerto; gws=$null; multi=$null; etiqueta="$puerto"; to=$cx.to; reint=$cx.reint}
             Con "HSU $($h.etiqueta): usando $($cx.ip):$($cx.puerto), $nota." ([System.Drawing.Color]::SteelBlue)
         } else {
-            throw "elige una HSU en el desplegable (BUSCAR HSUs) o una entrada GW concreta: la HSU cuelga de un gateway"
+            # Sin HSU elegida en el desplegable, la topologia sabe de que NCU
+            # cuelga cada esclavo. Pero el numero se repite entre NCUs, asi que
+            # solo vale si no hay duda: escribir umbrales de viento en la
+            # estacion de otra NCU es de las cosas que no se pueden deshacer.
+            $u = [int](Val-Int $txtHSlave.Text 'Esclavo HSU' 1 255)
+            $r = Hsu-Resolver (Hsu-ObjetivosDeTopologia $cx) $u ''
+            if ($r.error) { throw "$($r.error), o elige una en el desplegable (BUSCAR HSUs)" }
+            $o = $r.obj
+            $puerto = Hsu-PuertoRecordado "$($o.ip)" $u
+            if (-not $puerto) { $puerto = [int]$o.puerto }
+            $cx = @{ip="$($o.ip)"; puerto=[int]$puerto; gws=$null; multi=$null; etiqueta="$puerto"; to=$cx.to; reint=$cx.reint}
+            Con "$($o.etiqueta): usando $($cx.ip):$($cx.puerto) segun la topologia." ([System.Drawing.Color]::SteelBlue)
         }
     }
     $cx.unitHsu = [byte](Val-Int $txtHSlave.Text 'Esclavo HSU' 1 255)
@@ -12203,10 +12247,13 @@ $btnFHLeer.Add_Click({ Lanzar {
 
 $btnFHInst.Add_Click({ Lanzar {
     $u = [byte](Val-Int $txtFHSlave.Text 'Esclavo HSU' 1 255)
-    # la estacion cuelga de un gateway concreto: se busca entre las conocidas
-    $obj = @(@(Hsu-Objetivos) | Where-Object { [int]$_.unit -eq [int]$u })
-    if ($obj.Count -eq 0) { throw "no se de que NCU cuelga el esclavo ${u}: pasa antes por BUSCAR HSUs, o elige una entrada GW concreta" }
-    $o = $obj[0]
+    # El esclavo NO identifica una estacion en la planta: cada NCU tiene su
+    # propia Zigbee y en Ayora el 230 esta en casi todas. Antes se filtraba por
+    # esclavo y se cogia el primero, o sea que INSTALAR FW podia reiniciar la
+    # estacion de otra NCU. Aqui, o no hay duda, o no se hace.
+    $r = Hsu-Resolver (Hsu-Objetivos) ([int]$u) "$($txtFHNcu.Text)"
+    if ($r.error) { throw "$($r.error)" }
+    $o = $r.obj
     $cx = Params-Conexion
     # una HSU que se reinicia es una zona sin guarda de viento mientras arranca
     $m = $null

@@ -2441,6 +2441,40 @@ Check 'hsutopo: Hsu-Objetivos tira de ella antes de rendirse' ($src.Contains('$d
 Check 'hsutopo: y ya no manda a BUSCAR HSUs sin motivo' ($src.Contains("throw 'pulsa BUSCAR HSUs primero")) $false
 
 Write-Host ''
+Write-Host '== el esclavo NO identifica una estacion en la planta =='
+# Cada NCU tiene su PROPIA red Zigbee, asi que el numero de esclavo se repite:
+# en Ayora el 230 esta en casi todas. Filtrar por esclavo y quedarse con el
+# primero es escribir en la HSU de otra NCU, y INSTALAR FW la reinicia.
+$objsAmb = @(
+  @{etiqueta='HSU2 (NCU2)';  ip='192.168.4.20';  puerto=503; puertos=@(503); unit=230; ncu='2'}
+  @{etiqueta='HSU3 (NCU3)';  ip='192.168.4.30';  puerto=503; puertos=@(503); unit=230; ncu='3'}
+  @{etiqueta='HSU10 (NCU16)';ip='192.168.4.110'; puerto=503; puertos=@(503); unit=230; ncu='16'}
+  @{etiqueta='HSU8 (NCU15)'; ip='192.168.4.100'; puerto=504; puertos=@(504); unit=231; ncu='15'}
+)
+$rAmb = Hsu-Resolver $objsAmb 230 ''
+Check 'esclavo: con varias candidatas no elige' ($null -eq $rAmb.obj) $true
+Check 'esclavo: y dice en cuantas NCUs esta' ($rAmb.error -like '*existe en 3 NCUs*') $true
+Check 'esclavo: nombrandolas' ($rAmb.error -like '*(2, 3, 16)*') $true
+Check 'esclavo: y explica por que se repite' ($rAmb.error -like '*su propia Zigbee*') $true
+# acotando la NCU si hay una sola respuesta posible
+$rOk = Hsu-Resolver $objsAmb 230 '16'
+Check 'esclavo: con la NCU puesta, resuelve' ($rOk.obj.etiqueta) 'HSU10 (NCU16)'
+Check 'esclavo: sin error' ($rOk.error) ''
+Check 'esclavo: y apunta a su IP' ($rOk.obj.ip) '192.168.4.110'
+# un esclavo que solo existe en una NCU no necesita que se lo digan
+Check 'esclavo: unico, resuelve solo' ((Hsu-Resolver $objsAmb 231 '').obj.etiqueta) 'HSU8 (NCU15)'
+# y los casos que no llevan a ningun sitio se dicen, no se adivinan
+Check 'esclavo: uno que no existe' ((Hsu-Resolver $objsAmb 199 '').error -like '*ninguna estacion declarada*') $true
+Check 'esclavo: NCU que no lo declara' ((Hsu-Resolver $objsAmb 231 '16').error -like '*NCU16 no declara*') $true
+Check 'esclavo: sin objetivos tampoco revienta' ((Hsu-Resolver @() 230 '').obj) $null
+# lo usan las dos operaciones que ESCRIBEN en una estacion
+Check 'esclavo: lo usa INSTALAR FW' ($src.Contains('$r = Hsu-Resolver (Hsu-Objetivos) ([int]$u) "$($txtFHNcu.Text)"')) $true
+Check 'esclavo: con su cuadro de NCU' ($src.Contains('$txtFHNcu = TG $tabFH')) $true
+Check 'esclavo: y las escrituras de la pestana HSU' ($src.Contains('$r = Hsu-Resolver (Hsu-ObjetivosDeTopologia $cx) $u ')) $true
+# y ya no se coge el primero de la lista sin mirar
+Check 'esclavo: nadie coge el primero a ciegas' ($src.Contains('$o = $obj[0]')) $false
+
+Write-Host ''
 Write-Host '== el SAT, por NCU y por TCU =='
 # El ensayo se monto pensando solo en la planta entera, que es lo que pide el
 # anexo. Pero en obra hace falta lo otro: comprobar el montaje de una NCU antes
