@@ -106,6 +106,34 @@ la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
 una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
 sitio.
 
+**El HSU Id no hay que teclearlo: la NCU ya lo dice (v11.54)** — una estación
+tiene **dos** números y no son lo mismo:
+
+| | Qué es |
+|---|---|
+| **Modbus Id** | Su dirección en la Zigbee del gateway. En Ayora **las diez son la 230**, porque cada NCU tiene su propia red. No distingue nada |
+| **HSU Id** | El hueco que ocupa en la caché de su NCU (bloque 30200). Es el nombre que sale en la página web de la NCU y en los planos, y el único nombre real que tienen |
+
+De ahí venía el lío de llamar **HSU1** a la que la NCU16 llama **HSU10**: el
+JSON de Ayora no traía el campo `rsu` en ninguna NCU, así que las declaradas se
+numeraban 1..n dentro de cada una. Las que *sí* contestan ya salían bien —
+`Ncu-HsuCompat` las etiqueta por el hueco —, y por eso lo leído y lo declarado
+no casaban.
+
+Casi no hay que teclear nada: **el hueco ES el HSU Id**, así que una estación
+que contesta ya lo está diciendo. El diagnóstico lo compara con lo declarado y
+avisa:
+
+```
+NCU15: HSU Id leido 8, 9. La topologia no lo declara: anade "rsu": [8, 9] a esa
+NCU y las tablas la llamaran por su nombre.
+NCU2: HSU Id leido 1, 2 pero la topologia declara 3, 4. Uno de los dos esta mal.
+```
+
+Sólo la que no ha comunicado nunca hay que ir a mirarla a la página de su NCU.
+La de Ayora ya está: **NCU16, HSU Id 10, Modbus Id 230, Gateway 1** — anotado en
+la topología.
+
 **El esclavo NO identifica una estación en la planta (v11.53)** — revisando el
 resto de pantallas por lo mismo que la v11.52, apareció algo peor que fricción.
 

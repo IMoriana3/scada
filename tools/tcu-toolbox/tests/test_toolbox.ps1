@@ -2441,6 +2441,38 @@ Check 'hsutopo: Hsu-Objetivos tira de ella antes de rendirse' ($src.Contains('$d
 Check 'hsutopo: y ya no manda a BUSCAR HSUs sin motivo' ($src.Contains("throw 'pulsa BUSCAR HSUs primero")) $false
 
 Write-Host ''
+Write-Host '== el HSU Id no hay que teclearlo: la NCU ya lo dice =='
+# Una estacion tiene dos numeros: el Modbus Id (su direccion en la Zigbee, la
+# 230 en las diez de Ayora, no distingue nada) y el HSU Id (el hueco que ocupa
+# en la cache de su NCU, que es el nombre de la pagina web y de los planos).
+# Como el hueco ES el HSU Id, la que contesta ya lo esta diciendo.
+$diagH = @(
+  [pscustomobject]@{NCU='15'; TCU='HSU8';  Salud='OK'}
+  [pscustomobject]@{NCU='15'; TCU='HSU9';  Salud='AVISO'}
+  [pscustomobject]@{NCU='16'; TCU='HSU10'; Salud='SIN LECTURA'}
+  [pscustomobject]@{NCU='2';  TCU='HSU1';  Salud='OK'}
+  [pscustomobject]@{NCU='2';  TCU=14;      Salud='OK'}
+  [pscustomobject]@{NCU='2';  TCU='Repetidor 1'; Salud='OK'}
+)
+$idsL = Hsu-IdsLeidos $diagH
+Check 'hsuid: los huecos leidos de la NCU15' (@($idsL['15']) -join ',') '8,9'
+Check 'hsuid: la que no contesta no dice su hueco' ($idsL.ContainsKey('16')) $false
+Check 'hsuid: ni las TCUs ni los repetidores cuentan' (@($idsL['2']) -join ',') '1'
+# lo declarado contra lo leido
+Check 'hsuid: si cuadra, no dice nada' (@(Hsu-IdsAvisos $idsL @{'15'=@(8,9); '2'=@(1)}).Count) 0
+$avSin = @(Hsu-IdsAvisos $idsL @{'2'=@(1)})
+Check 'hsuid: sin declarar, dice que anadir' ($avSin[0] -like '*NCU15: HSU Id leido 8, 9*') $true
+# .Contains y no -like: en -like los corchetes son una clase de caracteres, asi
+# que '[8, 9]' casa con "un caracter que sea 8, coma, espacio o 9" y el test
+# fallaba con el texto correcto delante
+Check 'hsuid: con el campo listo para pegar' ($avSin[0].Contains('"rsu": [8, 9]')) $true
+$avMal = @(Hsu-IdsAvisos $idsL @{'15'=@(1,2); '2'=@(1)})
+Check 'hsuid: si no cuadra, lo canta' ($avMal[0] -like '*leido 8, 9 pero la topologia declara 1, 2*') $true
+Check 'hsuid: y no decide cual es el bueno' ($avMal[0] -like '*Uno de los dos esta mal*') $true
+Check 'hsuid: el diagnostico lo usa' ($src.Contains('Hsu-IdsAvisos (Hsu-IdsLeidos $script:UltimoDiag) $decPorNcu')) $true
+Check 'hsuid: sin filas, sin avisos' (@(Hsu-IdsAvisos (Hsu-IdsLeidos @()) @{}).Count) 0
+
+Write-Host ''
 Write-Host '== el esclavo NO identifica una estacion en la planta =='
 # Cada NCU tiene su PROPIA red Zigbee, asi que el numero de esclavo se repite:
 # en Ayora el 230 esta en casi todas. Filtrar por esclavo y quedarse con el
