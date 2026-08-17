@@ -49,7 +49,12 @@ $CANDIDATOS = @(
   @{ruta="/login";             forma="form"})
 $CLAVES = @(,@("username","password")) + @(,@("user","password"))
 
-function Login($ip,$usuario,$clave){
+function Login($ip,$usuario,$pwds){
+  # $pwds puede traer VARIAS contrasenas: en plantas con NCUs de un digito no se
+  # sabe si es NCU01 o NCU1, se prueban las dos y se dice cual valio.
+  # OJO: no llamarlo $claves - PowerShell ignora mayusculas y pisaria $CLAVES,
+  # la lista de pares usuario/contrasena de abajo (cazado 17-08).
+  foreach($clave in @($pwds)){
   foreach($c in $CANDIDATOS){ foreach($k in $CLAVES){
     try{
       $h=@{}; $h[$k[0]]=$usuario; $h[$k[1]]=$clave
@@ -60,12 +65,13 @@ function Login($ip,$usuario,$clave){
            -ContentType $ct -TimeoutSec 15 -UseBasicParsing
       $sc=@($r.Headers["Set-Cookie"]) -join "; "
       if($sc -match "sunner_auth=([^;,\s]+)"){
-        Log ("login OK en {0}{1} como {2}" -f $ip,$c.ruta,$usuario)
+        Log ("login OK en {0}{1} como {2} / {3}" -f $ip,$c.ruta,$usuario,$clave)
         return $Matches[1]
       }
     } catch { }
   }}
-  Log ("FALLO login en {0} como {1}: ninguna ruta candidata devolvio sunner_auth - captura el cURL del login del panel (o usa -Cookie)" -f $ip,$usuario)
+  }
+  Log ("FALLO login en {0} como {1} (probadas: {2}): ninguna ruta candidata devolvio sunner_auth - captura el cURL del login del panel (o usa -Cookie)" -f $ip,$usuario,((@($pwds)) -join ", "))
   return $null
 }
 
@@ -133,9 +139,15 @@ function DescargaDia($ip,$ncu,$fecha,$tok){
 
 function UsuarioDe($n){ if($n.PSObject.Properties["usuario"] -and $n.usuario){ $n.usuario } else { $Usuario } }
 function ClaveDe($n){
+  # OJO: "return ,$x" anida el array (probado 17-08) y mandaba la lista entera
+  # como contrasena; se devuelve plano y quien lo usa lo envuelve con @()
   if($n.PSObject.Properties["pass"] -and $n.pass){ return $n.pass }
   if($Password){ return $Password }
-  return "NCU" + ("{0}" -f $n.ncu).PadLeft(2,"0")
+  # confirmado por Ignacio (17-08): NCU + numero a DOS cifras (NCU01, NCU05).
+  # La variante sin relleno queda de red por si alguna planta no lo sigue.
+  $p=("{0}" -f $n.ncu).PadLeft(2,"0"); $s=("{0}" -f $n.ncu) -replace '^0+',''
+  $c=@("NCU$p"); if($s -and "NCU$s" -ne "NCU$p"){ $c+="NCU$s" }
+  return $c
 }
 
 $script:galletas=@{}
