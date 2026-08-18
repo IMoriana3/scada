@@ -18,6 +18,9 @@
       "hsus": 1,
       "hsu_esclavos": [
         230
+      ],
+      "rsu": [
+        1
       ]
     },
     {
@@ -29,6 +32,9 @@
       "hsus": 1,
       "hsu_esclavos": [
         230
+      ],
+      "rsu": [
+        2
       ]
     },
     {
@@ -53,6 +59,9 @@
       "hsus": 1,
       "hsu_esclavos": [
         230
+      ],
+      "rsu": [
+        3
       ]
     },
     {
@@ -83,6 +92,9 @@
       "hsus": 1,
       "hsu_esclavos": [
         230
+      ],
+      "rsu": [
+        4
       ]
     },
     {
@@ -108,6 +120,9 @@
       "hsus": 1,
       "hsu_esclavos": [
         230
+      ],
+      "rsu": [
+        5
       ]
     },
     {
@@ -129,6 +144,9 @@
           "nombre": "Repetidor 3",
           "esclavo": 201
         }
+      ],
+      "rsu": [
+        6
       ]
     },
     {
@@ -140,6 +158,9 @@
       "hsus": 1,
       "hsu_esclavos": [
         230
+      ],
+      "rsu": [
+        7
       ]
     },
     {
@@ -171,6 +192,10 @@
           "nombre": "Repetidor 5",
           "esclavo": 200
         }
+      ],
+      "rsu": [
+        8,
+        9
       ]
     },
     {
