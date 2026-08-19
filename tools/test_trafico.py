@@ -96,7 +96,8 @@ def test_estimacion_vs_driver():
 
     asyncio.run(un_ciclo())
     real = m.snapshot(30)
-    est = T.modbus_cycle(108, 2, max_regs=110)
+    # la estimación se arma con los tamaños del MAPA, no con números a mano
+    est = T.modbus_cycle(108, 2, **T.map_params(mmap, {"max_regs_per_read": 110}))
     check("transacciones estimadas = contadas",
           est["modbus_tx"] == real["modbus_tx"], f"({est['modbus_tx']} vs {real['modbus_tx']})")
     check("bytes estimados = contados",
@@ -201,6 +202,40 @@ def test_escala():
                        rel_tol=1e-9))
 
 
+def test_mapa_modbus():
+    """La estimación tiene que salir del mapa, no de números escritos a mano.
+
+    El driver lee `config/modbus_map.yml`; si el modelo llevara el 22 y el 10 a
+    mano, un cambio de mapa movería al driver y dejaría quieta la estimación,
+    que es justo la clase de desviación silenciosa que este banco existe para
+    evitar.
+    """
+    import copy
+
+    import yaml
+    with open(os.path.join(RAIZ, "config", "modbus_map.yml"), encoding="utf-8") as f:
+        mmap = yaml.safe_load(f)
+    with open(os.path.join(RAIZ, "config", "plants.yml"), encoding="utf-8") as f:
+        pol = yaml.safe_load(f)["polling"]
+    p = T.map_params(mmap, pol)
+    check("el stride del bloque compat sale del mapa",
+          p["stride"] == mmap["tcu_compat"]["stride"], f'({p["stride"]})')
+    check("el tamaño de la HSU sale del mapa (recortado a 30 como hace el driver)",
+          p["hsu_regs"] == min(mmap["hsu"]["stride"], 30), f'({p["hsu_regs"]})')
+    check("el troceo máximo sale de plants.yml",
+          p["max_regs"] == pol["max_regs_per_read"], f'({p["max_regs"]})')
+    check("la HSU extendida (bloque 28000) se lee más larga",
+          T.map_params(mmap, pol, hsu_extended=True)["hsu_regs"] == 30)
+
+    otro = copy.deepcopy(mmap)
+    otro["tcu_compat"]["stride"] = 30
+    base = T.modbus_cycle(108, 2, **T.map_params(mmap, pol))
+    cambiado = T.modbus_cycle(108, 2, **T.map_params(otro, pol))
+    check("si el mapa engorda el bloque, la estimación engorda con él",
+          cambiado["lan_b"] > base["lan_b"],
+          f'({base["lan_b"]} -> {cambiado["lan_b"]})')
+
+
 def test_planes_de_subida():
     """Leer a un ritmo y subir a otro: lo que pide el 4G de una caseta."""
     base = T.cloud_plan(108, 2, poll_s=30)
@@ -249,7 +284,7 @@ def test_zigbee():
 if __name__ == "__main__":
     for fn in (test_troceo, test_bytes_adu, test_medidor, test_nube,
                test_estimacion_vs_driver, test_line_protocol_real, test_visor_html,
-               test_visor_al_dia, test_escala, test_planes_de_subida,
+               test_visor_al_dia, test_mapa_modbus, test_escala, test_planes_de_subida,
                test_peso_por_campo, test_zigbee):
         print(f"\n{fn.__name__}:")
         fn()

@@ -134,6 +134,30 @@ class TrafficMeter:
 
 # --- Estimación a partir de la configuración --------------------------------
 
+def map_params(mmap: dict, polling: dict | None = None, hsu_extended: bool = False) -> dict:
+    """Parámetros de lectura TAL COMO los declara `config/modbus_map.yml`.
+
+    El modelo no debe llevar el mapa a mano: si mañana el bloque compat deja de
+    ser de 22 registros o la HSU cambia de tamaño, la estimación tiene que
+    moverse sola, igual que se mueve el driver (que lee el mismo YAML).
+
+    Lo único que sigue viniendo del código y no del mapa son las dos lecturas de
+    estado de la NCU (30002 y 30100..30105), porque el driver las tiene fijas.
+    """
+    tc = mmap.get("tcu_compat", {})
+    lc = mmap.get("tcu_lastcomm", {})
+    h = mmap.get("hsu_ext" if hsu_extended else "hsu", {})
+    out = {
+        "stride": int(tc.get("stride", 22)),
+        "lastcomm_regs": int(lc.get("stride", 2)),
+        # el driver recorta la lectura de HSU a 30 registros (read_meteo)
+        "hsu_regs": min(int(h.get("stride", 10)), 30),
+    }
+    if polling:
+        out["max_regs"] = int(polling.get("max_regs_per_read", out.get("max_regs", 110)))
+    return out
+
+
 def modbus_cycle(n_tcu: int, n_hsu: int = 0, *, stride: int = 22, lastcomm_regs: int = 2,
                  hsu_regs: int = 10, ncu_reads: tuple[int, ...] = (1, 6),
                  max_regs: int = 110, overhead_b: int = L3L4_B,
@@ -319,8 +343,16 @@ def field_weights(n_tcu: int = 108, n_hsu: int = 2, *, agregado: bool = False) -
     return out
 
 
-def ncu_estimate(n_tcu: int, n_hsu: int = 0, *, interval_s: float = 30, **kw) -> dict:
-    """Tráfico diario de una NCU: LAN de planta y subida a la nube."""
+def ncu_estimate(n_tcu: int, n_hsu: int = 0, *, interval_s: float = 30,
+                 mmap: dict | None = None, polling: dict | None = None,
+                 hsu_extended: bool = False, **kw) -> dict:
+    """Tráfico diario de una NCU: LAN de planta y subida a la nube.
+
+    Con `mmap` (el `config/modbus_map.yml` ya cargado) los tamaños de bloque
+    salen del mapa; lo que se pase suelto manda sobre él.
+    """
+    del_mapa = map_params(mmap, polling, hsu_extended) if mmap else {}
+    kw = {**del_mapa, **kw}
     mb_kw = {k: v for k, v in kw.items() if k in
              ("stride", "lastcomm_regs", "hsu_regs", "ncu_reads", "max_regs",
               "overhead_b", "reconnect")}
@@ -352,7 +384,8 @@ def plant_estimate(ncus: list[dict], *, interval_s: float = 30, **kw) -> dict:
     detail = []
     for n in ncus:
         e = ncu_estimate(int(n.get("tcu_count", 0)), int(n.get("hsu_count", 0)),
-                         interval_s=interval_s, ncu=str(n.get("id", "NCU")), **kw)
+                         interval_s=interval_s, ncu=str(n.get("id", "NCU")),
+                         hsu_extended=bool(n.get("hsu_extended", False)), **kw)
         e["ncu"] = n.get("id", "NCU")
         detail.append(e)
     tot = {

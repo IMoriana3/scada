@@ -21,8 +21,9 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(RAIZ, "collector"))
 sys.path.insert(0, os.path.join(RAIZ, "tools"))
 
-from traffic import PRESETS, cloud_cycle, modbus_cycle  # noqa: E402
-from trafico import cargar_flota, cargar_plants_yml, normaliza  # noqa: E402
+from traffic import PRESETS, cloud_cycle, map_params, modbus_cycle  # noqa: E402
+from trafico import (cargar_flota, cargar_modbus_map, cargar_plants_yml,  # noqa: E402
+                     normaliza)
 
 INI = "/* === DATOS GENERADOS por tools/gen_trafico.py — no editar a mano === */"
 FIN = "/* === FIN DATOS GENERADOS === */"
@@ -33,8 +34,8 @@ FIN = "/* === FIN DATOS GENERADOS === */"
 CURVA_N = [1, 2, 5, 10, 20, 35, 50, 75, 100, 150, 200, 300, 400, 600, 800,
            1200, 1700, 2400]
 
-def por_ncu(ncu_id, n_tcu, n_hsu, plant="planta"):
-    lan = modbus_cycle(n_tcu, n_hsu)
+def por_ncu(ncu_id, n_tcu, n_hsu, plant="planta", mapa=None, hsu_extended=False):
+    lan = modbus_cycle(n_tcu, n_hsu, **(map_params(*mapa, hsu_extended) if mapa else {}))
     nube = cloud_cycle(n_tcu, n_hsu, plant=plant, ncu=ncu_id)
     # Bytes de UNA subida para cada plan (qué campos) y modo (último valor o
     # media/mín/máx). El gzip no se puede rehacer en el navegador, así que la
@@ -57,6 +58,7 @@ def por_ncu(ncu_id, n_tcu, n_hsu, plant="planta"):
 def construir():
     plantas = []
     cfg = cargar_plants_yml(os.path.join(RAIZ, "config", "plants.yml"))
+    mmap = cargar_modbus_map()
     nombre_cfg = ""
     if cfg:
         pid = cfg["plant"]["id"]
@@ -65,7 +67,9 @@ def construir():
             "planta": cfg["plant"]["name"],
             "configurada": True,
             "intervalo": float(cfg["polling"]["interval_s"]),
-            "ncus": [por_ncu(str(n["id"]), int(n["tcu_count"]), int(n.get("hsu_count", 0)), pid)
+            "ncus": [por_ncu(str(n["id"]), int(n["tcu_count"]), int(n.get("hsu_count", 0)), pid,
+                             (mmap, cfg.get("polling")) if mmap else None,
+                             bool(n.get("hsu_extended", False)))
                      | {"gws": len(n.get("gateways", [])) or 1} for n in cfg["ncus"]],
         })
     for p in cargar_flota():
@@ -77,7 +81,8 @@ def construir():
             "planta": p["planta"],
             "configurada": False,
             "intervalo": None,
-            "ncus": [por_ncu(n["id"], n["tcu_count"], n["hsu_count"])
+            "ncus": [por_ncu(n["id"], n["tcu_count"], n["hsu_count"], "planta",
+                             (mmap, cfg.get("polling") if cfg else None) if mmap else None)
                      | {"gws": n.get("gws", 1)} for n in p["ncus"]],
         })
     curva = []

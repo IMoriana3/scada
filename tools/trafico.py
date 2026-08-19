@@ -23,8 +23,24 @@ import sys
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(RAIZ, "collector"))
 
-from traffic import (PRESETS, cloud_plan, field_weights, ncu_estimate,  # noqa: E402
-                     plant_estimate, zigbee_estimate)
+from traffic import (PRESETS, cloud_plan, field_weights, map_params,  # noqa: E402
+                     ncu_estimate, plant_estimate, zigbee_estimate)
+
+
+def cargar_yaml(ruta):
+    try:
+        import yaml
+    except ImportError:
+        return None
+    if not os.path.exists(ruta):
+        return None
+    with open(ruta, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def cargar_modbus_map():
+    """El mapa que lee el colector: de aquí salen los tamaños de bloque."""
+    return cargar_yaml(os.path.join(RAIZ, "config", "modbus_map.yml"))
 
 
 def cargar_plants_yml(ruta):
@@ -145,6 +161,8 @@ def main():
     a = ap.parse_args()
 
     cfg = cargar_plants_yml(os.path.join(RAIZ, "config", "plants.yml"))
+    mmap = cargar_modbus_map()
+    mapa_kw = {"mmap": mmap, "polling": cfg.get("polling") if cfg else None} if mmap else {}
     base_int = float(cfg["polling"]["interval_s"]) if cfg else 30.0
 
     if a.campos:
@@ -194,12 +212,14 @@ def main():
     if cfg:
         salida["configurada"] = {
             "planta": cfg["plant"]["name"],
-            "por_intervalo": {i: plant_estimate(cfg["ncus"], interval_s=i) for i in intervalos},
+            "por_intervalo": {i: plant_estimate(cfg["ncus"], interval_s=i, **mapa_kw)
+                              for i in intervalos},
         }
     for p in flota:
         salida["flota"].append({
             "planta": p["planta"],
-            "por_intervalo": {i: plant_estimate(p["ncus"], interval_s=i) for i in intervalos},
+            "por_intervalo": {i: plant_estimate(p["ncus"], interval_s=i, **mapa_kw)
+                              for i in intervalos},
         })
     if a.zigbee:
         for p in flota:
