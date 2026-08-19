@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Medidor de tráfico · Tracker SCADA</title>
+<link rel="icon" href="favicon.svg">
+<!-- Un único fichero, sin CDN ni build: esto se abre en la LAN de una planta,
+     que normalmente no tiene salida a internet. Los datos de la flota los
+     hornea tools/gen_trafico.py con el MISMO modelo que usa el colector. -->
+<style>
+:root{
+  --void:#0B0F14; --panel:#121922; --panel-2:#0F151D; --line:#23303D; --line-soft:#1A2530;
+  --text:#E7EEF4; --muted:#8093A4; --muted-2:#5E6F7E;
+  --dato:#3B8FE0;              /* magnitud (una sola serie): azul en banda sobre oscuro */
+  --ok:#36D399; --aviso:#F6A623; --grave:#D0594F;
+  --radius:14px;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--void);color:var(--text);font:15px/1.55 var(--sans);}
+a{color:var(--dato)}
+.wrap{max-width:1080px;margin:0 auto;padding:26px 18px 60px}
+header h1{font:600 26px/1.2 var(--sans);margin:0 0 6px}
+header p.sub{color:var(--muted);margin:0 0 4px;max-width:70ch}
+.migas{font:500 12px var(--mono);color:var(--muted-2);margin-bottom:18px}
+.migas a{color:var(--muted);text-decoration:none} .migas a:hover{color:var(--text)}
+
+section{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  padding:18px 18px 16px;margin:16px 0;overflow-x:auto}   /* en móvil scrollea la sección, no la página */
+section h2{font:600 15px/1.2 var(--sans);margin:0 0 3px}
+section p.nota{color:var(--muted);font-size:13px;margin:0 0 14px;max-width:78ch}
+
+/* controles */
+.ctrl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+.ctrl .et{font:600 11px var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-right:2px}
+button.seg{background:var(--panel-2);color:var(--muted);border:1px solid var(--line);
+  border-radius:9px;padding:6px 12px;font:600 12px var(--mono);cursor:pointer}
+button.seg:hover{color:var(--text);border-color:var(--muted-2)}
+button.seg.on{background:var(--dato);border-color:var(--dato);color:#06121f}
+input[type=number],input[type=text]{background:var(--panel-2);border:1px solid var(--line);
+  color:var(--text);border-radius:9px;padding:6px 10px;font:500 13px var(--mono);width:110px}
+input[type=text].url{width:270px}
+input{max-width:100%}
+
+/* KPIs */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:4px}
+.kpi{background:var(--panel-2);border:1px solid var(--line-soft);border-radius:11px;padding:12px 14px}
+.kpi .v{font:600 25px/1.15 var(--mono);letter-spacing:-.01em}
+.kpi .k{font:500 11px var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:3px}
+.kpi .u{font-size:14px;color:var(--muted);margin-left:3px}
+
+/* tablas */
+.tabla{width:100%;min-width:520px;border-collapse:collapse;font-size:13.5px}
+.tabla th{font:600 11px var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;
+  text-align:right;padding:0 8px 7px;border-bottom:1px solid var(--line)}
+.tabla th:first-child{text-align:left}
+.tabla td{padding:7px 8px;border-bottom:1px solid var(--line-soft);text-align:right;
+  font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:12.5px}
+.tabla td:first-child{text-align:left;font-family:var(--sans);font-size:13.5px;white-space:nowrap}
+.tabla tr.planta{cursor:pointer}
+.tabla tr.planta:hover td{background:#18222D}
+.tabla tr.ncu td{color:var(--muted);font-size:11.5px;border-bottom:1px dashed var(--line-soft)}
+.tabla tr.ncu td:first-child{padding-left:24px;font-family:var(--mono);font-size:11.5px}
+.tabla tfoot td{border-bottom:none;border-top:1px solid var(--line);font-weight:600;padding-top:9px}
+.marca{font:600 10px var(--mono);color:var(--dato);border:1px solid var(--dato);border-radius:5px;
+  padding:1px 5px;margin-left:7px;vertical-align:1px}
+.chevron{color:var(--muted-2);display:inline-block;width:12px}
+
+/* barras */
+.barra{--w:0%;height:11px;background:#1A2530;border-radius:4px;overflow:hidden;min-width:70px}
+.barra>i{display:block;height:100%;width:var(--w);background:var(--dato);border-radius:0 4px 4px 0}
+td.conbarra{width:34%}
+.medidor{display:flex;align-items:center;gap:9px;justify-content:flex-end}
+.medidor .barra{width:150px;flex:none}
+/* Referencias del medidor: sin ellas un 2 % parece una barra rota en vez de
+   una malla con sitio de sobra. */
+.barra.escala{position:relative}
+.barra.escala::before,.barra.escala::after{content:"";position:absolute;top:0;bottom:0;width:1px;background:#2c3b4a}
+.barra.escala::before{left:30%} .barra.escala::after{left:60%}
+.estado{font:600 11px var(--mono);min-width:74px;text-align:left}
+
+/* tooltip */
+#tip{position:fixed;z-index:20;pointer-events:none;background:#0d1620;border:1px solid var(--line);
+  border-radius:9px;padding:9px 11px;font:12px/1.5 var(--mono);color:var(--text);
+  box-shadow:0 8px 26px rgba(0,0,0,.5);max-width:300px;display:none}
+#tip b{color:var(--dato);font-weight:600}
+#tip .m{color:var(--muted)}
+
+.aviso{border-left:2px solid var(--aviso);padding:8px 12px;background:#1a1a1055;border-radius:0 8px 8px 0;
+  color:var(--muted);font-size:13px;margin-top:12px}
+.malo{color:var(--grave)}
+footer{color:var(--muted-2);font-size:12.5px;text-align:center;margin-top:26px}
+footer a{color:var(--muted)}
+code{font-family:var(--mono);font-size:12.5px;background:var(--panel-2);border:1px solid var(--line-soft);
+  border-radius:5px;padding:1px 5px}
+@media(max-width:640px){ td.conbarra{display:none} .tabla th.conbarra{display:none} }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="migas"><a href="https://imoriana3.github.io/proyectos/">Panel</a> / Medidor de tráfico</div>
+  <h1>Medidor de tráfico</h1>
+  <p class="sub">Qué mete el SCADA en la LAN de planta y cuánto sube a la nube cada planta.
+  Las cifras salen del mismo modelo de bytes que cuenta el colector en marcha
+  (<code>collector/traffic.py</code>), horneadas aquí con el inventario real de NCU y TCU.</p>
+</header>
+
+<section>
+  <h2>Flota</h2>
+  <p class="nota">Ritmo de polling: es el único mando que mueve la factura, y la mueve en proporción directa.</p>
+  <div class="ctrl">
+    <span class="et">Polling</span>
+    <button class="seg" data-int="10">10 s</button>
+    <button class="seg" data-int="30">30 s</button>
+    <button class="seg" data-int="60">1 min</button>
+    <button class="seg" data-int="300">5 min</button>
+    <button class="seg" data-int="900">15 min</button>
+    <input type="number" id="intLibre" min="1" max="3600" step="1" placeholder="otro (s)">
+  </div>
+  <div class="kpis" id="kpis"></div>
+  <table class="tabla" id="tFlota" style="margin-top:16px">
+    <thead><tr>
+      <th>Planta</th><th>NCU</th><th>TCU</th><th>Tx/día</th>
+      <th>LAN MB/día</th><th>Nube MB/día</th><th class="conbarra"></th><th>GB/mes</th>
+    </tr></thead>
+    <tbody></tbody>
+    <tfoot></tfoot>
+  </table>
+  <div class="aviso">La barra mide la subida a la nube (comprimida, con cabeceras). Pincha una planta
+    para ver sus NCU. Pasa el ratón por una fila para el desglose de un ciclo.</div>
+</section>
+
+<section>
+  <h2>¿Y una planta nueva?</h2>
+  <p class="nota">Mismo modelo, con los números que le pongas. Útil antes de contratar el enlace.</p>
+  <div class="ctrl">
+    <span class="et">TCU</span><input type="number" id="cTcu" value="500" min="1" max="5000">
+    <span class="et">NCU</span><input type="number" id="cNcu" value="5" min="1" max="60">
+    <span class="et">HSU/NCU</span><input type="number" id="cHsu" value="1" min="0" max="10">
+  </div>
+  <div class="kpis" id="calc"></div>
+</section>
+
+<section>
+  <h2>Malla Zigbee · NCU ↔ TCU</h2>
+  <p class="nota">Aquí no se cuentan megas: se cuenta <b>aire</b>. Son 250 kbps compartidos por malla, y lo
+  que satura es la ocupación del canal, no el volumen. Cada gateway es una malla.</p>
+  <div class="ctrl">
+    <span class="et">Refresco NCU→TCU</span>
+    <button class="seg" data-zb="10">10 s</button>
+    <button class="seg" data-zb="30">30 s</button>
+    <button class="seg" data-zb="60">1 min</button>
+    <button class="seg" data-zb="300">5 min</button>
+    <span class="et" style="margin-left:10px">Saltos medios</span>
+    <input type="number" id="zbSaltos" value="2" min="1" max="6" step="0.5">
+  </div>
+  <table class="tabla" id="tZigbee">
+    <thead><tr><th>Planta</th><th>Mallas</th><th>Peor malla</th><th>MB/día</th>
+      <th style="text-align:right">Ocupación de aire de la peor malla</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p class="nota" style="margin:10px 0 0">Las marcas del medidor son el 30 % (apretada) y el 60 % (saturada).
+  Con los ritmos de hoy sobra sitio: la malla se estrecha cuando se pide refresco rápido, no por tener muchos TCU.</p>
+  <div class="aviso"><b>Esto es un modelo, no una medida.</b> La NCU no expone contadores de radio: el mapa
+    R7 solo da <code>lastComm</code>, el canal y la alarma <code>zigbee_fail</code>. Los saltos y los
+    reintentos se pueden calibrar con las capturas de
+    <a href="https://imoriana3.github.io/cobertura-zigbee/">Cobertura Zigbee</a> (rutas y
+    <code>ack_failures</code> del gateway Digi); mientras tanto, son parámetros.</div>
+</section>
+
+<section>
+  <h2>Medido en vivo</h2>
+  <p class="nota">Si tienes el stack levantado, esto pregunta a <code>GET /traffic</code> lo que de verdad
+  ha contado el colector en las últimas 24 h y lo pone al lado de la estimación.</p>
+  <div class="ctrl">
+    <span class="et">API</span>
+    <input type="text" class="url" id="apiUrl" placeholder="http://localhost:8000">
+    <button class="seg" id="btnApi">Consultar</button>
+    <span id="apiEstado" style="font:500 12px var(--mono);color:var(--muted)"></span>
+  </div>
+  <table class="tabla" id="tMedido" style="display:none">
+    <thead><tr><th>NCU</th><th>Medido MB/día</th><th>Estimado MB/día</th><th>Δ</th>
+      <th>Tx/día</th><th>Medido durante</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<section>
+  <h2>Cómo se cuenta</h2>
+  <p class="nota">No es un sniffer: es una caja registradora. El protocolo fija el tamaño de cada mensaje,
+  así que el byte sale de la cuenta, no de una captura.</p>
+  <table class="tabla">
+    <thead><tr><th>Concepto</th><th style="text-align:right">Bytes</th></tr></thead>
+    <tbody>
+      <tr><td>Petición Modbus FC03 — MBAP 7 + función 1 + dirección 2 + nº registros 2</td><td>12</td></tr>
+      <tr><td>Respuesta de n registros — MBAP 7 + función 1 + byte count 1 + 2n</td><td>9 + 2n</td></tr>
+      <tr><td>Cabecera IPv4 + TCP por segmento</td><td>40</td></tr>
+      <tr><td>Apertura y cierre de conexión, una vez por ciclo y NCU</td><td>7 segmentos</td></tr>
+      <tr><td>Nube — line protocol comprimido con gzip</td><td>medido</td></tr>
+      <tr><td>Cabeceras HTTP + TLS por escritura</td><td>500</td></tr>
+    </tbody>
+  </table>
+  <div class="aviso">Queda fuera, siempre a la baja: los ACK puros (viajan montados en el segmento
+    siguiente), la trama Ethernet (18 B más por trama; lo que se factura en un 4G es la carga IP) y el
+    retorno de la nube, porque el colector solo escribe.</div>
+</section>
+
+<footer>Factiun · Tracker SCADA — <a href="https://imoriana3.github.io/proyectos/">Panel de Proyectos</a>
+  · datos generados por <code>tools/gen_trafico.py</code></footer>
+</div>
+<div id="tip"></div>
+
+<script>
+/* === DATOS GENERADOS por tools/gen_trafico.py — no editar a mano === */
+const DATOS = {
+  plantas: [
+    {planta:"El Burgo I", configurada:true, intervalo:30.0, ncus:[{id:"NCU1", tcu:108, hsu:2, gws:2, tx:28, lan:8346, crudo:32795, gz:4439}, {id:"NCU2", tcu:107, hsu:2, gws:3, tx:28, lan:8298, crudo:32495, gz:4412}]},
+    {planta:"Fayón", configurada:false, intervalo:null, ncus:[{id:"192.168.1.150", tcu:24, hsu:1, gws:1, tx:9, lan:2375, crudo:7690, gz:2252}]},
+    {planta:"San José", configurada:false, intervalo:null, ncus:[{id:"10.21.236.1", tcu:119, hsu:2, gws:2, tx:31, lan:9177, crudo:36835, gz:4745}, {id:"10.21.236.11", tcu:119, hsu:0, gws:2, tx:29, lan:8935, crudo:36677, gz:4699}, {id:"10.21.236.6", tcu:121, hsu:0, gws:2, tx:30, lan:9132, crudo:37172, gz:4754}, {id:"10.21.236.16", tcu:124, hsu:0, gws:2, tx:30, lan:9276, crudo:38219, gz:4844}, {id:"10.21.236.26", tcu:124, hsu:0, gws:2, tx:30, lan:9276, crudo:38219, gz:4845}, {id:"10.21.236.31", tcu:119, hsu:2, gws:2, tx:31, lan:9177, crudo:36957, gz:4751}, {id:"10.21.236.36", tcu:119, hsu:2, gws:2, tx:31, lan:9177, crudo:36957, gz:4751}, {id:"10.21.236.21", tcu:119, hsu:0, gws:2, tx:29, lan:8935, crudo:36677, gz:4698}, {id:"10.21.236.46", tcu:119, hsu:0, gws:2, tx:29, lan:8935, crudo:36677, gz:4701}, {id:"10.21.236.51", tcu:118, hsu:2, gws:2, tx:31, lan:9129, crudo:36650, gz:4721}, {id:"10.21.236.61", tcu:119, hsu:0, gws:2, tx:29, lan:8935, crudo:36677, gz:4698}, {id:"10.21.236.66", tcu:64, hsu:0, gws:1, tx:17, lan:5083, crudo:19796, gz:3291}, {id:"10.21.236.71", tcu:54, hsu:0, gws:1, tx:14, lan:4300, crudo:16724, gz:3034}, {id:"10.21.236.86", tcu:122, hsu:0, gws:2, tx:30, lan:9180, crudo:37603, gz:4788}, {id:"10.21.236.101", tcu:57, hsu:0, gws:1, tx:16, lan:4646, crudo:17702, gz:3146}, {id:"10.21.236.96", tcu:69, hsu:1, gws:1, tx:19, lan:5545, crudo:21464, gz:3460}]},
+    {planta:"Túnez", configurada:false, intervalo:null, ncus:[{id:"192.168.1.111", tcu:19, hsu:1, gws:1, tx:8, lan:2034, crudo:6153, gz:2089}]},
+    {planta:"Ayora", configurada:false, intervalo:null, ncus:[{id:"192.168.4.10", tcu:63, hsu:0, gws:1, tx:17, lan:5035, crudo:19487, gz:3263}, {id:"192.168.4.20", tcu:69, hsu:1, gws:1, tx:19, lan:5545, crudo:21464, gz:3458}, {id:"192.168.4.30", tcu:66, hsu:1, gws:1, tx:19, lan:5401, crudo:20547, gz:3386}, {id:"192.168.4.40", tcu:30, hsu:0, gws:1, tx:9, lan:2643, crudo:9366, gz:2383}, {id:"192.168.4.45", tcu:48, hsu:1, gws:1, tx:14, lan:4032, crudo:15025, gz:2927}, {id:"192.168.4.50", tcu:26, hsu:0, gws:1, tx:9, lan:2451, crudo:8140, gz:2260}, {id:"192.168.4.55", tcu:25, hsu:0, gws:1, tx:8, lan:2302, crudo:7832, gz:2228}, {id:"192.168.4.60", tcu:44, hsu:1, gws:1, tx:13, lan:3739, crudo:13798, gz:2824}, {id:"192.168.4.65", tcu:41, hsu:0, gws:1, tx:12, lan:3474, crudo:12739, gz:2702}, {id:"192.168.4.70", tcu:40, hsu:0, gws:1, tx:11, lan:3325, crudo:12432, gz:2673}, {id:"192.168.4.75", tcu:65, hsu:1, gws:1, tx:18, lan:5252, crudo:20244, gz:3361}, {id:"192.168.4.80", tcu:53, hsu:1, gws:1, tx:15, lan:4373, crudo:16558, gz:3053}, {id:"192.168.4.90", tcu:72, hsu:1, gws:1, tx:20, lan:5790, crudo:22383, gz:3531}, {id:"192.168.4.95", tcu:24, hsu:0, gws:1, tx:8, lan:2254, crudo:7524, gz:2194}, {id:"192.168.4.100", tcu:43, hsu:2, gws:1, tx:14, lan:3812, crudo:13678, gz:2831}, {id:"192.168.4.110", tcu:45, hsu:1, gws:1, tx:13, lan:3787, crudo:14152, gz:2879}]},
+    {planta:"Bagnarelli", configurada:false, intervalo:null, ncus:[{id:"192.168.5.21", tcu:17, hsu:2, gws:1, tx:9, lan:2059, crudo:5658, gz:2025}]},
+  ],
+  // [nº de TCU, bytes crudos/ciclo, bytes comprimidos/ciclo] — 1 HSU
+  curvaNube: [[1,595,1409], [2,894,1462], [5,1789,1587], [10,3275,1781], [20,6262,2112], [35,10746,2575], [50,15222,2973], [75,22686,3597], [100,30156,4213], [150,45142,5539], [200,60123,6816], [300,90087,9337], [400,120052,11811], [600,179985,16736], [800,239911,21646], [1200,359978,31496], [1700,510306,43710], [2400,720764,60933]],
+};
+/* === FIN DATOS GENERADOS === */
+
+/* ---------- modelo (puerto de collector/traffic.py) ---------- */
+const MBAP=7, REQ_PDU=5, RESP_PDU=2, L3L4=40, HANDSHAKE=7;
+const ZB_OVERHEAD=41, ZB_REQ=12, ZB_RESP=44, ZB_BPS=250000, ZB_TRAMA_S=0.0015;
+
+function trocear(n,max){ const o=[]; while(n>0){ const t=Math.min(max,n); o.push(t); n-=t; } return o; }
+function bytesLectura(n){ return [MBAP+REQ_PDU+L3L4, MBAP+RESP_PDU+2*n+L3L4]; }
+function cicloModbus(tcu,hsu,max=110){
+  const lec=[...trocear(tcu*22,max), ...trocear(tcu*2,max), 1, 6];
+  for(let i=0;i<hsu;i++) lec.push(10);
+  let b=HANDSHAKE*L3L4;
+  for(const n of lec){ const [u,d]=bytesLectura(n); b+=u+d; }
+  return {tx:lec.length, lan:b};
+}
+/* La curva de nube viene horneada porque el gzip real no se puede rehacer aquí;
+   se interpola entre los puntos que calculó el modelo. */
+function interpNube(n){
+  const C=DATOS.curvaNube;
+  if(n<=C[0][0]) return {crudo:C[0][1], gz:C[0][2]};
+  for(let i=1;i<C.length;i++){
+    if(n<=C[i][0]){
+      const [x0,c0,g0]=C[i-1], [x1,c1,g1]=C[i], t=(n-x0)/(x1-x0);
+      return {crudo:c0+t*(c1-c0), gz:g0+t*(g1-g0)};
+    }
+  }
+  const [x0,c0,g0]=C[C.length-2], [x1,c1,g1]=C[C.length-1], t=(n-x0)/(x1-x0);
+  return {crudo:c0+t*(c1-c0), gz:g0+t*(g1-g0)};   // extrapola la última pendiente
+}
+function zigbee(tcuPorGw, cicloS, saltos, reintentos=1.15){
+  const bytes=(2*ZB_OVERHEAD+ZB_REQ+ZB_RESP)*saltos*reintentos;
+  const tramas=2*saltos*reintentos;
+  const aire=(bytes*8/ZB_BPS)+tramas*ZB_TRAMA_S;
+  return { mbDia: tcuPorGw*bytes*(86400/cicloS)/1e6, pct: 100*tcuPorGw*aire/cicloS };
+}
+
+/* ---------- estado ---------- */
+const S = { int:30, zb:60, saltos:2, abierta:new Set(), medido:null };
+const $ = s => document.querySelector(s);
+const ciclos = () => 86400/S.int;
+const num = (v,d=1) => v.toLocaleString("es-ES",{minimumFractionDigits:d,maximumFractionDigits:d});
+const ent = v => Math.round(v).toLocaleString("es-ES");
+
+function totalesPlanta(p){
+  const c=ciclos();
+  let lan=0,gz=0,crudo=0,tx=0,tcu=0;
+  for(const n of p.ncus){ lan+=n.lan; gz+=n.gz; crudo+=n.crudo; tx+=n.tx; tcu+=n.tcu; }
+  return { tcu, ncus:p.ncus.length, txDia:tx*c,
+           lanMB:lan*c/1e6, nubeMB:gz*c/1e6, crudoMB:crudo*c/1e6,
+           lanCiclo:lan, nubeCiclo:gz, crudoCiclo:crudo, txCiclo:tx };
+}
+
+/* ---------- pintado ---------- */
+function pintaFlota(){
+  const filas=DATOS.plantas.map(p=>({p, t:totalesPlanta(p)}));
+  filas.sort((a,b)=>b.t.nubeMB-a.t.nubeMB);
+  const max=Math.max(...filas.map(f=>f.t.nubeMB));
+  const tb=$("#tFlota tbody"); tb.innerHTML="";
+  for(const {p,t} of filas){
+    const abierta=S.abierta.has(p.planta);
+    const tr=document.createElement("tr");
+    tr.className="planta";
+    tr.innerHTML=`<td><span class="chevron">${abierta?"▾":"▸"}</span>${p.planta}`+
+      (p.configurada?`<span class="marca" title="La que el stack tiene configurada en config/plants.yml">config</span>`:"")+
+      `</td><td>${t.ncus}</td><td>${ent(t.tcu)}</td><td>${ent(t.txDia)}</td>`+
+      `<td>${num(t.lanMB)}</td><td>${num(t.nubeMB)}</td>`+
+      `<td class="conbarra"><div class="barra" style="--w:${(100*t.nubeMB/max).toFixed(1)}%"><i></i></div></td>`+
+      `<td>${num(t.nubeMB*30/1000,2)}</td>`;
+    tr.onclick=()=>{ S.abierta.has(p.planta)?S.abierta.delete(p.planta):S.abierta.add(p.planta); pintaFlota(); };
+    tr.onmousemove=e=>tip(e,
+      `<b>${p.planta}</b><br>`+
+      `<span class="m">un ciclo:</span> ${t.txCiclo} transacciones · ${ent(t.lanCiclo)} B en la LAN<br>`+
+      `<span class="m">a la nube:</span> ${ent(t.crudoCiclo)} B crudos → ${ent(t.nubeCiclo)} B comprimidos `+
+      `(${num(t.crudoCiclo/t.nubeCiclo)}×)<br>`+
+      `<span class="m">al mes:</span> ${num(t.lanMB*30/1000,2)} GB en la LAN, ${num(t.nubeMB*30/1000,2)} GB a la nube`);
+    tr.onmouseleave=()=>$("#tip").style.display="none";
+    tb.appendChild(tr);
+    if(!abierta) continue;
+    const c=ciclos();
+    for(const n of [...p.ncus].sort((a,b)=>b.tcu-a.tcu)){
+      const f=document.createElement("tr"); f.className="ncu";
+      f.innerHTML=`<td>${n.id}</td><td>${n.gws} GW</td><td>${n.tcu}</td><td>${ent(n.tx*c)}</td>`+
+        `<td>${num(n.lan*c/1e6)}</td><td>${num(n.gz*c/1e6)}</td>`+
+        `<td class="conbarra"><div class="barra" style="--w:${(100*(n.gz*c/1e6)/max).toFixed(1)}%"><i></i></div></td>`+
+        `<td>${num(n.gz*c/1e6*30/1000,2)}</td>`;
+      tb.appendChild(f);
+    }
+  }
+  const T=filas.reduce((a,{t})=>({tcu:a.tcu+t.tcu,ncus:a.ncus+t.ncus,tx:a.tx+t.txDia,
+    lan:a.lan+t.lanMB,nube:a.nube+t.nubeMB}),{tcu:0,ncus:0,tx:0,lan:0,nube:0});
+  $("#tFlota tfoot").innerHTML=`<tr><td>Total flota</td><td>${T.ncus}</td><td>${ent(T.tcu)}</td>`+
+    `<td>${ent(T.tx)}</td><td>${num(T.lan)}</td><td>${num(T.nube)}</td><td class="conbarra"></td>`+
+    `<td>${num(T.nube*30/1000,2)}</td></tr>`;
+  $("#kpis").innerHTML=[
+    ["Plantas", ent(DATOS.plantas.length), ""],
+    ["Seguidores", ent(T.tcu), "TCU"],
+    ["A la nube", num(T.nube*30/1000,1), "GB/mes"],
+    ["En la LAN", num(T.lan*30/1000,1), "GB/mes"],
+    ["Peor planta", num(Math.max(...filas.map(f=>f.t.nubeMB))*30/1000,2), "GB/mes"],
+  ].map(([k,v,u])=>`<div class="kpi"><div class="v">${v}<span class="u">${u}</span></div><div class="k">${k}</div></div>`).join("");
+}
+
+function pintaCalc(){
+  const tcu=+$("#cTcu").value||0, ncu=Math.max(1,+$("#cNcu").value||1), hsu=+$("#cHsu").value||0;
+  const porNcu=Math.round(tcu/ncu), c=ciclos();
+  const m=cicloModbus(porNcu,hsu), n=interpNube(porNcu);
+  const lanMB=m.lan*ncu*c/1e6, nubeMB=n.gz*ncu*c/1e6;
+  $("#calc").innerHTML=[
+    ["Por NCU", ent(porNcu), "TCU"],
+    ["Transacciones", ent(m.tx*ncu*c), "/día"],
+    ["LAN", num(lanMB), "MB/día"],
+    ["A la nube", num(nubeMB), "MB/día"],
+    ["Al mes", num(nubeMB*30/1000,2), "GB/mes"],
+  ].map(([k,v,u])=>`<div class="kpi"><div class="v">${v}<span class="u">${u}</span></div><div class="k">${k}</div></div>`).join("");
+}
+
+function pintaZigbee(){
+  /* Una fila por planta con su PEOR malla: 37 filas de gateway con el mismo
+     verde no dicen nada; lo que se mira es si alguna malla va apretada. */
+  const tb=$("#tZigbee tbody"); tb.innerHTML="";
+  const filas=DATOS.plantas.map(p=>{
+    let mallas=0, mb=0, peorPct=0, peorTcu=0, maxTcu=0;
+    for(const n of p.ncus){
+      const gws=Math.max(1,n.gws), porGw=Math.round(n.tcu/gws);
+      const z=zigbee(porGw,S.zb,S.saltos);
+      mallas+=gws; mb+=z.mbDia*gws; maxTcu=Math.max(maxTcu,porGw);
+      if(z.pct>peorPct){ peorPct=z.pct; peorTcu=porGw; }
+    }
+    return {planta:p.planta, mallas, mb, pct:peorPct, peorTcu, maxTcu};
+  }).sort((a,b)=>b.pct-a.pct);
+  for(const f of filas){
+    const [col,txt] = f.pct>60?["var(--grave)","saturada"] : f.pct>30?["var(--aviso)","apretada"] : ["var(--ok)","holgada"];
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${f.planta}</td><td>${f.mallas}</td>`+
+      `<td>${f.peorTcu} TCU</td><td>${num(f.mb)}</td><td><div class="medidor">`+
+        `<span class="estado" style="color:${col}">${num(f.pct)} % ${txt}</span>`+
+        `<div class="barra escala"><i style="width:${Math.min(100,f.pct).toFixed(1)}%;background:${col}"></i></div>`+
+      `</div></td>`;
+    tr.onmousemove=e=>tip(e, `<b>${f.planta}</b><br><span class="m">peor malla:</span> ${f.peorTcu} TCU en un gateway<br>`+
+      `<span class="m">ocupación:</span> ${num(f.pct)} % del canal (250 kbps)<br>`+
+      `<span class="m">margen:</span> hasta ${num(30/f.pct*S.zb,0)} s de refresco antes de rozar el 30 %`);
+    tr.onmouseleave=()=>$("#tip").style.display="none";
+    tb.appendChild(tr);
+  }
+}
+
+function tip(e,html){
+  const t=$("#tip"); t.innerHTML=html; t.style.display="block";
+  const x=Math.min(e.clientX+16, innerWidth-t.offsetWidth-10);
+  const y=Math.min(e.clientY+16, innerHeight-t.offsetHeight-10);
+  t.style.left=x+"px"; t.style.top=y+"px";
+}
+
+/* ---------- medido en vivo ---------- */
+async function consultarApi(){
+  const url=$("#apiUrl").value.trim().replace(/\/$/,"");
+  const est=$("#apiEstado");
+  if(!url){ est.textContent="pon la URL de la API"; return; }
+  localStorage.setItem("scadaApiUrl",url);
+  est.textContent="consultando…"; est.className="";
+  try{
+    const r=await fetch(url+"/traffic?hours=24",{cache:"no-store"});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const j=await r.json();
+    if(!j.ncus||!j.ncus.length||!j.measured_s){ est.textContent="la API responde, pero aún no hay ciclos medidos"; return; }
+    S.medido=j; pintaMedido(j);
+    est.innerHTML=`medidas <b style="color:var(--ok)">${num(j.measured_s/3600,1)} h</b> de colector`;
+  }catch(e){
+    S.medido=null; $("#tMedido").style.display="none";
+    est.innerHTML=`<span class="malo">no responde: ${e.message}</span> · revisa la URL o el CORS`;
+  }
+}
+function pintaMedido(j){
+  /* Se compara contra la estimación de la MISMA NCU, buscándola por id en el
+     inventario; si no está (planta que no es la configurada), se deja en blanco. */
+  const est={}; for(const p of DATOS.plantas) for(const n of p.ncus) est[n.id]=n;
+  const tb=$("#tMedido tbody"); tb.innerHTML="";
+  for(const n of j.ncus){
+    const e=est[n.ncu];
+    const eMB=e ? e.gz*(86400/S.int)/1e6 : null;
+    const d=eMB ? 100*(n.cloud_mb_day-eMB)/eMB : null;
+    const tr=document.createElement("tr");
+    tr.innerHTML=`<td>${n.ncu}</td><td>${num(n.cloud_mb_day)}</td>`+
+      `<td>${eMB?num(eMB):"—"}</td>`+
+      `<td style="color:${d==null?"var(--muted)":Math.abs(d)<15?"var(--ok)":"var(--aviso)"}">`+
+        `${d==null?"—":(d>0?"+":"")+num(d)+" %"}</td>`+
+      `<td>${ent(n.modbus_tx*86400/n.period_s)}</td><td>${num(n.period_s/3600,1)} h</td>`;
+    tb.appendChild(tr);
+  }
+  $("#tMedido").style.display="";
+}
+
+/* ---------- arranque ---------- */
+function marca(sel,attr,val){ document.querySelectorAll(sel).forEach(b=>b.classList.toggle("on", +b.dataset[attr]===val)); }
+document.querySelectorAll("[data-int]").forEach(b=>b.onclick=()=>{
+  S.int=+b.dataset.int; $("#intLibre").value=""; marca("[data-int]","int",S.int); todo();
+});
+$("#intLibre").oninput=e=>{ const v=+e.target.value; if(v>0){ S.int=v; marca("[data-int]","int",-1); todo(); } };
+document.querySelectorAll("[data-zb]").forEach(b=>b.onclick=()=>{ S.zb=+b.dataset.zb; marca("[data-zb]","zb",S.zb); pintaZigbee(); });
+$("#zbSaltos").oninput=e=>{ S.saltos=Math.max(1,+e.target.value||2); pintaZigbee(); };
+["#cTcu","#cNcu","#cHsu"].forEach(s=>$(s).oninput=pintaCalc);
+$("#btnApi").onclick=consultarApi;
+$("#apiUrl").value=localStorage.getItem("scadaApiUrl")||"";
+$("#apiUrl").onkeydown=e=>{ if(e.key==="Enter") consultarApi(); };
+
+function todo(){ pintaFlota(); pintaCalc(); if(S.medido) pintaMedido(S.medido); }
+marca("[data-int]","int",S.int); marca("[data-zb]","zb",S.zb);
+todo(); pintaZigbee();
+</script>
+</body>
+</html>

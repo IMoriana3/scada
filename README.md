@@ -73,6 +73,7 @@ Dos preguntas con la misma respuesta: **qué mete el SCADA en la LAN de planta**
 |---|---|---|
 | **Medida** | Bytes reales de cada transacción Modbus y de cada escritura a InfluxDB, ciclo a ciclo | `collector/traffic.py` (`TrafficMeter`), serie `traffic`, `GET /traffic` |
 | **Estimación** | El mismo modelo aplicado sobre la configuración, sin tocar hierro | `python tools/trafico.py` |
+| **Visor** | Las dos cosas en una página: flota, calculadora, malla y lo medido en vivo | [`trafico.html`](trafico.html) |
 
 Es tráfico **contabilizado**, no capturado: se calcula del tamaño real de cada ADU y de cada payload, no de un sniffer. El modelo:
 
@@ -106,6 +107,8 @@ Tres cosas que se leen en esa tabla:
 La sensibilidad al ritmo es lineal — `python tools/trafico.py --intervalo 10,30,60,300` la pinta —, así que bajar el polling a 10 s multiplica por 3 la factura y subirlo a 5 min la divide por 10.
 
 **Malla Zigbee (NCU ↔ TCU).** `--zigbee` añade el tráfico de radio entre equipos: volumen por gateway y **ocupación del canal** (250 kbps compartidos), que es lo que de verdad limita. Con un refresco de 60 s, la malla mayor de la flota (72 TCU en un gateway de Ayora) ocupa ~4 % del aire. Ojo: **esto es un modelo, no una medida** — la NCU no expone contadores de radio y los parámetros (`ZB_*` en `collector/traffic.py`: saltos medios, reintentos, tamaño de trama) están puestos a la vista para ajustarlos en campo con las capturas de `cobertura-zigbee`.
+
+**Visor (`trafico.html`).** Un único HTML sin CDN ni build, como el resto: tabla de flota con el reparto por NCU, KPIs de GB/mes, calculadora para una planta que aún no existe, ocupación de aire de la peor malla de cada planta y un panel que consulta `GET /traffic` para poner lo medido al lado de lo estimado. Los bytes por ciclo de cada NCU van **horneados** por `python tools/gen_trafico.py --write` con el modelo de Python, así el visor no puede desviarse del medidor; el banco comprueba las dos cosas (que el puerto JS del modelo da lo mismo, y que el inventario del fichero está al día).
 
 Banco de pruebas: `python tools/test_trafico.py` (sin pytest). Comprueba el troceo y el tamaño de las ADU, que **lo estimado coincide exactamente con lo que el driver contabiliza** en un ciclo real del simulado, y que el line protocol de ejemplo del estimador es carácter a carácter el que genera `influxdb_client`.
 
@@ -233,10 +236,12 @@ Backend Docker (`tracker-scada.tar.gz`) + frontend de un solo fichero (`index.ht
 | `api/main.py` | API FastAPI: `/live`, `/history/{ncu}/{tcu}`, `/meteo`, `/traffic` |
 | `api/Dockerfile`, `requirements.txt` | Imagen de la API |
 | `index.html` | Frontend: herramienta de siting + capa SCADA (botón "SCADA") |
+| `trafico.html` | Visor del medidor de tráfico: flota, calculadora, malla Zigbee y medido en vivo |
 | `lib/xlsx.full.min.js` | SheetJS local (sin CDN: la LAN de planta no tiene internet) |
 | `tools/sync_plantas.mjs` | Trae al SCADA las plantas del siting (mismo plano, mismos datos) |
 | `tools/test_plantas.mjs` | Banco: las 7 plantas cargan y cargan igual que en el siting |
 | `tools/trafico.py` | Estimador de tráfico por planta y por flota (LAN, nube, malla Zigbee) |
+| `tools/gen_trafico.py` | Hornea en `trafico.html` los bytes por ciclo de cada NCU (fuente: el modelo) |
 | `tools/test_trafico.py` | Banco del medidor: modelo de bytes, estimación ≡ medida, line protocol |
 
 ### API REST
@@ -283,7 +288,7 @@ Derivado de `NCU_Modbus_Map_R7.xlsx`. Estructura principal:
 
 ## Despliegue (URL)
 
-Sin deploy público: el backend Modbus corre en local/oficina (PC con acceso a la LAN de planta), no en la nube. El frontend es `index.html`, un fichero estático autocontenido que se abre en el navegador y apunta a la URL de la API del stack.
+`trafico.html` es una página estática y se publica con el repo (GitHub Pages); el resto no. Sin deploy público: el backend Modbus corre en local/oficina (PC con acceso a la LAN de planta), no en la nube. El frontend es `index.html`, un fichero estático autocontenido que se abre en el navegador y apunta a la URL de la API del stack.
 
 > Recomendación: servir el HTML desde el mismo origen que la API (p. ej. un Caddy) para evitar CORS/mixed-content cuando la API no está en `localhost`.
 

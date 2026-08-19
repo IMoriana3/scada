@@ -122,6 +122,62 @@ def test_line_protocol_real():
           real.split(" ", 1)[1] == campos, f"\n    {real.split(' ', 1)[1]}\n    {campos}")
 
 
+def test_visor_html():
+    """El modelo del visor (JS) tiene que dar lo mismo que el de Python.
+
+    `trafico.html` reimplementa el lado Modbus en JavaScript y lleva horneada
+    una curva para el lado nube. Si una de las dos partes se desvía, aquí se ve.
+    """
+    import json
+    import shutil
+    import subprocess
+    html = os.path.join(RAIZ, "trafico.html")
+    if not shutil.which("node"):
+        print("  --  visor trafico.html (no hay node)")
+        return
+    js = r"""
+      const fs=require('fs');
+      const src=fs.readFileSync(process.argv[1],'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
+      // el bloque toca el DOM al final: se corta justo antes de los manejadores
+      const modelo=src.slice(0, src.indexOf('/* ---------- estado ----------'));
+      const f=new Function(modelo+'; return {DATOS, cicloModbus, interpNube, zigbee};')();
+      const out={ncus:[],curva:[]};
+      for(const p of f.DATOS.plantas) for(const n of p.ncus){
+        const m=f.cicloModbus(n.tcu,n.hsu);
+        out.ncus.push({id:n.id,tcu:n.tcu,hsu:n.hsu,lanJs:m.lan,txJs:m.tx,lanDato:n.lan,txDato:n.tx});
+      }
+      for(const n of [7,33,64,111,250,777,1500]) out.curva.push({n, gz:f.interpNube(n).gz});
+      console.log(JSON.stringify(out));
+    """
+    r = subprocess.run(["node", "-e", js, html], capture_output=True, text=True)
+    if r.returncode:
+        check("el visor evalúa", False, r.stderr.strip()[:200])
+        return
+    out = json.loads(r.stdout)
+    check("el visor lleva la flota horneada", len(out["ncus"]) > 30, f"({len(out['ncus'])} NCU)")
+    malos = [n for n in out["ncus"] if n["lanJs"] != n["lanDato"] or n["txJs"] != n["txDato"]]
+    check("el modelo LAN del visor == el de Python", not malos,
+          f"({len(malos)} NCU descuadran, p.ej. {malos[0] if malos else ''})")
+    peor = 0
+    for c in out["curva"]:
+        real = T.cloud_cycle(c["n"], 1)["cloud_gz_b"]
+        peor = max(peor, abs(c["gz"] - real) / real)
+    check("la curva de nube interpola con menos del 2 % de error",
+          peor < 0.02, f"(peor {100 * peor:.1f} %)")
+
+
+def test_visor_al_dia():
+    """El bloque de datos del visor tiene que ser el que sale del inventario de hoy."""
+    sys.path.insert(0, os.path.join(RAIZ, "tools"))
+    import gen_trafico
+    html = os.path.join(RAIZ, "trafico.html")
+    with open(html, encoding="utf-8") as f:
+        actual = f.read()
+    esperado = gen_trafico.bloque(gen_trafico.construir())
+    check("trafico.html lleva el inventario al día", esperado in actual,
+          "regenera con: python tools/gen_trafico.py --write")
+
+
 def test_escala():
     """Sanidad de la extrapolación: el doble de TCU no puede costar menos."""
     a = T.ncu_estimate(50, 1, interval_s=30, ncu="N1")
@@ -153,8 +209,8 @@ def test_zigbee():
 
 if __name__ == "__main__":
     for fn in (test_troceo, test_bytes_adu, test_medidor, test_nube,
-               test_estimacion_vs_driver, test_line_protocol_real, test_escala,
-               test_zigbee):
+               test_estimacion_vs_driver, test_line_protocol_real, test_visor_html,
+               test_visor_al_dia, test_escala, test_zigbee):
         print(f"\n{fn.__name__}:")
         fn()
     print()
