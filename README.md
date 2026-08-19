@@ -275,7 +275,7 @@ Backend Docker (`tracker-scada.tar.gz`) + frontend de un solo fichero (`index.ht
 | `collector/drivers/modbus_ncu.py` | Driver Modbus TCP real (solo lectura) |
 | `collector/drivers/simulated.py` | Driver simulado con pvlib |
 | `collector/Dockerfile`, `requirements.txt` | Imagen del colector |
-| `api/main.py` | API FastAPI: `/live`, `/history/{ncu}/{tcu}`, `/meteo`, `/traffic` |
+| `api/main.py` | API FastAPI: `/live`, `/history/{ncu}/{tcu}`, `/meteo`, `/meteo/history`, `/traffic` |
 | `api/Dockerfile`, `requirements.txt` | Imagen de la API |
 | `index.html` | Frontend: herramienta de siting + capa SCADA (botón "SCADA") |
 | `trafico.html` | Visor del medidor de tráfico: flota, calculadora, malla Zigbee y medido en vivo |
@@ -296,7 +296,17 @@ Backend Docker (`tracker-scada.tar.gz`) + frontend de un solo fichero (`index.ht
 | `GET /history/{ncu}/{tcu}?hours=24&fields=tilt_angle,target_angle,soc` | Series temporales de un TCU |
 | `GET /meteo` | Última lectura de cada HSU |
 | `GET /traffic?hours=24&ncu=NCU1` | Tráfico medido: LAN de planta y subida a la nube, por NCU y total |
+| `GET /meteo/history?hours=720&every=10m&hsu=1` | Series de las HSU (viento, dirección, temperatura, GHI) sobre un único eje de tiempos |
 | `GET /health` | Healthcheck del servicio |
+
+`/meteo/history` es lo que convierte a las HSU en dato de análisis y no solo de pantalla: lo consume
+el simulador de abanderamiento del Panel
+([`sim-viento.html`](https://imoriana3.github.io/proyectos/sim-viento.html)) para estudiar un
+emplazamiento **con el viento medido en la planta** en vez de con reanálisis. Dos cosas que hay que
+saber del dato que devuelve: los escalares se agregan por media en cada ventana, pero la **dirección
+se toma como último valor** (promediar rumbos exige media circular: entre 350° y 10° la media
+aritmética da 180°, el rumbo contrario), y **sin filtrar `hsu` o `ncu` se mezclan todas las HSU** de
+la planta.
 
 Respuesta de `/live` (resumen):
 
