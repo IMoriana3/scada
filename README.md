@@ -285,6 +285,7 @@ Backend Docker (`tracker-scada.tar.gz`) + frontend de un solo fichero (`index.ht
 | `tools/trafico.py` | Estimador de tráfico por planta y por flota (LAN, nube, malla Zigbee) |
 | `tools/gen_trafico.py` | Hornea en `trafico.html` los bytes por ciclo de cada NCU (fuente: el modelo) |
 | `tools/test_trafico.py` | Banco del medidor: modelo de bytes, estimación ≡ medida, line protocol |
+| `tools/test_modbus_map.py` | Banco del mapa: el subconjunto contra el R7 publicado (bloques, offsets, tipos, alarmas) |
 
 ### API REST
 
@@ -325,6 +326,13 @@ Derivado de `NCU_Modbus_Map_R7.xlsx`. Estructura principal:
 - **lastComm TCU** — base `29500`, U32 por TCU (epoch Unix).
 - **HSU** — base `30200` (básico) o `28000` (extendido con piranómetros).
 - **NCU** — `30000`–`30105`: estado de gateways, batería UPS, alarmas globales.
+
+**Contrastado con el mapa publicado.** `python tools/test_modbus_map.py` compara este subconjunto con el R7 ya extraído a JSON del repo de Cobertura Zigbee (`tools/modbus_src/ncu_r7_hsu_r23.json`, el mismo que genera la ficha [Mapa Modbus](https://imoriana3.github.io/cobertura-zigbee/modbus.html) del Panel): bases y tamaños de bloque, offset y tipo de cada campo del bloque compat, y los bits de alarma que deciden el `health`. 40 comprobaciones, en verde. Las dos diferencias son **erratas conocidas del documento** y están declaradas con su motivo en el propio banco:
+
+- `30513` solapa `StateOfCharge` (U8 bajo) y `RemainingCapacity` (U16); el colector lee el SoC del byte bajo, confirmado en R7.1.
+- El MSR figura como U8 pero coloca `MainState` en los bits 9..8 y `SafePosition` en 15..13, así que se lee el registro entero y se extraen los bits.
+
+Si no tienes el otro repo clonado al lado, el banco lo dice y sale sin dar nada por bueno (`--fuente` acepta la ruta).
 
 > Decodificación de F32: dos registros U16 → IEEE-754. El orden de palabras (`float_word_order`) es configurable porque el Excel no lo especifica.
 
