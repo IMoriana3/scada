@@ -153,32 +153,86 @@ def modbus_cycle(n_tcu: int, n_hsu: int = 0, *, stride: int = 22, lastcomm_regs:
     return m.snapshot(0)
 
 
-def sample_lines(plant: str, ncu: str, n_tcu: int, n_hsu: int = 0) -> list[str]:
-    """Line protocol representativo de un ciclo, en el formato que escribe el colector.
+# Campos que escribe el colector por TCU, en el orden alfabético en que los
+# serializa influxdb_client. Los valores VARÍAN por TCU a propósito: si todas
+# las líneas fueran iguales el gzip las aplastaría y la subida saldría
+# optimista. Lo que pesa un campo no es su longitud, es su dispersión.
+def _campos_tcu(i: int) -> dict:
+    tilt = -23.5 + (i % 17) * 0.06
+    return {
+        "alarms": '""',
+        "battery_current": f"{-300 + (i * 37) % 1100}",
+        "battery_voltage": f"{12600 + (i * 53) % 800}",
+        "bt_active": "0",
+        "comms_age_s": f"{round(3 + (i * 7) % 27 + 0.1 * (i % 10), 1)}",
+        "health": '"ok"',
+        "main_state": "2",
+        "motor_current": f"{(i * 91) % 1200}",
+        "panel_voltage": f"{17000 + (i * 131) % 4000}",
+        "safe_position": "0",
+        "soc": f"{70 + (i * 11) % 30}",
+        "soh": f"{92 + i % 8}",
+        "system_ok": "1",
+        "target_angle": "-23.5",
+        "temp_battery": f"{round(15 + (i * 3) % 20 + 0.1 * (i % 10), 1)}",
+        "temp_pcb": f"{round(20 + (i * 5) % 25 + 0.1 * (i % 10), 1)}",
+        "tilt_angle": f"{round(tilt, 2)}",
+    }
+
+
+# Campos de estado: no tiene sentido promediarlos. Si se agrega la ventana, el
+# resto va como media/mínimo/máximo y estos van con su último valor.
+ESTADO = {"alarms", "health", "main_state", "safe_position", "system_ok", "bt_active"}
+
+# Qué se sube. `None` = todo lo que hay.
+PRESETS = {
+    "todo": None,
+    "operacion": ["alarms", "comms_age_s", "health", "main_state", "soc",
+                  "system_ok", "target_angle", "tilt_angle"],
+    "minimo": ["alarms", "health", "soc", "tilt_angle"],
+}
+
+
+def _agrega(campos: dict) -> dict:
+    """Media/mínimo/máximo de lo numérico; el estado va con su último valor."""
+    out = {}
+    for k, v in campos.items():
+        if k in ESTADO:
+            out[k] = v
+            continue
+        try:
+            x = float(v)
+        except ValueError:
+            out[k] = v
+            continue
+        d = max(abs(x) * 0.04, 0.3)
+        for suf, y in (("_avg", x), ("_max", x + d), ("_min", x - d)):
+            out[k + suf] = f"{round(y, 2)}"
+    return dict(sorted(out.items()))
+
+
+def sample_lines(plant: str, ncu: str, n_tcu: int, n_hsu: int = 0,
+                 campos: list[str] | None = None, agregado: bool = False) -> list[str]:
+    """Line protocol representativo de una subida, tal como lo escribe el colector.
 
     Reproduce a mano lo que genera `Point.to_line_protocol()` para no arrastrar
     influxdb_client fuera del contenedor. `tools/test_trafico.py` comprueba que
     ambos coinciden cuando la librería está instalada.
+
+    `campos`: subconjunto a subir (None = todo). `agregado`: en vez del último
+    valor de la ventana, media/mín/máx de lo numérico.
     """
     lines = []
     for i in range(1, n_tcu + 1):
-        # Los valores VARÍAN por TCU a propósito: si todas las líneas fueran
-        # iguales el gzip las aplastaría y la estimación de subida saldría
-        # optimista. Esta dispersión imita la de un campo real (mismo ángulo
-        # ±0,5°, SoC y tensiones repartidas).
-        tilt = -23.5 + (i % 17) * 0.06
-        lines.append(
-            f'tracker_status,ncu={ncu},plant={plant},tcu={i} '
-            f'alarms="",battery_current={-300 + (i * 37) % 1100},'
-            f'battery_voltage={12600 + (i * 53) % 800},bt_active=0,'
-            f'comms_age_s={round(3 + (i * 7) % 27 + 0.1 * (i % 10), 1)},'
-            f'health="ok",main_state=2,motor_current={(i * 91) % 1200},'
-            f'panel_voltage={17000 + (i * 131) % 4000},safe_position=0,'
-            f'soc={70 + (i * 11) % 30},soh={92 + i % 8},system_ok=1,'
-            f'target_angle=-23.5,temp_battery={round(15 + (i * 3) % 20 + 0.1 * (i % 10), 1)},'
-            f'temp_pcb={round(20 + (i * 5) % 25 + 0.1 * (i % 10), 1)},'
-            f'tilt_angle={round(tilt, 2)}'
-        )
+        f = _campos_tcu(i)
+        if campos is not None:
+            f = {k: v for k, v in f.items() if k in campos}
+        if agregado:
+            f = _agrega(f)
+        if not f:
+            continue
+        cuerpo = ",".join(f"{k}={v}" for k, v in f.items())
+        lines.append(f"tracker_status,ncu={ncu},plant={plant},tcu={i} {cuerpo}")
     lines.append(
         f'ncu_status,ncu={ncu},plant={plant} '
         'alarm_any_snow=0,alarm_any_wind=0,battery_low=0,date_time=1755600000,'
@@ -194,7 +248,8 @@ def sample_lines(plant: str, ncu: str, n_tcu: int, n_hsu: int = 0) -> list[str]:
 
 
 def cloud_cycle(n_tcu: int, n_hsu: int = 0, *, plant: str = "planta", ncu: str = "NCU1",
-                http_overhead_b: int = HTTP_OVERHEAD_B, writes: int = 2) -> dict:
+                http_overhead_b: int = HTTP_OVERHEAD_B, writes: int = 2,
+                campos: list[str] | None = None, agregado: bool = False) -> dict:
     """Bytes que subiría a la nube UN ciclo de una NCU (crudo y comprimido).
 
     `writes`: escrituras HTTP por ciclo (el colector hace una del bloque de
@@ -202,12 +257,66 @@ def cloud_cycle(n_tcu: int, n_hsu: int = 0, *, plant: str = "planta", ncu: str =
     una.
     """
     m = TrafficMeter(http_overhead_b=http_overhead_b)
-    lines = sample_lines(plant, ncu, n_tcu, n_hsu)
+    lines = sample_lines(plant, ncu, n_tcu, n_hsu, campos, agregado)
     corte = max(1, len(lines) - 1 - n_hsu) if writes > 1 else len(lines)
     m.cloud_write(lines[:corte])
     if writes > 1:
         m.cloud_write(lines[corte:])
     return m.snapshot(0)
+
+
+def cloud_plan(n_tcu: int, n_hsu: int = 0, *, poll_s: float = 30, upload_s: float | None = None,
+               preset: str = "todo", agregado: bool = False, plant: str = "planta",
+               ncu: str = "NCU1", http_overhead_b: int = HTTP_OVERHEAD_B) -> dict:
+    """Plan de subida: leer a un ritmo y subir a otro.
+
+    El colector puede seguir sondeando cada `poll_s` (que es lo que manda en
+    seguridad y en el mapa de estados) y subir solo cada `upload_s`: minutal,
+    cinco minutal, lo que sea. Cada subida lleva UN punto por TCU — el último
+    valor de la ventana, o su media/mín/máx si `agregado`.
+
+    Subir más a menudo de lo que se lee no existe: se recorta a `poll_s`.
+    """
+    upload_s = max(poll_s, upload_s or poll_s)
+    c = cloud_cycle(n_tcu, n_hsu, plant=plant, ncu=ncu, http_overhead_b=http_overhead_b,
+                    campos=PRESETS[preset], agregado=agregado)
+    subidas = 86400.0 / upload_s
+    return {
+        "tcus": n_tcu, "poll_s": poll_s, "upload_s": upload_s,
+        "preset": preset, "agregado": agregado,
+        "subidas_dia": round(subidas, 1),
+        "raw_b_subida": c["cloud_raw_b"], "gz_b_subida": c["cloud_gz_b"],
+        "puntos_subida": c["cloud_points"],
+        "cloud_mb_day": c["cloud_gz_b"] * subidas / 1e6,
+        "cloud_raw_mb_day": c["cloud_raw_b"] * subidas / 1e6,
+        "cloud_gb_month": c["cloud_gz_b"] * subidas * 30 / 1e9,
+    }
+
+
+def field_weights(n_tcu: int = 108, n_hsu: int = 2, *, agregado: bool = False) -> list[dict]:
+    """Cuánto pesa CADA campo, quitándolo y volviendo a comprimir.
+
+    No es su longitud: es su dispersión. `target_angle` ocupa 18 B crudos y
+    0,3 comprimidos porque vale lo mismo en todos los seguidores; a
+    `panel_voltage`, que baila en cada TCU, el gzip no le puede hacer nada.
+    """
+    import gzip as _gz
+
+    def pesa(ls):
+        p = ("\n".join(ls) + "\n").encode()
+        return len(p), len(_gz.compress(p, 6, mtime=0))
+
+    todos = list(_campos_tcu(1).keys())
+    base_raw, base_gz = pesa(sample_lines("p", "N", n_tcu, n_hsu, agregado=agregado))
+    out = []
+    for c in todos:
+        resto = [x for x in todos if x != c]
+        r, g = pesa(sample_lines("p", "N", n_tcu, n_hsu, resto, agregado))
+        out.append({"campo": c,
+                    "raw_b_tcu": (base_raw - r) / n_tcu,
+                    "gz_b_tcu": (base_gz - g) / n_tcu})
+    out.sort(key=lambda d: -d["gz_b_tcu"])
+    return out
 
 
 def ncu_estimate(n_tcu: int, n_hsu: int = 0, *, interval_s: float = 30, **kw) -> dict:

@@ -73,7 +73,7 @@ Dos preguntas con la misma respuesta: **qué mete el SCADA en la LAN de planta**
 |---|---|---|
 | **Medida** | Bytes reales de cada transacción Modbus y de cada escritura a InfluxDB, ciclo a ciclo | `collector/traffic.py` (`TrafficMeter`), serie `traffic`, `GET /traffic` |
 | **Estimación** | El mismo modelo aplicado sobre la configuración, sin tocar hierro | `python tools/trafico.py` |
-| **Visor** | Las dos cosas en una página: flota, calculadora, malla y lo medido en vivo | [`trafico.html`](trafico.html) |
+| **Visor** | Las dos cosas en una página: flota, planes de subida, calculadora, malla y lo medido en vivo | [`trafico.html`](trafico.html) |
 
 Es tráfico **contabilizado**, no capturado: se calcula del tamaño real de cada ADU y de cada payload, no de un sniffer. El modelo:
 
@@ -86,29 +86,69 @@ nube           = line protocol comprimido (gzip) + cabeceras HTTP/TLS (500 B por
 
 Lo que **no** cuenta, y conviene saberlo: los ACK puros (viajan montados en el segmento siguiente; como mucho 40 B por transacción, siempre a la baja), la trama Ethernet (18 B más por trama: lo que se factura en un 4G es la carga IP) y el retorno de la nube (el colector solo escribe).
 
-**Flota completa, con polling cada 30 s** (`python tools/trafico.py`):
+**Flota completa, con polling cada 30 s** (`python tools/trafico.py`). El inventario sale del **plano del propio SCADA** (`index.html`), donde cada TCU declara de qué NCU y de qué gateway cuelga:
 
 | Planta | NCU | TCU | LAN MB/día | Nube MB/día | Nube GB/mes |
 |---|---:|---:|---:|---:|---:|
-| El Burgo I (configurada) | 2 | 215 | 47,9 | 25,5 | 0,76 |
-| Ayora (24025) | 16 | 754 | 182,1 | 132,3 | 3,97 |
-| San José (24019) | 16 | 1686 | 371,1 | 201,4 | 6,04 |
-| Fayón (24007) | 1 | 24 | 6,8 | 6,5 | 0,19 |
-| Túnez (24021) | 1 | 19 | 5,9 | 6,0 | 0,18 |
-| Bagnarelli (24030) | 1 | 17 | 5,9 | 5,8 | 0,17 |
-| **Total flota** | | **2716** | | **377,7** | **11,3** |
+| San José 24019 | 21 | 2289 | 501,1 | 269,8 | 8,09 |
+| Panbianco 25004.2 | 12 | 1476 | 319,8 | 166,4 | 4,99 |
+| Ayora 24025 | 16 | 754 | 182,1 | 131,6 | 3,95 |
+| Benante 25004 | 6 | 730 | 158,6 | 82,6 | 2,48 |
+| Páramo 25019 | 4 | 396 | 87,7 | 48,3 | 1,45 |
+| El Burgo I 23003 | 2 | 215 | 47,9 | 25,5 | 0,76 |
+| El Polvorín 25082 | 2 | 119 | 27,9 | 18,4 | 0,55 |
+| Fayón 24007 | 1 | 24 | 6,8 | 6,4 | 0,19 |
+| Túnez 24021 | 1 | 19 | 5,9 | 6,0 | 0,18 |
+| Bagnarelli 24030 | 1 | 17 | 5,9 | 5,8 | 0,17 |
+| **Total** | **66** | **6039** | **1343,6** | **760,7** | **22,8** |
+
+> El inventario **no** sale de `tools/tcu-toolbox/plantas/*.json`: ese fichero solo lleva las NCU que alguien declaró para la herramienta de campo, y estaba corto — en San José faltaban 5 de las 21 (1686 TCU en vez de 2289) y no aparecían Páramo, Benante, Panbianco ni El Polvorín. El plano del SCADA es el mismo que pinta la capa de telemetría, así que lo que sale aquí es lo que se va a pollear de verdad.
 
 Tres cosas que se leen en esa tabla:
 
-- **Ninguna planta pasa de 7 GB/mes** con el ritmo actual. La flota entera cabe en ~11 GB/mes: el SCADA no es un problema de datos, es un problema de cobertura.
-- En las plantas pequeñas **manda la cabecera, no el dato**: Fayón sube 6,5 MB/día con 24 TCU y Túnez 6,0 con 19, porque cada escritura HTTP paga sus ~500 B pase lo que pase. Por eso el colector manda NCU y meteo en un solo POST.
-- El gzip hace el trabajo: de 1500 MB/día crudos en San José a 201 comprimidos.
+- **La mayor de la flota sube 8 GB/mes** y las diez juntas 23. Con eso, una SIM de 10 GB cubre la planta más grande y el problema sigue siendo la cobertura, no los datos.
+- En las plantas pequeñas **manda la cabecera, no el dato**: Fayón sube 6,4 MB/día con 24 TCU y Túnez 6,0 con 19, porque cada escritura HTTP paga sus ~500 B pase lo que pase. Por eso el colector manda NCU y meteo en un solo POST.
+- El gzip hace el trabajo: de 2021 MB/día crudos en San José a 270 comprimidos.
 
 La sensibilidad al ritmo es lineal — `python tools/trafico.py --intervalo 10,30,60,300` la pinta —, así que bajar el polling a 10 s multiplica por 3 la factura y subirlo a 5 min la divide por 10.
 
+### Planes de subida: leer a un ritmo y subir a otro
+
+El ritmo de polling manda en seguridad y en el mapa de estados, así que no siempre se puede tocar. Pero **subir no es leer**: el colector puede seguir sondeando cada 30 s, guardar todo en el InfluxDB local de planta y mandar a la nube solo el dato minutal. `python tools/trafico.py --planes` compara los planes; en El Burgo I:
+
+| Sube cada | Campos | De la ventana | MB/día | GB/mes | vs hoy |
+|---|---|---|---:|---:|---:|
+| 30 s (cada ciclo) | todo (17) | último valor | 25,5 | 0,76 | 100 % |
+| 30 s | operación (8) | último valor | 14,0 | 0,42 | 55 % |
+| 1 min | todo | último valor | 12,7 | 0,38 | 50 % |
+| 1 min | todo | media/mín/máx | 32,9 | 0,99 | **129 %** |
+| 1 min | operación | último valor | 7,0 | 0,21 | 27 % |
+| 5 min | todo | último valor | 2,5 | 0,08 | 10 % |
+| 15 min | mínimo (4) | último valor | 0,4 | 0,01 | 1 % |
+
+Lo que hay que mirar de esa tabla es la fila en negrita: **agregar sale caro**. Media, mínimo y máximo triplican los campos numéricos, así que subir minutal agregado cuesta *más* que subir cada 30 s el último valor. Si lo que se quiere es ahorrar, se sube el último valor y el detalle se queda en planta; si lo que se quiere es no perder los picos de viento o de corriente de motor, se paga.
+
+En flota, a 30 s el total son 22,8 GB/mes; minutal, 11,4; a 5 min, 2,3; y minutal con solo los campos de operación, 6,5.
+
+Los planes de campos son tres y viven en `PRESETS` (`collector/traffic.py`): `todo` (los 17 que escribe hoy), `operacion` (health, alarmas, ángulos, SoC, estado y edad de comunicaciones) y `minimo` (health, alarmas, SoC y ángulo real).
+
+### Lo que pesa cada campo
+
+`python tools/trafico.py --campos` lo mide quitando cada campo y volviendo a comprimir. No es su longitud, es su **dispersión**:
+
+| Campo | B crudos/TCU | B gz/TCU |
+|---|---:|---:|
+| `panel_voltage` | 20,0 | 3,97 |
+| `battery_voltage` | 22,0 | 3,44 |
+| `comms_age_s` | 16,7 | 3,23 |
+| `soc` | 7,0 | 2,01 |
+| `target_angle` | 18,0 | 0,29 |
+
+`target_angle` ocupa 18 B crudos y 0,3 comprimidos porque vale lo mismo en los 108 seguidores de la NCU; `panel_voltage`, que baila en cada uno, cuesta trece veces más siendo igual de largo. Cualquier decisión de "quitamos campos para ahorrar" hay que tomarla con esta columna, no con la del crudo.
+
 **Malla Zigbee (NCU ↔ TCU).** `--zigbee` añade el tráfico de radio entre equipos: volumen por gateway y **ocupación del canal** (250 kbps compartidos), que es lo que de verdad limita. Con un refresco de 60 s, la malla mayor de la flota (72 TCU en un gateway de Ayora) ocupa ~4 % del aire. Ojo: **esto es un modelo, no una medida** — la NCU no expone contadores de radio y los parámetros (`ZB_*` en `collector/traffic.py`: saltos medios, reintentos, tamaño de trama) están puestos a la vista para ajustarlos en campo con las capturas de `cobertura-zigbee`.
 
-**Visor (`trafico.html`).** Un único HTML sin CDN ni build, como el resto: tabla de flota con el reparto por NCU, KPIs de GB/mes, calculadora para una planta que aún no existe, ocupación de aire de la peor malla de cada planta y un panel que consulta `GET /traffic` para poner lo medido al lado de lo estimado. Los bytes por ciclo de cada NCU van **horneados** por `python tools/gen_trafico.py --write` con el modelo de Python, así el visor no puede desviarse del medidor; el banco comprueba las dos cosas (que el puerto JS del modelo da lo mismo, y que el inventario del fichero está al día).
+**Visor (`trafico.html`).** Un único HTML sin CDN ni build, como el resto: tabla de flota con el reparto por NCU, mandos para el plan de subida (cada cuánto, qué campos y último valor o agregado), KPIs de GB/mes, calculadora para una planta que aún no existe, ocupación de aire de la peor malla de cada planta y un panel que consulta `GET /traffic` para poner lo medido al lado de lo estimado. Los bytes por ciclo de cada NCU van **horneados** por `python tools/gen_trafico.py --write` con el modelo de Python, así el visor no puede desviarse del medidor; el banco comprueba las dos cosas (que el puerto JS del modelo da lo mismo, y que el inventario del fichero está al día).
 
 Banco de pruebas: `python tools/test_trafico.py` (sin pytest). Comprueba el troceo y el tamaño de las ADU, que **lo estimado coincide exactamente con lo que el driver contabiliza** en un ciclo real del simulado, y que el line protocol de ejemplo del estimador es carácter a carácter el que genera `influxdb_client`.
 

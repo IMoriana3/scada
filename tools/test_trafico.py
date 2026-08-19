@@ -146,7 +146,9 @@ def test_visor_html():
         const m=f.cicloModbus(n.tcu,n.hsu);
         out.ncus.push({id:n.id,tcu:n.tcu,hsu:n.hsu,lanJs:m.lan,txJs:m.tx,lanDato:n.lan,txDato:n.tx});
       }
-      for(const n of [7,33,64,111,250,777,1500]) out.curva.push({n, gz:f.interpNube(n).gz});
+      for(const plan of ['todo','operacion','minimo']) for(const agr of [0,1])
+        for(const n of [7,33,64,111,250,777,1500])
+          out.curva.push({n, plan, agr, gz:f.interpNube(n,plan,agr).gz});
       console.log(JSON.stringify(out));
     """
     r = subprocess.run(["node", "-e", js, html], capture_output=True, text=True)
@@ -158,12 +160,15 @@ def test_visor_html():
     malos = [n for n in out["ncus"] if n["lanJs"] != n["lanDato"] or n["txJs"] != n["txDato"]]
     check("el modelo LAN del visor == el de Python", not malos,
           f"({len(malos)} NCU descuadran, p.ej. {malos[0] if malos else ''})")
-    peor = 0
+    peor, peor_txt = 0, ""
     for c in out["curva"]:
-        real = T.cloud_cycle(c["n"], 1)["cloud_gz_b"]
-        peor = max(peor, abs(c["gz"] - real) / real)
-    check("la curva de nube interpola con menos del 2 % de error",
-          peor < 0.02, f"(peor {100 * peor:.1f} %)")
+        real = T.cloud_cycle(c["n"], 1, campos=T.PRESETS[c["plan"]],
+                             agregado=bool(c["agr"]))["cloud_gz_b"]
+        e = abs(c["gz"] - real) / real
+        if e > peor:
+            peor, peor_txt = e, f'{c["plan"]}/{"agr" if c["agr"] else "últ"} n={c["n"]}'
+    check("las curvas de nube (3 planes x 2 modos) interpolan con menos del 2 %",
+          peor < 0.02, f"(peor {100 * peor:.1f} % en {peor_txt})")
 
 
 def test_visor_al_dia():
@@ -196,6 +201,40 @@ def test_escala():
                        rel_tol=1e-9))
 
 
+def test_planes_de_subida():
+    """Leer a un ritmo y subir a otro: lo que pide el 4G de una caseta."""
+    base = T.cloud_plan(108, 2, poll_s=30)
+    minutal = T.cloud_plan(108, 2, poll_s=30, upload_s=60)
+    check("subir la mitad de veces cuesta la mitad",
+          math.isclose(minutal["cloud_mb_day"], base["cloud_mb_day"] / 2, rel_tol=1e-9))
+    check("no se puede subir más a menudo de lo que se lee",
+          T.cloud_plan(108, 2, poll_s=30, upload_s=5)["upload_s"] == 30)
+    todo = base["cloud_mb_day"]
+    oper = T.cloud_plan(108, 2, poll_s=30, preset="operacion")["cloud_mb_day"]
+    mini = T.cloud_plan(108, 2, poll_s=30, preset="minimo")["cloud_mb_day"]
+    check("menos campos, menos subida", todo > oper > mini, f"({todo:.1f} {oper:.1f} {mini:.1f})")
+    check("el mínimo no baja de la mitad: la cabecera y las etiquetas no se van",
+          mini > todo * 0.3, f"(mínimo {100 * mini / todo:.0f} % de todo)")
+    agr = T.cloud_plan(108, 2, poll_s=30, upload_s=60, agregado=True)["cloud_mb_day"]
+    check("agregar la ventana pesa más que mandar el último valor",
+          agr > minutal["cloud_mb_day"])
+    check("minutal agregado puede salir MÁS caro que 30 s a pelo (media/mín/máx triplica campos)",
+          agr > todo, f"(agregado {agr:.1f} vs hoy {todo:.1f})")
+
+
+def test_peso_por_campo():
+    pesos = T.field_weights(n_tcu=108, n_hsu=2)
+    d = {p["campo"]: p for p in pesos}
+    check("todos los campos tienen peso", len(pesos) == 17, f"({len(pesos)})")
+    check("lo que no varía casi no pesa comprimido: target_angle < soc",
+          d["target_angle"]["gz_b_tcu"] < d["soc"]["gz_b_tcu"],
+          f'({d["target_angle"]["gz_b_tcu"]:.2f} vs {d["soc"]["gz_b_tcu"]:.2f})')
+    check("y aun así ocupa más en crudo (el gzip es quien decide)",
+          d["target_angle"]["raw_b_tcu"] > d["soc"]["raw_b_tcu"])
+    check("la suma de los campos no se pasa del total",
+          sum(p["gz_b_tcu"] for p in pesos) < T.cloud_cycle(108, 2)["cloud_gz_b"] / 108)
+
+
 def test_zigbee():
     z = T.zigbee_estimate(52, cycle_s=60)
     check("ocupación de aire razonable en una malla de 52",
@@ -210,7 +249,8 @@ def test_zigbee():
 if __name__ == "__main__":
     for fn in (test_troceo, test_bytes_adu, test_medidor, test_nube,
                test_estimacion_vs_driver, test_line_protocol_real, test_visor_html,
-               test_visor_al_dia, test_escala, test_zigbee):
+               test_visor_al_dia, test_escala, test_planes_de_subida,
+               test_peso_por_campo, test_zigbee):
         print(f"\n{fn.__name__}:")
         fn()
     print()

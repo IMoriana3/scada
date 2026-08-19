@@ -110,7 +110,9 @@ code{font-family:var(--mono);font-size:12.5px;background:var(--panel-2);border:1
 
 <section>
   <h2>Flota</h2>
-  <p class="nota">Ritmo de polling: es el único mando que mueve la factura, y la mueve en proporción directa.</p>
+  <p class="nota">Dos ritmos distintos: cada cuánto se <b>lee</b> la NCU (manda en seguridad y en el mapa de
+  estados) y cada cuánto se <b>sube</b>. Se pueden separar: seguir sondeando a 30 s y mandar a la nube solo
+  el dato minutal, con todo el detalle guardado en el InfluxDB local de planta.</p>
   <div class="ctrl">
     <span class="et">Polling</span>
     <button class="seg" data-int="10">10 s</button>
@@ -119,6 +121,23 @@ code{font-family:var(--mono);font-size:12.5px;background:var(--panel-2);border:1
     <button class="seg" data-int="300">5 min</button>
     <button class="seg" data-int="900">15 min</button>
     <input type="number" id="intLibre" min="1" max="3600" step="1" placeholder="otro (s)">
+  </div>
+  <div class="ctrl">
+    <span class="et" title="El polling de la NCU no cambia: solo cada cuánto sale el dato hacia la nube">Sube a la nube</span>
+    <button class="seg" data-up="0">cada ciclo</button>
+    <button class="seg" data-up="60">minutal</button>
+    <button class="seg" data-up="300">5 min</button>
+    <button class="seg" data-up="900">15 min</button>
+    <button class="seg" data-up="3600">horario</button>
+  </div>
+  <div class="ctrl">
+    <span class="et">Qué sube</span>
+    <button class="seg" data-plan="todo">todo (17 campos)</button>
+    <button class="seg" data-plan="operacion">operación (8)</button>
+    <button class="seg" data-plan="minimo">mínimo (4)</button>
+    <span class="et" style="margin-left:10px">De la ventana</span>
+    <button class="seg" data-agr="0">último valor</button>
+    <button class="seg" data-agr="1">media/mín/máx</button>
   </div>
   <div class="kpis" id="kpis"></div>
   <table class="tabla" id="tFlota" style="margin-top:16px">
@@ -182,7 +201,7 @@ code{font-family:var(--mono);font-size:12.5px;background:var(--panel-2);border:1
     <span id="apiEstado" style="font:500 12px var(--mono);color:var(--muted)"></span>
   </div>
   <table class="tabla" id="tMedido" style="display:none">
-    <thead><tr><th>NCU</th><th>Medido MB/día</th><th>Estimado MB/día</th><th>Δ</th>
+    <thead><tr><th>NCU</th><th>Medido MB/día</th><th>Estimado (plan de hoy)</th><th>Δ</th>
       <th>Tx/día</th><th>Medido durante</th></tr></thead>
     <tbody></tbody>
   </table>
@@ -217,20 +236,26 @@ code{font-family:var(--mono);font-size:12.5px;background:var(--panel-2);border:1
 /* === DATOS GENERADOS por tools/gen_trafico.py — no editar a mano === */
 const DATOS = {
   plantas: [
-    {planta:"El Burgo I", configurada:true, intervalo:30.0, ncus:[{id:"NCU1", tcu:108, hsu:2, gws:2, tx:28, lan:8346, crudo:32795, gz:4439}, {id:"NCU2", tcu:107, hsu:2, gws:3, tx:28, lan:8298, crudo:32495, gz:4412}]},
-    {planta:"Fayón", configurada:false, intervalo:null, ncus:[{id:"192.168.1.150", tcu:24, hsu:1, gws:1, tx:9, lan:2375, crudo:7690, gz:2252}]},
-    {planta:"San José", configurada:false, intervalo:null, ncus:[{id:"10.21.236.1", tcu:119, hsu:2, gws:2, tx:31, lan:9177, crudo:36835, gz:4745}, {id:"10.21.236.11", tcu:119, hsu:0, gws:2, tx:29, lan:8935, crudo:36677, gz:4699}, {id:"10.21.236.6", tcu:121, hsu:0, gws:2, tx:30, lan:9132, crudo:37172, gz:4754}, {id:"10.21.236.16", tcu:124, hsu:0, gws:2, tx:30, lan:9276, crudo:38219, gz:4844}, {id:"10.21.236.26", tcu:124, hsu:0, gws:2, tx:30, lan:9276, crudo:38219, gz:4845}, {id:"10.21.236.31", tcu:119, hsu:2, gws:2, tx:31, lan:9177, crudo:36957, gz:4751}, {id:"10.21.236.36", tcu:119, hsu:2, gws:2, tx:31, lan:9177, crudo:36957, gz:4751}, {id:"10.21.236.21", tcu:119, hsu:0, gws:2, tx:29, lan:8935, crudo:36677, gz:4698}, {id:"10.21.236.46", tcu:119, hsu:0, gws:2, tx:29, lan:8935, crudo:36677, gz:4701}, {id:"10.21.236.51", tcu:118, hsu:2, gws:2, tx:31, lan:9129, crudo:36650, gz:4721}, {id:"10.21.236.61", tcu:119, hsu:0, gws:2, tx:29, lan:8935, crudo:36677, gz:4698}, {id:"10.21.236.66", tcu:64, hsu:0, gws:1, tx:17, lan:5083, crudo:19796, gz:3291}, {id:"10.21.236.71", tcu:54, hsu:0, gws:1, tx:14, lan:4300, crudo:16724, gz:3034}, {id:"10.21.236.86", tcu:122, hsu:0, gws:2, tx:30, lan:9180, crudo:37603, gz:4788}, {id:"10.21.236.101", tcu:57, hsu:0, gws:1, tx:16, lan:4646, crudo:17702, gz:3146}, {id:"10.21.236.96", tcu:69, hsu:1, gws:1, tx:19, lan:5545, crudo:21464, gz:3460}]},
-    {planta:"Túnez", configurada:false, intervalo:null, ncus:[{id:"192.168.1.111", tcu:19, hsu:1, gws:1, tx:8, lan:2034, crudo:6153, gz:2089}]},
-    {planta:"Ayora", configurada:false, intervalo:null, ncus:[{id:"192.168.4.10", tcu:63, hsu:0, gws:1, tx:17, lan:5035, crudo:19487, gz:3263}, {id:"192.168.4.20", tcu:69, hsu:1, gws:1, tx:19, lan:5545, crudo:21464, gz:3458}, {id:"192.168.4.30", tcu:66, hsu:1, gws:1, tx:19, lan:5401, crudo:20547, gz:3386}, {id:"192.168.4.40", tcu:30, hsu:0, gws:1, tx:9, lan:2643, crudo:9366, gz:2383}, {id:"192.168.4.45", tcu:48, hsu:1, gws:1, tx:14, lan:4032, crudo:15025, gz:2927}, {id:"192.168.4.50", tcu:26, hsu:0, gws:1, tx:9, lan:2451, crudo:8140, gz:2260}, {id:"192.168.4.55", tcu:25, hsu:0, gws:1, tx:8, lan:2302, crudo:7832, gz:2228}, {id:"192.168.4.60", tcu:44, hsu:1, gws:1, tx:13, lan:3739, crudo:13798, gz:2824}, {id:"192.168.4.65", tcu:41, hsu:0, gws:1, tx:12, lan:3474, crudo:12739, gz:2702}, {id:"192.168.4.70", tcu:40, hsu:0, gws:1, tx:11, lan:3325, crudo:12432, gz:2673}, {id:"192.168.4.75", tcu:65, hsu:1, gws:1, tx:18, lan:5252, crudo:20244, gz:3361}, {id:"192.168.4.80", tcu:53, hsu:1, gws:1, tx:15, lan:4373, crudo:16558, gz:3053}, {id:"192.168.4.90", tcu:72, hsu:1, gws:1, tx:20, lan:5790, crudo:22383, gz:3531}, {id:"192.168.4.95", tcu:24, hsu:0, gws:1, tx:8, lan:2254, crudo:7524, gz:2194}, {id:"192.168.4.100", tcu:43, hsu:2, gws:1, tx:14, lan:3812, crudo:13678, gz:2831}, {id:"192.168.4.110", tcu:45, hsu:1, gws:1, tx:13, lan:3787, crudo:14152, gz:2879}]},
-    {planta:"Bagnarelli", configurada:false, intervalo:null, ncus:[{id:"192.168.5.21", tcu:17, hsu:2, gws:1, tx:9, lan:2059, crudo:5658, gz:2025}]},
+    {planta:"El Burgo I", configurada:true, intervalo:30.0, ncus:[{id:"NCU1", tcu:108, hsu:2, gws:2, tx:28, lan:8346, crudo:32795, gz:4439, planes:{todo:[4439,11468],operacion:[2429,4078],minimo:[1928,2436]}}, {id:"NCU2", tcu:107, hsu:2, gws:3, tx:28, lan:8298, crudo:32495, gz:4412, planes:{todo:[4412,11383],operacion:[2420,4057],minimo:[1924,2430]}}]},
+    {planta:"San José 24019", configurada:false, intervalo:null, ncus:[{id:"MU-01_1-21", tcu:119, hsu:1, gws:2, tx:30, lan:9056, crudo:36575, gz:4741, planes:{todo:[4741,12367],operacion:[2575,4310],minimo:[2016,2532]}}, {id:"MU-02_2-19", tcu:119, hsu:1, gws:2, tx:30, lan:9056, crudo:36575, gz:4744, planes:{todo:[4744,12369],operacion:[2576,4311],minimo:[2017,2532]}}, {id:"MU-02_1-18", tcu:120, hsu:1, gws:2, tx:30, lan:9104, crudo:36881, gz:4773, planes:{todo:[4773,12442],operacion:[2584,4330],minimo:[2026,2540]}}, {id:"MU-03_1-20", tcu:124, hsu:1, gws:2, tx:31, lan:9397, crudo:38107, gz:4884, planes:{todo:[4884,12767],operacion:[2624,4408],minimo:[2054,2574]}}, {id:"MU-04_1-17", tcu:124, hsu:1, gws:2, tx:31, lan:9397, crudo:38107, gz:4884, planes:{todo:[4884,12770],operacion:[2623,4407],minimo:[2053,2573]}}, {id:"MU-04_2-16", tcu:119, hsu:1, gws:2, tx:30, lan:9056, crudo:36575, gz:4742, planes:{todo:[4742,12366],operacion:[2576,4311],minimo:[2017,2532]}}, {id:"MU-05_2-15", tcu:119, hsu:1, gws:2, tx:30, lan:9056, crudo:36575, gz:4743, planes:{todo:[4743,12366],operacion:[2575,4310],minimo:[2016,2531]}}, {id:"MU-05_1-14", tcu:119, hsu:1, gws:2, tx:30, lan:9056, crudo:36575, gz:4741, planes:{todo:[4741,12366],operacion:[2575,4310],minimo:[2016,2531]}}, {id:"MU-03_2-13", tcu:120, hsu:0, gws:2, tx:29, lan:8983, crudo:36743, gz:4726, planes:{todo:[4726,12399],operacion:[2538,4284],minimo:[1979,2494]}}, {id:"MU-06_1-12", tcu:119, hsu:0, gws:2, tx:29, lan:8935, crudo:36437, gz:4698, planes:{todo:[4698,12320],operacion:[2530,4265],minimo:[1971,2486]}}, {id:"MU-06_2-11", tcu:118, hsu:0, gws:2, tx:29, lan:8887, crudo:36132, gz:4669, planes:{todo:[4669,12238],operacion:[2521,4244],minimo:[1966,2478]}}, {id:"MU-07_1-10", tcu:118, hsu:0, gws:2, tx:29, lan:8887, crudo:36132, gz:4669, planes:{todo:[4669,12236],operacion:[2521,4244],minimo:[1966,2478]}}, {id:"MU-07_2-09", tcu:119, hsu:0, gws:2, tx:29, lan:8935, crudo:36437, gz:4698, planes:{todo:[4698,12324],operacion:[2531,4266],minimo:[1973,2487]}}, {id:"MU-08_1-07", tcu:64, hsu:0, gws:1, tx:17, lan:5083, crudo:19666, gz:3297, planes:{todo:[3297,7857],operacion:[1993,3133],minimo:[1674,2129]}}, {id:"MU-08_1-08", tcu:54, hsu:0, gws:1, tx:14, lan:4300, crudo:16614, gz:3036, planes:{todo:[3036,7024],operacion:[1896,2920],minimo:[1622,2065]}}, {id:"MU-08_2-06", tcu:121, hsu:0, gws:2, tx:30, lan:9132, crudo:37050, gz:4756, planes:{todo:[4756,12478],operacion:[2549,4304],minimo:[1987,2503]}}, {id:"MU-09_1-05", tcu:122, hsu:0, gws:2, tx:30, lan:9180, crudo:37357, gz:4783, planes:{todo:[4783,12560],operacion:[2560,4323],minimo:[1994,2512]}}, {id:"MU-09_2-04", tcu:122, hsu:0, gws:2, tx:30, lan:9180, crudo:37357, gz:4783, planes:{todo:[4783,12562],operacion:[2560,4323],minimo:[1994,2512]}}, {id:"MU-10_1-03", tcu:123, hsu:0, gws:2, tx:30, lan:9228, crudo:37664, gz:4809, planes:{todo:[4809,12645],operacion:[2570,4342],minimo:[2002,2519]}}, {id:"", tcu:57, hsu:0, gws:1, tx:16, lan:4646, crudo:16948, gz:3086, planes:{todo:[3086,7254],operacion:[1901,2957],minimo:[1621,2061]}}, {id:"MU-10_2-01", tcu:69, hsu:0, gws:1, tx:18, lan:5424, crudo:21184, gz:3417, planes:{todo:[3417,8262],operacion:[2042,3233],minimo:[1697,2158]}}]},
+    {planta:"Panbianco 25004.2", configurada:false, intervalo:null, ncus:[{id:"1", tcu:139, hsu:1, gws:1, tx:34, lan:10420, crudo:41419, gz:5246, planes:{todo:[5246,13956],operacion:[2722,4658],minimo:[2137,2669]}}, {id:"2", tcu:140, hsu:1, gws:1, tx:34, lan:10468, crudo:41716, gz:5275, planes:{todo:[5275,14034],operacion:[2732,4680],minimo:[2144,2679]}}, {id:"3", tcu:54, hsu:1, gws:1, tx:15, lan:4421, crudo:16248, gz:3059, planes:{todo:[3059,7052],operacion:[1917,2935],minimo:[1651,2086]}}, {id:"4", tcu:139, hsu:1, gws:1, tx:34, lan:10420, crudo:41419, gz:5247, planes:{todo:[5247,13960],operacion:[2724,4660],minimo:[2139,2670]}}, {id:"5", tcu:156, hsu:1, gws:1, tx:38, lan:11640, crudo:46468, gz:5696, planes:{todo:[5696,15327],operacion:[2880,4989],minimo:[2244,2804]}}, {id:"6", tcu:140, hsu:1, gws:1, tx:34, lan:10468, crudo:41716, gz:5275, planes:{todo:[5275,14034],operacion:[2733,4680],minimo:[2144,2679]}}, {id:"7", tcu:126, hsu:0, gws:1, tx:31, lan:9473, crudo:37438, gz:4867, planes:{todo:[4867,12872],operacion:[2559,4366],minimo:[2010,2521]}}, {id:"8", tcu:46, hsu:0, gws:1, tx:13, lan:3815, crudo:13755, gz:2812, planes:{todo:[2812,6338],operacion:[1798,2722],minimo:[1565,1994]}}, {id:"9", tcu:119, hsu:0, gws:1, tx:29, lan:8935, crudo:35357, gz:4673, planes:{todo:[4673,12303],operacion:[2492,4230],minimo:[1960,2463]}}, {id:"10", tcu:133, hsu:0, gws:1, tx:32, lan:9910, crudo:39646, gz:5051, planes:{todo:[5051,13421],operacion:[2626,4502],minimo:[2051,2579]}}, {id:"11", tcu:138, hsu:0, gws:1, tx:33, lan:10251, crudo:41133, gz:5176, planes:{todo:[5176,13831],operacion:[2670,4600],minimo:[2083,2620]}}, {id:"12", tcu:146, hsu:0, gws:1, tx:35, lan:10837, crudo:43515, gz:5386, planes:{todo:[5386,14471],operacion:[2743,4751],minimo:[2134,2684]}}]},
+    {planta:"Ayora 24025", configurada:false, intervalo:null, ncus:[{id:"1", tcu:63, hsu:1, gws:1, tx:18, lan:5156, crudo:18912, gz:3288, planes:{todo:[3288,7796],operacion:[1998,3123],minimo:[1695,2141]}}, {id:"2", tcu:69, hsu:1, gws:1, tx:19, lan:5545, crudo:20683, gz:3439, planes:{todo:[3439,8286],operacion:[2056,3245],minimo:[1726,2177]}}, {id:"3", tcu:66, hsu:1, gws:1, tx:19, lan:5401, crudo:19799, gz:3366, planes:{todo:[3366,8044],operacion:[2027,3184],minimo:[1711,2159]}}, {id:"4.1", tcu:30, hsu:0, gws:1, tx:9, lan:2643, crudo:9087, gz:2372, planes:{todo:[2372,4979],operacion:[1644,2379],minimo:[1481,1892]}}, {id:"4.2", tcu:48, hsu:1, gws:1, tx:14, lan:4032, crudo:14575, gz:2914, planes:{todo:[2914,6555],operacion:[1862,2816],minimo:[1623,2058]}}, {id:"5.1", tcu:26, hsu:0, gws:1, tx:9, lan:2451, crudo:7897, gz:2248, planes:{todo:[2248,4595],operacion:[1596,2261],minimo:[1452,1825]}}, {id:"5.2", tcu:25, hsu:0, gws:1, tx:8, lan:2302, crudo:7598, gz:2214, planes:{todo:[2214,4493],operacion:[1584,2231],minimo:[1443,1810]}}, {id:"6.1", tcu:44, hsu:1, gws:1, tx:13, lan:3739, crudo:13384, gz:2812, planes:{todo:[2812,6221],operacion:[1822,2728],minimo:[1602,2030]}}, {id:"6.2", tcu:41, hsu:0, gws:1, tx:12, lan:3474, crudo:12361, gz:2689, planes:{todo:[2689,5917],operacion:[1750,2618],minimo:[1542,1967]}}, {id:"7.1", tcu:40, hsu:0, gws:1, tx:11, lan:3325, crudo:12063, gz:2659, planes:{todo:[2659,5834],operacion:[1738,2595],minimo:[1537,1959]}}, {id:"7.2", tcu:65, hsu:1, gws:1, tx:18, lan:5252, crudo:19641, gz:3347, planes:{todo:[3347,7967],operacion:[2019,3169],minimo:[1707,2160]}}, {id:"8", tcu:53, hsu:1, gws:1, tx:15, lan:4373, crudo:15953, gz:3035, planes:{todo:[3035,6974],operacion:[1909,2915],minimo:[1647,2081]}}, {id:"9.1", tcu:72, hsu:1, gws:1, tx:20, lan:5790, crudo:21717, gz:3515, planes:{todo:[3515,8538],operacion:[2086,3313],minimo:[1742,2201]}}, {id:"9.2", tcu:24, hsu:0, gws:1, tx:8, lan:2254, crudo:7299, gz:2185, planes:{todo:[2185,4394],operacion:[1575,2202],minimo:[1437,1795]}}, {id:"10", tcu:43, hsu:1, gws:1, tx:13, lan:3691, crudo:13042, gz:2780, planes:{todo:[2780,6129],operacion:[1811,2701],minimo:[1594,2020]}}, {id:"11", tcu:45, hsu:1, gws:1, tx:13, lan:3787, crudo:13635, gz:2832, planes:{todo:[2832,6298],operacion:[1832,2744],minimo:[1605,2033]}}]},
+    {planta:"Benante 25004", configurada:false, intervalo:null, ncus:[{id:"1", tcu:114, hsu:1, gws:1, tx:29, lan:8715, crudo:34002, gz:4582, planes:{todo:[4582,11935],operacion:[2489,4169],minimo:[1969,2459]}}, {id:"2", tcu:209, hsu:1, gws:1, tx:49, lan:15295, crudo:62186, gz:7048, planes:{todo:[7048,19601],operacion:[3378,6031],minimo:[2578,3216]}}, {id:"3", tcu:133, hsu:1, gws:1, tx:33, lan:10031, crudo:39641, gz:5094, planes:{todo:[5094,13471],operacion:[2671,4546],minimo:[2099,2622]}}, {id:"4", tcu:55, hsu:1, gws:1, tx:15, lan:4469, crudo:16544, gz:3084, planes:{todo:[3084,7132],operacion:[1925,2959],minimo:[1656,2092]}}, {id:"5", tcu:76, hsu:0, gws:1, tx:20, lan:5962, crudo:22622, gz:3566, planes:{todo:[3566,8808],operacion:[2079,3340],minimo:[1717,2173]}}, {id:"6", tcu:143, hsu:0, gws:1, tx:34, lan:10592, crudo:42477, gz:5308, planes:{todo:[5308,14229],operacion:[2716,4694],minimo:[2119,2659]}}]},
+    {planta:"Páramo 25019", configurada:false, intervalo:null, ncus:[{id:"1", tcu:120, hsu:1, gws:2, tx:30, lan:9104, crudo:35783, gz:4745, planes:{todo:[4745,12421],operacion:[2544,4291],minimo:[2010,2514]}}, {id:"2", tcu:84, hsu:1, gws:1, tx:22, lan:6568, crudo:25117, gz:3809, planes:{todo:[3809,9500],operacion:[2199,3549],minimo:[1802,2264]}}, {id:"3", tcu:120, hsu:0, gws:2, tx:29, lan:8983, crudo:35654, gz:4701, planes:{todo:[4701,12378],operacion:[2500,4248],minimo:[1966,2470]}}, {id:"4", tcu:72, hsu:1, gws:1, tx:20, lan:5790, crudo:21569, gz:3511, planes:{todo:[3511,8532],operacion:[2085,3307],minimo:[1741,2194]}}]},
+    {planta:"El Polvorín 25082", configurada:false, intervalo:null, ncus:[{id:"1", tcu:75, hsu:1, gws:1, tx:20, lan:5934, crudo:22455, gz:3584, planes:{todo:[3584,8773],operacion:[2113,3364],minimo:[1756,2211]}}, {id:"2", tcu:44, hsu:1, gws:1, tx:13, lan:3739, crudo:13292, gz:2806, planes:{todo:[2806,6215],operacion:[1820,2723],minimo:[1598,2025]}}]},
+    {planta:"Fayón 24007", configurada:false, intervalo:null, ncus:[{id:"1", tcu:24, hsu:1, gws:1, tx:9, lan:2375, crudo:7378, gz:2222, planes:{todo:[2222,4432],operacion:[1614,2238],minimo:[1474,1832]}}]},
+    {planta:"Túnez 24021", configurada:false, intervalo:null, ncus:[{id:"1", tcu:19, hsu:1, gws:1, tx:8, lan:2034, crudo:5901, gz:2066, planes:{todo:[2066,3922],operacion:[1557,2086],minimo:[1434,1750]}}]},
+    {planta:"Bagnarelli 24030", configurada:false, intervalo:null, ncus:[{id:"1", tcu:17, hsu:2, gws:1, tx:9, lan:2059, crudo:5438, gz:2008, planes:{todo:[2008,3701],operacion:[1539,2026],minimo:[1424,1721]}}]},
   ],
-  // [nº de TCU, bytes crudos/ciclo, bytes comprimidos/ciclo] — 1 HSU
-  curvaNube: [[1,595,1409], [2,894,1462], [5,1789,1587], [10,3275,1781], [20,6262,2112], [35,10746,2575], [50,15222,2973], [75,22686,3597], [100,30156,4213], [150,45142,5539], [200,60123,6816], [300,90087,9337], [400,120052,11811], [600,179985,16736], [800,239911,21646], [1200,359978,31496], [1700,510306,43710], [2400,720764,60933]],
+  // [nº TCU, crudos, gz de cada plan × modo: todo/operacion/minimo ×
+  //  último valor/media-mín-máx] por subida, con 1 HSU
+  curvaNube: [[1,595,1409,1577,1328,1386,1291,1333], [2,894,1462,1741,1349,1439,1307,1368], [5,1789,1587,2177,1390,1559,1336,1440], [10,3275,1781,2865,1454,1756,1378,1557], [20,6262,2112,4042,1580,2132,1458,1784], [35,10746,2575,5469,1744,2544,1559,1984], [50,15222,2973,6732,1886,2869,1637,2082], [75,22686,3597,8788,2115,3383,1757,2230], [100,30156,4213,10810,2348,3900,1876,2377], [150,45142,5539,14849,2811,4894,2195,2775], [200,60123,6816,18875,3261,5873,2494,3159], [300,90087,9337,26936,4192,7832,3097,3914], [400,120052,11811,34969,5118,9796,3581,4657], [600,179985,16736,50985,6947,13678,4465,6117], [800,239911,21646,67016,8770,17550,5331,7544], [1200,359978,31496,99097,12400,25327,7044,10384], [1700,510306,43710,139129,16919,35024,9167,13940], [2400,720764,60933,195192,23250,48561,12148,18904]],
 };
 /* === FIN DATOS GENERADOS === */
 
 /* ---------- modelo (puerto de collector/traffic.py) ---------- */
 const MBAP=7, REQ_PDU=5, RESP_PDU=2, L3L4=40, HANDSHAKE=7;
+const PLANES=["todo","operacion","minimo"];   // el orden de las columnas de curvaNube
 const ZB_OVERHEAD=41, ZB_REQ=12, ZB_RESP=44, ZB_BPS=250000, ZB_TRAMA_S=0.0015;
 
 function trocear(n,max){ const o=[]; while(n>0){ const t=Math.min(max,n); o.push(t); n-=t; } return o; }
@@ -244,17 +269,14 @@ function cicloModbus(tcu,hsu,max=110){
 }
 /* La curva de nube viene horneada porque el gzip real no se puede rehacer aquí;
    se interpola entre los puntos que calculó el modelo. */
-function interpNube(n){
-  const C=DATOS.curvaNube;
-  if(n<=C[0][0]) return {crudo:C[0][1], gz:C[0][2]};
-  for(let i=1;i<C.length;i++){
-    if(n<=C[i][0]){
-      const [x0,c0,g0]=C[i-1], [x1,c1,g1]=C[i], t=(n-x0)/(x1-x0);
-      return {crudo:c0+t*(c1-c0), gz:g0+t*(g1-g0)};
-    }
-  }
-  const [x0,c0,g0]=C[C.length-2], [x1,c1,g1]=C[C.length-1], t=(n-x0)/(x1-x0);
-  return {crudo:c0+t*(c1-c0), gz:g0+t*(g1-g0)};   // extrapola la última pendiente
+function interpNube(n, plan=S.plan, agr=S.agr){
+  const C=DATOS.curvaNube, col=2+2*PLANES.indexOf(plan)+(agr?1:0);   // 0:TCU 1:crudo 2..7:planes
+  const lee=f=>({crudo:f[1], gz:f[col]});
+  if(n<=C[0][0]) return lee(C[0]);
+  let a=C[C.length-2], b=C[C.length-1];
+  for(let i=1;i<C.length;i++) if(n<=C[i][0]){ a=C[i-1]; b=C[i]; break; }
+  const t=(n-a[0])/(b[0]-a[0]);                                      // extrapola la última pendiente
+  return {crudo:a[1]+t*(b[1]-a[1]), gz:a[col]+t*(b[col]-a[col])};
 }
 function zigbee(tcuPorGw, cicloS, saltos, reintentos=1.15){
   const bytes=(2*ZB_OVERHEAD+ZB_REQ+ZB_RESP)*saltos*reintentos;
@@ -264,18 +286,24 @@ function zigbee(tcuPorGw, cicloS, saltos, reintentos=1.15){
 }
 
 /* ---------- estado ---------- */
-const S = { int:30, zb:60, saltos:2, abierta:new Set(), medido:null };
+const S = { int:30, up:0, plan:"todo", agr:0, zb:60, saltos:2, abierta:new Set(), medido:null };
+/* Subir más a menudo de lo que se lee no existe: la cadencia de nube se recorta
+   al polling. up=0 significa "cada ciclo". */
+const subeCada = () => S.up ? Math.max(S.int, S.up) : S.int;
+const subidas  = () => 86400/subeCada();
+const gzSubida = n => n.planes[S.plan][S.agr];
 const $ = s => document.querySelector(s);
 const ciclos = () => 86400/S.int;
 const num = (v,d=1) => v.toLocaleString("es-ES",{minimumFractionDigits:d,maximumFractionDigits:d});
 const ent = v => Math.round(v).toLocaleString("es-ES");
 
 function totalesPlanta(p){
-  const c=ciclos();
-  let lan=0,gz=0,crudo=0,tx=0,tcu=0;
-  for(const n of p.ncus){ lan+=n.lan; gz+=n.gz; crudo+=n.crudo; tx+=n.tx; tcu+=n.tcu; }
+  const c=ciclos(), sub=subidas();
+  let lan=0,gz=0,crudo=0,tx=0,tcu=0,hoy=0;
+  for(const n of p.ncus){ lan+=n.lan; gz+=gzSubida(n); crudo+=n.crudo; tx+=n.tx; tcu+=n.tcu; hoy+=n.gz; }
   return { tcu, ncus:p.ncus.length, txDia:tx*c,
-           lanMB:lan*c/1e6, nubeMB:gz*c/1e6, crudoMB:crudo*c/1e6,
+           lanMB:lan*c/1e6, nubeMB:gz*sub/1e6, crudoMB:crudo*c/1e6,
+           hoyMB:hoy*c/1e6,                       // el plan de hoy, para comparar
            lanCiclo:lan, nubeCiclo:gz, crudoCiclo:crudo, txCiclo:tx };
 }
 
@@ -299,19 +327,21 @@ function pintaFlota(){
     tr.onmousemove=e=>tip(e,
       `<b>${p.planta}</b><br>`+
       `<span class="m">un ciclo:</span> ${t.txCiclo} transacciones · ${ent(t.lanCiclo)} B en la LAN<br>`+
-      `<span class="m">a la nube:</span> ${ent(t.crudoCiclo)} B crudos → ${ent(t.nubeCiclo)} B comprimidos `+
-      `(${num(t.crudoCiclo/t.nubeCiclo)}×)<br>`+
-      `<span class="m">al mes:</span> ${num(t.lanMB*30/1000,2)} GB en la LAN, ${num(t.nubeMB*30/1000,2)} GB a la nube`);
+      `<span class="m">cada subida:</span> ${ent(t.nubeCiclo)} B comprimidos, `+
+      `${ent(subidas())} al día<br>`+
+      `<span class="m">al mes:</span> ${num(t.lanMB*30/1000,2)} GB en la LAN, ${num(t.nubeMB*30/1000,2)} GB a la nube<br>`+
+      `<span class="m">vs plan de hoy:</span> ${num(100*t.nubeMB/t.hoyMB,0)} %`);
     tr.onmouseleave=()=>$("#tip").style.display="none";
     tb.appendChild(tr);
     if(!abierta) continue;
     const c=ciclos();
     for(const n of [...p.ncus].sort((a,b)=>b.tcu-a.tcu)){
       const f=document.createElement("tr"); f.className="ncu";
+      const nMB=gzSubida(n)*subidas()/1e6;
       f.innerHTML=`<td>${n.id}</td><td>${n.gws} GW</td><td>${n.tcu}</td><td>${ent(n.tx*c)}</td>`+
-        `<td>${num(n.lan*c/1e6)}</td><td>${num(n.gz*c/1e6)}</td>`+
-        `<td class="conbarra"><div class="barra" style="--w:${(100*(n.gz*c/1e6)/max).toFixed(1)}%"><i></i></div></td>`+
-        `<td>${num(n.gz*c/1e6*30/1000,2)}</td>`;
+        `<td>${num(n.lan*c/1e6)}</td><td>${num(nMB)}</td>`+
+        `<td class="conbarra"><div class="barra" style="--w:${(100*nMB/max).toFixed(1)}%"><i></i></div></td>`+
+        `<td>${num(nMB*30/1000,2)}</td>`;
       tb.appendChild(f);
     }
   }
@@ -320,12 +350,13 @@ function pintaFlota(){
   $("#tFlota tfoot").innerHTML=`<tr><td>Total flota</td><td>${T.ncus}</td><td>${ent(T.tcu)}</td>`+
     `<td>${ent(T.tx)}</td><td>${num(T.lan)}</td><td>${num(T.nube)}</td><td class="conbarra"></td>`+
     `<td>${num(T.nube*30/1000,2)}</td></tr>`;
+  const hoy=filas.reduce((a,{t})=>a+t.hoyMB,0);
   $("#kpis").innerHTML=[
     ["Plantas", ent(DATOS.plantas.length), ""],
     ["Seguidores", ent(T.tcu), "TCU"],
     ["A la nube", num(T.nube*30/1000,1), "GB/mes"],
     ["En la LAN", num(T.lan*30/1000,1), "GB/mes"],
-    ["Peor planta", num(Math.max(...filas.map(f=>f.t.nubeMB))*30/1000,2), "GB/mes"],
+    ["Vs plan de hoy", num(100*T.nube/hoy,0), "%"],
   ].map(([k,v,u])=>`<div class="kpi"><div class="v">${v}<span class="u">${u}</span></div><div class="k">${k}</div></div>`).join("");
 }
 
@@ -333,7 +364,7 @@ function pintaCalc(){
   const tcu=+$("#cTcu").value||0, ncu=Math.max(1,+$("#cNcu").value||1), hsu=+$("#cHsu").value||0;
   const porNcu=Math.round(tcu/ncu), c=ciclos();
   const m=cicloModbus(porNcu,hsu), n=interpNube(porNcu);
-  const lanMB=m.lan*ncu*c/1e6, nubeMB=n.gz*ncu*c/1e6;
+  const lanMB=m.lan*ncu*c/1e6, nubeMB=n.gz*ncu*subidas()/1e6;
   $("#calc").innerHTML=[
     ["Por NCU", ent(porNcu), "TCU"],
     ["Transacciones", ent(m.tx*ncu*c), "/día"],
@@ -425,6 +456,10 @@ document.querySelectorAll("[data-int]").forEach(b=>b.onclick=()=>{
   S.int=+b.dataset.int; $("#intLibre").value=""; marca("[data-int]","int",S.int); todo();
 });
 $("#intLibre").oninput=e=>{ const v=+e.target.value; if(v>0){ S.int=v; marca("[data-int]","int",-1); todo(); } };
+document.querySelectorAll("[data-up]").forEach(b=>b.onclick=()=>{ S.up=+b.dataset.up; marca("[data-up]","up",S.up); todo(); });
+document.querySelectorAll("[data-plan]").forEach(b=>b.onclick=()=>{ S.plan=b.dataset.plan;
+  document.querySelectorAll("[data-plan]").forEach(x=>x.classList.toggle("on",x.dataset.plan===S.plan)); todo(); });
+document.querySelectorAll("[data-agr]").forEach(b=>b.onclick=()=>{ S.agr=+b.dataset.agr; marca("[data-agr]","agr",S.agr); todo(); });
 document.querySelectorAll("[data-zb]").forEach(b=>b.onclick=()=>{ S.zb=+b.dataset.zb; marca("[data-zb]","zb",S.zb); pintaZigbee(); });
 $("#zbSaltos").oninput=e=>{ S.saltos=Math.max(1,+e.target.value||2); pintaZigbee(); };
 ["#cTcu","#cNcu","#cHsu"].forEach(s=>$(s).oninput=pintaCalc);
@@ -434,6 +469,8 @@ $("#apiUrl").onkeydown=e=>{ if(e.key==="Enter") consultarApi(); };
 
 function todo(){ pintaFlota(); pintaCalc(); if(S.medido) pintaMedido(S.medido); }
 marca("[data-int]","int",S.int); marca("[data-zb]","zb",S.zb);
+marca("[data-up]","up",S.up); marca("[data-agr]","agr",S.agr);
+document.querySelector('[data-plan="todo"]').classList.add("on");
 todo(); pintaZigbee();
 </script>
 </body>
