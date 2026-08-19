@@ -622,13 +622,18 @@ function orderNCUs(ncus,mode,tol){
 }
 function numberTCUs(){
   const mode=S.numMode;
+  /* EL CONTADOR NO REINICIA EN CADA GATEWAY. Reiniciaba, y por eso dos TCU de la MISMA NCU salian
+     con el mismo numero: el esclavo es unico por NCU, que es el bus, no por gateway. Se ve en la
+     malla medida de El Burgo, donde el identificador REAL del equipo (TCU_SUNNER_ID_nnn) llega
+     hasta 108 en una NCU de 108 seguidores, sin volver a empezar. */
   for(const n of S.ncus){
+    let k=0;
     for(const g of [1,2]){
       const arr=n.motorIdx.filter(i=>S.motors[i].gw===g);
       arr.sort((ia,ib)=>{ const a=S.motors[ia],b=S.motors[ib];
         return mode==="cols" ? ((Math.round(a.x/6)-Math.round(b.x/6))||(b.y-a.y))
                              : ((Math.round(b.y/34)-Math.round(a.y/34))||(a.x-b.x)); });
-      arr.forEach((i,k)=>{ S.motors[i].tn=k+1; S.motors[i].tcu=n.id+"\u00b7GW"+g+"\u00b7T"+String(k+1).padStart(3,"0"); });
+      arr.forEach(i=>{ k++; S.motors[i].tn=k; S.motors[i].tcu=n.id+"\u00b7GW"+g+"\u00b7T"+String(k).padStart(3,"0"); });
     }
   }
   S.motors.forEach(m=>{ if(m.ncu==null){ m.tn=null; m.tcu=null; } });
@@ -839,7 +844,12 @@ function loadProject(P){
   S.ncus=P.ncus.map(n=>({id:pad(n[0]),gz:(showGZ?n[1]:null),tipo:n[2],x:n[3],y:n[4],pb:psOf[n[0]],manual:true,motorIdx:[],gw:[[],[]],count:0}));
   const byId={}; S.ncus.forEach(n=>byId[n.id]=n);
   S.motors.forEach((m,i)=>{ const n=byId[m.ncu]; if(n) n.motorIdx.push(i); });
-  S.ncus.forEach(n=>{ n.count=n.motorIdx.length; n.gw=[[],[]]; n.motorIdx.forEach(i=>{ n.gw[S.motors[i].gw===2?1:0].push(i); }); [0,1].forEach(g=>n.gw[g].forEach((i,k)=>{S.motors[i].tn=k+1;})); });
+  /* EL NUMERO QUE SE PINTA ES EL DEL DATO, no uno recontado aqui. Antes se reasignaba k+1 dentro de
+     cada gateway, asi que la planta enseñaba una numeracion inventada que reiniciaba en cada GW y
+     repetia numero dentro de la misma NCU. Si el dato no trae numero, se cuenta de corrido dentro
+     de la NCU, no por gateway. */
+  S.ncus.forEach(n=>{ n.count=n.motorIdx.length; n.gw=[[],[]]; n.motorIdx.forEach(i=>{ n.gw[S.motors[i].gw===2?1:0].push(i); });
+    let k=0; [0,1].forEach(g=>n.gw[g].forEach(i=>{ k++; const v=+S.motors[i].id; S.motors[i].tn=(isFinite(v)&&v>0)?v:k; })); });
   S.rsus=P.hsus.map(h=>({id:h[0],gz:h[1],x:h[2],y:h[3],idnum:h[4],adjusted:false}));
   S.reps=(P.reps||[]).map(r=>({id:r[0],gz:r[1],x:r[2],y:r[3],idnum:r[4]}));
   S.altLabel=P.alt||"GZ"; S.projOX=(P.ox!=null?P.ox:null); S.projOY=(P.oy!=null?P.oy:null); S.hull=convexHull(recinto()); S.sc=P.sc||"ayora"; S.projName=P.name||"Ayora 24025"; S.sel=null; S.preset=true; S.fromAyora=true;
