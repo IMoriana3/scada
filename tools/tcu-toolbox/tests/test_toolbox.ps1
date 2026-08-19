@@ -1047,6 +1047,44 @@ $crM = Aband-Cronologia $abMedio 1.0 2.0
 Check 'D.2 ida sin vuelta: hay llegada' $crM.t_llegada 120
 Check 'D.2 ida sin vuelta: no hay vuelta' $crM.t_vuelta ''
 
+# -- lado del abanderamiento y limite de mediodia --------------------------
+# Convenio TCU: el este queda POR DEBAJO del oeste, o sea este < 0 < oeste.
+Write-Host ''
+Write-Host '== lado del abanderamiento =='
+Check 'lado: siguiendo al este bien abajo -> este'   (Aband-LadoEsperado -40.0 $true 10.0) 'este'
+Check 'lado: siguiendo al oeste -> oeste'            (Aband-LadoEsperado  40.0 $true 10.0) 'oeste'
+# la regla: pegado a la horizontal viniendo del este, al OESTE
+Check 'mediodia: -5 va al oeste'                     (Aband-LadoEsperado  -5.0 $true 10.0) 'oeste'
+Check 'mediodia: -10 justo en el borde va al oeste'  (Aband-LadoEsperado -10.0 $true 10.0) 'oeste'
+Check 'mediodia: -10.1 ya esta fuera'                (Aband-LadoEsperado -10.1 $true 10.0) 'este'
+Check 'mediodia: 0 tambien esta dentro'              (Aband-LadoEsperado   0.0 $true 10.0) 'oeste'
+# el limite es configurable, y a 0 la regla no existe
+Check 'mediodia: limite 20 se traga -15'             (Aband-LadoEsperado -15.0 $true 20.0) 'oeste'
+Check 'mediodia: limite 0 apaga la regla'            (Aband-LadoEsperado  -5.0 $true  0.0) 'este'
+# cara al viento el lado no lo decide el sol: no se juzga
+Check 'cara al viento no se pronuncia'               (Aband-LadoEsperado  -5.0 $false 10.0) ''
+
+# veredicto contra una cronologia real: la de arriba parte de +10 (oeste) y
+# abandera a 0, que no tiene lado -> no evaluable, y eso NO es un aprobado
+Check 'veredicto: objetivo 0 no es evaluable' (Aband-LadoCorrecto $cr $true 10.0) ''
+# el caso que la regla existe para cazar: viene del este pegado a la
+# horizontal y la TCU lo manda al ESTE. Tiene que salir NO.
+$abMal = @(
+  [pscustomobject]@{ts=100; real=-5.0;  obj=-5.0}
+  [pscustomobject]@{ts=110; real=-5.0;  obj=-55.0}
+  [pscustomobject]@{ts=120; real=-54.5; obj=-55.0}
+)
+Check 'veredicto: al este con la regla activa -> NO' (Aband-LadoCorrecto (Aband-Cronologia $abMal 1.0 2.0) $true 10.0) 'NO'
+# y el mismo movimiento con la regla apagada es correcto: venia del este
+Check 'veredicto: sin regla, ese mismo es SI'        (Aband-LadoCorrecto (Aband-Cronologia $abMal 1.0 2.0) $true  0.0) 'SI'
+$abBien = @(
+  [pscustomobject]@{ts=100; real=-5.0; obj=-5.0}
+  [pscustomobject]@{ts=110; real=-5.0; obj=55.0}
+  [pscustomobject]@{ts=120; real=54.5; obj=55.0}
+)
+Check 'veredicto: al oeste con la regla -> SI'       (Aband-LadoCorrecto (Aband-Cronologia $abBien 1.0 2.0) $true 10.0) 'SI'
+Check 'veredicto: sin orden no se pronuncia'         (Aband-LadoCorrecto (Aband-Cronologia $abSin 1.0 2.0) $true 10.0) ''
+
 # --------------------------------------------------------------------------
 #  Rangos plausibles e identidad de red
 # --------------------------------------------------------------------------

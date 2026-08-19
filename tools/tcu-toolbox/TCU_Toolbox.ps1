@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.54'
+$VERSION_TOOLBOX = '11.55'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2942,6 +2942,51 @@ function Aband-Cronologia($muestras, [double]$tolLlegada = 1.0, [double]$tolCamb
         $r.segundos_vuelta = [int]($ms[$l].ts - $ms[$k].ts)
     }
     return $r
+}
+
+# Lado esperado del abanderamiento, incluido el LIMITE DE MEDIODIA.
+#
+# Convenio de la TCU (el de la planta, no el del core): el ESTE queda POR
+# DEBAJO del oeste -- es la misma relacion que exige $PARES_TILT entre
+# min_tilt_east y max_tilt_west. Asi que "inclinado al este" es tilt < 0 y
+# "al oeste" tilt > 0.
+#
+# Regla del cliente: cuando el seguidor viene SIGUIENDO HACIA EL ESTE y ya
+# esta pegado a la horizontal -- tilt entre -limite y 0 -- el abanderamiento
+# hacia el sol lo mandaria a cruzar por el cero justo en el paso por el
+# meridiano. En esa franja tiene que irse al OESTE. Fuera de la franja manda
+# el lado del sol, como siempre.
+#
+# Solo aplica a las estrategias que abanderan HACIA EL SOL. Si la planta
+# abandera cara al viento, el lado lo decide el viento y esta comprobacion no
+# significa nada: por eso hay que pasarle $haciaElSol = $false y devuelve ''.
+#
+# Funcion PURA a proposito: se prueba sin ventana y sin planta delante.
+function Aband-LadoEsperado([double]$tiltInicial, [bool]$haciaElSol = $true,
+                            [double]$limiteMediodia = 10.0) {
+    if (-not $haciaElSol) { return '' }
+    if ($limiteMediodia -gt 0 -and $tiltInicial -ge (-$limiteMediodia) -and $tiltInicial -le 0) {
+        return 'oeste'          # limite de mediodia
+    }
+    if ($tiltInicial -lt 0) { return 'este' }
+    if ($tiltInicial -gt 0) { return 'oeste' }
+    return ''                   # justo en 0 y sin regla: no hay lado esperado
+}
+
+# Veredicto del lado: compara la posicion de seguridad REAL con la esperada.
+# Devuelve 'SI' / 'NO' / '' (no evaluable). El '' no es un aprobado: es que no
+# hay con que juzgar -- sin orden recibida, sin lado esperado o con la planta
+# abanderando cara al viento.
+function Aband-LadoCorrecto($cronologia, [bool]$haciaElSol = $true,
+                            [double]$limiteMediodia = 10.0) {
+    if ($null -eq $cronologia) { return '' }
+    if ("$($cronologia.obj_seguridad)" -eq '') { return '' }
+    $esperado = Aband-LadoEsperado ([double]$cronologia.tilt_inicial) $haciaElSol $limiteMediodia
+    if ($esperado -eq '') { return '' }
+    $obj = [double]$cronologia.obj_seguridad
+    if ($obj -eq 0) { return '' }
+    $real = $(if ($obj -lt 0) { 'este' } else { 'oeste' })
+    return $(if ($real -eq $esperado) { 'SI' } else { 'NO' })
 }
 
 # ---------------------------------------------------------------------------
@@ -10483,6 +10528,11 @@ $script:CronMeteo = New-Object System.Collections.ArrayList
 $script:CronEnsayo = ''
 $script:CronIni = $null
 $script:CronTope = 30
+# Como abandera ESTA planta. Solo si abandera hacia el SOL tiene sentido juzgar
+# el lado (y aplicar el limite de mediodia); cara al viento el lado lo decide
+# el viento, que el cronometro no lee. Se declara aqui, no se adivina.
+$script:CronHaciaElSol = $true
+$script:CronLimiteMediodia = 10.0
 
 $tmrCron = New-Object System.Windows.Forms.Timer
 $tmrCron.Interval = 3000   # se ajusta al arrancar cada ensayo
@@ -10567,6 +10617,8 @@ $btnSatCronFin.Add_Click({
                 Hora_UTC_recepcion_señal = (& $utc $cr.t_orden)
                 Inclinacion_al_recibir_deg = $cr.tilt_orden
                 Objetivo_seguridad_deg = $cr.obj_seguridad
+                Lado_esperado = (Aband-LadoEsperado ([double]$cr.tilt_inicial) $script:CronHaciaElSol $script:CronLimiteMediodia)
+                Lado_correcto = (Aband-LadoCorrecto $cr $script:CronHaciaElSol $script:CronLimiteMediodia)
                 Hora_UTC_llegada_seguridad = (& $utc $cr.t_llegada)
                 Inclinacion_en_seguridad_deg = $cr.tilt_llegada
                 Segundos_hasta_seguridad = $cr.segundos_ida
