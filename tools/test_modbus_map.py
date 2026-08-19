@@ -38,6 +38,8 @@ ERRATAS = {
                         "el colector lee el SoC del byte bajo, confirmado en R7.1",
     ("tcu_compat", 1): "El doc etiqueta MSR como U8, pero coloca MainState en los bits 9..8 y "
                        "SafePosition en 15..13: el registro se lee entero (U16) y se extraen bits",
+    ("hsu", 1): "Mismo caso en la HSU: el doc dice U8 y a la vez declara el registro sobre los "
+                "bits 15..0. Se lee entero (U16) y se extraen wind_level (2..0) y wind_dir (3)",
 }
 
 ok, ko = 0, 0
@@ -112,6 +114,29 @@ def main():
             print(f"      {motivo}")
             continue
         check(f"offset {off}: {spec['name']} ({spec['type']}) = {doc['nombre']} ({doc['tipo']})", bien)
+
+    print("\nbloques de HSU (básico y extendido), campo a campo:")
+    for clave, hoja, base in (("hsu", "HSU", 30200), ("hsu_ext", "HSU EXT", 28000)):
+        doc = {}
+        for r in src["ncu_r7"][hoja]:
+            if r.get("addr") is not None and r["addr"] >= base:
+                doc[r["addr"] - base] = r
+        for off, spec in sorted(y[clave]["fields"].items(), key=lambda kv: int(kv[0])):
+            off = int(off)
+            d = doc.get(off)
+            if d is None:
+                check(f"{clave} offset {off} ({spec['name']}) existe en el documento", False,
+                      f"el doc declara los offsets {sorted(doc)}")
+                continue
+            motivo = ERRATAS.get((clave, off))
+            if motivo:
+                print(f"  --  {clave} offset {off} ({spec['name']}) vs {d['nombre']}: errata conocida")
+                print(f"      {motivo}")
+                continue
+            # BITSET es como el documento llama a un U16 de bits sueltos
+            equivalentes = TIPOS.get(spec["type"], set()) | ({"BITSET"} if spec["type"] == "u16" else set())
+            check(f"{clave} offset {off}: {spec['name']} ({spec['type']}) = "
+                  f"{d['nombre']} ({d['tipo']})", d["tipo"] in equivalentes)
 
     print("\nbits de alarma (los que deciden el health):")
     doc_bits = {"alarms1": {}, "alarms2": {}}

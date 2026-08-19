@@ -327,10 +327,13 @@ Derivado de `NCU_Modbus_Map_R7.xlsx`. Estructura principal:
 - **HSU** — base `30200` (básico) o `28000` (extendido con piranómetros).
 - **NCU** — `30000`–`30105`: estado de gateways, batería UPS, alarmas globales.
 
-**Contrastado con el mapa publicado.** `python tools/test_modbus_map.py` compara este subconjunto con el R7 ya extraído a JSON del repo de Cobertura Zigbee (`tools/modbus_src/ncu_r7_hsu_r23.json`, el mismo que genera la ficha [Mapa Modbus](https://imoriana3.github.io/cobertura-zigbee/modbus.html) del Panel): bases y tamaños de bloque, offset y tipo de cada campo del bloque compat, y los bits de alarma que deciden el `health`. 40 comprobaciones, en verde. Las dos diferencias son **erratas conocidas del documento** y están declaradas con su motivo en el propio banco:
+**Contrastado con el mapa publicado.** `python tools/test_modbus_map.py` compara este subconjunto con el R7 ya extraído a JSON del repo de Cobertura Zigbee (`tools/modbus_src/ncu_r7_hsu_r23.json`, el mismo que genera la ficha [Mapa Modbus](https://imoriana3.github.io/cobertura-zigbee/modbus.html) del Panel): bases y tamaños de bloque, offset y tipo de cada campo del bloque compat **y de las dos hojas de HSU** (básica 30200 y extendida 28000, con las tres irradiancias), y los bits de alarma que deciden el `health`. 51 comprobaciones, en verde. Las tres diferencias son **erratas conocidas del documento** y están declaradas con su motivo en el propio banco:
 
 - `30513` solapa `StateOfCharge` (U8 bajo) y `RemainingCapacity` (U16); el colector lee el SoC del byte bajo, confirmado en R7.1.
-- El MSR figura como U8 pero coloca `MainState` en los bits 9..8 y `SafePosition` en 15..13, así que se lee el registro entero y se extraen los bits.
+- El MSR del TCU figura como U8 pero coloca `MainState` en los bits 9..8 y `SafePosition` en 15..13, así que se lee el registro entero y se extraen los bits.
+- El MSR de la HSU, igual: declarado U8 y a la vez definido sobre los bits 15..0.
+
+El otro mapa de la plataforma, el del TCU (`tcu_v6.json`, del PDF de Sunner v6), **no entra aquí a propósito**: describe el espacio propio del TCU, al que se llega por el passthrough de la NCU. Es el que usa la [TCU Toolbox](tools/tcu-toolbox/), no el colector, que solo lee el bloque que la NCU republica.
 
 Si no tienes el otro repo clonado al lado, el banco lo dice y sale sin dar nada por bueno (`--fuente` acepta la ruta).
 
