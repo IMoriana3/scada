@@ -283,13 +283,25 @@ def main() -> None:
                 if puerto in vistos:
                     sufijo += f" (TCU {ini}-{fin})"
                 vistos[puerto] = True
-                plantas.append({
+                entrada = {
                     "nombre": gw.get("nombre") or f"{nombre_planta} {ncu.get('id', host)}{sufijo}",
                     "ip": host,
                     "puerto": puerto,
                     "tcu_ini": ini,
                     "tcu_fin": fin,
-                })
+                }
+                # La estación meteo cuelga de UN gateway, no de los dos, y ahora
+                # el gateway lo dice: `hsu_esclavo` en su fila de plants.yml
+                # (230 en el GW1, 231 en el GW2). Antes esto no se sabía y el
+                # esclavo se repetía en las entradas de la NCU entera, dejando a
+                # la toolbox adivinando el puerto.
+                esc = gw.get("hsu_esclavo", gw.get("hsu_esclavos"))
+                if esc is not None:
+                    escl = [int(x) for x in (esc if isinstance(esc, (list, tuple)) else [esc])]
+                    if escl:
+                        entrada["hsus"] = len(escl)
+                        entrada["hsu_esclavos"] = escl
+                plantas.append(entrada)
         else:
             # fallback sin gateways declarados: rangos 1..tcu_count a ajustar a mano
             a_mano = True
