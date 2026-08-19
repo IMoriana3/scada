@@ -15,10 +15,20 @@ from decode import decode_tcu_block, decode_alarms, regs_to_u32
 class NCUDriver(ABC):
     """Interfaz común: el collector no sabe si habla con hierro o simulación."""
 
-    def __init__(self, ncu_cfg: dict, mmap: dict, word_order: str = "big"):
+    def __init__(self, ncu_cfg: dict, mmap: dict, word_order: str = "big", meter=None):
         self.cfg = ncu_cfg
         self.mmap = mmap
         self.word_order = word_order
+        self.meter = meter          # TrafficMeter opcional (medidor de tráfico)
+
+    # --- contabilidad de tráfico (no cuesta nada si no hay medidor) ---
+    def _count_read(self, n_regs: int):
+        if self.meter:
+            self.meter.read(n_regs)
+
+    def _count_connection(self):
+        if self.meter:
+            self.meter.connection()
 
     @abstractmethod
     async def connect(self): ...
@@ -38,8 +48,8 @@ class NCUDriver(ABC):
 
 
 class ModbusNCUDriver(NCUDriver):
-    def __init__(self, ncu_cfg, mmap, word_order="big", timeout=3, max_regs=110):
-        super().__init__(ncu_cfg, mmap, word_order)
+    def __init__(self, ncu_cfg, mmap, word_order="big", timeout=3, max_regs=110, meter=None):
+        super().__init__(ncu_cfg, mmap, word_order, meter)
         self.timeout = timeout
         self.max_regs = max_regs
         self.client = None
@@ -50,6 +60,7 @@ class ModbusNCUDriver(NCUDriver):
             self.cfg["host"], port=self.cfg.get("port", 502), timeout=self.timeout
         )
         await self.client.connect()
+        self._count_connection()
 
     async def close(self):
         if self.client:
@@ -69,6 +80,9 @@ class ModbusNCUDriver(NCUDriver):
     async def _read(self, addr: int, count: int) -> list[int]:
         kw = {"count": count, self._kw_unidad(): self.cfg.get("unit_id", 1)}
         rr = await self.client.read_holding_registers(addr, **kw)
+        # Se contabiliza la transacción tanto si responde como si da excepción:
+        # una respuesta de error también viaja por la LAN (y por el 4G).
+        self._count_read(count)
         if rr.isError():
             raise IOError(f"Modbus error @{addr} x{count}: {rr}")
         return rr.registers

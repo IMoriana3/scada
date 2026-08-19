@@ -56,6 +56,13 @@ ncus:
       # GW2 ya está declarada arriba, en la fila del rango bueno.
       - { puerto: 504, tcu_ini: 109, tcu_fin: 109 }
 
+# Medidor de tráfico: el colector cuenta los bytes de cada ciclo (Modbus contra
+# la NCU y subida a InfluxDB) y los publica en la serie `traffic`. Cuesta un
+# punto por NCU y ciclo (~250 B), y es lo que responde GET /traffic.
+# Para estimarlo SIN arrancar nada: python tools/trafico.py
+traffic:
+  enabled: true
+
 influxdb:
   url: "http://influxdb:8086"
   org: "factiun"

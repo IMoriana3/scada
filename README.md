@@ -47,6 +47,7 @@ La NCU actúa como **gateway Modbus** de todos sus TCU en un único espacio de d
 - Guarda histórico en InfluxDB con retención configurable.
 - Expone los datos ya digeridos en una API REST simple para el frontend.
 - Colorea cada seguidor en el mapa según su **estado de salud** (`health`) y muestra su telemetría al pasar el ratón.
+- **Mide su propio tráfico**: cuenta los bytes de cada ciclo (Modbus contra la NCU y subida a InfluxDB) y los publica como una serie más, para saber qué cuesta el SCADA en la LAN de planta y **cuánto sube a la nube cada planta**. Ver [Medidor de tráfico](#medidor-de-tráfico).
 - Es **solo lectura**: el rango Modbus de comandos (40000+: safe positions, modos, ángulo objetivo) queda excluido a propósito para no comprometer la seguridad de la planta.
 - Cuando sí hay que **escribir** en un TCU (configuración, reloj, NVM), el complemento de campo es **[TCU Toolbox](tools/tcu-toolbox/)** (`tools/tcu-toolbox/`): herramienta offline en PowerShell que habla con los TCU vía el passthrough Modbus de la NCU, comparte las plantas de `config/plants.yml` (vía `make_plantas.py`) y replica este mismo modelo de `health` en su pestaña de diagnóstico.
 
@@ -64,13 +65,59 @@ El colector clasifica cada TCU en uno de cinco estados, que determinan el color 
 
 El estado de comunicaciones lo da la propia NCU mediante el registro `lastComm` por TCU (timestamp Unix), no se infiere.
 
+### Medidor de tráfico
+
+Dos preguntas con la misma respuesta: **qué mete el SCADA en la LAN de planta** (por si el enlace a las NCU es un túnel flojo o un 4G) y **cuánto subiría a la nube cada planta** (por si hay que contratar el plan de datos). Se resuelven con el mismo modelo de bytes, para que la estimación y la medida sean comparables:
+
+| | Qué cuenta | Dónde |
+|---|---|---|
+| **Medida** | Bytes reales de cada transacción Modbus y de cada escritura a InfluxDB, ciclo a ciclo | `collector/traffic.py` (`TrafficMeter`), serie `traffic`, `GET /traffic` |
+| **Estimación** | El mismo modelo aplicado sobre la configuración, sin tocar hierro | `python tools/trafico.py` |
+
+Es tráfico **contabilizado**, no capturado: se calcula del tamaño real de cada ADU y de cada payload, no de un sniffer. El modelo:
+
+```
+petición  FC03 = MBAP(7) + FC(1) + dirección(2) + nº registros(2)  = 12 B
+respuesta      = MBAP(7) + FC(1) + byte count(1) + 2·nº registros  = 9 + 2n B
++ IPv4+TCP (40 B por segmento) + handshake y cierre (7 segmentos por ciclo y NCU)
+nube           = line protocol comprimido (gzip) + cabeceras HTTP/TLS (500 B por escritura)
+```
+
+Lo que **no** cuenta, y conviene saberlo: los ACK puros (viajan montados en el segmento siguiente; como mucho 40 B por transacción, siempre a la baja), la trama Ethernet (18 B más por trama: lo que se factura en un 4G es la carga IP) y el retorno de la nube (el colector solo escribe).
+
+**Flota completa, con polling cada 30 s** (`python tools/trafico.py`):
+
+| Planta | NCU | TCU | LAN MB/día | Nube MB/día | Nube GB/mes |
+|---|---:|---:|---:|---:|---:|
+| El Burgo I (configurada) | 2 | 215 | 47,9 | 25,5 | 0,76 |
+| Ayora (24025) | 16 | 754 | 182,1 | 132,3 | 3,97 |
+| San José (24019) | 16 | 1686 | 371,1 | 201,4 | 6,04 |
+| Fayón (24007) | 1 | 24 | 6,8 | 6,5 | 0,19 |
+| Túnez (24021) | 1 | 19 | 5,9 | 6,0 | 0,18 |
+| Bagnarelli (24030) | 1 | 17 | 5,9 | 5,8 | 0,17 |
+| **Total flota** | | **2716** | | **377,7** | **11,3** |
+
+Tres cosas que se leen en esa tabla:
+
+- **Ninguna planta pasa de 7 GB/mes** con el ritmo actual. La flota entera cabe en ~11 GB/mes: el SCADA no es un problema de datos, es un problema de cobertura.
+- En las plantas pequeñas **manda la cabecera, no el dato**: Fayón sube 6,5 MB/día con 24 TCU y Túnez 6,0 con 19, porque cada escritura HTTP paga sus ~500 B pase lo que pase. Por eso el colector manda NCU y meteo en un solo POST.
+- El gzip hace el trabajo: de 1500 MB/día crudos en San José a 201 comprimidos.
+
+La sensibilidad al ritmo es lineal — `python tools/trafico.py --intervalo 10,30,60,300` la pinta —, así que bajar el polling a 10 s multiplica por 3 la factura y subirlo a 5 min la divide por 10.
+
+**Malla Zigbee (NCU ↔ TCU).** `--zigbee` añade el tráfico de radio entre equipos: volumen por gateway y **ocupación del canal** (250 kbps compartidos), que es lo que de verdad limita. Con un refresco de 60 s, la malla mayor de la flota (72 TCU en un gateway de Ayora) ocupa ~4 % del aire. Ojo: **esto es un modelo, no una medida** — la NCU no expone contadores de radio y los parámetros (`ZB_*` en `collector/traffic.py`: saltos medios, reintentos, tamaño de trama) están puestos a la vista para ajustarlos en campo con las capturas de `cobertura-zigbee`.
+
+Banco de pruebas: `python tools/test_trafico.py` (sin pytest). Comprueba el troceo y el tamaño de las ADU, que **lo estimado coincide exactamente con lo que el driver contabiliza** en un ciclo real del simulado, y que el line protocol de ejemplo del estimador es carácter a carácter el que genera `influxdb_client`.
+
+El medidor se apaga con `traffic.enabled: false` en `config/plants.yml`. Cuesta un punto por NCU y ciclo (~250 B, contabilizado también).
+
 ## Uso
 
 ### Frontend (`index.html`)
 
 - **Botón SCADA** (barra de herramientas): activa/desactiva el modo telemetría. Al activarlo pide la URL de la API y la recuerda en el navegador (localStorage).
 - Con SCADA activo, las mesas/puntos se colorean por `health` y se actualizan cada 20 s.
-- **Chip de estado** (arriba a la izquierda): recuento `ok / warn / alarma / offline` y hora del último dato. Si la API falla, muestra el error y conserva el último dato bueno.
+- **Chip de estado** (arriba a la izquierda): recuento `ok / warn / alarma / offline` y hora del último dato. Si la API falla, muestra el error y conserva el último dato bueno. Debajo, el **tráfico** de las últimas 24 h (LAN y nube, MB/día y GB/mes), refrescado cada 10 ciclos; si la API es anterior a `/traffic`, la línea no aparece y no molesta.
 - **Tooltip** al pasar por un seguidor: estado, ángulo real / objetivo, SoC, tensión y temperatura de batería, y alarmas activas.
 - Desactivar el botón devuelve el plano al modo siting normal (colores por NCU) sin alterar nada más.
 
@@ -178,16 +225,19 @@ Backend Docker (`tracker-scada.tar.gz`) + frontend de un solo fichero (`index.ht
 | `config/plants.yml` | NCU de la planta, IPs, nº de TCU, intervalos, driver activo |
 | `config/modbus_map.yml` | Mapa de registros (derivado de `NCU_Modbus_Map_R7.xlsx`) |
 | `collector/main.py` | Loop asíncrono por NCU + escritura a InfluxDB |
+| `collector/traffic.py` | Medidor de tráfico: modelo de bytes, contador por ciclo y estimación por planta |
 | `collector/decode.py` | Decodificación U16/S16/F32/U32, bitsets de alarmas y clasificación `health` |
 | `collector/drivers/modbus_ncu.py` | Driver Modbus TCP real (solo lectura) |
 | `collector/drivers/simulated.py` | Driver simulado con pvlib |
 | `collector/Dockerfile`, `requirements.txt` | Imagen del colector |
-| `api/main.py` | API FastAPI: `/live`, `/history/{ncu}/{tcu}`, `/meteo` |
+| `api/main.py` | API FastAPI: `/live`, `/history/{ncu}/{tcu}`, `/meteo`, `/traffic` |
 | `api/Dockerfile`, `requirements.txt` | Imagen de la API |
 | `index.html` | Frontend: herramienta de siting + capa SCADA (botón "SCADA") |
 | `lib/xlsx.full.min.js` | SheetJS local (sin CDN: la LAN de planta no tiene internet) |
 | `tools/sync_plantas.mjs` | Trae al SCADA las plantas del siting (mismo plano, mismos datos) |
 | `tools/test_plantas.mjs` | Banco: las 7 plantas cargan y cargan igual que en el siting |
+| `tools/trafico.py` | Estimador de tráfico por planta y por flota (LAN, nube, malla Zigbee) |
+| `tools/test_trafico.py` | Banco del medidor: modelo de bytes, estimación ≡ medida, line protocol |
 
 ### API REST
 
@@ -197,6 +247,7 @@ Backend Docker (`tracker-scada.tar.gz`) + frontend de un solo fichero (`index.ht
 | `GET /live?ncu=NCU-01` | Filtrado por NCU |
 | `GET /history/{ncu}/{tcu}?hours=24&fields=tilt_angle,target_angle,soc` | Series temporales de un TCU |
 | `GET /meteo` | Última lectura de cada HSU |
+| `GET /traffic?hours=24&ncu=NCU1` | Tráfico medido: LAN de planta y subida a la nube, por NCU y total |
 | `GET /health` | Healthcheck del servicio |
 
 Respuesta de `/live` (resumen):
@@ -216,6 +267,7 @@ Respuesta de `/live` (resumen):
 
 - `tracker_status` — tags: `plant`, `ncu`, `tcu` · fields: `tilt_angle`, `target_angle`, `soc`, `soh`, `battery_voltage`, `battery_current`, `temp_battery`, `temp_pcb`, `motor_current`, `main_state`, `bt_active`, `safe_position`, `system_ok`, `alarms` (texto), `health`, `comms_age_s`.
 - `ncu_status` — alarmas globales de viento/nieve, estado de gateways, UPS.
+- `traffic` — tags: `plant`, `ncu` · fields: `lan_up_b`, `lan_down_b`, `lan_b`, `modbus_tx`, `connections`, `cloud_raw_b`, `cloud_gz_b`, `cloud_points`, `cloud_writes`, `period_s`. Un punto por NCU y ciclo, con el coste de ESE ciclo (no acumulados): la proyección a día/mes la hace `/traffic` sobre el tiempo realmente medido, así un colector parado no infla la cuenta.
 - `meteo` — tags: `ncu`, `hsu` · fields: `wind_speed`, `wind_direction`, `snow_level`, `wind_level`, `alarm_wind`, `alarm_snow`.
 
 ### Mapa Modbus (`config/modbus_map.yml`)

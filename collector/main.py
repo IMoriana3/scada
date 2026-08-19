@@ -7,12 +7,14 @@ import asyncio
 import logging
 import os
 import sys
+import time
 
 import yaml
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 from decode import tracker_health
+from traffic import TrafficMeter
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
@@ -29,18 +31,20 @@ def load_cfg():
     return plants, mmap
 
 
-def make_driver(cfg, ncu_cfg, mmap):
+def make_driver(cfg, ncu_cfg, mmap, meter=None):
     word_order = cfg.get("float_word_order", "big")
+    max_regs = cfg["polling"]["max_regs_per_read"]
     if cfg["driver"] == "modbus":
         from drivers.modbus_ncu import ModbusNCUDriver
         return ModbusNCUDriver(ncu_cfg, mmap, word_order,
                                timeout=cfg["polling"]["modbus_timeout_s"],
-                               max_regs=cfg["polling"]["max_regs_per_read"])
+                               max_regs=max_regs, meter=meter)
     from drivers.simulated import SimulatedNCUDriver
-    return SimulatedNCUDriver(ncu_cfg, mmap, word_order)
+    return SimulatedNCUDriver(ncu_cfg, mmap, word_order, meter=meter, max_regs=max_regs)
 
 
-def write_trackers(write_api, bucket, org, plant_id, ncu_id, trackers):
+def tracker_points(plant_id, ncu_id, trackers):
+    """Puntos InfluxDB de un ciclo de TCUs (se escriben en un solo POST)."""
     points = []
     for t in trackers:
         f = t["fields"]
@@ -58,15 +62,40 @@ def write_trackers(write_api, bucket, org, plant_id, ncu_id, trackers):
             if k in f and f[k] is not None:
                 p.field(k, float(f[k]))
         points.append(p)
+    return points
+
+
+def write_points(write_api, bucket, org, points, meter=None):
+    """Escribe un lote y contabiliza lo que ese lote sube a la nube."""
+    if not points:
+        return
     write_api.write(bucket=bucket, org=org, record=points)
+    if meter:
+        meter.cloud_write([p.to_line_protocol() for p in points])
+
+
+def write_traffic(write_api, bucket, org, plant_id, ncu_id, snap, meter):
+    """Publica el coste del ciclo como una serie más (`traffic`).
+
+    El punto que escribe esta función también ocupa: se contabiliza en el
+    medidor DESPUÉS de escribirlo, así entra en el ciclo siguiente en vez de
+    morderse la cola.
+    """
+    p = Point("traffic").tag("plant", plant_id).tag("ncu", ncu_id)
+    for k, v in snap.items():
+        p.field(k, float(v))
+    write_api.write(bucket=bucket, org=org, record=p)
+    meter.cloud_write([p.to_line_protocol()])
 
 
 async def poll_ncu(cfg, mmap, ncu_cfg, write_api):
     plant_id = cfg["plant"]["id"]
     bucket, org = cfg["influxdb"]["bucket"], cfg["influxdb"]["org"]
     interval = cfg["polling"]["interval_s"]
-    drv = make_driver(cfg, ncu_cfg, mmap)
+    meter = TrafficMeter() if cfg.get("traffic", {}).get("enabled", True) else None
+    drv = make_driver(cfg, ncu_cfg, mmap, meter)
     first = True
+    t_prev = time.monotonic()
     while True:
         try:
             await drv.connect()
@@ -81,24 +110,35 @@ async def poll_ncu(cfg, mmap, ncu_cfg, write_api):
                          list(sample["fields"].keys()) if sample else "ninguno")
                 first = False
 
-            write_trackers(write_api, bucket, org, plant_id, ncu_cfg["id"], trackers)
+            write_points(write_api, bucket, org,
+                         tracker_points(plant_id, ncu_cfg["id"], trackers), meter)
 
-            p = Point("ncu_status").tag("plant", plant_id).tag("ncu", ncu_cfg["id"])
+            # NCU + meteo van en el MISMO POST: cada escritura HTTP paga sus
+            # cabeceras, y por un enlace 4G eso pesa más que los propios datos.
+            estado = [Point("ncu_status").tag("plant", plant_id).tag("ncu", ncu_cfg["id"])]
             for k, v in ncu_status.items():
-                p.field(k, float(v))
-            write_api.write(bucket=bucket, org=org, record=p)
-
+                estado[0].field(k, float(v))
             for m in meteo:
                 p = (Point("meteo").tag("plant", plant_id)
                      .tag("ncu", ncu_cfg["id"]).tag("hsu", str(m["hsu"])))
                 for k, v in m["fields"].items():
                     p.field(k, float(v))
-                write_api.write(bucket=bucket, org=org, record=p)
+                estado.append(p)
+            write_points(write_api, bucket, org, estado, meter)
+
+            if meter:
+                now_m = time.monotonic()
+                snap = meter.snapshot(now_m - t_prev)
+                t_prev = now_m
+                write_traffic(write_api, bucket, org, plant_id, ncu_cfg["id"], snap, meter)
 
             n_off = sum(1 for t in trackers if tracker_health(
                 t["fields"], t["alarms"], t["comms_age_s"]) == "offline")
-            log.info("[%s] %d TCUs leídos (%d offline)", ncu_cfg["id"],
-                     len(trackers), n_off)
+            log.info("[%s] %d TCUs leídos (%d offline)%s", ncu_cfg["id"],
+                     len(trackers), n_off,
+                     "" if not meter else
+                     " — LAN %.1f kB, nube %.1f kB" % (snap["lan_b"] / 1e3,
+                                                       snap["cloud_gz_b"] / 1e3))
             await asyncio.sleep(interval)
         except Exception as e:
             log.error("[%s] %s — reintento en %ds", ncu_cfg["id"], e, interval)

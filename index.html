@@ -1418,8 +1418,25 @@ async function publishMeteo(sc){
       localStorage.setItem("factiun_meteo",JSON.stringify({ws:+(sws/nw).toFixed(2),wd:+wd.toFixed(1),n:nw,t:Date.now()})); }
   }catch(e){}
 }
+function fmtBytes(b){ if(!isFinite(b))return "?"; return b<1e3?b.toFixed(0)+" B":b<1e6?(b/1e3).toFixed(1)+" kB":b<1e9?(b/1e6).toFixed(1)+" MB":(b/1e9).toFixed(2)+" GB"; }
+async function scadaTraffic(sc){
+  // Medidor de tráfico: cuánto cuesta el SCADA en la LAN de planta y cuánto
+  // sube a la nube. Se pide cada 10 ciclos (no cambia rápido) y si la API es
+  // vieja y no tiene /traffic, se calla y no estorba.
+  try{
+    const r=await fetch(sc.url.replace(/\/$/,"")+"/traffic?hours=24",{cache:"no-store"});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const j=await r.json();
+    sc.traffic=(j&&j.plant&&j.plant.period_s>0)?j.plant:null;
+  }catch(e){ sc.traffic=null; }
+}
+function trafficLine(sc){
+  const t=sc.traffic; if(!t) return "";
+  return `<br><span style="opacity:.75;font-weight:400">tr\u00e1fico \u00b7 LAN ${fmtBytes(t.lan_mb_day*1e6)}/d\u00eda \u00b7 nube ${fmtBytes(t.cloud_mb_day*1e6)}/d\u00eda (${(t.cloud_gb_month||0).toFixed(2)} GB/mes)</span>`;
+}
 async function scadaPoll(){
   const sc=S.scada;
+  if((sc.n=(sc.n||0)+1)===1||sc.n%10===0) scadaTraffic(sc);
   try{
     const r=await fetch(sc.url.replace(/\/$/,"")+"/live",{cache:"no-store"});
     if(!r.ok) throw new Error("HTTP "+r.status);
@@ -1429,10 +1446,10 @@ async function scadaPoll(){
     for(const t of (j.trackers||[])){ sc.data[t.ncu+"|"+t.tcu]=t; if(cnt[t.health]!=null)cnt[t.health]++; }
     sc.last=new Date(); sc.err=null;
     publishMeteo(sc);   // publica el viento real (HSU) al bus compartido \u2192 el anem\u00f3metro del 3D (cobertura) gira con \u00e9l
-    scadaChip().innerHTML=`SCADA \u00b7 ${j.count} TCU \u00b7 <span style="color:#7be0a8">${cnt.ok}</span> / <span style="color:#ffd35c">${cnt.warn}</span> / <span style="color:#ff8a80">${cnt.alarm}</span> / <span style="color:#aab6c2">${cnt.offline} off</span> \u00b7 ${sc.last.toLocaleTimeString().slice(0,8)}`;
+    scadaChip().innerHTML=`SCADA \u00b7 ${j.count} TCU \u00b7 <span style="color:#7be0a8">${cnt.ok}</span> / <span style="color:#ffd35c">${cnt.warn}</span> / <span style="color:#ff8a80">${cnt.alarm}</span> / <span style="color:#aab6c2">${cnt.offline} off</span> \u00b7 ${sc.last.toLocaleTimeString().slice(0,8)}`+trafficLine(sc);
   }catch(e){
     sc.err=String(e.message||e);
-    scadaChip().innerHTML=`SCADA \u00b7 <span style="color:#ff8a80">error: ${sc.err}</span>${sc.last?` \u00b7 \u00faltimo dato ${sc.last.toLocaleTimeString().slice(0,8)}`:""}`;
+    scadaChip().innerHTML=`SCADA \u00b7 <span style="color:#ff8a80">error: ${sc.err}</span>${sc.last?` \u00b7 \u00faltimo dato ${sc.last.toLocaleTimeString().slice(0,8)}`:""}`+trafficLine(sc);
   }
   draw();
 }
@@ -1450,7 +1467,7 @@ function scadaStart(){
 }
 function scadaStop(){
   const sc=S.scada;
-  sc.on=false; if(sc.timer){clearInterval(sc.timer);sc.timer=null;}
+  sc.on=false; if(sc.timer){clearInterval(sc.timer);sc.timer=null;} sc.traffic=null; sc.n=0;
   const c=document.getElementById("scada-chip"); if(c)c.remove();
   draw();
 }
