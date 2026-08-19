@@ -106,6 +106,46 @@ la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
 una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
 sitio.
 
+**Lo que le falta a la topología de cada planta, dicho antes de tropezarse
+(v11.55)** — Ayora es la única planta con los datos de sus estaciones. Las
+demás declaran que las tienen pero no con qué esclavo:
+
+| Planta | HSUs declaradas | Con esclavo | Con HSU Id |
+|---|---|---|---|
+| Ayora | 10 | 9 | 10 |
+| San José | 9 | **0** | 0 |
+| Fayón | 1 | **0** | 0 |
+| Túnez | 1 | **0** | 0 |
+| Bagnarelli | 2 | **0** | 0 |
+
+Sin el esclavo, leer las HSUs con *Planta completa* no funciona — y eso no se
+sabía hasta ir a leerlas y que la herramienta mandara a escanear sin explicar
+por qué. Ahora el diagnóstico lo dice, en cualquier planta:
+
+```
+La topologia declara HSUs en 9 NCU(s) pero no dice con que esclavo (NCU 1, 2,
+3, 6, 9, 12, 15, 17, 20). Sin eso no se pueden leer con Planta completa: usalas
+con BUSCAR ESCLAVO (rango 225-235) y guarda lo que encuentre, o mira el Modbus
+Id en la pagina de cada NCU.
+```
+
+Los dos datos que faltan **no se consiguen igual**, y por eso se dicen por
+separado: el **HSU Id** lo aprende solo un diagnóstico (el hueco *es* el
+número), pero el **esclavo no se puede aprender leyendo** — el bloque que la
+NCU cachea (30200+) trae ProductId, estado, alarmas, viento y nieve, y no el
+esclavo. Sale de un barrido o de la página web de la NCU.
+
+**Y el barrido ya no cuesta minutos.** `BUSCAR ESCLAVO` iba del 1 al 247
+*siempre*: 247 consultas por gateway, y cada esclavo que no existe cuesta lo
+que tarde la NCU en rendirse con el Zigbee. Ahora lleva rango, por defecto
+**225–235**: once números, donde están las estaciones. Los repetidores están por
+el 200.
+
+**El comisionado de planta completa ignoraba el cuadro de TCUs (v11.55)** —
+escribías `1-72`, pulsabas ESTADO Y MODO con *Planta completa*, y recorría el
+rango entero de cada NCU sin decir nada. Las demás acciones de PEM sí lo
+respetaban. Ahora también.
+
 **El HSU Id no hay que teclearlo: la NCU ya lo dice (v11.54)** — una estación
 tiene **dos** números y no son lo mismo:
 

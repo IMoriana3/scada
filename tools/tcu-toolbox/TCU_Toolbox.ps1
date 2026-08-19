@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.54'
+$VERSION_TOOLBOX = '11.55'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -881,6 +881,49 @@ function Hsu-Resolver($objs, [int]$unit, [string]$ncu) {
                  error=("el esclavo $unit existe en $($c.Count) NCUs (" + ($ncus -join ', ') + "): cada NCU tiene su propia Zigbee y el numero se repite. Pon la NCU en el cuadro de al lado para decir cual")}
     }
     return @{obj=$c[0]; candidatos=$c; error=''}
+}
+
+# Lo que le falta a la topologia de esta planta para poder trabajar con sus
+# estaciones sin escanear nada. Son dos datos distintos y se consiguen de forma
+# distinta, asi que se dicen por separado:
+#
+#   - hsu_esclavos: la direccion Modbus. NO se puede aprender leyendo: el bloque
+#     que la NCU cachea (30200+) trae ProductId, estado, alarmas, viento y
+#     nieve, pero no el esclavo. Sale de BUSCAR ESCLAVO o de la pagina web de
+#     la NCU.
+#   - rsu: el HSU Id, el hueco de la cache. Ese si lo aprende solo el
+#     diagnostico, porque el hueco ES el numero.
+#
+# Sin lo primero, ninguna lectura de HSU funciona con Planta completa. Y hasta
+# ahora eso no se sabia hasta tropezarse: la planta decia "tengo 9 estaciones"
+# y al ir a leerlas mandaba a escanear sin explicar por que. Pura.
+function Hsu-QueFaltaEnTopologia($cx) {
+    $sinEsclavo = @(); $sinRsu = @()
+    $ncus = @()
+    if ($cx.multi) { $ncus = @($cx.multi) }
+    elseif ($cx) { $ncus = @(@{ncu=''; hsus=$cx.hsus; hsuLista=@($cx.hsuLista); rsuLista=@($cx.rsuLista)}) }
+    foreach ($n in $ncus) {
+        $decl = [int]("0" + "$($n.hsus)")
+        $esc = @(@(Lista $n.hsuLista) | Where-Object { "$_" -match '^\d+$' })
+        $rsu = @(@(Lista $n.rsuLista) | Where-Object { "$_" -match '^\d+$' })
+        # una NCU que no declara estaciones no tiene nada que completar
+        if ($decl -le 0 -and $esc.Count -eq 0) { continue }
+        $cuantas = [Math]::Max($decl, $esc.Count)
+        if ($esc.Count -lt $cuantas) { $sinEsclavo += "$($n.ncu)" }
+        elseif ($rsu.Count -lt $cuantas) { $sinRsu += "$($n.ncu)" }
+    }
+    $av = @()
+    if ($sinEsclavo.Count -gt 0) {
+        $av += ("La topologia declara HSUs en $($sinEsclavo.Count) NCU(s) pero no dice con que esclavo (NCU " +
+                (($sinEsclavo | Sort-Object { [int]("0" + $_) }) -join ', ') +
+                "). Sin eso no se pueden leer con Planta completa: usalas con BUSCAR ESCLAVO (rango 225-235) y guarda lo que encuentre, o mira el Modbus Id en la pagina de cada NCU.")
+    }
+    if ($sinRsu.Count -gt 0) {
+        $av += ("Falta el HSU Id en $($sinRsu.Count) NCU(s) (NCU " +
+                (($sinRsu | Sort-Object { [int]("0" + $_) }) -join ', ') +
+                "). Ese lo aprende solo un diagnostico: las tablas las llamaran por su nombre en cuanto lo corras.")
+    }
+    return $av
 }
 
 function Hsu-ObjetivosDeTopologia($cx) {
@@ -4608,7 +4651,16 @@ $btnHEsclavo.Location = New-Object System.Drawing.Point(443, 80)
 $btnHEsclavo.Size = New-Object System.Drawing.Size(130, 26)
 $tabH.Controls.Add($btnHEsclavo)
 
-$lblHSel = LG $tabH 'Escanea la planta para listar sus HSUs y de que NCU cuelga cada una.' 581 327 85
+# Rango del barrido. Antes iba del 1 al 247 SIEMPRE: 247 consultas por gateway,
+# y cada esclavo que no existe cuesta lo que tarde la NCU en rendirse con el
+# Zigbee. Las estaciones estan siempre por el 230 y los repetidores por el 200,
+# asi que con once numeros se encuentra lo que se busca en un minuto.
+[void](LG $tabH 'esclavos' 581 56 84)
+$txtHEscIni = TG $tabH '225' 641 82 40
+[void](LG $tabH 'a' 687 12 84)
+$txtHEscFin = TG $tabH '235' 703 82 40
+
+$lblHSel = LG $tabH 'barre 1 NCU' 749 159 84
 $lblHSel.ForeColor = [System.Drawing.Color]::Gray
 
 $lvH = New-Object System.Windows.Forms.ListView
@@ -8026,6 +8078,11 @@ function Diag-Correr {
             $decPorNcu = @{}
             foreach ($n in @($cx.multi)) { $decPorNcu["$($n.ncu)"] = @($n.rsuLista) }
             if (-not $cx.multi) { $decPorNcu["$(Ncu-DeNombre $cx.nombre)"] = @($cx.rsuLista) }
+            # y lo que le falta a la topologia de ESTA planta, que hasta ahora
+            # no se sabia hasta ir a leer una HSU y que te mandara a escanear
+            foreach ($linea in @(Hsu-QueFaltaEnTopologia $cx)) {
+                Con $linea ([System.Drawing.Color]::Orange)
+            }
             foreach ($linea in @(Hsu-IdsAvisos (Hsu-IdsLeidos $script:UltimoDiag) $decPorNcu)) {
                 Con $linea ([System.Drawing.Color]::Orange)
             }
@@ -9830,7 +9887,10 @@ $btnPComis.Add_Click({ Lanzar {
         # Planta completa: el estado de comisionado viaja en los bits 4:3 del
         # registro de estado que la NCU cachea (bloque compacto, puerto 502)
         # - toda la planta en segundos, sin rondas Zigbee
-        $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
+        # El cuadro de TCUs y el de GW valen aqui igual que en las demas
+        # acciones de esta pestana. Se ignoraban: escribias "1-72", pulsabas, y
+        # recorria el rango entero de cada NCU sin decir nada.
+        $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Comisionado') $txtPGw.Text)
         Ctx-Guardar 'pem' $cx $trabajos
         Con "Comisionado de Planta completa via NCU: $($trabajos.Count) NCUs (bloque compacto, sin Zigbee)" ([System.Drawing.Color]::SteelBlue)
         foreach ($tr in $trabajos) {
@@ -11003,10 +11063,13 @@ $btnHEsclavo.Add_Click({ Lanzar {
         $gws = @($(if ($pt -eq 'auto' -or -not $pt) { @(503, 504) } else { @([int]$pt) }))
     }
     $to = Val-Int $txtTo.Text 'Timeout' 500 60000
-    $lista = @(Esclavos-Barrido ([int]$txtHSlave.Text) 1 247)
+    $eIni = Val-Int $txtHEscIni.Text 'Esclavo inicial' 1 247
+    $eFin = Val-Int $txtHEscFin.Text 'Esclavo final' 1 247
+    if ($eFin -lt $eIni) { throw "el esclavo final ($eFin) no puede ser menor que el inicial ($eIni)" }
+    $lista = @(Esclavos-Barrido ([int]$txtHSlave.Text) $eIni $eFin)
     $tot = $lista.Count * @($gws).Count
     $r = [System.Windows.Forms.MessageBox]::Show(
-        "Buscar equipos en $ip, gateways $($gws -join ' y '), esclavos 1-247.`r`n`r`n$tot consultas. Cada esclavo que no existe cuesta lo que tarde la NCU en rendirse con el Zigbee, asi que esto puede irse a varios minutos.`r`n`r`nSe puede parar con CANCELAR en cualquier momento y lo encontrado se queda en la lista.`r`n`r`nContinuar?",
+        "Buscar equipos en $ip, gateways $($gws -join ' y '), esclavos $eIni-$eFin.`r`n`r`n$tot consultas. Cada esclavo que no existe cuesta lo que tarde la NCU en rendirse con el Zigbee, asi que esto puede irse a varios minutos.`r`n`r`nSe puede parar con CANCELAR en cualquier momento y lo encontrado se queda en la lista.`r`n`r`nContinuar?",
         'Buscar esclavo', 'YesNo', 'Warning')
     if ($r -ne 'Yes') { return }
     $lvH.Items.Clear()

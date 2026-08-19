@@ -2416,6 +2416,36 @@ Check 'auditoria: la linea sale aunque haya mudas' ($src.Contains('y $errTcu var
 Check 'auditoria: cuenta las mixtas' ($src.Contains('if ($desvTcu -gt 0) { $nMixtas++ }')) $true
 
 Write-Host ''
+Write-Host '== lo que le falta a la topologia de cada planta =='
+# Son dos datos distintos y se consiguen distinto: el ESCLAVO no se puede
+# aprender leyendo (el bloque que cachea la NCU no lo trae) y el HSU Id si.
+# Hasta ahora no se sabia que faltaban hasta ir a leer una HSU y que te mandara
+# a escanear sin explicar por que.
+$cxFalta = @{multi = @(
+    @{ncu='1';  hsus=1; hsuLista=@();     rsuLista=@()}      # ni esclavo ni id
+    @{ncu='2';  hsus=1; hsuLista=@(230);  rsuLista=@()}      # esclavo si, id no
+    @{ncu='3';  hsus=1; hsuLista=@(230);  rsuLista=@(3)}     # completa
+    @{ncu='4';  hsus=0; hsuLista=@();     rsuLista=@()})}    # sin estaciones
+$avF = @(Hsu-QueFaltaEnTopologia $cxFalta)
+Check 'falta: avisa de las dos cosas' $avF.Count 2
+Check 'falta: la que no tiene esclavo' ($avF[0] -like '*NCU 1*') $true
+Check 'falta: y no confunde con la que si lo tiene' ($avF[0] -like '*NCU 1, 2*') $false
+Check 'falta: dice como conseguirlo' ($avF[0] -like '*BUSCAR ESCLAVO*') $true
+Check 'falta: la que solo necesita el HSU Id' ($avF[1] -like '*NCU 2*') $true
+Check 'falta: y que eso lo aprende solo' ($avF[1] -like '*lo aprende solo un diagnostico*') $true
+# una NCU sin estaciones declaradas no tiene nada que completar
+Check 'falta: la NCU sin HSUs no sale' (($avF -join ' ') -like '*NCU 4*') $false
+# una planta entera bien puesta no dice nada
+Check 'falta: planta completa, silencio' (@(Hsu-QueFaltaEnTopologia @{multi=@(@{ncu='3'; hsus=1; hsuLista=@(230); rsuLista=@(3)})}).Count) 0
+Check 'falta: una NCU con dos estaciones necesita las dos' (@(Hsu-QueFaltaEnTopologia @{multi=@(@{ncu='15'; hsus=2; hsuLista=@(230,231); rsuLista=@(8)})})[0] -like '*HSU Id*') $true
+Check 'falta: el diagnostico lo dice' ($src.Contains('foreach ($linea in @(Hsu-QueFaltaEnTopologia $cx))')) $true
+# el barrido va acotado: 247 consultas por gateway eran minutos por NCU
+Check 'falta: el barrido lleva rango' ($src.Contains('$txtHEscIni = TG $tabH')) $true
+Check 'falta: y ya no barre siempre 1-247' ($src.Contains('Esclavos-Barrido ([int]$txtHSlave.Text) 1 247')) $false
+# el comisionado de planta completa ignoraba el cuadro de TCUs
+Check 'falta: el comisionado respeta el cuadro de TCUs' ($src.Contains("(Parse-Seleccion `$txtPTcus.Text 'Comisionado') `$txtPGw.Text")) $true
+
+Write-Host ''
 Write-Host '== las HSUs salen de la topologia, sin escanear =='
 # "pulsa BUSCAR HSUs primero" era pedir dos veces lo mismo: la topologia ya dice
 # cuantas estaciones tiene cada NCU y con que esclavo, y es lo que pinta la
