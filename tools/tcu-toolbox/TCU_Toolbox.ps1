@@ -4575,23 +4575,28 @@ $txtCronMax = TG $tabSAT '30' 850 51 34
 #    mitad de la casuistica queda invisible.
 #  · el limite de mediodia ya era parametro de la funcion, pero quien la
 #    llamaba pasaba siempre el mismo numero.
-[void](LG $tabSAT 'Abandera' 892 48 60)
+#
+# Van en su propia fila, la tercera, y dentro de los 908 px utiles de la
+# pestana: puestos a la derecha de la fila del cronometro se salian del ancho
+# de la ventana (que arranca en su MinimumSize) y no habia forma de verlos ni
+# de rellenarlos en un portatil.
+[void](LG $tabSAT 'Abandera' 10 60 116)
 $cbSatOrient = New-Object System.Windows.Forms.ComboBox
-$cbSatOrient.Location = New-Object System.Drawing.Point(950, 51)
+$cbSatOrient.Location = New-Object System.Drawing.Point(74, 114)
 $cbSatOrient.Size = New-Object System.Drawing.Size(104, 22)
 $cbSatOrient.DropDownStyle = 'DropDownList'
 [void]$cbSatOrient.Items.AddRange(@('cara al sol', 'cara al viento'))
 $cbSatOrient.SelectedIndex = 0
 $tabSAT.Controls.Add($cbSatOrient)
-[void](LG $tabSAT 'Mediodia deg' 1060 48 78)
-$txtSatNoon = TG $tabSAT '10' 1140 51 30
-[void](LG $tabSAT 'Pasivo: lado deg' 892 78 100)
-$txtSatPasLado = TG $tabSAT '55' 996 84 34
-[void](LG $tabSAT 'min s' 1038 78 40)
-$txtSatPasMin = TG $tabSAT '120' 1078 84 34
+[void](LG $tabSAT 'Mediodia deg' 186 78 116)
+$txtSatNoon = TG $tabSAT '10' 268 114 30
+[void](LG $tabSAT 'Pasivo: lado deg' 306 100 116)
+$txtSatPasLado = TG $tabSAT '55' 410 114 34
+[void](LG $tabSAT 'min s' 452 40 116)
+$txtSatPasMin = TG $tabSAT '120' 496 114 34
 $chkSatPasAmbos = New-Object System.Windows.Forms.CheckBox
 $chkSatPasAmbos.Text = 'los dos lados'
-$chkSatPasAmbos.Location = New-Object System.Drawing.Point(1118, 84)
+$chkSatPasAmbos.Location = New-Object System.Drawing.Point(538, 114)
 $chkSatPasAmbos.Size = New-Object System.Drawing.Size(104, 20)
 $tabSAT.Controls.Add($chkSatPasAmbos)
 
@@ -4611,12 +4616,12 @@ $txtSatCRsu = TG $tabSAT '99,5' 594 84 42
 [void](LG $tabSAT 'Ventana D.4 s' 644 84 86)
 $txtSatVent = TG $tabSAT '120' 732 84 38
 
-$lblSat = LG $tabSAT 'Anexo 4. El registro de arriba cubre D.1.1, D.3.4 y D.4; el cronometro de abajo, los abanderamientos. Deja la ventana abierta mientras dure el ensayo.' 10 890 112
+$lblSat = LG $tabSAT 'Anexo 4. El registro de arriba cubre D.1.1, D.3.4 y D.4; el cronometro de abajo, los abanderamientos. Deja la ventana abierta mientras dure el ensayo.' 10 890 144
 $lblSat.ForeColor = [System.Drawing.Color]::Gray
 
 $lvSat = New-Object System.Windows.Forms.ListView
-$lvSat.Location = New-Object System.Drawing.Point(10, 136)
-$lvSat.Size = New-Object System.Drawing.Size(898, 224)
+$lvSat.Location = New-Object System.Drawing.Point(10, 168)
+$lvSat.Size = New-Object System.Drawing.Size(898, 192)
 $lvSat.View = 'Details'; $lvSat.FullRowSelect = $true; $lvSat.GridLines = $true
 [void]$lvSat.Columns.Add('Hora', 130)
 [void]$lvSat.Columns.Add('Ensayo', 110)

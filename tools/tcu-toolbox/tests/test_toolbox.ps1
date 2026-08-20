@@ -1089,28 +1089,34 @@ Check 'veredicto: sin orden no se pronuncia'         (Aband-LadoCorrecto (Aband-
 Write-Host ''
 Write-Host '== suelta pasiva =='
 # el objetivo SIGUE AL SOL y el real esta clavado en +55: eso es una suelta
-# pasiva, no un fallo de obediencia
+# pasiva, no un fallo de obediencia.
+# Las marcas van a 60 s a proposito: el tramo dura 180 s, por encima del minimo
+# de 120 s. Una suelta de verdad dura minutos u horas; la maqueta de 30 s que
+# habia aqui antes era mas corta que el propio umbral y solo pasaba porque el
+# umbral no existia.
 $abPas = @(
-  [pscustomobject]@{ts=100; real=-30.0; obj=-30.0}
-  [pscustomobject]@{ts=110; real=55.0;  obj=-25.0}
+  [pscustomobject]@{ts=0;   real=-30.0; obj=-30.0}
+  [pscustomobject]@{ts=60;  real=55.0;  obj=-25.0}
   [pscustomobject]@{ts=120; real=55.2;  obj=-10.0}
-  [pscustomobject]@{ts=130; real=54.9;  obj=5.0}
-  [pscustomobject]@{ts=140; real=55.0;  obj=20.0}
+  [pscustomobject]@{ts=180; real=54.9;  obj=5.0}
+  [pscustomobject]@{ts=240; real=55.0;  obj=20.0}
 )
 $pas = Aband-Pasiva $abPas 55.0
 Check 'pasiva: detectada'            $pas.detectada $true
-Check 'pasiva: desde'                $pas.t0 110
-Check 'pasiva: hasta'                $pas.t1 140
+Check 'pasiva: desde'                $pas.t0 60
+Check 'pasiva: hasta'                $pas.t1 240
 Check 'pasiva: muestras'             $pas.muestras 4
 Check 'pasiva: tilt del limite'      $pas.tilt 55
 # un abanderamiento ORDENADO no es una suelta pasiva: ahi el objetivo TAMBIEN
 # se va al limite, asi que real y objetivo coinciden. Es el discriminante.
+# Tambien a 60 s: si durase menos que el minimo, este caso saldria 'false' por
+# CORTO y no por el discriminante, y la prueba dejaria de probar lo que dice.
 $abOrd = @(
-  [pscustomobject]@{ts=100; real=-30.0; obj=-30.0}
-  [pscustomobject]@{ts=110; real=20.0;  obj=55.0}
+  [pscustomobject]@{ts=0;   real=-30.0; obj=-30.0}
+  [pscustomobject]@{ts=60;  real=20.0;  obj=55.0}
   [pscustomobject]@{ts=120; real=55.0;  obj=55.0}
-  [pscustomobject]@{ts=130; real=55.1;  obj=55.0}
-  [pscustomobject]@{ts=140; real=54.9;  obj=55.0}
+  [pscustomobject]@{ts=180; real=55.1;  obj=55.0}
+  [pscustomobject]@{ts=240; real=54.9;  obj=55.0}
 )
 Check 'ordenado NO es suelta pasiva' (Aband-Pasiva $abOrd 55.0).detectada $false
 # seguimiento normal tampoco
