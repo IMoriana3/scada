@@ -17,8 +17,27 @@ el colector, así que si alguien cambia una dirección en el mapa, la simulada c
 Los valores son verosímiles, no reales: el ángulo sigue una curva de día, el SoC baja de
 noche y sube de día, y las averías se inyectan a propósito. NO sirven para validar nada de
 la planta — sirven para que el camino de datos se recorra entero.
+
+Salvo que se le enchufe el GEMELO
+---------------------------------
+`gemelo-digital/sim/planta.js` sí es una planta de verdad: jerarquía de posiciones
+seguras, banda muerta en pulsos, inclinómetro que miente, seta enclavada, batería con
+JEITA. Vive en el navegador, y ahí no puede haber un esclavo Modbus TCP. Aquí sí.
+
+    node sim/servidor.mjs --tcus 200 --puerto 8787      # el motor, en el otro repo
+    python3 tools/ncu_simulada.py --gemelo http://127.0.0.1:8787
+
+Con `--gemelo` esta NCU deja de fabricarse los valores y se limita a servir la imagen de
+registros del motor. Y la escritura vuelve por el mismo sitio: un FC06/FC16 contra esta
+NCU entra por `P.escribe()`, la MISMA puerta que usa la interfaz web. No hay un camino
+«de la web» y otro «de Modbus», que es justo la diferencia entre un simulador que sirve
+para ensayar una puesta en marcha y uno que solo sirve para mirar.
+
+La planta de juguete de aquí abajo se queda para lo que siempre hizo: arrancar sola, sin
+Node y sin nada más, cuando lo único que se quiere probar es el camino de datos.
 """
-import argparse, asyncio, math, os, random, struct, sys, time
+import argparse, asyncio, json, math, os, random, struct, sys, time
+import urllib.error, urllib.request
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(RAIZ, "collector"))
@@ -200,6 +219,47 @@ def construye(planta, wo):
     return vals
 
 
+# ---------- el gemelo, cuando lo hay ----------
+class Gemelo:
+    """Cliente de gemelo-digital/sim/servidor.mjs. urllib pelado: esta herramienta se
+       arranca en el portátil de quien esté en planta y no puede pedir un pip install.
+
+       Se salta el proxy a propósito. El motor corre en localhost y un http_proxy puesto
+       para otra cosa lo dejaría inalcanzable con un error que no dice nada."""
+
+    def __init__(self, url, timeout=4.0):
+        self.url = url.rstrip("/")
+        self.timeout = timeout
+        self.caido = False
+        self.abre = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
+
+    def _pide(self, ruta, cuerpo=None):
+        datos = None if cuerpo is None else json.dumps(cuerpo).encode("utf-8")
+        req = urllib.request.Request(self.url + ruta, data=datos,
+                                     headers={"content-type": "application/json"})
+        try:
+            with self.abre(req, timeout=self.timeout) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            # el motor contesta 400 con el motivo en el cuerpo: eso NO es un fallo de
+            # transporte, es un rechazo con explicación y hay que dejarlo pasar entero
+            try:
+                return json.loads(e.read().decode("utf-8"))
+            except Exception:
+                raise
+
+    def estado(self):
+        return self._pide("/estado")
+
+    def regs(self, dev="ncu"):
+        d = self._pide("/regs?dev=" + dev)
+        return {int(k): int(v) & 0xFFFF for k, v in d["regs"].items()}
+
+    def escribe(self, direccion, valores):
+        return self._pide("/escribe", {"dev": "ncu", "id": 1,
+                                       "dir": int(direccion), "vals": list(valores)})
+
+
 # ---------- servidor Modbus TCP, escrito a mano ----------
 # NO se usa el almacen de datos de pymodbus a proposito. Su API cambia entre versiones (en la 3.9
 # ModbusSlaveContext paso a ModbusDeviceContext y en la 3.14 los bloques ya no tienen setValues y
@@ -208,12 +268,50 @@ def construye(planta, wo):
 # que se implementa aqui: cero dependencias, y la direccion se sirve 1:1 tal como la pide el
 # colector, que es lo que hace la NCU real (sondeo de El Burgo: 30000 responde como 30000).
 class Servidor:
-    def __init__(self, planta, args):
-        self.planta, self.args, self.vals = planta, args, {}
+    def __init__(self, planta, args, gemelo=None):
+        self.planta, self.args, self.gemelo, self.vals = planta, args, gemelo, {}
         self.refresca()
 
     def refresca(self):
-        self.vals = construye(self.planta, self.args.word_order)
+        if self.gemelo is None:
+            self.vals = construye(self.planta, self.args.word_order)
+            return
+        try:
+            self.vals = self.gemelo.regs()
+            if self.gemelo.caido:
+                self.gemelo.caido = False
+                print("el gemelo vuelve a responder")
+        except Exception as e:
+            # se siguen sirviendo los ULTIMOS valores buenos, que es lo que hace una NCU
+            # de verdad cuando pierde a un TCU: no publica ceros, publica lo ultimo y deja
+            # que envejezca el lastcomm. Servir ceros haria pensar que la planta se apago.
+            if not self.gemelo.caido:
+                self.gemelo.caido = True
+                print(f"el gemelo no responde ({e}): se sirven los ultimos valores buenos")
+
+    async def refresca_async(self):
+        await asyncio.to_thread(self.refresca)
+
+    async def escribe(self, fc, dir0, valores):
+        """Devuelve la PDU de respuesta. Sin gemelo detras no hay a quien escribir: la
+           planta de aqui abajo no tiene modelo de escritura, y devolver un eco fingido
+           enseñaria a confiar en una orden que no ha pasado."""
+        if self.gemelo is None:
+            return bytes([fc | 0x80, 1])
+        try:
+            r = await asyncio.to_thread(self.gemelo.escribe, dir0, valores)
+        except Exception as e:
+            print(f"escritura {dir0} = {valores}: el gemelo no responde ({e})")
+            return bytes([fc | 0x80, 4])                          # fallo del esclavo
+        if r.get("ok"):
+            print(f"escritura {dir0} = {valores}: " + "; ".join(r.get("aplicados") or []))
+            await self.refresca_async()      # que el maestro relea YA lo que acaba de poner
+            return None                      # el que llama compone el eco
+        txt = "; ".join(r.get("avisos") or []) or "rechazada"
+        print(f"escritura {dir0} = {valores} RECHAZADA: {txt}")
+        # el motor distingue «esa direccion no se escribe» de «ese valor no vale», y el
+        # maestro merece la misma distincion: 02 direccion ilegal, 03 valor ilegal
+        return bytes([fc | 0x80, 2 if "no es un registro escribible" in txt else 3])
 
     async def cliente(self, lector, escritor):
         try:
@@ -232,6 +330,22 @@ class Servidor:
                         datos = b"".join(struct.pack(">H", self.vals.get(dir0 + k, 0) & 0xFFFF)
                                          for k in range(n))
                         pdu = bytes([fc, len(datos)]) + datos
+                elif fc == 6 and len(cuerpo) >= 5:
+                    dir0, v = struct.unpack(">HH", cuerpo[1:5])
+                    if uid != self.args.unit:
+                        pdu = bytes([fc | 0x80, 11])
+                    else:
+                        pdu = await self.escribe(fc, dir0, [v]) or cuerpo[:5]
+                elif fc == 16 and len(cuerpo) >= 7:
+                    dir0, n = struct.unpack(">HH", cuerpo[1:5])
+                    nb = cuerpo[5]
+                    if uid != self.args.unit:
+                        pdu = bytes([fc | 0x80, 11])
+                    elif n < 1 or n > 123 or nb != 2 * n or len(cuerpo) < 6 + nb:
+                        pdu = bytes([fc | 0x80, 3])
+                    else:
+                        vs = [struct.unpack(">H", cuerpo[6 + 2 * k:8 + 2 * k])[0] for k in range(n)]
+                        pdu = await self.escribe(fc, dir0, vs) or (bytes([fc]) + cuerpo[1:5])
                 else:
                     pdu = bytes([fc | 0x80, 1])                   # funcion no admitida
                 escritor.write(struct.pack(">HHHB", tid, pid, len(pdu) + 1, uid) + pdu)
@@ -242,12 +356,39 @@ class Servidor:
             escritor.close()
 
 
+def engancha_gemelo(args):
+    """Se conecta ANTES de abrir el puerto. Si el motor no está, se dice y se para: una
+       NCU que arranca y sirve ceros porque no encontró a su gemelo es peor que una que
+       no arranca, porque el colector la da por buena."""
+    g = Gemelo(args.gemelo)
+    try:
+        e = g.estado()
+    except Exception as ex:
+        sys.exit(f"no encuentro el motor de planta en {args.gemelo} ({ex})\n"
+                 f"arráncalo en el repo gemelo-digital con:  node sim/servidor.mjs --puerto "
+                 f"{args.gemelo.rsplit(':', 1)[-1] or '8787'}")
+    p = e.get("planta", {})
+    # el motor manda: pedirle más TCU de los que publica dejaría al colector leyendo
+    # ceros y llamandolos equipos
+    for k, cuantos in (("tcus", p.get("tcus")), ("hsus", p.get("hsus"))):
+        if cuantos and getattr(args, k) != cuantos:
+            print(f"--{k} {getattr(args, k)} → {cuantos}: manda el motor, que es quien publica")
+            setattr(args, k, cuantos)
+    args.ext = True                          # el motor siempre publica el bloque de 28000
+    print(f"gemelo: {e.get('motor')} · {p.get('tcus')} TCU · ×{p.get('vel')} · "
+          f"{e.get('t', {}).get('fecha')} · viento {e.get('meteo', {}).get('viento_kmh')} km/h")
+    return g
+
+
 async def sirve(args, mmap):
+    gemelo = engancha_gemelo(args) if args.gemelo else None
     planta = Planta(mmap, args.tcus, args.hsus, args.averias, args.ext, args.semilla)
-    srv = Servidor(planta, args)
+    srv = Servidor(planta, args, gemelo)
     servidor = await asyncio.start_server(srv.cliente, args.host, args.port)
+    fuente = (f"del gemelo ({args.gemelo}), escritura incluida" if gemelo
+              else f"{len(planta.mudos)} sin responder: {sorted(planta.mudos) or '—'}")
     print(f"NCU simulada en {args.host}:{args.port} · unit {args.unit} · "
-          f"{args.tcus} TCU ({len(planta.mudos)} sin responder: {sorted(planta.mudos) or '—'}) · "
+          f"{args.tcus} TCU ({fuente}) · "
           f"{args.hsus} HSU{' + extendido' if args.ext else ''} · orden de palabra {args.word_order} · "
           f"{len(srv.vals)} registros servidos")
     print(f"Apunta el colector con:  ncus: [{{host: {args.host}, port: {args.port}, "
@@ -256,7 +397,7 @@ async def sirve(args, mmap):
     async def latido():
         while True:
             await asyncio.sleep(args.periodo)
-            srv.refresca()
+            await srv.refresca_async()
 
     asyncio.create_task(latido())
     async with servidor:
@@ -292,15 +433,17 @@ async def autotest(args, mmap):
     ok(all(isinstance(s, int) and 0 <= s <= 100 for s in socs), f"SoC 0..100 ({min(socs)}…{max(socs)})")
     tmp = [t["fields"].get("temp_pcb") for t in trk]
     ok(all(-40 <= x <= 90 for x in tmp), f"temp_pcb convertida de K×10 a °C ({min(tmp):.1f}…{max(tmp):.1f})")
-    mudos = sorted(t["tcu"] for t in trk if t["comms_age_s"] and t["comms_age_s"] > 600)
-    ok(mudos == sorted(Planta(mmap, args.tcus, args.hsus, args.averias, args.ext, args.semilla).mudos),
-       f"los TCU averiados salen por comms_age_s: {mudos}")
-    ok(any(t["alarms"] for t in trk), "las alarmas se decodifican por nombre: " +
-       str(next((t["alarms"] for t in trk if t["alarms"]), [])))
+    if not args.gemelo:
+        mudos = sorted(t["tcu"] for t in trk if t["comms_age_s"] and t["comms_age_s"] > 600)
+        ok(mudos == sorted(Planta(mmap, args.tcus, args.hsus, args.averias, args.ext, args.semilla).mudos),
+           f"los TCU averiados salen por comms_age_s: {mudos}")
+        ok(any(t["alarms"] for t in trk), "las alarmas se decodifican por nombre: " +
+           str(next((t["alarms"] for t in trk if t["alarms"]), [])))
 
     ncu = await d.read_ncu()
-    ok(ncu.get("cleaning_switch_1") == 1, f"el interruptor de limpieza 1 llega hasta el colector ({ncu.get('cleaning_switch_1')})")
-    ok(abs(ncu.get("date_time", 0) - time.time()) < 120, "la hora de la NCU (U32 epoch) se recompone bien")
+    if not args.gemelo:
+        ok(ncu.get("cleaning_switch_1") == 1, f"el interruptor de limpieza 1 llega hasta el colector ({ncu.get('cleaning_switch_1')})")
+        ok(abs(ncu.get("date_time", 0) - time.time()) < 120, "la hora de la NCU (U32 epoch) se recompone bien")
 
     met = await d.read_meteo()
     ok(len(met) == args.hsus, f"lee las {args.hsus} HSU ({len(met)})")
@@ -310,11 +453,86 @@ async def autotest(args, mmap):
         ghi = met[0]["fields"].get("ghi")
         ok(ghi is not None and 0 <= ghi <= 1500, f"bloque extendido (28000): GHI {ghi} W/m²")
 
+    if args.gemelo:
+        await careo_gemelo(args, d, trk, ncu, met, ok)
+
     await d.close()
     srv.cancel()
-    print("\n" + ("✓ el driver de hierro recorre el camino entero contra la simulada"
+    print("\n" + ("✓ el driver de hierro recorre el camino entero contra la "
+                  + ("planta simulada de verdad" if args.gemelo else "simulada")
                   if not fallos else f"✗ {fallos} FALLOS"))
     return 1 if fallos else 0
+
+
+# ---------- careo contra el motor, cuando la fuente es el gemelo ----------
+async def modbus_crudo(host, port, unit, pdu):
+    """Un maestro Modbus de tres líneas. Hace falta para escribir (FC06/FC16), que el
+       driver del colector no hace nunca —es de solo lectura a propósito— y es justo
+       lo que hay que probar aquí."""
+    lector, escritor = await asyncio.open_connection(host, port)
+    try:
+        escritor.write(struct.pack(">HHHB", 1, 0, len(pdu) + 1, unit) + pdu)
+        await escritor.drain()
+        cab = await asyncio.wait_for(lector.readexactly(7), 5)
+        largo = struct.unpack(">HHHB", cab)[2]
+        return await asyncio.wait_for(lector.readexactly(largo - 1), 5)
+    finally:
+        escritor.close()
+
+
+async def careo_gemelo(args, d, trk, ncu, met, ok):
+    """Lo que solo se puede comprobar cuando detrás hay un motor de verdad: que el valor
+       que sale por Modbus es el MISMO que el motor tiene dentro, y que una orden escrita
+       por Modbus llega hasta él y vuelve cambiada."""
+    comp = ok
+    g = Gemelo(args.gemelo)
+    # 1. el mismo ángulo por dos caminos distintos del motor: el bloque compacto que
+    #    republica la NCU (f32 en radianes, 30500+) y el mapa PROPIO del TCU (s16 en
+    #    grados×10, 30111). Si coinciden después de todo el viaje, la aritmética de
+    #    direcciones, el troceado y el orden de palabra están bien los dos.
+    rt = await asyncio.to_thread(g.regs, "tcu")
+    prop = struct.unpack(">h", struct.pack(">H", rt[30111]))[0] / 10.0
+    modb = trk[0]["fields"].get("tilt_angle")
+    comp(abs(prop - modb) < 0.15,
+         f"el tilt del TCU 1 sale igual por los dos mapas: {modb:.2f}° (30500+) vs {prop:.2f}° (30111)")
+
+    e = await asyncio.to_thread(g.estado)
+    comp(abs(ncu.get("date_time", 0) - e["t"]["epoch"]) < 5 * max(1, e["planta"]["vel"]),
+         "el reloj de la NCU (U32) es el del motor, no uno inventado")
+    vg = e["meteo"]["viento_kmh"] / 3.6
+    vm = max(m["fields"].get("wind_speed", 0) for m in met) if met else 0
+    comp(vm <= vg + 3, f"el viento de las HSU sale del motor ({vm:.1f} ≤ {vg:.1f} m/s + racha)")
+
+    # 2. LA VUELTA: una orden escrita por Modbus tiene que entrar por P.escribe() y verse
+    #    en la planta. Se fuerza la posición segura 1 en los grupos 1 y 2 (40001, mapa de
+    #    bits por grupo del R7) y se relee por el mismo sitio.
+    r = await modbus_crudo(args.host, args.port, args.unit, struct.pack(">BHH", 6, 40001, 0b11))
+    comp(r[0] == 6 and struct.unpack(">HH", r[1:5]) == (40001, 0b11),
+         f"FC06 40001 = 0b11 aceptado y con eco ({r.hex()})")
+    await asyncio.sleep(max(1.5, args.periodo + 0.5))
+    r = await modbus_crudo(args.host, args.port, args.unit, struct.pack(">BHH", 3, 40001, 1))
+    leido = struct.unpack(">H", r[2:4])[0] if r[0] == 3 else -1
+    comp(leido == 0b11, f"al releer 40001 vuelve lo escrito ({leido:#b})")
+    trk2 = await d.read_trackers()
+    forzados = [t["tcu"] for t in trk2 if t["fields"].get("safe_position") == 1]
+    comp(len(forzados) > 0,
+         f"la orden LLEGA a la planta: {len(forzados)} TCU en posición segura 1 {forzados[:6]}")
+
+    # 3. un FC16 de varios registros seguidos: 40001..40003 son force_sp_1/2/3 y cada uno
+    #    lleva SU valor. Si el bloque se colapsara en la primera dirección, 40003 saldría
+    #    a cero al releerlo y nadie se enteraría.
+    r = await modbus_crudo(args.host, args.port, args.unit,
+                           struct.pack(">BHHB", 16, 40001, 3, 6) + struct.pack(">HHH", 0, 0, 0b101))
+    comp(r[0] == 16, f"FC16 40001..40003 aceptado ({r.hex()})")
+    await asyncio.sleep(max(1.5, args.periodo + 0.5))
+    r = await modbus_crudo(args.host, args.port, args.unit, struct.pack(">BHH", 3, 40001, 3))
+    tres = struct.unpack(">HHH", r[2:8]) if r[0] == 3 else ()
+    comp(tres == (0, 0, 0b101),
+         f"cada registro del bloque se queda con SU valor, no con el primero {tres}")
+
+    # 4. y lo que el equipo rechaza, se rechaza: 30100 es de solo lectura
+    r = await modbus_crudo(args.host, args.port, args.unit, struct.pack(">BHH", 6, 30100, 1))
+    comp(r[0] == 0x86 and r[1] == 2, f"escribir en un registro de solo lectura da excepción 02 ({r.hex()})")
 
 
 def main():
@@ -326,12 +544,19 @@ def main():
     p.add_argument("--hsus", type=int, default=2)
     p.add_argument("--averias", type=int, default=2, help="TCU que dejan de responder")
     p.add_argument("--ext", action="store_true", help="publica también el bloque extendido de HSU (28000)")
-    p.add_argument("--periodo", type=float, default=5.0, help="cada cuánto se refrescan los valores (s)")
+    p.add_argument("--periodo", type=float, default=None, help="cada cuánto se refrescan los valores (s)")
+    p.add_argument("--gemelo", default=None, metavar="URL",
+                   help="sirve la planta REAL de gemelo-digital (node sim/servidor.mjs) "
+                        "en vez de la de juguete, con escritura FC06/FC16 incluida")
     p.add_argument("--semilla", type=int, default=7)
     p.add_argument("--word-order", default="big", choices=["big", "little"])
     p.add_argument("--mapa", default=os.path.join(RAIZ, "config", "modbus_map.yml"))
     p.add_argument("--autotest", action="store_true", help="arranca, se lee con el driver real y sale")
     a = p.parse_args()
+    # con el gemelo detrás la planta se mueve de verdad y a la velocidad que le hayan
+    # puesto: refrescar cada 5 s serviría escalones donde hay una curva
+    if a.periodo is None:
+        a.periodo = 1.0 if a.gemelo else 5.0
     mmap = yaml.safe_load(open(a.mapa, encoding="utf-8"))
     if a.autotest:
         sys.exit(asyncio.run(autotest(a, mmap)))

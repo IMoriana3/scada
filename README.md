@@ -227,6 +227,36 @@ La librería de Excel (SheetJS) va en `lib/`, no en un CDN: esto se abre en la L
 4. `docker compose logs -f collector` — el primer ciclo loguea los campos leídos.
 5. Abre `index.html`, carga un proyecto (p. ej. El Burgo I), pulsa **SCADA** e introduce `http://localhost:8000`. Verás seguidores en verde, los offline simulados en gris y uno en rojo (eje bloqueado), con el ángulo siguiendo al sol real.
 
+**Prueba con Modbus de verdad, sin NCU:**
+
+`driver: simulated` entra por debajo del transporte, así que deja sin ejercitar justo donde
+viven los fallos: aritmética de direcciones, troceado a 110 registros, orden de palabra,
+`decode_tcu_block`. `tools/ncu_simulada.py` es un esclavo Modbus TCP de verdad, y sirve el
+mapa desde el MISMO `config/modbus_map.yml` que lee el colector.
+
+```bash
+python3 tools/ncu_simulada.py --tcus 60 --averias 3     # planta de juguete, sin dependencias
+python3 tools/ncu_simulada.py --autotest                # se lee con el driver real y sale
+```
+
+Y con `--gemelo` deja de fabricarse los valores: los saca del motor de planta de
+`gemelo-digital` (jerarquía de posiciones seguras, banda muerta en pulsos, inclinómetro
+descalibrado, seta enclavada, batería con JEITA). La **escritura** vuelve por el mismo
+camino — un FC06/FC16 contra esta NCU entra por la misma puerta que usa la interfaz web
+del simulador, así que un forzado de posición segura escrito desde la toolbox mueve la
+planta simulada de verdad:
+
+```bash
+node sim/servidor.mjs --tcus 200 --puerto 8787          # en el repo gemelo-digital
+python3 tools/ncu_simulada.py --gemelo http://127.0.0.1:8787
+python3 tools/ncu_simulada.py --gemelo http://127.0.0.1:8787 --autotest   # el camino entero
+```
+
+El `--autotest` con gemelo comprueba lo que solo se puede comprobar con un motor detrás:
+que el mismo ángulo sale igual por el bloque compacto de la NCU (f32 en radianes, 30500+)
+y por el mapa propio del TCU (s16 en grados×10, 30111), que una orden escrita por Modbus
+llega hasta la planta, y que un registro de solo lectura se rechaza con excepción 02.
+
 **Conexión a NCU real:**
 
 1. Pon `driver: modbus`, las IP y `port: 503` en `plants.yml`.
@@ -312,6 +342,7 @@ Backend Docker (`tracker-scada.tar.gz`) + frontend de un solo fichero (`index.ht
 | `index.html` | Frontend: herramienta de siting + capa SCADA (botón "SCADA") |
 | `trafico.html` | Visor del medidor de tráfico: flota, calculadora, malla Zigbee y medido en vivo |
 | `lib/xlsx.full.min.js` | SheetJS local (sin CDN: la LAN de planta no tiene internet) |
+| `tools/ncu_simulada.py` | Esclavo Modbus TCP con el mapa real; con `--gemelo`, la planta de `gemelo-digital` |
 | `tools/sync_plantas.mjs` | Trae al SCADA las plantas del siting (mismo plano, mismos datos) |
 | `tools/test_plantas.mjs` | Banco: las 7 plantas cargan y cargan igual que en el siting |
 | `tools/trafico.py` | Estimador de tráfico por planta y por flota (LAN, nube, malla Zigbee) |
