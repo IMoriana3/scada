@@ -1710,10 +1710,49 @@ tramo `desde`/`hasta` en UTC y la inclinación a la que se quedó. El lado se
 declara en `$script:CronPasivoLado` (55° = oeste en el convenio de la toolbox):
 es de **montaje**, no depende del rumbo del viento.
 
-⚠️ Lo que **no** se puede saber desde aquí: si se soltó por carga o si el motor
-se quedó atascado en el tope. Las dos cosas dan la misma serie. El cronómetro
-dice «clavada en el límite sin orden», que es lo que ve — igual que la
-cronología, es una **inferencia de dos registros**, no la lectura de un flag.
+**El falso positivo del desabanderamiento (medido y corregido, v11.55)** — al
+desabanderar, el objetivo vuelve al sol de golpe y el seguidor real sigue en el
+tope mientras arranca la bajada. Eso da **exactamente** la firma de una suelta
+pasiva durante `tol/velocidad` = 2/0,17 = **12 s**. Con el umbral original —3
+*muestras*, y el cronómetro a 3 s— cada desabanderamiento se marcaba como
+suelta. Y el desabanderamiento **es parte del ensayo D.2**: no era un caso raro,
+era el de todos los días. La función que existe para no llamar fallo a lo
+correcto habría llamado anomalía a lo correcto.
+
+Dos defensas, y van las dos:
+
+1. el mínimo es una **duración en segundos** (120 por defecto), no un número de
+   muestras. El intervalo del cronómetro es configurable de 1 a 60 s, así que
+   «3 muestras» significaba 3 segundos o 3 minutos según lo que pusiera el
+   operario — el mismo código con dos significados. Una suelta por carga dura
+   minutos u horas; el arranque de la vuelta, segundos;
+2. las muestras **desde la orden de desabanderamiento** (`t_vuelta`, que la
+   cronología ya conoce) no se miran.
+
+⚠️ Lo que **no** se puede saber con lo que el cronómetro muestrea hoy: si se
+soltó por carga o si el motor se quedó atascado en el tope. Las dos dan la misma
+serie de `ts/real/obj`. **Sí se podría separar** añadiendo al muestreo
+`motor_state` y `motor_current`, que el diagnóstico ya lee: con orden de mover y
+corriente pero sin movimiento es **atasco**; sin orden ni corriente y en el tope
+es **suelta**. Mientras no se añadan, el cronómetro dice «clavada en el límite
+sin orden», que es lo que ve — igual que la cronología, una **inferencia de dos
+registros**, no la lectura de un flag.
+
+**Nada queda en blanco en una columna de veredicto.** `Lado_correcto` sale
+`SI`/`NO`/`NO EVALUABLE: <motivo>` (`SIN ORDEN`, `SIN LADO (objetivo 0)`,
+`CARA AL VIENTO`), y `Suelta_pasiva` sale `SI`/`NO`. Una celda vacía entre
+síes se lee como «nada que objetar», y quien abre el CSV en una recepción no
+tiene este README delante. La traducción vive en el **borde del CSV**
+(`Aband-LadoTexto`): las funciones puras conservan su contrato —`''` = no
+evaluable— porque eso es lo correcto en código.
+
+**Todo lo que era de proyecto pasa a la pestaña SAT**, donde ya viven los demás
+criterios de aceptación: si la planta abandera **cara al sol o cara al viento**
+(con «cara al viento» el veredicto del lado se abstiene, que es lo que el diseño
+quiere), el **límite de mediodía**, y del pasivo el **lado**, la **duración
+mínima** y si están expuestos **los dos perímetros**. Estaban fijos en el
+código: con `cara al sol` clavado, una planta de las otras habría recibido
+veredictos SI/NO donde debía callarse.
 
 **Rótulos que dicen la verdad (v7.5)** — tres cosas que despistaban al trabajar
 contra una sola NCU o una sola TCU:

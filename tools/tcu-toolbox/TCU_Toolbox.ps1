@@ -2973,6 +2973,69 @@ function Aband-LadoEsperado([double]$tiltInicial, [bool]$haciaElSol = $true,
     return ''                   # justo en 0 y sin regla: no hay lado esperado
 }
 
+# La FILA del CSV de D.2, como funcion pura. Estaba dentro del manejador del
+# boton, o sea fuera del alcance del banco: sus columnas -- que es lo que se
+# entrega en una recepcion -- no las comprobaba nadie. Las funciones de
+# veredicto si tenian pruebas; que el CSV las escriba, y con que valores, no.
+function Aband-FilaCsv([string]$ensayo, [string]$ncu, [int]$tcu, $cr, $pas,
+                       [int]$nMuestras, [bool]$haciaElSol = $true,
+                       [double]$limiteMediodia = 10.0) {
+    $utc = { param($t) if ("$t") { [DateTimeOffset]::FromUnixTimeSeconds([long]$t).UtcDateTime.ToString('yyyy-MM-dd HH:mm:ss') } else { '' } }
+    if ($null -eq $pas) { $pas = @{detectada=$false; t0=''; t1=''; tilt=''; segundos=0} }
+    return [pscustomobject]@{
+        Ensayo = $ensayo; NCU = $ncu; TCU = $tcu
+        Inclinacion_inicial_deg = $cr.tilt_inicial
+        Hora_UTC_recepcion_señal = (& $utc $cr.t_orden)
+        Inclinacion_al_recibir_deg = $cr.tilt_orden
+        Objetivo_seguridad_deg = $cr.obj_seguridad
+        Lado_esperado = (Aband-LadoEsperadoTexto ([double]$cr.tilt_inicial) $haciaElSol $limiteMediodia)
+        Lado_correcto = (Aband-LadoTexto $cr $haciaElSol $limiteMediodia)
+        Suelta_pasiva = $(if ($pas.detectada) { 'SI' } else { 'NO' })
+        Suelta_pasiva_desde_UTC = $(if ($pas.detectada) { (& $utc $pas.t0) } else { '' })
+        Suelta_pasiva_hasta_UTC = $(if ($pas.detectada) { (& $utc $pas.t1) } else { '' })
+        Suelta_pasiva_tilt_deg = $pas.tilt
+        Suelta_pasiva_segundos = $(if ($pas.detectada) { $pas.segundos } else { '' })
+        Hora_UTC_llegada_seguridad = (& $utc $cr.t_llegada)
+        Inclinacion_en_seguridad_deg = $cr.tilt_llegada
+        Segundos_hasta_seguridad = $cr.segundos_ida
+        Hora_UTC_desabanderamiento = (& $utc $cr.t_vuelta)
+        Hora_UTC_vuelta_seguimiento = (& $utc $cr.t_llegada_vuelta)
+        Inclinacion_final_deg = $cr.tilt_final
+        Segundos_hasta_seguimiento = $cr.segundos_vuelta
+        Muestras = $nMuestras
+    }
+}
+
+# Traduccion del veredicto para el CSV. Las funciones puras devuelven '' para
+# "no evaluable", que es lo correcto en codigo; pero una CELDA EN BLANCO en una
+# columna de SI/NO se lee como "nada que objetar" -- y quien abre el CSV en una
+# recepcion no tiene el README delante. Aqui el vacio se convierte en un token
+# que no se puede confundir con un aprobado, y ademas dice POR QUE.
+#
+# Vive en el borde, no dentro de `Aband-LadoCorrecto`: esa funcion y sus
+# pruebas tienen su contrato ('' = no evaluable) y no hay que tocarlo para
+# arreglar un problema de presentacion.
+function Aband-LadoTexto($cronologia, [bool]$haciaElSol = $true,
+                         [double]$limiteMediodia = 10.0) {
+    $v = Aband-LadoCorrecto $cronologia $haciaElSol $limiteMediodia
+    if ($v -ne '') { return $v }
+    if (-not $haciaElSol) { return 'NO EVALUABLE: CARA AL VIENTO' }
+    if ($null -eq $cronologia) { return 'NO EVALUABLE: SIN DATOS' }
+    if ("$($cronologia.obj_seguridad)" -eq '') { return 'NO EVALUABLE: SIN ORDEN' }
+    if ([double]$cronologia.obj_seguridad -eq 0) { return 'NO EVALUABLE: SIN LADO (objetivo 0)' }
+    return 'NO EVALUABLE'
+}
+
+# Lo mismo para el lado esperado: en una planta que abandera cara al viento no
+# hay lado que esperar, y dejarlo en blanco deja la fila entera muda.
+function Aband-LadoEsperadoTexto([double]$tiltInicial, [bool]$haciaElSol = $true,
+                                 [double]$limiteMediodia = 10.0) {
+    $e = Aband-LadoEsperado $tiltInicial $haciaElSol $limiteMediodia
+    if ($e -ne '') { return $e }
+    if (-not $haciaElSol) { return 'CARA AL VIENTO' }
+    return 'SIN LADO (horizontal)'
+}
+
 # SUELTA PASIVA: la fila que se desembraga sola, sin orden.
 #
 # En bifila, la fila exterior a barlovento se suelta por CARGA DE VIENTO. No
@@ -2988,31 +3051,68 @@ function Aband-LadoEsperado([double]$tiltInicial, [bool]$haciaElSol = $true,
 #   pasivo   -> el objetivo sigue al sol; real y objetivo DIVERGEN todo el rato
 #               y el real no se mueve del limite.
 #
+# CUIDADO CON EL DESABANDERAMIENTO (falso positivo medido, 2026-08-20): al
+# desabanderar, el objetivo vuelve al sol de golpe y el seguidor real sigue en
+# el tope mientras arranca la bajada. Eso da EXACTAMENTE la firma de arriba
+# durante tol/velocidad = 2/0,17 = 12 s. Con un umbral de 3 MUESTRAS y el
+# cronometro a 3 s eran 9 s, o sea que CADA desabanderamiento -- que es parte
+# del propio ensayo D.2 -- se marcaba como suelta pasiva. Dos defensas, y van
+# las dos porque ninguna sola es suficiente:
+#
+#   1. el minimo es una DURACION EN SEGUNDOS, no un numero de muestras. El
+#      intervalo del cronometro es configurable de 1 a 60 s, asi que "3
+#      muestras" significaba 3 segundos o 3 minutos segun lo que pusiera el
+#      operario -- el mismo codigo con dos significados. Una suelta por carga
+#      dura minutos u horas; el arranque de la vuelta, segundos.
+#   2. `$hasta` recorta las muestras desde que se ordena el desabanderamiento.
+#      La cronologia ya sabe cuando fue (`t_vuelta`), asi que esa ventana no
+#      hay ni que discriminarla: no se mira.
+#
 # Es una INFERENCIA de dos registros, como la cronologia de al lado, y por eso
-# se declara. Lo que NO se puede saber desde aqui: si se solto por carga o si
-# el motor se quedo atascado en el tope -- los dos dan la misma serie. El
-# cronometro dice "clavada en el limite sin orden", que es lo que ve.
+# se declara. Lo que NO se puede saber con lo que el cronometro muestrea hoy:
+# si se solto por carga o si el motor se quedo atascado en el tope -- los dos
+# dan la misma serie de ts/real/obj. SI se podria separar anadiendo al muestreo
+# `motor_state` y `motor_current`, que el diagnostico ya lee: con orden de
+# mover y corriente pero sin movimiento es ATASCO, y sin orden ni corriente es
+# suelta. Mientras no se anadan, esta funcion dice "clavada en el limite sin
+# orden", que es lo que ve.
 #
 # Funcion PURA: se prueba sin ventana y sin planta delante.
 function Aband-Pasiva($muestras, [double]$lado = 55.0, [double]$tol = 2.0,
-                      [double]$divergencia = 5.0, [int]$minMuestras = 3) {
+                      [double]$divergencia = 5.0, [double]$minSegundos = 120.0,
+                      $hasta = $null, [bool]$ambosLados = $false) {
     $ms = @($muestras)
-    $r = @{detectada = $false; t0 = ''; t1 = ''; muestras = 0; tilt = ''
-           divergencia_max = ''}
-    if ($ms.Count -lt $minMuestras) { return $r }
-    $mejorI = -1; $mejorN = 0; $i = 0
+    $r = @{detectada = $false; t0 = ''; t1 = ''; muestras = 0; segundos = 0
+           tilt = ''; divergencia_max = ''}
+    # Fuera las muestras desde que se ordena el desabanderamiento: ahi el
+    # objetivo vuelve al sol y el real sigue en el tope, que es la firma de la
+    # suelta sin serlo.
+    if ($null -ne $hasta -and "$hasta" -ne '') {
+        $ms = @($ms | Where-Object { [double]$_.ts -lt [double]$hasta })
+    }
+    if ($ms.Count -lt 2) { return $r }
+    # El lado es de MONTAJE y por eso se declara: mirar los dos topes "por si
+    # acaso" contradiria el dato de proyecto (siempre la misma fila y el mismo
+    # lado) y ademas debilitaria el discriminante. Quien tenga una planta con
+    # los dos perimetros expuestos lo dice con $ambosLados.
+    $enLimite = {
+        param($m)
+        $d = $(if ($ambosLados) { [math]::Abs([math]::Abs([double]$m.real) - [math]::Abs($lado)) }
+               else { [math]::Abs([double]$m.real - $lado) })
+        return ($d -le $tol) -and
+               ([math]::Abs([double]$m.obj - [double]$m.real) -gt $divergencia)
+    }
+    $mejorI = -1; $mejorN = 0; $mejorS = 0.0; $i = 0
     while ($i -lt $ms.Count) {
-        $enLimite = ([math]::Abs([double]$ms[$i].real - $lado) -le $tol) -and
-                    ([math]::Abs([double]$ms[$i].obj - [double]$ms[$i].real) -gt $divergencia)
-        if (-not $enLimite) { $i++; continue }
+        if (-not (& $enLimite $ms[$i])) { $i++; continue }
         $j = $i
-        while ($j -lt $ms.Count -and
-               ([math]::Abs([double]$ms[$j].real - $lado) -le $tol) -and
-               ([math]::Abs([double]$ms[$j].obj - [double]$ms[$j].real) -gt $divergencia)) { $j++ }
-        if (($j - $i) -gt $mejorN) { $mejorN = $j - $i; $mejorI = $i }
+        while ($j -lt $ms.Count -and (& $enLimite $ms[$j])) { $j++ }
+        # duracion REAL del tramo, de sus propias marcas de tiempo
+        $seg = [double]$ms[$j - 1].ts - [double]$ms[$i].ts
+        if ($seg -gt $mejorS) { $mejorS = $seg; $mejorN = $j - $i; $mejorI = $i }
         $i = $j
     }
-    if ($mejorN -lt $minMuestras) { return $r }
+    if ($mejorI -lt 0 -or $mejorS -lt $minSegundos) { return $r }
     $div = 0.0
     for ($k = $mejorI; $k -lt ($mejorI + $mejorN); $k++) {
         $d = [math]::Abs([double]$ms[$k].obj - [double]$ms[$k].real)
@@ -3022,6 +3122,7 @@ function Aband-Pasiva($muestras, [double]$lado = 55.0, [double]$tol = 2.0,
     $r.t0 = $ms[$mejorI].ts
     $r.t1 = $ms[$mejorI + $mejorN - 1].ts
     $r.muestras = $mejorN
+    $r.segundos = [int]$mejorS
     $r.tilt = [math]::Round([double]$ms[$mejorI].real, 2)
     $r.divergencia_max = [math]::Round($div, 2)
     return $r
@@ -4464,6 +4565,35 @@ $tabSAT.Controls.Add($btnSatHoja)
 $txtCronInt = TG $tabSAT '3' 752 51 30
 [void](LG $tabSAT 'max min' 790 56 57)
 $txtCronMax = TG $tabSAT '30' 850 51 34
+
+# Como abandera ESTA planta. Son de PROYECTO, no del equipo, igual que el
+# resto de criterios de aceptacion, y estaban fijos en el codigo:
+#  · cara al sol / cara al viento decide si tiene sentido juzgar el LADO. Con
+#    'cara al viento' fijo en el codigo, una planta de las otras habria
+#    recibido veredictos SI/NO donde el diseno quiere abstenerse.
+#  · el lado de la suelta pasiva es de montaje; con el valor equivocado la
+#    mitad de la casuistica queda invisible.
+#  · el limite de mediodia ya era parametro de la funcion, pero quien la
+#    llamaba pasaba siempre el mismo numero.
+[void](LG $tabSAT 'Abandera' 892 48 60)
+$cbSatOrient = New-Object System.Windows.Forms.ComboBox
+$cbSatOrient.Location = New-Object System.Drawing.Point(950, 51)
+$cbSatOrient.Size = New-Object System.Drawing.Size(104, 22)
+$cbSatOrient.DropDownStyle = 'DropDownList'
+[void]$cbSatOrient.Items.AddRange(@('cara al sol', 'cara al viento'))
+$cbSatOrient.SelectedIndex = 0
+$tabSAT.Controls.Add($cbSatOrient)
+[void](LG $tabSAT 'Mediodia deg' 1060 48 78)
+$txtSatNoon = TG $tabSAT '10' 1140 51 30
+[void](LG $tabSAT 'Pasivo: lado deg' 892 78 100)
+$txtSatPasLado = TG $tabSAT '55' 996 84 34
+[void](LG $tabSAT 'min s' 1038 78 40)
+$txtSatPasMin = TG $tabSAT '120' 1078 84 34
+$chkSatPasAmbos = New-Object System.Windows.Forms.CheckBox
+$chkSatPasAmbos.Text = 'los dos lados'
+$chkSatPasAmbos.Location = New-Object System.Drawing.Point(1118, 84)
+$chkSatPasAmbos.Size = New-Object System.Drawing.Size(104, 20)
+$tabSAT.Controls.Add($chkSatPasAmbos)
 
 # Criterios de aceptacion: van editables porque son de contrato, no del
 # equipo. El registro no depende de ellos, asi que cambiarlos y volver a
@@ -10590,6 +10720,14 @@ $script:CronLimiteMediodia = 10.0
 # Lado al que cae una fila que se suelta sola. Es de MONTAJE (no depende del
 # rumbo del viento) y en convenio TCU el oeste es el positivo.
 $script:CronPasivoLado = 55.0
+# Duracion minima para dar por suelta. En SEGUNDOS, no en muestras: el
+# intervalo del cronometro es configurable y con un umbral en muestras el
+# mismo codigo significaba 3 s o 3 min segun lo que pusiera el operario.
+$script:CronPasivoMinSeg = 120.0
+# Planta con los DOS perimetros expuestos. Por defecto NO: el dato de proyecto
+# dice siempre la misma fila y el mismo lado, y mirar los dos topes por si
+# acaso debilita el discriminante.
+$script:CronPasivoAmbos = $false
 
 $tmrCron = New-Object System.Windows.Forms.Timer
 $tmrCron.Interval = 3000   # se ajusta al arrancar cada ensayo
@@ -10645,6 +10783,13 @@ $btnSatCron.Add_Click({
     try {
         $tmrCron.Interval = 1000 * (Val-Int $txtCronInt.Text 'Intervalo del cronometro' 1 60)
         $script:CronTope = Val-Int $txtCronMax.Text 'Tope del cronometro' 0 1440
+        # Como abandera la planta: se DECLARA al arrancar el ensayo, no se
+        # adivina. De aqui depende que el veredicto del lado signifique algo.
+        $script:CronHaciaElSol = ("$($cbSatOrient.SelectedItem)" -eq 'cara al sol')
+        $script:CronLimiteMediodia = Val-Int $txtSatNoon.Text 'Limite de mediodia' 0 30
+        $script:CronPasivoLado = Val-Int $txtSatPasLado.Text 'Lado de la suelta pasiva' -90 90
+        $script:CronPasivoMinSeg = Val-Int $txtSatPasMin.Text 'Duracion minima de suelta pasiva' 10 3600
+        $script:CronPasivoAmbos = $chkSatPasAmbos.Checked
     } catch { Con "ERROR: $_" ([System.Drawing.Color]::Salmon); return }
     $script:CronMuestras = @{}
     $script:CronMeteo = New-Object System.Collections.ArrayList
@@ -10671,29 +10816,14 @@ $btnSatCronFin.Add_Click({
             # Antes de dar por 'no obedecio' una TCU sin orden, se mira si esta
             # clavada en el limite con el objetivo siguiendo al sol: eso es una
             # SUELTA PASIVA, no un fallo.
-            $pas = Aband-Pasiva $msOrd $script:CronPasivoLado
+            # `$cr.t_vuelta` recorta la ventana del desabanderamiento, que
+            # tiene la misma firma que una suelta sin serlo.
+            $pas = Aband-Pasiva $msOrd $script:CronPasivoLado 2.0 5.0 `
+                                $script:CronPasivoMinSeg $cr.t_vuelta $script:CronPasivoAmbos
             $utc = { param($t) if ("$t") { [DateTimeOffset]::FromUnixTimeSeconds([long]$t).UtcDateTime.ToString('yyyy-MM-dd HH:mm:ss') } else { '' } }
-            $filas += [pscustomobject]@{
-                Ensayo = $script:CronEnsayo; NCU = $p[0]; TCU = [int]$p[1]
-                Inclinacion_inicial_deg = $cr.tilt_inicial
-                Hora_UTC_recepcion_señal = (& $utc $cr.t_orden)
-                Inclinacion_al_recibir_deg = $cr.tilt_orden
-                Objetivo_seguridad_deg = $cr.obj_seguridad
-                Lado_esperado = (Aband-LadoEsperado ([double]$cr.tilt_inicial) $script:CronHaciaElSol $script:CronLimiteMediodia)
-                Lado_correcto = (Aband-LadoCorrecto $cr $script:CronHaciaElSol $script:CronLimiteMediodia)
-                Suelta_pasiva = $(if ($pas.detectada) { 'SI' } else { '' })
-                Suelta_pasiva_desde_UTC = $(if ($pas.detectada) { (& $utc $pas.t0) } else { '' })
-                Suelta_pasiva_hasta_UTC = $(if ($pas.detectada) { (& $utc $pas.t1) } else { '' })
-                Suelta_pasiva_tilt_deg = $pas.tilt
-                Hora_UTC_llegada_seguridad = (& $utc $cr.t_llegada)
-                Inclinacion_en_seguridad_deg = $cr.tilt_llegada
-                Segundos_hasta_seguridad = $cr.segundos_ida
-                Hora_UTC_desabanderamiento = (& $utc $cr.t_vuelta)
-                Hora_UTC_vuelta_seguimiento = (& $utc $cr.t_llegada_vuelta)
-                Inclinacion_final_deg = $cr.tilt_final
-                Segundos_hasta_seguimiento = $cr.segundos_vuelta
-                Muestras = @($script:CronMuestras[$k]).Count
-            }
+            $filas += Aband-FilaCsv $script:CronEnsayo $p[0] ([int]$p[1]) $cr $pas `
+                        @($script:CronMuestras[$k]).Count $script:CronHaciaElSol `
+                        $script:CronLimiteMediodia
         }
         $eti = ($script:CronEnsayo -replace '[^\w\.]', '_')
         $f1 = Join-Path $dir ("RESULTADO_{0}_{1}.csv" -f $eti, (Get-Date -Format 'yyyyMMdd_HHmm'))
@@ -11709,7 +11839,10 @@ function Config-Guardar {
             tema = $script:TemaNombre; rollback = $chkRoll.Checked
             sat = @{tol=$txtSatTol.Text; dtcu=$txtSatDTcu.Text; drsu=$txtSatDRsu.Text; ctcu=$txtSatCTcu.Text; crsu=$txtSatCRsu.Text
                     vent=$txtSatVent.Text; cronint=$txtCronInt.Text; cronmax=$txtCronMax.Text; dur=$txtSatDur.Text; unid="$($cbSatUnid.SelectedItem)"
-                    muestreo=$txtSatInt.Text; comms=$txtSatCom.Text}
+                    muestreo=$txtSatInt.Text; comms=$txtSatCom.Text
+                    orient="$($cbSatOrient.SelectedItem)"; noon=$txtSatNoon.Text
+                    paslado=$txtSatPasLado.Text; pasmin=$txtSatPasMin.Text
+                    pasambos=$chkSatPasAmbos.Checked}
         }
         ConvertTo-Json $cfg | Set-Content $script:FichConfigLocal -Encoding UTF8
     } catch {}
@@ -11742,6 +11875,11 @@ function Config-Restaurar {
             if ("$($cfg.sat.unid)" -and $cbSatUnid.Items.Contains("$($cfg.sat.unid)")) { $cbSatUnid.SelectedItem = "$($cfg.sat.unid)" }
             if ("$($cfg.sat.muestreo)") { $txtSatInt.Text  = "$($cfg.sat.muestreo)" }
             if ("$($cfg.sat.comms)")    { $txtSatCom.Text  = "$($cfg.sat.comms)" }
+            if ("$($cfg.sat.orient)" -and $cbSatOrient.Items.Contains("$($cfg.sat.orient)")) { $cbSatOrient.SelectedItem = "$($cfg.sat.orient)" }
+            if ("$($cfg.sat.noon)")     { $txtSatNoon.Text = "$($cfg.sat.noon)" }
+            if ("$($cfg.sat.paslado)")  { $txtSatPasLado.Text = "$($cfg.sat.paslado)" }
+            if ("$($cfg.sat.pasmin)")   { $txtSatPasMin.Text = "$($cfg.sat.pasmin)" }
+            if ($null -ne $cfg.sat.pasambos) { $chkSatPasAmbos.Checked = [bool]$cfg.sat.pasambos }
         }
         Con "Sesion anterior restaurada: planta '$($cbPlanta.SelectedItem)' (config_local.json)." ([System.Drawing.Color]::SteelBlue)
     } catch { Con "AVISO: config_local.json ilegible ($_) - ignorado" ([System.Drawing.Color]::Orange) }

@@ -1125,6 +1125,129 @@ $abPico = @(
 Check 'pasiva: un pico suelto no cuenta' (Aband-Pasiva $abPico 55.0).detectada $false
 # y cae al lado que se declare: buscando el este, esta serie del oeste no sale
 Check 'pasiva: lado declarado manda'     (Aband-Pasiva $abPas -55.0).detectada $false
+# con los dos perimetros expuestos DECLARADOS, esa misma serie si sale
+Check 'pasiva: los dos lados, declarado' (Aband-Pasiva $abPas -55.0 2.0 5.0 30.0 $null $true).detectada $true
+
+# -- el FALSO POSITIVO del desabanderamiento (regresion, 2026-08-20) ---------
+# Al desabanderar, el objetivo vuelve al sol de golpe y el seguidor real sigue
+# en el tope mientras arranca la bajada: MISMA firma que una suelta pasiva
+# durante tol/velocidad = 2/0,17 = 12 s. Con un minimo de 3 MUESTRAS y el
+# cronometro a 3 s eran 9 s, asi que CADA desabanderamiento -- que es parte del
+# propio ensayo D.2 -- se marcaba como suelta. Medido antes de arreglarlo.
+Write-Host ''
+Write-Host '== falso positivo del desabanderamiento =='
+$abCiclo = @()
+$t = 0; $real = -30.0
+foreach ($k in 1..4) { $abCiclo += [pscustomobject]@{ts=$t; real=$real; obj=-30.0}; $t += 3 }
+while ($real -lt 55.0) {                      # sube a 0,17 deg/s con el objetivo YA en 55
+  $real = [math]::Min(55.0, $real + 0.51)
+  $abCiclo += [pscustomobject]@{ts=$t; real=$real; obj=55.0}; $t += 3
+}
+foreach ($k in 1..20) { $abCiclo += [pscustomobject]@{ts=$t; real=55.0; obj=55.0}; $t += 3 }
+$tVuelta = $t
+while ($real -gt 35.0) {                      # DESABANDERAMIENTO: el objetivo vuelve al sol
+  $real = [math]::Max(35.0, $real - 0.51)
+  $abCiclo += [pscustomobject]@{ts=$t; real=$real; obj=35.0}; $t += 3
+}
+# 1) el minimo en SEGUNDOS ya lo mata: la ventana dura 12 s y el minimo son 120
+Check 'ciclo ordenado NO es suelta (min en s)' (Aband-Pasiva $abCiclo 55.0).detectada $false
+# 2) y recortando desde la orden de vuelta, esa ventana ni se mira
+Check 'ciclo ordenado NO es suelta (recorte)' (Aband-Pasiva $abCiclo 55.0 2.0 5.0 120.0 $tVuelta).detectada $false
+# 3) el mutante: con el umbral VIEJO (3 muestras ~ 9 s) y sin recorte, saltaba.
+#    Si esto deja de detectarse, es que el fixture ya no reproduce el defecto y
+#    los dos casos de arriba estarian pasando por la razon equivocada.
+# La ventana dura 6 s MEDIDOS entre la primera y la ultima muestra (3 muestras
+# a 3 s de cadencia). El umbral viejo eran 3 MUESTRAS, o sea que caia dentro.
+Check 'el defecto REPRODUCE con el umbral viejo' (Aband-Pasiva $abCiclo 55.0 2.0 5.0 5.0).detectada $true
+Check 'y el umbral nuevo lo deja fuera por poco' (Aband-Pasiva $abCiclo 55.0 2.0 5.0 10.0).detectada $false
+
+# -- el umbral es DURACION, no numero de muestras ---------------------------
+# El intervalo del cronometro es configurable de 1 a 60 s: con un minimo en
+# muestras, '3' significaba 3 segundos o 3 minutos segun lo que pusiera el
+# operario. La misma suelta a dos cadencias tiene que dar el mismo veredicto.
+Write-Host ''
+Write-Host '== el umbral es duracion, no muestras =='
+$mk = {
+  param([int]$paso, [int]$dur)      # una suelta de $dur segundos a cadencia $paso
+  $o = @(); $tt = 0
+  $o += [pscustomobject]@{ts=$tt; real=-30.0; obj=-30.0}; $tt += $paso
+  while ($tt -le $dur) { $o += [pscustomobject]@{ts=$tt; real=55.0; obj=-20.0}; $tt += $paso }
+  return $o
+}
+Check 'suelta de 300 s a 3 s  -> SI'  (Aband-Pasiva (& $mk 3 300) 55.0).detectada $true
+Check 'suelta de 300 s a 60 s -> SI'  (Aband-Pasiva (& $mk 60 300) 55.0).detectada $true
+Check 'suelta de 30 s a 3 s   -> NO'  (Aband-Pasiva (& $mk 3 30) 55.0).detectada $false
+Check 'suelta de 30 s a 1 s   -> NO'  (Aband-Pasiva (& $mk 1 30) 55.0).detectada $false
+# La duracion es la MEDIDA entre marcas de tiempo, no una extrapolacion: una
+# suelta de 300 s muestreada cada 3 s da 297 s entre la primera y la ultima
+# muestra. Se reporta eso, que subestima como mucho un intervalo y nunca
+# exagera -- lo contrario seria inventarse medio periodo por cada lado.
+Check 'reporta los segundos medidos'  (Aband-Pasiva (& $mk 3 300) 55.0).segundos 297
+
+# -- el vacio NO puede leerse como aprobado en el CSV -------------------------
+# Las funciones puras devuelven '' para 'no evaluable', que es correcto en
+# codigo; una CELDA EN BLANCO en una columna de SI/NO se lee como 'nada que
+# objetar' por quien abre el CSV en una recepcion sin el README delante.
+Write-Host ''
+Write-Host '== el vacio se traduce, y dice por que =='
+Check 'texto: sin orden'        (Aband-LadoTexto (Aband-Cronologia $abSin 1.0 2.0) $true 10.0) 'NO EVALUABLE: SIN ORDEN'
+Check 'texto: objetivo 0'       (Aband-LadoTexto $cr $true 10.0) 'NO EVALUABLE: SIN LADO (objetivo 0)'
+Check 'texto: cara al viento'   (Aband-LadoTexto $cr $false 10.0) 'NO EVALUABLE: CARA AL VIENTO'
+Check 'texto: el SI pasa igual' (Aband-LadoTexto (Aband-Cronologia $abBien 1.0 2.0) $true 10.0) 'SI'
+Check 'texto: el NO pasa igual' (Aband-LadoTexto (Aband-Cronologia $abMal 1.0 2.0) $true 10.0) 'NO'
+Check 'esperado: cara al viento' (Aband-LadoEsperadoTexto -5.0 $false 10.0) 'CARA AL VIENTO'
+Check 'esperado: sin lado'       (Aband-LadoEsperadoTexto 0.0 $true 0.0) 'SIN LADO (horizontal)'
+Check 'esperado: el lado pasa'   (Aband-LadoEsperadoTexto -40.0 $true 10.0) 'este'
+# ningun token de 'no evaluable' puede ser vacio ni parecerse a un aprobado
+foreach ($_t in @((Aband-LadoTexto (Aband-Cronologia $abSin 1.0 2.0) $true 10.0),
+                  (Aband-LadoTexto $cr $true 10.0),
+                  (Aband-LadoTexto $cr $false 10.0))) {
+  Check "token no vacio: '$_t'" ($_t -ne '' -and $_t -ne 'SI') $true
+}
+
+# -- LA FILA DEL CSV: es lo que se entrega, y no lo comprobaba nadie ---------
+# Estaba dentro del manejador del boton, o sea fuera del banco: las funciones
+# de veredicto tenian pruebas, pero que el CSV las escriba -- y con que
+# valores -- no.
+Write-Host ''
+Write-Host '== la fila del CSV de D.2 =='
+$crBien = Aband-Cronologia $abBien 1.0 2.0
+$pasSi  = Aband-Pasiva (& $mk 3 300) 55.0
+$fila   = Aband-FilaCsv 'D.2.1 abanderamiento por viento' 'NCU1' 7 $crBien $pasSi 120 $true 10.0
+# las columnas del Anexo 4 y las cinco nuevas, por nombre
+foreach ($_c in @('Ensayo','NCU','TCU','Inclinacion_inicial_deg',
+                  'Hora_UTC_recepcion_señal','Inclinacion_al_recibir_deg',
+                  'Objetivo_seguridad_deg','Lado_esperado','Lado_correcto',
+                  'Suelta_pasiva','Suelta_pasiva_desde_UTC','Suelta_pasiva_hasta_UTC',
+                  'Suelta_pasiva_tilt_deg','Suelta_pasiva_segundos',
+                  'Hora_UTC_llegada_seguridad','Inclinacion_en_seguridad_deg',
+                  'Segundos_hasta_seguridad','Hora_UTC_desabanderamiento',
+                  'Hora_UTC_vuelta_seguimiento','Inclinacion_final_deg',
+                  'Segundos_hasta_seguimiento','Muestras')) {
+  Check "columna '$_c'" ($fila.PSObject.Properties.Name -contains $_c) $true
+}
+Check 'fila: ensayo'            $fila.Ensayo 'D.2.1 abanderamiento por viento'
+Check 'fila: TCU'               $fila.TCU 7
+Check 'fila: muestras'          $fila.Muestras 120
+Check 'fila: lado correcto'     $fila.Lado_correcto 'SI'
+Check 'fila: lado esperado'     $fila.Lado_esperado 'oeste'
+Check 'fila: suelta pasiva SI'  $fila.Suelta_pasiva 'SI'
+Check 'fila: segundos de suelta' $fila.Suelta_pasiva_segundos 297
+# la hora sale en UTC legible, no en epoch
+Check 'fila: hora UTC formateada' ($fila.Hora_UTC_recepcion_señal -match '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$') $true
+# sin suelta, la columna dice NO -- nunca queda en blanco
+$pasNo  = Aband-Pasiva $abOrd 55.0
+$filaNo = Aband-FilaCsv 'D.2.1' 'NCU1' 8 $crBien $pasNo 120 $true 10.0
+Check 'fila: sin suelta dice NO'      $filaNo.Suelta_pasiva 'NO'
+Check 'fila: sin suelta, tramo vacio' $filaNo.Suelta_pasiva_desde_UTC ''
+# y con la planta cara al viento, el veredicto del lado NO se pronuncia
+$filaV = Aband-FilaCsv 'D.2.1' 'NCU1' 9 $crBien $pasNo 120 $false 10.0
+Check 'fila: cara al viento no juzga' $filaV.Lado_correcto 'NO EVALUABLE: CARA AL VIENTO'
+Check 'fila: cara al viento, esperado' $filaV.Lado_esperado 'CARA AL VIENTO'
+# ninguna celda de veredicto puede quedar en blanco
+Check 'fila: ninguna celda de veredicto en blanco' (
+  ($fila.Lado_correcto -ne '') -and ($fila.Lado_esperado -ne '') -and
+  ($fila.Suelta_pasiva -ne '') -and ($filaV.Lado_correcto -ne '')) $true
 
 # --------------------------------------------------------------------------
 #  Rangos plausibles e identidad de red
