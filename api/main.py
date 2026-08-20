@@ -5,10 +5,12 @@ GET /live?ncu=NCU-01      -> filtrado por NCU
 GET /history/{ncu}/{tcu}  -> series del tracker (por defecto últimas 24h)
 GET /meteo                -> última lectura de cada HSU
 GET /traffic              -> tráfico medido: LAN de planta y subida a la nube
+GET /meteo/history        -> series de las HSU (viento, dirección, nieve…)
 """
 import os
+import re
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from influxdb_client import InfluxDBClient
 
@@ -136,6 +138,113 @@ def _rates(fila: dict) -> dict:
         "cloud_gb_month": round(fila["cloud_gz_b"] * dia * 30 / 1e9, 3),
         "cloud_bps": round(fila["cloud_gz_b"] * 8 / s, 1),
     }
+#: Lo que se acepta interpolar en una consulta Flux. NO es cosmética: `hours`
+#: llevaba `ge/le` desde el principio, pero `every`, `hsu`, `ncu` y `fields`
+#: entraban en crudo en el texto de la consulta, así que un valor con comillas
+#: se sale del literal y puede leer otro `measurement` o `bucket` —datos de
+#: otra planta— o lanzar una consulta que tumbe el servicio. Que la API sea de
+#: solo lectura no lo evita: lee lo que no debe.
+_RE_TAG = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")      # hsu, ncu
+#: La ventana tiene que ser POSITIVA y sin ceros a la izquierda: `0s` daba una
+#: división por cero al calcular los puntos y `00s` un KeyError al partir la
+#: unidad. Las dos pasaban el filtro y morían con un 500 — un valor que se
+#: rechaza tiene que salir por la puerta del 400, diciendo qué está mal.
+_RE_EVERY = re.compile(r"^[1-9]\d{0,4}(ms|s|m|h|d|w)$")   # ventana de agregación
+#: Lista BLANCA de campos. Una negra habría que mantenerla al día; esta falla
+#: hacia el lado seguro cuando aparezca un campo nuevo.
+_METEO_FIELDS = frozenset((
+    "wind_speed", "wind_direction", "wind_gust", "temp_air", "temp_module",
+    "humidity", "pressure", "ghi", "poa", "rain", "snow_level", "wind_level",
+))
+#: Tope de puntos por serie. `hours=8760&every=1s` son ~31 millones: no es un
+#: ataque, es un enlace mal escrito, y tumba igual.
+_MAX_PUNTOS = 20000
+
+_UNID_SEG = {"ms": 0.001, "s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+
+
+def _every_segundos(every: str) -> float:
+    n = int(re.match(r"^(\d+)", every).group(1))
+    return n * _UNID_SEG[every[len(str(n)):]]
+
+
+@app.get("/meteo/history")
+def meteo_history(hours: int = Query(720, ge=1, le=8760),
+                  every: str = Query("10m"),
+                  hsu: str | None = None,
+                  ncu: str | None = None,
+                  fields: str = "wind_speed,wind_direction,temp_air,ghi"):
+    """Series de las HSU: el viento MEDIDO en la planta.
+
+    `/meteo` da solo la última lectura, que sirve para pintar el estado pero no
+    para analizar un emplazamiento. Esto devuelve la serie sobre un ÚNICO eje de
+    tiempos, para que el consumidor no tenga que casar timestamps (el simulador
+    de abanderamiento la come tal cual).
+
+    Dos decisiones que conviene conocer antes de usar el dato:
+
+    * los campos escalares se agregan por **media** en cada ventana, pero la
+      **dirección se toma como último valor**: promediar rumbos exige media
+      circular —entre 350° y 10° la media aritmética da 180°, el rumbo
+      contrario— y para una ventana de minutos el último valor dice lo mismo
+      sin abrir esa puerta;
+    * sin filtrar `hsu` o `ncu` se mezclan todas las HSU de la planta. Para
+      analizar un punto concreto, hay que decir cuál.
+    """
+    # Validación ANTES de tocar la consulta: nada llega al texto de Flux sin
+    # pasar por aquí. Se rechaza con 400 y diciendo qué valor está mal, no se
+    # limpia en silencio — un filtro que se ignora es peor que un error.
+    if not _RE_EVERY.match(every):
+        raise HTTPException(400, f"`every` inválido: {every!r}. Formato "
+                                 "<número><ms|s|m|h|d|w>, p.ej. 10m")
+    for nombre, valor in (("hsu", hsu), ("ncu", ncu)):
+        if valor is not None and not _RE_TAG.match(valor):
+            raise HTTPException(400, f"`{nombre}` inválido: {valor!r}. Solo "
+                                     "letras, dígitos, punto, guion y guion bajo")
+    field_list = [f.strip() for f in fields.split(",") if f.strip()]
+    desconocidos = [f for f in field_list if f not in _METEO_FIELDS]
+    if desconocidos:
+        raise HTTPException(400, f"campos no reconocidos: {desconocidos}. "
+                                 f"Disponibles: {sorted(_METEO_FIELDS)}")
+    puntos = hours * 3600 / _every_segundos(every)
+    if puntos > _MAX_PUNTOS:
+        raise HTTPException(400, f"{int(puntos):,} puntos por serie ({hours} h "
+                                 f"cada {every}) pasan del tope de {_MAX_PUNTOS:,}. "
+                                 "Sube `every` o baja `hours`")
+    if not field_list:
+        return {"hours": hours, "every": every, "t": [], "series": {}}
+
+    filtro = ['r._measurement == "meteo"']
+    if hsu:
+        filtro.append(f'r.hsu == "{hsu}"')
+    if ncu:
+        filtro.append(f'r.ncu == "{ncu}"')
+    base = " and ".join(filtro)
+
+    series: dict[str, dict[str, float]] = {}
+
+    def _consulta(campos: list[str], fn: str) -> None:
+        if not campos:
+            return
+        flt = " or ".join(f'r._field == "{f}"' for f in campos)
+        q = f"""
+from(bucket: "{BUCKET}")
+  |> range(start: -{hours}h)
+  |> filter(fn: (r) => {base} and ({flt}))
+  |> aggregateWindow(every: {every}, fn: {fn}, createEmpty: false)
+"""
+        for table in client.query_api().query(q):
+            for rec in table.records:
+                series.setdefault(rec.get_field(), {})[rec.get_time().isoformat()] = rec.get_value()
+
+    _consulta([f for f in field_list if f != "wind_direction"], "mean")
+    if "wind_direction" in field_list:
+        _consulta(["wind_direction"], "last")
+
+    tiempos = sorted({t for campo in series.values() for t in campo})
+    return {"hours": hours, "every": every, "hsu": hsu, "ncu": ncu,
+            "t": tiempos,
+            "series": {k: [v.get(t) for t in tiempos] for k, v in series.items()}}
 
 
 @app.get("/health")
