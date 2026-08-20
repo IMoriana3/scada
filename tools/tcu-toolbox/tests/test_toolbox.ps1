@@ -1085,6 +1085,47 @@ $abBien = @(
 Check 'veredicto: al oeste con la regla -> SI'       (Aband-LadoCorrecto (Aband-Cronologia $abBien 1.0 2.0) $true 10.0) 'SI'
 Check 'veredicto: sin orden no se pronuncia'         (Aband-LadoCorrecto (Aband-Cronologia $abSin 1.0 2.0) $true 10.0) ''
 
+# -- suelta PASIVA: clavada en el limite sin que nadie se lo mande -----------
+Write-Host ''
+Write-Host '== suelta pasiva =='
+# el objetivo SIGUE AL SOL y el real esta clavado en +55: eso es una suelta
+# pasiva, no un fallo de obediencia
+$abPas = @(
+  [pscustomobject]@{ts=100; real=-30.0; obj=-30.0}
+  [pscustomobject]@{ts=110; real=55.0;  obj=-25.0}
+  [pscustomobject]@{ts=120; real=55.2;  obj=-10.0}
+  [pscustomobject]@{ts=130; real=54.9;  obj=5.0}
+  [pscustomobject]@{ts=140; real=55.0;  obj=20.0}
+)
+$pas = Aband-Pasiva $abPas 55.0
+Check 'pasiva: detectada'            $pas.detectada $true
+Check 'pasiva: desde'                $pas.t0 110
+Check 'pasiva: hasta'                $pas.t1 140
+Check 'pasiva: muestras'             $pas.muestras 4
+Check 'pasiva: tilt del limite'      $pas.tilt 55
+# un abanderamiento ORDENADO no es una suelta pasiva: ahi el objetivo TAMBIEN
+# se va al limite, asi que real y objetivo coinciden. Es el discriminante.
+$abOrd = @(
+  [pscustomobject]@{ts=100; real=-30.0; obj=-30.0}
+  [pscustomobject]@{ts=110; real=20.0;  obj=55.0}
+  [pscustomobject]@{ts=120; real=55.0;  obj=55.0}
+  [pscustomobject]@{ts=130; real=55.1;  obj=55.0}
+  [pscustomobject]@{ts=140; real=54.9;  obj=55.0}
+)
+Check 'ordenado NO es suelta pasiva' (Aband-Pasiva $abOrd 55.0).detectada $false
+# seguimiento normal tampoco
+Check 'seguimiento no es suelta'     (Aband-Pasiva $ab 55.0).detectada $false
+# un pico suelto no cuenta: hacen falta muestras seguidas
+$abPico = @(
+  [pscustomobject]@{ts=100; real=-30.0; obj=-30.0}
+  [pscustomobject]@{ts=110; real=55.0;  obj=-25.0}
+  [pscustomobject]@{ts=120; real=-20.0; obj=-20.0}
+  [pscustomobject]@{ts=130; real=-10.0; obj=-10.0}
+)
+Check 'pasiva: un pico suelto no cuenta' (Aband-Pasiva $abPico 55.0).detectada $false
+# y cae al lado que se declare: buscando el este, esta serie del oeste no sale
+Check 'pasiva: lado declarado manda'     (Aband-Pasiva $abPas -55.0).detectada $false
+
 # --------------------------------------------------------------------------
 #  Rangos plausibles e identidad de red
 # --------------------------------------------------------------------------

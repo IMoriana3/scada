@@ -2973,6 +2973,60 @@ function Aband-LadoEsperado([double]$tiltInicial, [bool]$haciaElSol = $true,
     return ''                   # justo en 0 y sin regla: no hay lado esperado
 }
 
+# SUELTA PASIVA: la fila que se desembraga sola, sin orden.
+#
+# En bifila, la fila exterior a barlovento se suelta por CARGA DE VIENTO. No
+# la manda la TCU, asi que el OBJETIVO no salta: sigue calculando seguimiento
+# como si nada mientras el seguidor real esta clavado en su limite. Para el
+# cronometro de D.2 eso es indistinguible de "no recibio la orden" -- y sale
+# como fallo cuando es el comportamiento correcto de la planta.
+#
+# La firma que lo distingue de un abanderamiento ORDENADO:
+#
+#   ordenado -> el objetivo TAMBIEN se va al limite; una vez llega, real y
+#               objetivo coinciden.
+#   pasivo   -> el objetivo sigue al sol; real y objetivo DIVERGEN todo el rato
+#               y el real no se mueve del limite.
+#
+# Es una INFERENCIA de dos registros, como la cronologia de al lado, y por eso
+# se declara. Lo que NO se puede saber desde aqui: si se solto por carga o si
+# el motor se quedo atascado en el tope -- los dos dan la misma serie. El
+# cronometro dice "clavada en el limite sin orden", que es lo que ve.
+#
+# Funcion PURA: se prueba sin ventana y sin planta delante.
+function Aband-Pasiva($muestras, [double]$lado = 55.0, [double]$tol = 2.0,
+                      [double]$divergencia = 5.0, [int]$minMuestras = 3) {
+    $ms = @($muestras)
+    $r = @{detectada = $false; t0 = ''; t1 = ''; muestras = 0; tilt = ''
+           divergencia_max = ''}
+    if ($ms.Count -lt $minMuestras) { return $r }
+    $mejorI = -1; $mejorN = 0; $i = 0
+    while ($i -lt $ms.Count) {
+        $enLimite = ([math]::Abs([double]$ms[$i].real - $lado) -le $tol) -and
+                    ([math]::Abs([double]$ms[$i].obj - [double]$ms[$i].real) -gt $divergencia)
+        if (-not $enLimite) { $i++; continue }
+        $j = $i
+        while ($j -lt $ms.Count -and
+               ([math]::Abs([double]$ms[$j].real - $lado) -le $tol) -and
+               ([math]::Abs([double]$ms[$j].obj - [double]$ms[$j].real) -gt $divergencia)) { $j++ }
+        if (($j - $i) -gt $mejorN) { $mejorN = $j - $i; $mejorI = $i }
+        $i = $j
+    }
+    if ($mejorN -lt $minMuestras) { return $r }
+    $div = 0.0
+    for ($k = $mejorI; $k -lt ($mejorI + $mejorN); $k++) {
+        $d = [math]::Abs([double]$ms[$k].obj - [double]$ms[$k].real)
+        if ($d -gt $div) { $div = $d }
+    }
+    $r.detectada = $true
+    $r.t0 = $ms[$mejorI].ts
+    $r.t1 = $ms[$mejorI + $mejorN - 1].ts
+    $r.muestras = $mejorN
+    $r.tilt = [math]::Round([double]$ms[$mejorI].real, 2)
+    $r.divergencia_max = [math]::Round($div, 2)
+    return $r
+}
+
 # Veredicto del lado: compara la posicion de seguridad REAL con la esperada.
 # Devuelve 'SI' / 'NO' / '' (no evaluable). El '' no es un aprobado: es que no
 # hay con que juzgar -- sin orden recibida, sin lado esperado o con la planta
@@ -10533,6 +10587,9 @@ $script:CronTope = 30
 # el viento, que el cronometro no lee. Se declara aqui, no se adivina.
 $script:CronHaciaElSol = $true
 $script:CronLimiteMediodia = 10.0
+# Lado al que cae una fila que se suelta sola. Es de MONTAJE (no depende del
+# rumbo del viento) y en convenio TCU el oeste es el positivo.
+$script:CronPasivoLado = 55.0
 
 $tmrCron = New-Object System.Windows.Forms.Timer
 $tmrCron.Interval = 3000   # se ajusta al arrancar cada ensayo
@@ -10608,8 +10665,13 @@ $btnSatCronFin.Add_Click({
         $filas = @()
         foreach ($k in @($script:CronMuestras.Keys | Sort-Object)) {
             $p = $k -split '\|'
-            $cr = Aband-Cronologia @($script:CronMuestras[$k] | Sort-Object { $_.ts })
+            $msOrd = @($script:CronMuestras[$k] | Sort-Object { $_.ts })
+            $cr = Aband-Cronologia $msOrd
             if ($null -eq $cr) { continue }
+            # Antes de dar por 'no obedecio' una TCU sin orden, se mira si esta
+            # clavada en el limite con el objetivo siguiendo al sol: eso es una
+            # SUELTA PASIVA, no un fallo.
+            $pas = Aband-Pasiva $msOrd $script:CronPasivoLado
             $utc = { param($t) if ("$t") { [DateTimeOffset]::FromUnixTimeSeconds([long]$t).UtcDateTime.ToString('yyyy-MM-dd HH:mm:ss') } else { '' } }
             $filas += [pscustomobject]@{
                 Ensayo = $script:CronEnsayo; NCU = $p[0]; TCU = [int]$p[1]
@@ -10619,6 +10681,10 @@ $btnSatCronFin.Add_Click({
                 Objetivo_seguridad_deg = $cr.obj_seguridad
                 Lado_esperado = (Aband-LadoEsperado ([double]$cr.tilt_inicial) $script:CronHaciaElSol $script:CronLimiteMediodia)
                 Lado_correcto = (Aband-LadoCorrecto $cr $script:CronHaciaElSol $script:CronLimiteMediodia)
+                Suelta_pasiva = $(if ($pas.detectada) { 'SI' } else { '' })
+                Suelta_pasiva_desde_UTC = $(if ($pas.detectada) { (& $utc $pas.t0) } else { '' })
+                Suelta_pasiva_hasta_UTC = $(if ($pas.detectada) { (& $utc $pas.t1) } else { '' })
+                Suelta_pasiva_tilt_deg = $pas.tilt
                 Hora_UTC_llegada_seguridad = (& $utc $cr.t_llegada)
                 Inclinacion_en_seguridad_deg = $cr.tilt_llegada
                 Segundos_hasta_seguridad = $cr.segundos_ida
