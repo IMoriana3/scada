@@ -23,8 +23,8 @@ import sys
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(RAIZ, "collector"))
 
-from traffic import (PRESETS, cloud_plan, field_weights, map_params,  # noqa: E402
-                     ncu_estimate, plant_estimate, zigbee_estimate)
+from traffic import (PRESETS, ZB_SALTOS, cloud_plan, field_weights,  # noqa: E402
+                     map_params, ncu_estimate, plant_estimate, zigbee_estimate)
 
 
 def cargar_yaml(ruta):
@@ -150,6 +150,8 @@ def main():
                     help="añade el modelo de la malla Zigbee NCU<->TCU")
     ap.add_argument("--zigbee-ciclo", type=float, default=60,
                     help="periodo con el que la NCU refresca cada TCU (s, por defecto 60)")
+    ap.add_argument("--zigbee-saltos", type=float, default=None,
+                    help="saltos medios al coordinador (por defecto, los medidos en El Burgo)")
     ap.add_argument("--nube-cada", type=float, default=None, metavar="S",
                     help="subir a la nube solo cada S segundos (minutal, 5 min...); "
                          "el polling de la NCU no cambia")
@@ -231,7 +233,8 @@ def main():
                 # cada gateway es una malla propia: el aire se ocupa por malla,
                 # el volumen se suma en la NCU.
                 gws = max(1, n.get("gws", 1))
-                z = zigbee_estimate(round(n["tcu_count"] / gws), cycle_s=a.zigbee_ciclo)
+                z = zigbee_estimate(round(n["tcu_count"] / gws), cycle_s=a.zigbee_ciclo,
+                                    **({"hops": a.zigbee_saltos} if a.zigbee_saltos else {}))
                 salida["zigbee"].append({"planta": p["planta"], "ncu": n["id"],
                                          "gateways": gws, "tcus_ncu": n["tcu_count"],
                                          "mb_day_ncu": z["mb_day"] * gws} | z)
@@ -275,8 +278,10 @@ def main():
                   f"{z['airtime_pct']:>10.1f}{aviso}")
         print("aire % = ocupación del canal de UNA malla (un gateway). Si dos gateways "
               "de la misma NCU comparten canal, súmalos.")
-        print("MODELO, no medida: la NCU no expone contadores de radio. "
-              "Parámetros en collector/traffic.py (ZB_*), a validar en campo.")
+        print(f"Saltos: {a.zigbee_saltos or ZB_SALTOS} "
+              f"({'los que has pasado' if a.zigbee_saltos else 'MEDIDOS en El Burgo NCU1-GW2'}). "
+              "El resto del modelo\nsigue en collector/traffic.py (ZB_*): la trama la fija el "
+              "protocolo y los reintentos siguen supuestos.")
 
 
 if __name__ == "__main__":

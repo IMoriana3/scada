@@ -150,7 +150,17 @@ Los planes de campos son tres y viven en `PRESETS` (`collector/traffic.py`): `to
 
 `target_angle` ocupa 18 B crudos y 0,3 comprimidos porque vale lo mismo en los 108 seguidores de la NCU; `panel_voltage`, que baila en cada uno, cuesta trece veces más siendo igual de largo. Cualquier decisión de "quitamos campos para ahorrar" hay que tomarla con esta columna, no con la del crudo.
 
-**Malla Zigbee (NCU ↔ TCU).** `--zigbee` añade el tráfico de radio entre equipos: volumen por gateway y **ocupación del canal** (250 kbps compartidos), que es lo que de verdad limita. Con un refresco de 60 s, la malla mayor de la flota (72 TCU en un gateway de Ayora) ocupa ~4 % del aire. Ojo: **esto es un modelo, no una medida** — la NCU no expone contadores de radio y los parámetros (`ZB_*` en `collector/traffic.py`: saltos medios, reintentos, tamaño de trama) están puestos a la vista para ajustarlos en campo con las capturas de `cobertura-zigbee`.
+**Malla Zigbee (NCU ↔ TCU).** `--zigbee` añade el tráfico de radio entre equipos: volumen por gateway y **ocupación del canal** (250 kbps compartidos), que es lo que de verdad limita.
+
+**Los saltos ya no se suponen: están medidos.** `python tools/calibrar_zigbee.py` los saca de `cobertura-zigbee/elburgo_real.geojson`, la malla real de la NCU1-GW2 (coordinador + 52 TCU, campo `hop_tipico` de las capturas de `xbee source_route`):
+
+| Saltos al coordinador | 2 | 3 | 4 | 5 | 6 |
+|---|---:|---:|---:|---:|---:|
+| TCU | 7 | 8 | 11 | **24** | 2 |
+
+Media **4,12**, mediana 4,5. El modelo suponía **2,0**, así que la ocupación de aire salía **a la mitad de lo que es**: cada salto es una retransmisión que vuelve a ocupar el canal. Con el valor medido y refresco de 60 s, la malla mayor de la flota (209 TCU en un gateway de Benante) ocupa **12,2 %** en vez del 5,9 % que decía antes. Sigue holgado, pero ya no por el doble.
+
+Lo que **sigue supuesto** es el factor de reintentos (1,15). Los `ack_failures` publicados son los contadores **acumulados** de la radio —hasta 4,5 millones por nodo—, no fallos por ronda: para convertirlos en un factor hace falta el `zigbee_log.csv` crudo, que guarda el contador ronda a ronda y permite restar. El tercer parámetro, el tamaño de trama, lo fija el protocolo.
 
 **Visor (`trafico.html`).** Un único HTML sin CDN ni build, como el resto: tabla de flota con el reparto por NCU, mandos para el plan de subida (cada cuánto, qué campos y último valor o agregado), KPIs de GB/mes, calculadora para una planta que aún no existe, ocupación de aire de la peor malla de cada planta y un panel que consulta `GET /traffic` para poner lo medido al lado de lo estimado. Los bytes por ciclo de cada NCU van **horneados** por `python tools/gen_trafico.py --write` con el modelo de Python, así el visor no puede desviarse del medidor; el banco comprueba las dos cosas (que el puerto JS del modelo da lo mismo, y que el inventario del fichero está al día).
 
@@ -288,6 +298,7 @@ Backend Docker (`tracker-scada.tar.gz`) + frontend de un solo fichero (`index.ht
 | `tools/gen_trafico.py` | Hornea en `trafico.html` los bytes por ciclo de cada NCU (fuente: el modelo) |
 | `tools/test_trafico.py` | Banco del medidor: modelo de bytes, estimación ≡ medida, line protocol |
 | `tools/test_modbus_map.py` | Banco del mapa: el subconjunto contra el R7 publicado (bloques, offsets, tipos, alarmas) |
+| `tools/calibrar_zigbee.py` | Saca los saltos medios REALES de la malla medida de El Burgo |
 
 ### API REST
 

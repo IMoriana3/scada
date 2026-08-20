@@ -302,22 +302,47 @@ def test_peso_por_campo():
           sum(p["gz_b_tcu"] for p in pesos) < T.cloud_cycle(108, 2)["cloud_gz_b"] / 108)
 
 
+def test_calibracion_zigbee():
+    """Los saltos del modelo son los MEDIDOS, y salen del fichero de la malla real."""
+    import shutil
+    sys.path.insert(0, os.path.join(RAIZ, "tools"))
+    import calibrar_zigbee as C
+
+    ruta = next((c for c in C.CANDIDATAS if c and os.path.exists(c)), None)
+    if not ruta:
+        print("  --  malla medida (elburgo_real.geojson no está al lado)")
+        return
+    r = C.calibrar(C.cargar(ruta))
+    check("la malla medida trae los 52 TCU de la NCU1-GW2", r["nodos"] == 52, f'({r["nodos"]})')
+    check("todos tienen salto conocido", r["con_salto"] == r["nodos"])
+    check("el modelo usa los saltos medidos",
+          abs(T.ZB_SALTOS - r["saltos_medios"]) < 0.01,
+          f'(modelo {T.ZB_SALTOS} vs medido {r["saltos_medios"]})')
+    check("y los medidos son bastantes más de los 2,0 que se suponían",
+          r["saltos_medios"] > 3.5, f'({r["saltos_medios"]})')
+    del shutil
+
+
 def test_zigbee():
     z = T.zigbee_estimate(52, cycle_s=60)
     check("ocupación de aire razonable en una malla de 52",
-          0 < z["airtime_pct"] < 10, f"({z['airtime_pct']:.1f}%)")
+          0 < z["airtime_pct"] < 15, f"({z['airtime_pct']:.1f}%)")
+    check("con los saltos medidos ocupa el doble que con los 2,0 supuestos",
+          math.isclose(z["airtime_pct"] / T.zigbee_estimate(52, cycle_s=60, hops=2.0)["airtime_pct"],
+                       T.ZB_SALTOS / 2.0, rel_tol=1e-6))
     rapido = T.zigbee_estimate(52, cycle_s=10)
     check("refrescar 6x más rápido ocupa 6x más aire",
           math.isclose(rapido["airtime_pct"], z["airtime_pct"] * 6, rel_tol=1e-6))
     check("más saltos, más aire",
-          T.zigbee_estimate(52, hops=3)["mb_day"] > z["mb_day"])
+          T.zigbee_estimate(52, cycle_s=60, hops=6)["mb_day"] >
+          T.zigbee_estimate(52, cycle_s=60, hops=3)["mb_day"])
 
 
 if __name__ == "__main__":
     for fn in (test_troceo, test_bytes_adu, test_medidor, test_nube,
                test_estimacion_vs_driver, test_line_protocol_real, test_visor_html,
                test_visor_al_dia, test_mapa_modbus, test_inventario_vs_botones,
-               test_escala, test_planes_de_subida,
+               test_escala, test_planes_de_subida, test_calibracion_zigbee,
                test_peso_por_campo, test_zigbee):
         print(f"\n{fn.__name__}:")
         fn()

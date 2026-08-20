@@ -407,21 +407,31 @@ def plant_estimate(ncus: list[dict], *, interval_s: float = 30, **kw) -> dict:
 # El tráfico de la malla NO se puede medir por Modbus: la NCU sirve de su caché
 # y no expone contadores de radio. Esto es un MODELO con los parámetros a la
 # vista, para saber si un cambio de ritmo cabe en el aire (250 kbps, canal
-# compartido por toda la planta). Validar en campo antes de tomarlo por bueno.
+# compartido por toda la planta). De sus tres parámetros, los saltos ya están
+# MEDIDOS (ver ZB_SALTOS); el tamaño de trama lo fija el protocolo; los
+# reintentos siguen supuestos.
 ZB_OVERHEAD_B = 41       # 802.15.4 MAC (~25) + NWK (~8) + APS (~8)
 ZB_REQ_PAYLOAD_B = 12    # petición de estado de la NCU al TCU
 ZB_RESP_PAYLOAD_B = 44   # respuesta con el bloque compat de 22 registros
 ZB_RATE_BPS = 250_000
 ZB_FRAME_FIXED_S = 0.0015  # CSMA/CA + ACK de nivel MAC por trama
+# Saltos medios al coordinador: MEDIDO, no supuesto. Sale de la malla real de
+# El Burgo NCU1-GW2 (52 TCU, `cobertura-zigbee/elburgo_real.geojson`, campo
+# `hop_tipico` de las capturas de `xbee source_route`): media 4,12, mediana 4,5,
+# rango 2–6. El modelo suponía 2,0 y se quedaba corto a la mitad.
+# Recalcular con: python tools/calibrar_zigbee.py
+ZB_SALTOS = 4.12
 
 
-def zigbee_estimate(n_tcu: int, *, cycle_s: float = 60, hops: float = 2.0,
+def zigbee_estimate(n_tcu: int, *, cycle_s: float = 60, hops: float = ZB_SALTOS,
                     retry_factor: float = 1.15) -> dict:
     """Tráfico y ocupación de aire de la malla de UN gateway.
 
-    `hops`: saltos medios al coordinador (de las capturas de `cobertura-zigbee`,
-    2–3 en El Burgo). Cada salto es una retransmisión: ocupa aire otra vez.
-    `retry_factor`: reintentos por enlaces flojos.
+    `hops`: saltos medios al coordinador. Por defecto los MEDIDOS en El Burgo
+    (4,12). Cada salto es una retransmisión: ocupa el canal otra vez.
+    `retry_factor`: reintentos por enlaces flojos. Este SIGUE siendo supuesto —
+    los `ack_failures` publicados son contadores acumulados de la radio, no
+    fallos por ronda; hace falta el `zigbee_log.csv` crudo para calibrarlo.
     """
     frame_b = [ZB_OVERHEAD_B + ZB_REQ_PAYLOAD_B, ZB_OVERHEAD_B + ZB_RESP_PAYLOAD_B]
     per_poll_b = sum(frame_b) * hops * retry_factor

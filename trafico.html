@@ -174,7 +174,8 @@ code{font-family:var(--mono);font-size:12.5px;background:var(--panel-2);border:1
     <button class="seg" data-zb="60">1 min</button>
     <button class="seg" data-zb="300">5 min</button>
     <span class="et" style="margin-left:10px">Saltos medios</span>
-    <input type="number" id="zbSaltos" value="2" min="1" max="6" step="0.5">
+    <input type="number" id="zbSaltos" value="4.12" min="1" max="8" step="0.1">
+    <span class="et" style="text-transform:none;letter-spacing:0" title="Malla real de El Burgo NCU1-GW2: 52 TCU, media 4,12, mediana 4,5, rango 2–6">medidos en El Burgo</span>
   </div>
   <table class="tabla" id="tZigbee">
     <thead><tr><th>Planta</th><th>Mallas</th><th>Peor malla</th><th>MB/día</th>
@@ -183,11 +184,13 @@ code{font-family:var(--mono);font-size:12.5px;background:var(--panel-2);border:1
   </table>
   <p class="nota" style="margin:10px 0 0">Las marcas del medidor son el 30 % (apretada) y el 60 % (saturada).
   Con los ritmos de hoy sobra sitio: la malla se estrecha cuando se pide refresco rápido, no por tener muchos TCU.</p>
-  <div class="aviso"><b>Esto es un modelo, no una medida.</b> La NCU no expone contadores de radio: el mapa
-    R7 solo da <code>lastComm</code>, el canal y la alarma <code>zigbee_fail</code>. Los saltos y los
-    reintentos se pueden calibrar con las capturas de
-    <a href="https://imoriana3.github.io/cobertura-zigbee/">Cobertura Zigbee</a> (rutas y
-    <code>ack_failures</code> del gateway Digi); mientras tanto, son parámetros.</div>
+  <div class="aviso"><b>Modelo con una pata ya medida.</b> La NCU no expone contadores de radio (el mapa
+    R7 solo da <code>lastComm</code>, el canal y la alarma <code>zigbee_fail</code>), pero los
+    <b>saltos ya no se suponen</b>: son los <b>4,12 de media</b> de la malla real de El Burgo
+    NCU1-GW2 —52 TCU, mediana 4,5, rango 2–6— medidos con <code>xbee source_route</code> y publicados en
+    <a href="https://imoriana3.github.io/cobertura-zigbee/">Cobertura Zigbee</a>. Antes se suponían 2,0 y
+    esto salía a la mitad. Lo que sigue supuesto es el factor de reintentos: los
+    <code>ack_failures</code> publicados son contadores acumulados de la radio, no fallos por ronda.</div>
 </section>
 
 <section>
@@ -286,7 +289,7 @@ function zigbee(tcuPorGw, cicloS, saltos, reintentos=1.15){
 }
 
 /* ---------- estado ---------- */
-const S = { int:30, up:0, plan:"todo", agr:0, zb:60, saltos:2, abierta:new Set(), medido:null };
+const S = { int:30, up:0, plan:"todo", agr:0, zb:60, saltos:4.12, abierta:new Set(), medido:null };
 /* Subir más a menudo de lo que se lee no existe: la cadencia de nube se recorta
    al polling. up=0 significa "cada ciclo". */
 const subeCada = () => S.up ? Math.max(S.int, S.up) : S.int;
@@ -461,7 +464,7 @@ document.querySelectorAll("[data-plan]").forEach(b=>b.onclick=()=>{ S.plan=b.dat
   document.querySelectorAll("[data-plan]").forEach(x=>x.classList.toggle("on",x.dataset.plan===S.plan)); todo(); });
 document.querySelectorAll("[data-agr]").forEach(b=>b.onclick=()=>{ S.agr=+b.dataset.agr; marca("[data-agr]","agr",S.agr); todo(); });
 document.querySelectorAll("[data-zb]").forEach(b=>b.onclick=()=>{ S.zb=+b.dataset.zb; marca("[data-zb]","zb",S.zb); pintaZigbee(); });
-$("#zbSaltos").oninput=e=>{ S.saltos=Math.max(1,+e.target.value||2); pintaZigbee(); };
+$("#zbSaltos").oninput=e=>{ S.saltos=Math.max(1,+e.target.value||4.12); pintaZigbee(); };
 ["#cTcu","#cNcu","#cHsu"].forEach(s=>$(s).oninput=pintaCalc);
 $("#btnApi").onclick=consultarApi;
 $("#apiUrl").value=localStorage.getItem("scadaApiUrl")||"";
