@@ -145,7 +145,11 @@ def _rates(fila: dict) -> dict:
 #: otra planta— o lanzar una consulta que tumbe el servicio. Que la API sea de
 #: solo lectura no lo evita: lee lo que no debe.
 _RE_TAG = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")      # hsu, ncu
-_RE_EVERY = re.compile(r"^\d{1,5}(ms|s|m|h|d|w)$")   # ventana de agregación
+#: La ventana tiene que ser POSITIVA y sin ceros a la izquierda: `0s` daba una
+#: división por cero al calcular los puntos y `00s` un KeyError al partir la
+#: unidad. Las dos pasaban el filtro y morían con un 500 — un valor que se
+#: rechaza tiene que salir por la puerta del 400, diciendo qué está mal.
+_RE_EVERY = re.compile(r"^[1-9]\d{0,4}(ms|s|m|h|d|w)$")   # ventana de agregación
 #: Lista BLANCA de campos. Una negra habría que mantenerla al día; esta falla
 #: hacia el lado seguro cuando aparezca un campo nuevo.
 _METEO_FIELDS = frozenset((
