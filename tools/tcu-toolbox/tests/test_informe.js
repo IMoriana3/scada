@@ -109,15 +109,19 @@ const { chromium } = require('playwright');
   chk('seccion de baterias', await p.locator('#s-bat').count(), 1);
   const tBat = p.locator('#t-bat');
   const txtBat = await tBat.textContent();
-  chk('detecta la bateria desconectada', txtBat.includes('SIN BATERIA'), true);
-  chk('detecta la sobretension', txtBat.includes('SOBRETENSION'), true);
-  chk('detecta la temperatura', txtBat.includes('TEMPERATURA'), true);
+  // los rotulos van tal cual los escribe la toolbox (v11.39 los paso a
+  // minusculas): comparar con la version en mayusculas hacia que estas tres
+  // fallaran desde entonces sin que nadie mirase, porque este arnes no lo
+  // ejecuta el banco de PowerShell
+  chk('detecta la bateria desconectada', txtBat.includes('Sin bateria'), true);
+  chk('detecta la sobretension', txtBat.includes('Sobretension'), true);
+  chk('detecta la temperatura', txtBat.includes('Temperatura'), true);
   chk('la TCU sana no sale', txtBat.includes('TCU 7'), false);
   chk('colorea la alarma', await tBat.locator('tbody tr.alarma').count() > 0, 'true');
   chk('y el aviso aparte', await tBat.locator('tbody tr.aviso').count() > 0, 'true');
   // y sus filtros funcionan igual que los del diagnostico (columna Tipo = 2)
   await tBat.locator('tr.filtros td').nth(2).locator('button.fmb').click();
-  await tBat.locator('tr.filtros td').nth(2).locator('div.fmp label', { hasText: 'SIN BATERIA' }).locator('input').check();
+  await tBat.locator('tr.filtros td').nth(2).locator('div.fmp label', { hasText: 'Sin bateria' }).locator('input').check();
   await p.waitForTimeout(120);
   chk('filtra por tipo de fallo', await tBat.locator('tbody tr:visible').count(), 1);
 
