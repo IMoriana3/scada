@@ -1764,22 +1764,44 @@ pasa cualquier rango por separado, pero tener el mismo valor en los dos límites
 no se sostiene. El CSV de corrección recoge también estas, proponiendo el valor
 mayoritario de la planta.
 
-**La maqueta audita también DESBORDES (v11.56)** — auditaba que nada se montase
+**La maqueta audita también DESBORDES** (del banco, no del producto: no lleva
+número de versión porque no cambia la herramienta) — auditaba que nada se montase
 encima de nada al *agrandar* la ventana, y no lo contrario. Por ese hueco se
 coló un defecto real: cinco campos de la pestaña SAT se colocaron de x=892 a
-x=1222 y la pestaña tiene 913 px útiles, así que en un portátil —donde la
-ventana arranca en su `MinimumSize`— eran **invisibles**.
+x=1222, con ~919 px útiles de pestaña.
 
-Y no era estética. Esos cinco campos existen **para no dar por supuesto el
+Lo que le pasa a un control que se sale **no es desaparecer**: `Layout-Rescatar`
+lo **mueve** al borde de su contenedor al arrancar. Aquellos cinco campos no
+habrían estado invisibles —eso se dijo mal en el PR #201—, habrían aparecido
+amontonados contra el borde derecho, unos encima de otros y encima de la fila
+del cronómetro. Peor, no mejor: un control invisible se echa en falta; uno que
+aparece donde no toca **se rellena creyendo que es otro**.
+
+Y no es estética. Esos cinco campos existen **para no dar por supuesto el
 criterio de una planta** (si abandera cara al sol o cara al viento, el límite de
-mediodía, el lado de la suelta pasiva); colocados fuera de la ventana, daban por
-supuesto el criterio de una planta. Un control que no se ve es un default
+mediodía, el lado de la suelta pasiva); fuera de sitio, daban por supuesto el
+criterio de una planta. Un control que no está donde se le puso es un default
 silencioso con otro disfraz.
 
 La ventana no puede encogerse por debajo de su `MinimumSize`, así que ese tamaño
-es el **peor caso real** y la comprobación es exacta, no una estimación. Y la
-maqueta pasa a **salir con código 1** si encuentra algo: antes informaba de los
-solapes por pantalla y salía con 0, así que en una tubería no lo veía nadie.
+es el **peor caso real** y la comprobación es exacta, no una estimación. El alto
+útil sale de `$pnlCuerpo`, que es lo que de verdad recorta, y **no** se le
+descuenta la fila de solapas: `Nav-OcultarCabecera` la saca fuera del panel a
+propósito. Descontarla daba 368 px donde hay ~394 y marcaba diez notas al pie
+que caben de sobra. Y la maqueta pasa a **salir con código 1** si encuentra
+algo: antes informaba de los solapes por pantalla y salía con 0, así que en una
+tubería no lo veía nadie.
+
+⚠️ **Pendiente de comprobar en Windows.** `Layout-Rescatar` se ejecuta **antes**
+que `Nav-OcultarCabecera`, así que mide la pestaña con la fila de solapas todavía
+dentro: ~368 px en vez de los ~394 finales. Con esa medida, las notas al pie de
+diez pestañas (`Diagnóstico NCU`, `Nodos`, `Enlace`, `NCU RW`, `FW NCU`, `HSU
+config`, `FW HSU`, `Repetidor…`) le sobresalen y las **sube ~20 px al arrancar**,
+donde se meten debajo de la tabla. Está deducido del código, no visto: aquí no
+hay GUI que abrir. La comprobación es de cinco segundos —abrir la toolbox y
+mirar si se lee la nota gris del pie en *Diagnóstico NCU*—. Si está tapada, el
+arreglo es ejecutar el rescate **después** de ocultar la cabecera; la guarda de
+`cuerpoTabs` ya impide que el rescate deshaga el truco.
 
 **El límite de mediodía, y por qué el cronómetro ahora juzga el LADO (v11.55)** —
 el cronómetro de D.2 apuntaba cuándo llegó la orden, cuándo llegó el seguidor y
