@@ -20,33 +20,48 @@ driver: "simulated"          # "simulated" | "modbus"
 # "little" -> registro N = palabra baja
 float_word_order: "big"
 
+# UNA HSU POR GATEWAY, y su esclavo lo dice el gateway: 230 en el GW1 y 231 en
+# el GW2 de cada NCU. Estaba declarado corto —1 en la NCU1 y 0 en la NCU2— y con
+# eso el colector leía UNA de las cuatro: `hsu_count` es cuántos huecos de la
+# caché de la NCU se leen (modbus_ncu.read_meteo), así que van 2 por NCU.
+# Se comprueba en campo: el registro real de la malla es del NCU1-GW2 —sus 52
+# TCU son los esclavos 57..108, exacto— y su único nodo meteo es HSU_V020_231.
 ncus:
   - id: "NCU1"
     host: "10.100.1.52"
     port: 502
     unit_id: 1
     tcu_count: 108           # TCUs reales configurados en esta NCU (1..200)
-    hsu_count: 1
+    hsu_count: 2             # una por gateway
     hsu_extended: false      # true si la HSU expone el bloque 28000 (piranómetros)
     # Passthrough Modbus de la NCU hacia los TCU (unit id = nº de TCU), un
     # puerto por gateway Zigbee. Lo usa tools/tcu-toolbox/make_plantas.py
-    # para generar plantas.json; el collector lo ignora.
+    # para generar plantas.json; el collector lo ignora. `hsu_esclavo` es el
+    # unit id de la estación de ESE gateway, para la toolbox.
     gateways:
-      - { puerto: 503, tcu_ini: 1,  tcu_fin: 56 }
-      - { puerto: 504, tcu_ini: 57, tcu_fin: 108 }
+      - { puerto: 503, tcu_ini: 1,  tcu_fin: 56,  hsu_esclavo: 230 }
+      - { puerto: 504, tcu_ini: 57, tcu_fin: 108, hsu_esclavo: 231 }
   - id: "NCU2"
     host: "10.100.1.56"
     port: 502
     unit_id: 1
     tcu_count: 107
-    hsu_count: 0
+    hsu_count: 2
     hsu_extended: false
     gateways:
-      - { puerto: 503, tcu_ini: 1,  tcu_fin: 45 }
-      - { puerto: 504, tcu_ini: 46, tcu_fin: 107 }
+      - { puerto: 503, tcu_ini: 1,  tcu_fin: 45,  hsu_esclavo: 230 }
+      - { puerto: 504, tcu_ini: 46, tcu_fin: 107, hsu_esclavo: 231 }
       # TCU 109 suelta en GW2 (rangos sacados de los .bat de Sunner; la 108
-      # no existe). Confirmar en campo.
+      # no existe). Confirmar en campo. Va sin hsu_esclavo: la estación del
+      # GW2 ya está declarada arriba, en la fila del rango bueno.
       - { puerto: 504, tcu_ini: 109, tcu_fin: 109 }
+
+# Medidor de tráfico: el colector cuenta los bytes de cada ciclo (Modbus contra
+# la NCU y subida a InfluxDB) y los publica en la serie `traffic`. Cuesta un
+# punto por NCU y ciclo (~250 B), y es lo que responde GET /traffic.
+# Para estimarlo SIN arrancar nada: python tools/trafico.py
+traffic:
+  enabled: true
 
 influxdb:
   url: "http://influxdb:8086"

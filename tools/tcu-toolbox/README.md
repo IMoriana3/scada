@@ -28,7 +28,7 @@ Cuando una NCU tiene varios gateways, el desplegable ofrece además una entrada 
 | **HSU** | La estación meteo. Botón **BUSCAR HSUs** (v4.0): escanea las NCUs de la selección (Planta completa, (auto) o una entrada suelta) leyendo el bloque compacto que cada NCU cachea (30200+, puerto 502) y lista **qué HSUs hay y de qué NCU cuelga cada una**, con su salud y su viento/nieve; el desplegable permite elegir una — fija su IP y su esclavo si la topología lo trae — o "(todas)" para ver el resumen conjunto. **LEER METEO** y **LEER CONFIG** funcionan sobre **todas las HSUs de la planta de una pasada** (v5.3): con "(todas)" en el desplegable recorren cada una por la IP y el gateway de su NCU, con una cabecera por HSU en la tabla, las mudas marcadas y un resumen de cuántas respondieron y cuántas tienen alarma o viento; LEER CONFIG avisa además si alguna HSU lleva **umbrales distintos** de las demás. Las escrituras (umbrales, reloj, nieve, NVM) siguen pidiendo una HSU concreta a propósito. Las operaciones directas van por su esclavo Modbus (default 185, editable; se preselecciona desde la topología si el fichero de plantas trae `hsu_esclavo`): **meteo en vivo** (viento m/s y km/h, dirección, nieve, lluvia, T/HR, irradiancia) con **alarmas decodificadas**; **config y umbrales de viento** (leer y escribir, con confirmación de seguridad y verificación); **reloj UTC**; **calibración del cero de nieve**; **NVM**; y la **caja negra de 24 h** (viento medio/máx, nieve e irradiancia minuto a minuto) descargada a CSV — para investigar un stow después de que pase. |
 | **Flota** | **Auditoría**: compara un rango de TCUs contra un *preset de referencia* (un preset o un backup completo) y lista **solo las desviaciones** (esperado vs leído), marcando en rojo las que además son **valores imposibles** para esa variable (v7.1), con export CSV — el "¿está toda la NCU igual?" en un clic. **Inventario**: FW principal/fábrica, nº de serie, MAC Xbee, HW y fecha de fabricación de todo el rango, con aviso si hay firmwares mezclados y export CSV. Ambas aceptan también la entrada **"(Planta completa)"**: recorren todas las NCUs en secuencia con sus rangos automáticos (los campos de TCU muestran NA) y añaden la columna NCU a la vista, al CSV y al informe HTML. |
 | **Firmware** | Planifica la **campaña de actualización** (v4.4). La toolbox **no** actualiza firmware — eso lo hace el *TCU Updater* de Sunner — pero resuelve lo caro: a partir del último **Inventario** y de una **versión objetivo**, saca el plan por **ventanas del updater** (una por NCU + gateway, que se abren a la vez): cada una dice con qué IP y puerto abrirla, qué rangos pegarle (*Add from … to …*) y cuánto tarda, y al final el total de la campaña. Muestra la estimación en paralelo y en serie, marca las TCUs que no respondieron al inventario (no se puede actualizar lo que no comunica), exporta el plan a CSV y, al terminar, **VERIFICAR TRAS ACTUALIZAR** relee el FW de las TCUs del plan y dice cuáles subieron y cuáles siguen pendientes. |
-| **SAT** | Los **ensayos de aceptación del Anexo 4** que se pueden automatizar (v6.6). **INICIAR REGISTRO** deja la toolbox registrando la planta entera durante los días que dure el ensayo, con dos cadencias sobre el bloque compacto de la NCU (puerto 502, sin tocar la Zigbee): un pase barato de **comunicaciones** cada 15 s (4 lecturas por NCU) y uno de **precisión y alarmas** cada minuto (18 por NCU). Escribe a disco en cada pase, en ficheros diarios y en modo añadir: si el PC se reinicia a los cuatro días, lo registrado sigue ahí y el ensayo continúa al volver a arrancar. Los **criterios de aceptación** (tolerancia de precisión, los umbrales de disponibilidad de TCU, RSU/NCU y comunicaciones, y la **ventana de la regla de los dos minutos** de D.4) y **todos los tiempos** (duración del ensayo **en minutos, horas o días** — 7 días para el ensayo del anexo, 20 minutos para comprobar el montaje antes de arrancarlo de verdad —, muestreo de TCU y de comunicaciones, ritmo del cronómetro y su tope) son **campos editables** y se recuerdan entre sesiones (v6.9 y v7.0): son de contrato, no del equipo, y cambian de una planta a otra. El registro **no depende de ellos**, así que ajustarlos y volver a analizar da el veredicto nuevo en segundos — sin repetir el ensayo. **ANALIZAR Y EMITIR** lee los CSV y emite el veredicto de los tres ensayos: **D.1.1** precisión de seguimiento (una muestra solo cuenta si el objetivo lleva dos muestras sin cambiar, que es como se descartan los transitorios y las activaciones de posición de seguridad que el anexo excluye), **D.3.4.1/2/3** disponibilidad de operación de TCUs (≥ 99 %), **RSU** (≥ 99,5 %) y **NCU** (≥ 99,5 %), por equipo y día, contando alarmas de motor, batería y comunicación; las meteorológicas no cuentan, como dice el anexo. Y **D.4** disponibilidad de comunicaciones, con la regla del anexo (un intento fallido suelto no computa salvo que se repita dentro de dos minutos, y entonces computan todos) y **umbrales distintos por tipo**: 98,5 % en TCU y 99,5 % en RSU. **RSU es lo que el mapa Sunner llama HSU**; los entregables del SAT usan RSU, que es como lo llama el contrato. Cada ensayo deja su `RESULTADO_*.csv` con el detalle por equipo y día, y la lista de los que incumplen. **CRONÓMETRO** (v6.7) para los **abanderamientos D.2.1–D.2.5** y la **posición objetivo manual D.3**: la condición la provoca el operario (bajar el umbral de viento, cortar la alimentación de la NCU…) y el cronómetro muestrea cada 3 s y apunta por TCU la hora UTC de recepción de la orden, la inclinación en ese momento, la hora de llegada a posición de seguridad, la inclinación allí, y lo mismo del desabanderamiento — las columnas exactas que pide el anexo, más los segundos de ida y vuelta. ⚠️ No hay un bit documentado de "posición de seguridad activa": la llegada de la orden se **infiere** del salto del objetivo y la llegada del seguidor de que el real alcanza ese objetivo. Queda dicho aquí porque en una recepción importa. **HOJA D.1.2** genera la hoja de precisión con equipo externo (nomenclatura, hora UTC, posición del tracker, posición según algoritmo) con la columna de la lectura del instrumento en blanco, que es la única que no puede poner una máquina. |
+| **SAT** | Los **ensayos de aceptación del Anexo 4** que se pueden automatizar (v6.6). **INICIAR REGISTRO** deja la toolbox registrando la planta entera durante los días que dure el ensayo, con dos cadencias sobre el bloque compacto de la NCU (puerto 502, sin tocar la Zigbee): un pase barato de **comunicaciones** cada 15 s (4 lecturas por NCU) y uno de **precisión y alarmas** cada minuto (18 por NCU). Escribe a disco en cada pase, en ficheros diarios y en modo añadir: si el PC se reinicia a los cuatro días, lo registrado sigue ahí y el ensayo continúa al volver a arrancar. Los **criterios de aceptación** (tolerancia de precisión, los umbrales de disponibilidad de TCU, RSU/NCU y comunicaciones, y la **ventana de la regla de los dos minutos** de D.4) y **todos los tiempos** (duración del ensayo **en minutos, horas o días** — 7 días para el ensayo del anexo, 20 minutos para comprobar el montaje antes de arrancarlo de verdad —, muestreo de TCU y de comunicaciones, ritmo del cronómetro y su tope) son **campos editables** y se recuerdan entre sesiones (v6.9 y v7.0): son de contrato, no del equipo, y cambian de una planta a otra. El registro **no depende de ellos**, así que ajustarlos y volver a analizar da el veredicto nuevo en segundos — sin repetir el ensayo. **ANALIZAR Y EMITIR** lee los CSV y emite el veredicto de los tres ensayos: **D.1.1** precisión de seguimiento (una muestra solo cuenta si el objetivo lleva dos muestras sin cambiar, que es como se descartan los transitorios y las activaciones de posición de seguridad que el anexo excluye), **D.3.4.1/2/3** disponibilidad de operación de TCUs (≥ 99 %), **RSU** (≥ 99,5 %) y **NCU** (≥ 99,5 %), por equipo y día, contando alarmas de motor, batería y comunicación; las meteorológicas no cuentan, como dice el anexo. Y **D.4** disponibilidad de comunicaciones, con la regla del anexo (un intento fallido suelto no computa salvo que se repita dentro de dos minutos, y entonces computan todos) y **umbrales distintos por tipo**: 98,5 % en TCU y 99,5 % en RSU. **RSU es lo que el mapa Sunner llama HSU**; los entregables del SAT usan RSU, que es como lo llama el contrato. Cada ensayo deja su `RESULTADO_*.csv` con el detalle por equipo y día, y la lista de los que incumplen. **CRONÓMETRO** (v6.7) para los **abanderamientos D.2.1–D.2.5** y la **posición objetivo manual D.3**: la condición la provoca el operario (bajar el umbral de viento, cortar la alimentación de la NCU…) y el cronómetro muestrea cada 3 s y apunta por TCU la hora UTC de recepción de la orden, la inclinación en ese momento, la hora de llegada a posición de seguridad, la inclinación allí, y lo mismo del desabanderamiento — las columnas exactas que pide el anexo, más los segundos de ida y vuelta. ⚠️ No hay un bit documentado de "posición de seguridad activa": la llegada de la orden se **infiere** del salto del objetivo y la llegada del seguidor de que el real alcanza ese objetivo. Queda dicho aquí porque en una recepción importa. Desde v11.55 el CSV trae además **`Lado_esperado` y `Lado_correcto`**: no basta con que el seguidor llegue a posición de seguridad, tiene que llegar **al lado que le toca** (ver «El límite de mediodía» más abajo) — y si está clavada en el límite **sin que nadie se lo haya mandado**, eso es una **suelta pasiva** y se marca como tal en vez de contarse como desobediencia. **HOJA D.1.2** genera la hoja de precisión con equipo externo (nomenclatura, hora UTC, posición del tracker, posición según algoritmo) con la columna de la lectura del instrumento en blanco, que es la única que no puede poner una máquina. |
 | **Utilidades** | **Sincronizar reloj**: escribe la hora del PC en un rango de TCUs (40001–40006 + secuencia 40007 bit0→bit1) y verifica leyendo el reloj real (30079). **Identificación**: FW principal/fábrica, MCU secundario, BQ, HW, Xbee HW/FW, **MAC Xbee**, **número de serie**, fecha de fabricación y lote (bloque 30300+). |
 
 En las operaciones de **planta completa**, cada línea de la consola lleva delante la **NCU** además del TCU (v5.8): los números de TCU se repiten en cada NCU, así que sin eso una línea no dice de qué equipo habla. El resumen de fallidas y el botón **Reintentar fallidas** también van por NCU — reintentar sobre la NCU equivocada sería escribir en el seguidor de al lado.
@@ -1763,6 +1763,100 @@ es lo que caza ahora el corrimiento de registros — una TCU con `min_tilt = 55`
 pasa cualquier rango por separado, pero tener el mismo valor en los dos límites
 no se sostiene. El CSV de corrección recoge también estas, proponiendo el valor
 mayoritario de la planta.
+
+**El límite de mediodía, y por qué el cronómetro ahora juzga el LADO (v11.55)** —
+el cronómetro de D.2 apuntaba cuándo llegó la orden, cuándo llegó el seguidor y
+a qué ángulo, pero no decía si el ángulo era **el correcto**. Y la posición de
+seguridad tiene lado: en las plantas que abanderan **hacia el sol**, el seguidor
+se tumba al este por la mañana y al oeste por la tarde.
+
+Con una excepción que es fácil leer como avería y no lo es. Si el seguidor viene
+**siguiendo hacia el este** y ya está pegado a la horizontal —inclinación entre
+`-límite` y 0, con el este por debajo del oeste como en toda la toolbox— tumbarlo
+«hacia el sol» lo mandaría a cruzar por el cero justo en el paso por el
+meridiano. En esa franja el abanderamiento va al **OESTE**. El límite es
+configurable (10° por defecto) porque es de proyecto, no del equipo.
+
+Dos columnas nuevas en `RESULTADO_D.2.*.csv`:
+
+| columna | qué dice |
+|---|---|
+| `Lado_esperado` | `este` / `oeste` según la inclinación de partida y la regla |
+| `Lado_correcto` | `SI` / `NO` / vacío |
+
+El **vacío no es un aprobado**: es que no hay con qué juzgar — no llegó la orden,
+la posición de seguridad es 0 (que no tiene lado), o la planta abandera **cara al
+viento** y entonces el lado lo decide el viento, que el cronómetro no lee. Se
+declara con `$script:CronHaciaElSol`; no se adivina.
+
+La regla es la misma que aplica el motor de SolarGPT en las estrategias B1/B2
+(`wind_stow_strategies._noon_flip`), y se carea contra él en las 44
+combinaciones de límite × inclinación **haciendo el cambio de convenio**: el
+core usa el de pvlib (este positivo) y la planta el contrario, y una regla
+espejada pasa cualquier test que se mire a sí mismo.
+
+**La suelta PASIVA no es un fallo de obediencia (v11.55)** — en bifila, la fila
+exterior a barlovento se desembraga **por carga de viento**. No la manda la TCU,
+así que el **objetivo no salta**: sigue calculando seguimiento como si nada
+mientras el seguidor real está clavado en su límite. Para el cronómetro de D.2
+eso era indistinguible de «no recibió la orden», y salía como fallo cuando es el
+comportamiento correcto de la planta.
+
+La firma que las separa:
+
+| | objetivo | real | divergencia |
+|---|---|---|---|
+| abanderamiento **ordenado** | se va al límite | llega al límite | ~0 una vez llegado |
+| suelta **pasiva** | sigue al sol | clavado en el límite | grande y sostenida |
+
+Cuatro columnas nuevas en `RESULTADO_D.2.*.csv`: `Suelta_pasiva` (SI/vacío), el
+tramo `desde`/`hasta` en UTC y la inclinación a la que se quedó. El lado se
+declara en `$script:CronPasivoLado` (55° = oeste en el convenio de la toolbox):
+es de **montaje**, no depende del rumbo del viento.
+
+**El falso positivo del desabanderamiento (medido y corregido, v11.55)** — al
+desabanderar, el objetivo vuelve al sol de golpe y el seguidor real sigue en el
+tope mientras arranca la bajada. Eso da **exactamente** la firma de una suelta
+pasiva durante `tol/velocidad` = 2/0,17 = **12 s**. Con el umbral original —3
+*muestras*, y el cronómetro a 3 s— cada desabanderamiento se marcaba como
+suelta. Y el desabanderamiento **es parte del ensayo D.2**: no era un caso raro,
+era el de todos los días. La función que existe para no llamar fallo a lo
+correcto habría llamado anomalía a lo correcto.
+
+Dos defensas, y van las dos:
+
+1. el mínimo es una **duración en segundos** (120 por defecto), no un número de
+   muestras. El intervalo del cronómetro es configurable de 1 a 60 s, así que
+   «3 muestras» significaba 3 segundos o 3 minutos según lo que pusiera el
+   operario — el mismo código con dos significados. Una suelta por carga dura
+   minutos u horas; el arranque de la vuelta, segundos;
+2. las muestras **desde la orden de desabanderamiento** (`t_vuelta`, que la
+   cronología ya conoce) no se miran.
+
+⚠️ Lo que **no** se puede saber con lo que el cronómetro muestrea hoy: si se
+soltó por carga o si el motor se quedó atascado en el tope. Las dos dan la misma
+serie de `ts/real/obj`. **Sí se podría separar** añadiendo al muestreo
+`motor_state` y `motor_current`, que el diagnóstico ya lee: con orden de mover y
+corriente pero sin movimiento es **atasco**; sin orden ni corriente y en el tope
+es **suelta**. Mientras no se añadan, el cronómetro dice «clavada en el límite
+sin orden», que es lo que ve — igual que la cronología, una **inferencia de dos
+registros**, no la lectura de un flag.
+
+**Nada queda en blanco en una columna de veredicto.** `Lado_correcto` sale
+`SI`/`NO`/`NO EVALUABLE: <motivo>` (`SIN ORDEN`, `SIN LADO (objetivo 0)`,
+`CARA AL VIENTO`), y `Suelta_pasiva` sale `SI`/`NO`. Una celda vacía entre
+síes se lee como «nada que objetar», y quien abre el CSV en una recepción no
+tiene este README delante. La traducción vive en el **borde del CSV**
+(`Aband-LadoTexto`): las funciones puras conservan su contrato —`''` = no
+evaluable— porque eso es lo correcto en código.
+
+**Todo lo que era de proyecto pasa a la pestaña SAT**, donde ya viven los demás
+criterios de aceptación: si la planta abandera **cara al sol o cara al viento**
+(con «cara al viento» el veredicto del lado se abstiene, que es lo que el diseño
+quiere), el **límite de mediodía**, y del pasivo el **lado**, la **duración
+mínima** y si están expuestos **los dos perímetros**. Estaban fijos en el
+código: con `cara al sol` clavado, una planta de las otras habría recibido
+veredictos SI/NO donde debía callarse.
 
 **Rótulos que dicen la verdad (v7.5)** — tres cosas que despistaban al trabajar
 contra una sola NCU o una sola TCU:

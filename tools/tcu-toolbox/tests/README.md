@@ -33,8 +33,15 @@ npm i playwright && node test_informe.js
 
 Cubre el filtro **multiopción** (marcar ALARMA y OFFLINE a la vez), el cruce de
 filtros de dos columnas, "todas"/"ninguna", que abrir un panel cierre el
-anterior, la caja de texto de las columnas con muchos valores, la ordenación y
-el bloque de **valores imposibles** de la sección de lectura.
+anterior, la caja de texto de las columnas con muchos valores, la ordenación,
+el bloque de **valores imposibles** de la sección de lectura y la **auditoría
+de baterías** (que separe alarma de aviso, y sus filtros).
+
+⚠️ "Opcional" es por lo que necesita, no por lo que vale: al no ir en el mismo
+comando que el banco de PowerShell, tres comprobaciones de la auditoría de
+baterías llevaban rojas desde la v11.39 —la que pasó los rótulos a
+minúsculas— sin que nadie lo viese. Si se toca el informe HTML, esto se
+ejecuta.
 Con `CHROMIUM_PATH` se le puede pasar un Chromium ya instalado.
 
 ## Auditoría de maqueta

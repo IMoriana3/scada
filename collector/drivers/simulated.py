@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timezone
 
 from drivers.modbus_ncu import NCUDriver
-from decode import tracker_health
+from traffic import split_reads
 
 try:
     import pvlib
@@ -42,18 +42,33 @@ def solar_tracker_angle(when: datetime) -> float:
 
 
 class SimulatedNCUDriver(NCUDriver):
-    def __init__(self, ncu_cfg, mmap, word_order="big", **_):
-        super().__init__(ncu_cfg, mmap, word_order)
+    def __init__(self, ncu_cfg, mmap, word_order="big", meter=None, max_regs=110, **_):
+        super().__init__(ncu_cfg, mmap, word_order, meter)
+        self.max_regs = max_regs
         n = ncu_cfg["tcu_count"]
         rnd = random.Random(hash(ncu_cfg["id"]))
         self.offline = set(rnd.sample(range(1, n + 1), max(1, n // 50)))
         self.lagging = set(rnd.sample(range(1, n + 1), max(1, n // 40)))
         self.alarmed = {rnd.randint(1, n): "axis_blocked"}
 
-    async def connect(self): pass
+    async def connect(self):
+        self._count_connection()
+
     async def close(self): pass
 
+    def _count_span(self, count):
+        """Contabiliza el troceo que HARÍA el driver real para esa lectura.
+
+        Sin esto el medidor de tráfico solo serviría con hierro delante; así se
+        puede dimensionar una planta con el stack en simulado.
+        """
+        for n in split_reads(count, self.max_regs):
+            self._count_read(n)
+
     async def read_trackers(self) -> list[dict]:
+        n = self.cfg["tcu_count"]
+        self._count_span(n * self.mmap["tcu_compat"]["stride"])   # bloque compat
+        self._count_span(n * 2)                                   # lastComm (U32/TCU)
         now = datetime.now(timezone.utc)
         base_angle = solar_tracker_angle(now)
         day = 7 <= now.hour + 1 <= 21
@@ -97,11 +112,16 @@ class SimulatedNCUDriver(NCUDriver):
         return out
 
     async def read_ncu(self) -> dict:
+        self._count_read(1)   # 30002 (HSU global)
+        self._count_read(6)   # 30100..30105
         return {"alarm_any_wind": 0, "wind_highest_level": 0, "alarm_any_snow": 0,
                 "gw1_alarm": 0, "gw2_alarm": 0, "battery_low": 0,
                 "ups_power_fault": 0, "date_time": int(time.time())}
 
     async def read_meteo(self) -> list[dict]:
+        h = self.mmap["hsu_ext"] if self.cfg.get("hsu_extended") else self.mmap["hsu"]
+        for _ in range(self.cfg.get("hsu_count", 0)):
+            self._count_read(min(h["stride"], 30))
         return [{"hsu": i + 1, "fields": {
             "wind_speed": round(random.uniform(1, 8), 1),
             "wind_direction": round(random.uniform(0, 360)),
