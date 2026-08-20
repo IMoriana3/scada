@@ -1660,6 +1660,23 @@ pasa cualquier rango por separado, pero tener el mismo valor en los dos límites
 no se sostiene. El CSV de corrección recoge también estas, proponiendo el valor
 mayoritario de la planta.
 
+**La maqueta audita también DESBORDES (v11.56)** — auditaba que nada se montase
+encima de nada al *agrandar* la ventana, y no lo contrario. Por ese hueco se
+coló un defecto real: cinco campos de la pestaña SAT se colocaron de x=892 a
+x=1222 y la pestaña tiene 913 px útiles, así que en un portátil —donde la
+ventana arranca en su `MinimumSize`— eran **invisibles**.
+
+Y no era estética. Esos cinco campos existen **para no dar por supuesto el
+criterio de una planta** (si abandera cara al sol o cara al viento, el límite de
+mediodía, el lado de la suelta pasiva); colocados fuera de la ventana, daban por
+supuesto el criterio de una planta. Un control que no se ve es un default
+silencioso con otro disfraz.
+
+La ventana no puede encogerse por debajo de su `MinimumSize`, así que ese tamaño
+es el **peor caso real** y la comprobación es exacta, no una estimación. Y la
+maqueta pasa a **salir con código 1** si encuentra algo: antes informaba de los
+solapes por pantalla y salía con 0, así que en una tubería no lo veía nadie.
+
 **El límite de mediodía, y por qué el cronómetro ahora juzga el LADO (v11.55)** —
 el cronómetro de D.2 apuntaba cuándo llegó la orden, cuándo llegó el seguidor y
 a qué ángulo, pero no decía si el ángulo era **el correcto**. Y la posición de
