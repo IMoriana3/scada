@@ -106,6 +106,29 @@ la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
 una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
 sitio.
 
+**LEER METEO y LEER CONFIG, en tabla (v11.57)** — con nueve estaciones, la
+tabla de la pestaña HSU eran **9 × 13 = 117 filas en una sola columna**, con una
+cabecera `--- NCU5 - HSU3 ---` cada trece. Para comparar el viento de dos
+estaciones había que hacer scroll entre dos números que deberían estar uno al
+lado del otro.
+
+Con **más de una** HSU ahora es una **fila por estación** y una columna por
+campo. Con una sola sigue siendo la lista vertical, que ahí es la forma
+correcta — lo decide lo mismo que ya decidía si poner cabeceras: cuántas hay.
+
+- las **columnas las pone la lectura**, no una lista escrita en el código: vale
+  igual para METEO (viento, dirección, nieve, lluvia, T, HR, irradiancia,
+  batería, tensiones) que para CONFIG (esclavo, umbrales ON/OFF, tiempos,
+  altura del sensor de nieve) — y comparar umbrales entre estaciones es
+  justo para lo que sirve una tabla;
+- en **Alarmas** y **Sensores** va el texto decodificado, no el `0x0000`, y esas
+  dos columnas se ponen **al final**: son las anchas y en medio partían en dos la
+  fila de números;
+- la estación **muda conserva su fila**, en su sitio y en rojo. Desaparecer no
+  es información.
+
+La tabla sigue siendo ordenable y filtrable por columna, como las demás.
+
 **En la hoja de HSUs, DIAGNOSTICAR barre solo HSUs (v11.56)** — entrar por
 *Diagnóstico → HSU* y pulsar DIAGNOSTICAR barría **la planta entera** —las 751
 TCUs de Ayora, minutos— para acabar enseñando diez filas. El resultado estaba

@@ -736,6 +736,44 @@ Check 'hsus: viento de la primera' (@($rH.filas | Where-Object { "$($_.Campo)" -
 $rH1 = Hsu-Recorrer @($objsH[0]) $cxH { param($u) Hsu-LeerMeteo $u } $null
 Check 'hsu unica sin cabecera' (@($rH1.filas | Where-Object { "$($_.Campo)" -like '--- *' }).Count) 0
 
+# ---------- y con varias, en tabla: una fila por estacion ----------
+# Nueve HSUs x 13 campos son 117 filas en una sola columna, y para comparar el
+# viento de dos estaciones hay que hacer scroll. Los campos los pone la lectura,
+# asi que la misma tabla vale para METEO y para CONFIG.
+$tH = Hsu-Tabla $rH.oks $objsH
+Check 'hsu tabla: una fila por estacion' (@($tH.filas).Count) 3
+Check 'hsu tabla: en el orden en que se pidieron' (@($tH.filas | ForEach-Object { $_.eti }) -join ' | ') 'NCU1 - HSU1 | NCU2 - HSU1 | NCU9 - HSU9'
+Check 'hsu tabla: las columnas son los campos leidos' (@($tH.cols).Count) 13
+Check 'hsu tabla: con nombre corto' (@($tH.cols) -contains 'Viento m/s') $true
+Check 'hsu tabla: y el largo no se usa de cabecera' (@($tH.cols) -contains 'Viento [m/s]') $false
+Check 'hsu tabla: la muda tiene su fila igual' ("$(@($tH.filas)[2].vals[0])") 'sin respuesta'
+Check 'hsu tabla: y sale en rojo' (@($tH.filas)[2].alarma) $true
+Check 'hsu tabla: todas las filas con el mismo ancho' (@(@($tH.filas) | Where-Object { @($_.vals).Count -ne @($tH.cols).Count }).Count) 0
+# en alarmas el dato util es el texto, no el hexadecimal
+$iAl = [array]::IndexOf(@($tH.cols), 'Alarmas')
+Check 'hsu tabla: la columna de alarmas existe' ($iAl -ge 0) $true
+Check 'hsu tabla: y lleva el texto, no 0x0000' ("$(@($tH.filas)[0].vals[$iAl])".StartsWith('0x')) $false
+# la de texto es la ancha: en medio parte en dos la fila de numeros
+Check 'hsu tabla: las de texto van al final' $iAl (@($tH.cols).Count - 1)
+Check 'hsu tabla: y los numeros no se parten' (@($tH.cols)[0..($iAl - 1)] -contains 'Alarmas') $false
+# un campo que no sale en el diccionario se queda con su nombre largo
+Check 'hsu tabla: campo desconocido, nombre tal cual' (Hsu-CampoCorto 'Loquesea [xyz]') 'Loquesea [xyz]'
+# CONFIG pasa por la misma funcion sin tocar nada
+$rC = Hsu-Recorrer @($objsH[0]) $cxH { param($u) Hsu-LeerConfig $u } $null
+$tC = Hsu-Tabla $rC.oks @($objsH[0])
+Check 'hsu tabla: config sale igual de tabla' (@($tC.cols) -contains 'ON m/s') $true
+Check 'hsu tabla: config no tiene alarmas, no pinta rojo' (@($tC.filas)[0].alarma) $false
+# anchos: las de texto largo se llevan mas sitio
+Check 'hsu tabla: la de alarmas es ancha' (Hsu-AnchoCol 'Alarmas') 160
+Check 'hsu tabla: una corta no baja de 58' ((Hsu-AnchoCol 'HR %') -ge 58) $true
+# con UNA estacion se sigue pintando la lista vertical: ahi es la forma correcta
+Check 'hsu tabla: una sola sigue en vertical' ($src.Contains('if (@($objs).Count -gt 1) { Hsu-MostrarTabla (Hsu-Tabla $r.oks $objs) }')) $true
+Check 'hsu tabla: los dos botones pintan igual' (@([regex]::Matches($src, 'Hsu-Pintar \$r \$objs')).Count) 2
+# la tabla cambia de columnas: el filtro de columna va por numero y hay que
+# reiniciarlo, y quien pinta con las tres de siempre tiene que reponerlas
+Check 'hsu tabla: rehace las columnas' ($src.Contains('function Lv-Columnas')) $true
+Check 'hsu tabla: BUSCAR HSUs repone las suyas' (@([regex]::Matches($src, 'Lv-Columnas \$lvH \$HSU_COLS_BASE')).Count -ge 3) $true
+
 # ---------- la HSU puede colgar del SEGUNDO gateway (v11.32) ----------
 # Burgo I: cada NCU lleva una estacion en el GW1 y otra en el GW2. Antes se
 # preguntaba siempre por el puerto mas bajo y la del GW2 salia muda. Aqui el

@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.56'
+$VERSION_TOOLBOX = '11.57'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -5192,6 +5192,23 @@ function Lv-Reiniciar($lv) {
     $e.orig = @($lv.Items)
     $e.dejadas = $lv.Items.Count
     for ($i = 0; $i -lt $lv.Columns.Count -and $i -lt @($e.cab).Count; $i++) { $lv.Columns[$i].Text = $e.cab[$i] + [char]0x25BE }
+}
+
+# Rehace las columnas de una tabla que cambia de forma segun lo que se lea. La
+# de HSUs es Campo/Valor/Nota para una estacion y una fila por estacion para
+# nueve, y los filtros de columna van por NUMERO de columna: dejarlos puestos
+# es apuntar a una columna que ya no es la misma. $defs: @(@{t=titulo; w=ancho}).
+function Lv-Columnas($lv, $defs) {
+    if ($null -eq $lv) { return }
+    $lv.BeginUpdate()
+    $lv.Columns.Clear()
+    foreach ($d in @($defs)) { [void]$lv.Columns.Add("$($d.t)", [int]$d.w) }
+    $lv.EndUpdate()
+    $e = Lv-Estado $lv
+    $e.cab = @(@($defs) | ForEach-Object { "$($_.t)" })
+    $e.filtros = @{}
+    $e.orig = @()
+    $e.dejadas = -1
 }
 
 function Lv-Ordenar($lv, [int]$col, [bool]$asc) {
@@ -11081,6 +11098,9 @@ $btnHBuscar.Add_Click({ Lanzar {
         if ($m.Success) { $eti = $m.Groups[1].Value }
         $ncus += ,@{ncu=$eti; ip=$cx.ip; hsu=$(if ($p) { $p.hsu } else { $null }); gws=$cx.gws; hsus=$(if ($p) { [int]$p.hsus } else { 0 }); hsuLista=@($(if ($p) { $p.hsuLista } else { @() })); rsuLista=@($(if ($p) { $p.rsuLista } else { @() }))}
     }
+    # la lectura de varias estaciones deja la tabla en modo tabla; esto pinta
+    # con las tres columnas de siempre
+    Lv-Columnas $lvH $HSU_COLS_BASE
     $lvH.Items.Clear()
     $script:HsusPlanta = @()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
@@ -11172,6 +11192,7 @@ $btnHEsclavo.Add_Click({ Lanzar {
         "Buscar equipos en $ip, gateways $($gws -join ' y '), esclavos $eIni-$eFin.`r`n`r`n$tot consultas. Cada esclavo que no existe cuesta lo que tarde la NCU en rendirse con el Zigbee, asi que esto puede irse a varios minutos.`r`n`r`nSe puede parar con CANCELAR en cualquier momento y lo encontrado se queda en la lista.`r`n`r`nContinuar?",
         'Buscar esclavo', 'YesNo', 'Warning')
     if ($r -ne 'Yes') { return }
+    Lv-Columnas $lvH $HSU_COLS_BASE
     $lvH.Items.Clear()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Barrido de esclavos en $ip$(if ($eti) { " ($eti)" }): gateways $($gws -join ', '), $tot consultas." ([System.Drawing.Color]::SteelBlue)
@@ -11461,7 +11482,99 @@ function Hsu-Recorrer($objs, $cx, [scriptblock]$leer, [scriptblock]$resumen) {
     return @{filas=$filas; oks=$oks}
 }
 
+# ---------- una fila por estacion, no una columna de 117 filas ----------
+# Cada lectura de HSU devuelve filas Campo/Valor/Nota, que es la forma correcta
+# cuando se lee UNA estacion. Con nueve, esa misma forma son 9 x 13 = 117 filas
+# y hay que hacer scroll para comparar dos numeros que deberian estar uno al
+# lado del otro. Los campos los pone la propia lectura, asi que esto vale igual
+# para METEO que para CONFIG: no hay una lista de campos escrita aqui.
+
+# Nombre corto para la cabecera. El nombre largo esta bien en una lista
+# vertical; de cabecera de columna no cabe.
+$HSU_COL_CORTA = @{
+    'Nivel de viento (0-7)'    = 'Nivel'
+    'Viento [m/s]'             = 'Viento m/s'
+    'Direccion viento [deg]'   = 'Dir deg'
+    'Nieve [m]'                = 'Nieve m'
+    'Lluvia [mm/h]'            = 'Lluvia'
+    'Temperatura ext [C]'      = 'T ext C'
+    'Humedad rel [%]'          = 'HR %'
+    'Irradiancia [W/m2]'       = 'Irrad W/m2'
+    'Alarmas (30002)'          = 'Alarmas'
+    'Bateria litio [mV]'       = 'Bat litio mV'
+    'T interna [C]'            = 'T int C'
+    'V bateria int [mV]'       = 'V bat mV'
+    'V panel/aliment [mV]'     = 'V panel mV'
+    'Esclavo Modbus (41002)'   = 'Esclavo'
+    'Sensores config. (41008)' = 'Sensores'
+    'Altura sensor nieve [cm]' = 'H nieve cm'
+    'Umbral viento ON [m/s]'   = 'ON m/s'
+    'Umbral viento OFF [m/s]'  = 'OFF m/s'
+    'Tiempo activacion [s]'    = 't ON s'
+    'Tiempo desactivacion [s]' = 't OFF s'
+}
+function Hsu-CampoCorto([string]$c) {
+    if ($HSU_COL_CORTA.ContainsKey("$c")) { return $HSU_COL_CORTA["$c"] }
+    return "$c"
+}
+
+# Ancho de columna a ojo por el nombre. Las de texto decodificado se llevan mas.
+function Hsu-AnchoCol([string]$nombre) {
+    if ("$nombre" -eq 'Alarmas' -or "$nombre" -eq 'Sensores') { return 160 }
+    return [math]::Max(58, 8 * "$nombre".Length + 14)
+}
+
+# Convierte lo leido en una tabla: @{cols; filas}. $objs manda en el ORDEN y en
+# quien sale, para que la estacion muda tenga su fila en su sitio en vez de
+# desaparecer. Pura: se prueba sin ventana.
+function Hsu-EsTexto([string]$campo) { return ("$campo" -like 'Alarmas*' -or "$campo" -like 'Sensores*') }
+
+function Hsu-Tabla($oks, $objs) {
+    $campos = @()
+    foreach ($o in @($oks)) {
+        $fs = @(@($o.datos.filas) | ForEach-Object { "$($_.Campo)" })
+        if ($fs.Count -gt $campos.Count) { $campos = $fs }
+    }
+    # las de texto decodificado al final: son las anchas, y en medio parten en
+    # dos la fila de numeros, que es lo que se mira de un vistazo
+    $campos = @(@($campos | Where-Object { -not (Hsu-EsTexto $_) }) + @($campos | Where-Object { Hsu-EsTexto $_ }))
+    $porEti = @{}
+    foreach ($o in @($oks)) { $porEti["$($o.obj.etiqueta)"] = $o.datos }
+    $filas = @()
+    foreach ($ob in @($objs)) {
+        $eti = "$($ob.etiqueta)"
+        $d = $porEti[$eti]
+        if ($null -eq $d) {
+            $vals = @(@($campos) | ForEach-Object { '' })
+            if ($vals.Count -gt 0) { $vals[0] = 'sin respuesta' }
+            $filas += ,@{eti=$eti; vals=@($vals); alarma=$true}
+            continue
+        }
+        $mapa = @{}
+        foreach ($f in @($d.filas)) { $mapa["$($f.Campo)"] = $f }
+        $vals = @()
+        foreach ($c in @($campos)) {
+            $f = $mapa["$c"]
+            if ($null -eq $f) { $vals += ''; continue }
+            # en alarmas y sensores el dato util es el texto decodificado de la
+            # nota, no el hexadecimal: "0x0000" no dice nada a pie de planta
+            if (Hsu-EsTexto $c) { $vals += "$($f.Nota)" }
+            else { $vals += "$($f.Valor)" }
+        }
+        # ojo: @($null).Count es 1, no 0. CONFIG no devuelve alarmas ni nivel, y
+        # sin filtrar los vacios todas sus filas salian en rojo.
+        $alarma = ((@(@($d.alarmas) | Where-Object { "$_" -ne '' }).Count -gt 0) -or ([int]"0$($d.nivel)" -gt 0))
+        $filas += ,@{eti=$eti; vals=@($vals); alarma=$alarma}
+    }
+    return @{campos=@($campos); cols=@(@($campos) | ForEach-Object { Hsu-CampoCorto $_ }); filas=@($filas)}
+}
+
+# Las tres columnas de siempre: BUSCAR HSUs, BUSCAR ESCLAVO y la lectura de una
+# sola estacion pintan con esta forma.
+$HSU_COLS_BASE = @(@{t='Campo'; w=240}, @{t='Valor'; w=160}, @{t='Nota'; w=480})
+
 function Hsu-Mostrar([array]$filas) {
+    Lv-Columnas $lvH $HSU_COLS_BASE
     $lvH.Items.Clear()
     foreach ($f in $filas) {
         $item = New-Object System.Windows.Forms.ListViewItem($f.Campo)
@@ -11469,6 +11582,31 @@ function Hsu-Mostrar([array]$filas) {
         if ($f.Nota -match 'ALARMA') { $item.ForeColor = [System.Drawing.Color]::Firebrick }
         $lvH.Items.Add($item) | Out-Null
     }
+    Lv-Reiniciar $lvH
+}
+
+function Hsu-MostrarTabla($t) {
+    $defs = @(@{t='HSU'; w=150})
+    foreach ($c in @($t.cols)) { $defs += ,@{t="$c"; w=(Hsu-AnchoCol $c)} }
+    Lv-Columnas $lvH $defs
+    $lvH.BeginUpdate()
+    $lvH.Items.Clear()
+    foreach ($f in @($t.filas)) {
+        $item = New-Object System.Windows.Forms.ListViewItem("$($f.eti)")
+        foreach ($v in @($f.vals)) { [void]$item.SubItems.Add("$v") }
+        if ($f.alarma) { $item.ForeColor = [System.Drawing.Color]::Firebrick }
+        $lvH.Items.Add($item) | Out-Null
+    }
+    $lvH.EndUpdate()
+    Lv-Reiniciar $lvH
+}
+
+# Con una estacion, la lista vertical de campos es la forma correcta; con
+# varias, la tabla. Lo decide lo mismo que ya decidia si poner cabeceras
+# "--- NCU5 - HSU3 ---": cuantas hay.
+function Hsu-Pintar($r, $objs) {
+    if (@($objs).Count -gt 1) { Hsu-MostrarTabla (Hsu-Tabla $r.oks $objs) }
+    else { Hsu-Mostrar $r.filas }
 }
 
 $btnHMeteo.Add_Click({ Lanzar {
@@ -11483,7 +11621,7 @@ $btnHMeteo.Add_Click({ Lanzar {
             Con "$($o.etiqueta): sin alarmas, nivel de viento 0." ([System.Drawing.Color]::LightGreen)
         }
     }
-    Hsu-Mostrar $r.filas
+    Hsu-Pintar $r $objs
     if (@($objs).Count -gt 1) {
         $conAlarma = @($r.oks | Where-Object { $_.datos.nivel -gt 0 -or $_.datos.alarmas.Count -gt 0 }).Count
         Con ("Resumen: {0} de {1} HSUs respondieron; {2} con alarma o viento." -f @($r.oks).Count, @($objs).Count, $conAlarma) ([System.Drawing.Color]::SteelBlue)
@@ -11495,7 +11633,7 @@ $btnHConfig.Add_Click({ Lanzar {
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Leyendo configuracion de $($objs.Count) HSU(s)." ([System.Drawing.Color]::SteelBlue)
     $r = Hsu-Recorrer $objs (Params-Conexion) { param($u) Hsu-LeerConfig $u } $null
-    Hsu-Mostrar $r.filas
+    Hsu-Pintar $r $objs
     if (@($r.oks).Count -eq 0) { return }
     # los cuadros de umbrales se cargan con la primera que conteste; si las
     # HSUs no llevan los mismos umbrales, se avisa en vez de disimularlo
