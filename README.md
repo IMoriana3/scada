@@ -160,7 +160,19 @@ Los planes de campos son tres y viven en `PRESETS` (`collector/traffic.py`): `to
 
 Media **4,12**, mediana 4,5. El modelo suponía **2,0**, así que la ocupación de aire salía **a la mitad de lo que es**: cada salto es una retransmisión que vuelve a ocupar el canal. Con el valor medido y refresco de 60 s, la malla mayor de la flota (209 TCU en un gateway de Benante) ocupa **12,2 %** en vez del 5,9 % que decía antes. Sigue holgado, pero ya no por el doble.
 
-Lo que **sigue supuesto** es el factor de reintentos (1,15). Los `ack_failures` publicados son los contadores **acumulados** de la radio —hasta 4,5 millones por nodo—, no fallos por ronda: para convertirlos en un factor hace falta el `zigbee_log.csv` crudo, que guarda el contador ronda a ronda y permite restar. El tercer parámetro, el tamaño de trama, lo fija el protocolo.
+**Y los reintentos tampoco se suponen ya.** Del `zigbee_log.csv` crudo de la misma campaña (GW-01, 52 TCU, 6 días), restando el contador `ack_failures` de cada radio entre rondas consecutivas: **1423 fallos en 7584 nodo·hora**, o sea **0,19 fallos por nodo y hora** de media (mediana 0,05; el peor nodo, 3,8).
+
+Eso no es un porcentaje: es una tasa por hora, así que el recargo por trama **depende de la cadencia** — cuanto más lento sondea la NCU, menos tramas para los mismos fallos:
+
+| La NCU sondea cada | 30 s | 60 s | 5 min | 15 min |
+|---|---:|---:|---:|---:|
+| Reintentos | 1,0008 | 1,0016 | 1,0078 | 1,0235 |
+
+El modelo suponía **1,15**, un 15 % de tramas repetidas. La malla real apenas falla: a 60 s el recargo medido es del **0,2 %**.
+
+Las dos correcciones no se cancelan — los saltos duplican y los reintentos quitan un 13 % — así que la cifra final **sube**: la malla de El Burgo pasa de 1,48 % a **2,65 %** de ocupación a 60 s. Lo que queda de modelo es la **estructura** (un sondeo por TCU y ciclo, dos tramas por salto), no las constantes. El tamaño de trama lo fija el protocolo.
+
+La evidencia derivada se guarda en **`config/malla_medida.json`** (2 kB: saltos por nodo, fallos por nodo y su procedencia) para que la calibración sea auditable sin arrastrar los 16 MB del CSV, y el banco exige que los números del modelo sean los de ese fichero.
 
 **Visor (`trafico.html`).** Un único HTML sin CDN ni build, como el resto: tabla de flota con el reparto por NCU, mandos para el plan de subida (cada cuánto, qué campos y último valor o agregado), KPIs de GB/mes, calculadora para una planta que aún no existe, ocupación de aire de la peor malla de cada planta y un panel que consulta `GET /traffic` para poner lo medido al lado de lo estimado. Los bytes por ciclo de cada NCU van **horneados** por `python tools/gen_trafico.py --write` con el modelo de Python, así el visor no puede desviarse del medidor; el banco comprueba las dos cosas (que el puerto JS del modelo da lo mismo, y que el inventario del fichero está al día).
 
@@ -298,7 +310,8 @@ Backend Docker (`tracker-scada.tar.gz`) + frontend de un solo fichero (`index.ht
 | `tools/gen_trafico.py` | Hornea en `trafico.html` los bytes por ciclo de cada NCU (fuente: el modelo) |
 | `tools/test_trafico.py` | Banco del medidor: modelo de bytes, estimación ≡ medida, line protocol |
 | `tools/test_modbus_map.py` | Banco del mapa: el subconjunto contra el R7 publicado (bloques, offsets, tipos, alarmas) |
-| `tools/calibrar_zigbee.py` | Saca los saltos medios REALES de la malla medida de El Burgo |
+| `tools/calibrar_zigbee.py` | Calibra la malla: saltos de la captura de rutas, reintentos del `zigbee_log.csv` |
+| `config/malla_medida.json` | Evidencia derivada de la campaña (lo que el banco contrasta) |
 
 ### API REST
 

@@ -304,6 +304,7 @@ def test_peso_por_campo():
 
 def test_calibracion_zigbee():
     """Los saltos del modelo son los MEDIDOS, y salen del fichero de la malla real."""
+    import json
     import shutil
     sys.path.insert(0, os.path.join(RAIZ, "tools"))
     import calibrar_zigbee as C
@@ -320,6 +321,24 @@ def test_calibracion_zigbee():
           f'(modelo {T.ZB_SALTOS} vs medido {r["saltos_medios"]})')
     check("y los medidos son bastantes más de los 2,0 que se suponían",
           r["saltos_medios"] > 3.5, f'({r["saltos_medios"]})')
+
+    # La evidencia derivada vive en el repo (unos kB); el CSV crudo, de 16 MB, no.
+    with open(os.path.join(RAIZ, "config", "malla_medida.json"), encoding="utf-8") as f:
+        ev = json.load(f)
+    check("la evidencia guardada lleva los mismos saltos",
+          abs(ev["saltos_medios"] - T.ZB_SALTOS) < 0.01)
+    check("el modelo usa los fallos de ACK medidos",
+          abs(ev["ack"]["fallos_h_media"] - T.ZB_FALLOS_ACK_H) < 0.001,
+          f'(modelo {T.ZB_FALLOS_ACK_H} vs medido {ev["ack"]["fallos_h_media"]})')
+    check("la campaña es la que dice ser (52 TCU, miles de nodo·hora)",
+          ev["ack"]["nodos"] == 52 and ev["ack"]["horas_nodo"] > 5000,
+          f'({ev["ack"]["nodos"]} TCU, {ev["ack"]["horas_nodo"]} nodo·hora)')
+
+    f60 = T.retry_factor_medido(60)
+    check("a 60 s los reintentos medidos son calderilla, no el 15 % supuesto",
+          1.0 < f60 < 1.01, f"({f60:.4f})")
+    check("y pesan más cuanto más lento se sondea",
+          T.retry_factor_medido(900) > T.retry_factor_medido(60))
     del shutil
 
 
@@ -330,9 +349,18 @@ def test_zigbee():
     check("con los saltos medidos ocupa el doble que con los 2,0 supuestos",
           math.isclose(z["airtime_pct"] / T.zigbee_estimate(52, cycle_s=60, hops=2.0)["airtime_pct"],
                        T.ZB_SALTOS / 2.0, rel_tol=1e-6))
+    viejo = T.zigbee_estimate(52, cycle_s=60, hops=2.0, retry_factor=1.15)["airtime_pct"]
+    check("las dos correcciones no se cancelan: la nueva cifra es mayor",
+          z["airtime_pct"] > viejo, f'({z["airtime_pct"]:.2f} % vs {viejo:.2f} %)')
     rapido = T.zigbee_estimate(52, cycle_s=10)
-    check("refrescar 6x más rápido ocupa 6x más aire",
-          math.isclose(rapido["airtime_pct"], z["airtime_pct"] * 6, rel_tol=1e-6))
+    # Ya NO es proporcionalidad exacta: los reintentos medidos son fallos por
+    # HORA, así que a un sondeo más rápido le tocan menos fallos por trama. El
+    # efecto es del 0,1 %, pero fijarlo a 1e-6 sería fijar el modelo viejo.
+    check("refrescar 6x más rápido ocupa ~6x más aire (los reintentos matizan)",
+          math.isclose(rapido["airtime_pct"], z["airtime_pct"] * 6, rel_tol=5e-3),
+          f'({rapido["airtime_pct"] / z["airtime_pct"]:.4f}x)')
+    check("y el matiz va en la dirección buena: algo menos de 6x",
+          rapido["airtime_pct"] < z["airtime_pct"] * 6)
     check("más saltos, más aire",
           T.zigbee_estimate(52, cycle_s=60, hops=6)["mb_day"] >
           T.zigbee_estimate(52, cycle_s=60, hops=3)["mb_day"])

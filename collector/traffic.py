@@ -407,9 +407,10 @@ def plant_estimate(ncus: list[dict], *, interval_s: float = 30, **kw) -> dict:
 # El tráfico de la malla NO se puede medir por Modbus: la NCU sirve de su caché
 # y no expone contadores de radio. Esto es un MODELO con los parámetros a la
 # vista, para saber si un cambio de ritmo cabe en el aire (250 kbps, canal
-# compartido por toda la planta). De sus tres parámetros, los saltos ya están
-# MEDIDOS (ver ZB_SALTOS); el tamaño de trama lo fija el protocolo; los
-# reintentos siguen supuestos.
+# compartido por toda la planta). Sus tres parámetros ya no son suposiciones:
+# los saltos y los reintentos están MEDIDOS (ZB_SALTOS, ZB_FALLOS_ACK_H) y el
+# tamaño de trama lo fija el protocolo. Lo que queda de modelo es la ESTRUCTURA
+# —un sondeo por TCU y ciclo, dos tramas por salto—, no las constantes.
 ZB_OVERHEAD_B = 41       # 802.15.4 MAC (~25) + NWK (~8) + APS (~8)
 ZB_REQ_PAYLOAD_B = 12    # petición de estado de la NCU al TCU
 ZB_RESP_PAYLOAD_B = 44   # respuesta con el bloque compat de 22 registros
@@ -421,18 +422,36 @@ ZB_FRAME_FIXED_S = 0.0015  # CSMA/CA + ACK de nivel MAC por trama
 # rango 2–6. El modelo suponía 2,0 y se quedaba corto a la mitad.
 # Recalcular con: python tools/calibrar_zigbee.py
 ZB_SALTOS = 4.12
+# Fallos de ACK por nodo y hora: MEDIDO también, del zigbee_log.csv crudo de la
+# misma campaña (GW-01, 52 TCU, 7584 nodo·hora, 1423 fallos en 6 días). El
+# modelo suponía un 15 % de tramas repetidas; la malla real apenas falla.
+# La evidencia derivada está en config/malla_medida.json.
+ZB_FALLOS_ACK_H = 0.188
+
+
+def retry_factor_medido(cycle_s: float, fallos_h: float = ZB_FALLOS_ACK_H) -> float:
+    """Reintentos por trama al ritmo que se esté modelando.
+
+    Los fallos medidos son por hora, no por trama: un nodo manda 2 tramas por
+    sondeo, así que a un sondeo cada `cycle_s` le tocan 7200/cycle_s tramas por
+    hora. Cuanto MÁS lento sondea la NCU, más pesa cada fallo — por eso esto es
+    una función de la cadencia y no una constante del sitio.
+    """
+    return 1 + fallos_h * cycle_s / 7200.0
 
 
 def zigbee_estimate(n_tcu: int, *, cycle_s: float = 60, hops: float = ZB_SALTOS,
-                    retry_factor: float = 1.15) -> dict:
+                    retry_factor: float | None = None) -> dict:
     """Tráfico y ocupación de aire de la malla de UN gateway.
 
     `hops`: saltos medios al coordinador. Por defecto los MEDIDOS en El Burgo
     (4,12). Cada salto es una retransmisión: ocupa el canal otra vez.
-    `retry_factor`: reintentos por enlaces flojos. Este SIGUE siendo supuesto —
-    los `ack_failures` publicados son contadores acumulados de la radio, no
-    fallos por ronda; hace falta el `zigbee_log.csv` crudo para calibrarlo.
+    `retry_factor`: reintentos por trama. Si no se pasa, sale de los fallos de
+    ACK MEDIDOS y de la cadencia (`retry_factor_medido`): a 60 s son 1,0016, no
+    el 1,15 que se suponía.
     """
+    if retry_factor is None:
+        retry_factor = retry_factor_medido(cycle_s)
     frame_b = [ZB_OVERHEAD_B + ZB_REQ_PAYLOAD_B, ZB_OVERHEAD_B + ZB_RESP_PAYLOAD_B]
     per_poll_b = sum(frame_b) * hops * retry_factor
     frames_poll = 2 * hops * retry_factor

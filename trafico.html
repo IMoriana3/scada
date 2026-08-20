@@ -260,6 +260,7 @@ const DATOS = {
 const MBAP=7, REQ_PDU=5, RESP_PDU=2, L3L4=40, HANDSHAKE=7;
 const PLANES=["todo","operacion","minimo"];   // el orden de las columnas de curvaNube
 const ZB_OVERHEAD=41, ZB_REQ=12, ZB_RESP=44, ZB_BPS=250000, ZB_TRAMA_S=0.0015;
+const ZB_SALTOS=4.12, ZB_FALLOS_ACK_H=0.188;   // MEDIDOS en El Burgo GW-01 (52 TCU, 6 días)
 
 function trocear(n,max){ const o=[]; while(n>0){ const t=Math.min(max,n); o.push(t); n-=t; } return o; }
 function bytesLectura(n){ return [MBAP+REQ_PDU+L3L4, MBAP+RESP_PDU+2*n+L3L4]; }
@@ -281,7 +282,11 @@ function interpNube(n, plan=S.plan, agr=S.agr){
   const t=(n-a[0])/(b[0]-a[0]);                                      // extrapola la última pendiente
   return {crudo:a[1]+t*(b[1]-a[1]), gz:a[col]+t*(b[col]-a[col])};
 }
-function zigbee(tcuPorGw, cicloS, saltos, reintentos=1.15){
+function zigbee(tcuPorGw, cicloS, saltos, reintentos=null){
+  // Los fallos medidos son por hora, no por trama: a un sondeo cada cicloS le
+  // tocan 7200/cicloS tramas por hora, así que cuanto más lento sondea la NCU
+  // más pesa cada fallo.
+  if(reintentos==null) reintentos = 1 + ZB_FALLOS_ACK_H*cicloS/7200;
   const bytes=(2*ZB_OVERHEAD+ZB_REQ+ZB_RESP)*saltos*reintentos;
   const tramas=2*saltos*reintentos;
   const aire=(bytes*8/ZB_BPS)+tramas*ZB_TRAMA_S;

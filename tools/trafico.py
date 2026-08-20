@@ -278,10 +278,12 @@ def main():
                   f"{z['airtime_pct']:>10.1f}{aviso}")
         print("aire % = ocupación del canal de UNA malla (un gateway). Si dos gateways "
               "de la misma NCU comparten canal, súmalos.")
-        print(f"Saltos: {a.zigbee_saltos or ZB_SALTOS} "
-              f"({'los que has pasado' if a.zigbee_saltos else 'MEDIDOS en El Burgo NCU1-GW2'}). "
-              "El resto del modelo\nsigue en collector/traffic.py (ZB_*): la trama la fija el "
-              "protocolo y los reintentos siguen supuestos.")
+        from traffic import retry_factor_medido
+        print(f"Saltos {a.zigbee_saltos or ZB_SALTOS} y reintentos "
+              f"{retry_factor_medido(a.zigbee_ciclo):.4f}: MEDIDOS en la campaña de El Burgo "
+              f"GW-01\n(52 TCU, 6 días) — ver config/malla_medida.json. Lo que sigue siendo "
+              "modelo es la estructura,\nno las constantes: un sondeo por TCU y ciclo, dos "
+              "tramas por salto.")
 
 
 if __name__ == "__main__":
