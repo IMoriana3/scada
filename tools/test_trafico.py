@@ -236,6 +236,38 @@ def test_mapa_modbus():
           f'({base["lan_b"]} -> {cambiado["lan_b"]})')
 
 
+def test_inventario_vs_botones():
+    """El inventario contado tiene que ser el que anuncia la propia herramienta.
+
+    Cada planta real declara en su botón «N TCU · M NCU». Si el recuento que
+    saca el estimador del plano no coincide con ese rótulo, o se ha roto el
+    lector o el rótulo miente: en los dos casos hay que enterarse aquí y no en
+    una reunión.
+
+    Decidido con el mantenedor (2026-08-20): para San José manda EL PLANO
+    (2289 TCU), no el `config_tcu_sunner_sanjose.csv` (2186). El plano es lo que
+    el colector va a pollear.
+    """
+    import re
+    sys.path.insert(0, os.path.join(RAIZ, "tools"))
+    from trafico import cargar_flota
+
+    with open(os.path.join(RAIZ, "index.html"), encoding="utf-8") as f:
+        html = f.read()
+    rotulos = {}
+    for m in re.finditer(r'data-sc="[a-z]+"[^>]*>([^<]+?) · proyecto real<small>'
+                         r'([\d.]+) TCU · (\d+) NCU', html):
+        rotulos[m.group(1).strip()] = (int(m.group(2).replace(".", "")), int(m.group(3)))
+    check("los botones declaran su recuento", len(rotulos) >= 10, f"({len(rotulos)})")
+
+    contado = {p["planta"]: (sum(n["tcu_count"] for n in p["ncus"]), len(p["ncus"]))
+               for p in cargar_flota()}
+    for nombre, (tcu, ncu) in sorted(rotulos.items()):
+        real = contado.get(nombre)
+        check(f"{nombre}: {tcu} TCU / {ncu} NCU contados en el plano",
+              real == (tcu, ncu), f"contados {real}")
+
+
 def test_planes_de_subida():
     """Leer a un ritmo y subir a otro: lo que pide el 4G de una caseta."""
     base = T.cloud_plan(108, 2, poll_s=30)
@@ -284,7 +316,8 @@ def test_zigbee():
 if __name__ == "__main__":
     for fn in (test_troceo, test_bytes_adu, test_medidor, test_nube,
                test_estimacion_vs_driver, test_line_protocol_real, test_visor_html,
-               test_visor_al_dia, test_mapa_modbus, test_escala, test_planes_de_subida,
+               test_visor_al_dia, test_mapa_modbus, test_inventario_vs_botones,
+               test_escala, test_planes_de_subida,
                test_peso_por_campo, test_zigbee):
         print(f"\n{fn.__name__}:")
         fn()

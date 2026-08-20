@@ -104,6 +104,8 @@ Lo que **no** cuenta, y conviene saberlo: los ACK puros (viajan montados en el s
 | Bagnarelli 24030 | 1 | 17 | 5,9 | 5,8 | 0,17 |
 | **Total** | **66** | **6039** | **1343,6** | **760,7** | **22,8** |
 
+> **San José va por el plano: 2289 TCU** (decidido el 2026-08-20). El `config_tcu_sunner_sanjose.csv` lista 2186 configurados; la diferencia de 103 queda como pregunta para comisionado, pero para tráfico manda el plano, que es lo que el colector va a pollear. `tools/test_trafico.py` lo fija: contrasta el recuento de cada planta con el que anuncia su propio botón en la herramienta («2289 TCU · 21 NCU»), las diez.
+
 > El inventario **no** sale de `tools/tcu-toolbox/plantas/*.json`: ese fichero solo lleva las NCU que alguien declaró para la herramienta de campo, y estaba corto — en San José faltaban 5 de las 21 (1686 TCU en vez de 2289) y no aparecían Páramo, Benante, Panbianco ni El Polvorín. El plano del SCADA es el mismo que pinta la capa de telemetría, así que lo que sale aquí es lo que se va a pollear de verdad.
 
 Tres cosas que se leen en esa tabla:

@@ -67,6 +67,10 @@ def cargar_flota(_ignorado=None):
     que `tools/sync_plantas.mjs` mantiene iguales a las del siting. Cada TCU
     declara su NCU y su gateway, así que el reparto es el real.
 
+    Para San José manda el plano —2289 TCU— y no el `config_tcu_sunner_sanjose.csv`,
+    que lista 2186 configurados (decidido con el mantenedor el 2026-08-20): lo que
+    cuenta para tráfico es lo que el colector va a pollear.
+
     Antes esto leía `tools/tcu-toolbox/plantas/*.json` y estaba MAL: ese fichero
     solo lleva las NCU que alguien declaró para la herramienta de campo. En San
     José faltaban 5 de las 21 (1686 TCU en vez de 2289) y no estaban ni Páramo,
