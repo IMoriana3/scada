@@ -99,4 +99,62 @@ foreach ($padre in ($porPadre.Keys | Sort-Object)) {
 }
 if ($solapes.Count -eq 0) { Write-Output 'SIN SOLAPES al agrandar la ventana' }
 else { $solapes | ForEach-Object { Write-Output "SOLAPE  $_" } }
+
+# ---------------------------------------------------------------------------
+#  DESBORDES: lo que cae fuera de la ventana en su tamano MINIMO
+# ---------------------------------------------------------------------------
+# La auditoria de arriba comprueba que nada se monte encima de nada al AGRANDAR
+# la ventana. No comprobaba lo contrario, y es el hueco por el que se colo un
+# defecto real (v11.55): cinco campos de la pestana SAT se colocaron de x=892 a
+# x=1222 y la pestana tiene ~919 px utiles.
+#
+# Lo que le pasa a un control que se sale NO es desaparecer: Layout-Rescatar lo
+# MUEVE al borde de su contenedor al arrancar. Asi que esos cinco campos no
+# habrian estado invisibles -eso se dijo mal en el PR #201-, habrian aparecido
+# amontonados contra el borde derecho, unos encima de otros y encima de la fila
+# del cronometro. Peor, no mejor: un control invisible se echa en falta; uno
+# que aparece donde no toca se rellena creyendo que es otro.
+#
+# Y no es estetica. Esos cinco campos existen para no dar por supuesto el
+# criterio de una planta (si abandera cara al sol o cara al viento, el limite
+# de mediodia, el lado de la suelta pasiva); fuera de sitio, daban por supuesto
+# el criterio de una planta. Un control que no esta donde se le puso es un
+# default silencioso con otro disfraz.
+#
+# La ventana no se puede encoger por debajo de su MinimumSize, asi que este
+# tamano es el PEOR CASO real y la comprobacion es exacta, no una estimacion.
+#
+# El tamano sale de $pnlCuerpo, que es lo que de verdad recorta: el TabControl
+# se sale de su panel A PROPOSITO -Nav-OcultarCabecera le pone Top = -hCab y le
+# suma esa misma altura- para dejar la fila de solapas fuera y que el panel se
+# la coma. O sea que la fila de solapas NO le quita alto a la pestana: restarla
+# daba 368 px y la pestana tiene ~394, y con esa cuenta salian diez controles
+# marcados que caben de sobra. Lo unico que se descuenta es el borde interior.
+$m = [regex]::Match($src, '\$pnlCuerpo\.Size\s*=\s*New-Object System\.Drawing\.Size\((\d+),\s*(\d+)\)')
+if (-not $m.Success) { Write-Output 'NO SE ENCUENTRA $pnlCuerpo.Size'; exit 1 }
+$MARGEN = 6                              # borde interior de una pestana
+$ANCHO_UTIL = [int]$m.Groups[1].Value - $MARGEN
+$ALTO_UTIL  = [int]$m.Groups[2].Value - $MARGEN
+
+$desbordes = @()
+foreach ($k in ($ctrl.Keys | Sort-Object)) {
+    $g = $ctrl[$k]
+    if (-not $g.padre -or $g.oculto) { continue }
+    if ($g.padre -notmatch '^tab') { continue }       # solo pestanas
+    if ($g.ancho -le 0 -and $g.alto -le 0) { continue }
+    $der = $g.left + $g.ancho
+    $aba = $g.top + $g.alto
+    if ($der -gt $ANCHO_UTIL) {
+        $desbordes += ("{0} : {1} llega a x={2} y la pestana tiene {3} px utiles ({4} px fuera)" -f
+                       $g.padre, $k, $der, $ANCHO_UTIL, ($der - $ANCHO_UTIL))
+    }
+    if ($aba -gt $ALTO_UTIL) {
+        $desbordes += ("{0} : {1} llega a y={2} y la pestana tiene {3} px utiles ({4} px fuera)" -f
+                       $g.padre, $k, $aba, $ALTO_UTIL, ($aba - $ALTO_UTIL))
+    }
+}
+if ($desbordes.Count -eq 0) { Write-Output 'SIN DESBORDES en la ventana minima' }
+else { $desbordes | ForEach-Object { Write-Output "DESBORDE  $_" } }
+
 Write-Output "controles analizados: $($ctrl.Count)"
+if ($solapes.Count -gt 0 -or $desbordes.Count -gt 0) { exit 1 }
