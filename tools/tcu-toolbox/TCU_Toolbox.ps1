@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.55'
+$VERSION_TOOLBOX = '11.56'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -3748,7 +3748,7 @@ $lvG.View = 'Details'; $lvG.FullRowSelect = $true; $lvG.GridLines = $true
 # gateway cuelga cada TCU importa aunque en modo via NCU todo se lea por el 502:
 # el equipo sigue estando en su GW y hay que saberlo para el updater y para
 # saber a que red Zigbee pertenece.
-[void]$lvG.Columns.Add('NCU', 45)
+[void]$lvG.Columns.Add('NCU', 58)
 [void]$lvG.Columns.Add('GW', 48)
 [void]$lvG.Columns.Add('TCU', 45)
 [void]$lvG.Columns.Add('Salud', 65)
@@ -3758,7 +3758,7 @@ $lvG.View = 'Details'; $lvG.FullRowSelect = $true; $lvG.GridLines = $true
 [void]$lvG.Columns.Add('Dif', 46)
 [void]$lvG.Columns.Add('SoC', 46)
 [void]$lvG.Columns.Add('Edad s', 60)
-[void]$lvG.Columns.Add('Alarmas / notas', 342)
+[void]$lvG.Columns.Add('Alarmas / notas', 329)
 $tabG.Controls.Add($lvG)
 
 # ============================ TAB AUDITORIA ============================
@@ -5137,9 +5137,19 @@ function Cab-Vigentes($cache, $textos) {
 }
 
 # Vuelve a coger la lista completa si la tabla se ha repintado desde fuera.
+#
+# Detectarlo por la CUENTA de filas no basta: dos repintados distintos pueden
+# dejar el mismo numero. Pasaba en el diagnostico, que tiene DOS filtros sobre
+# la misma tabla -el de nivel del arbol, que repinta desde $script:UltimoDiag, y
+# el de columna, que repinta desde su propia copia-: si la vista nueva tenia
+# tantas filas como dejo la anterior, el filtro de columna se creia vigente y al
+# pulsar una cabecera resucitaba las filas VIEJAS, que ya no estaban en la
+# tabla. Asi que ademas de la cuenta se mira si la primera fila a la vista es
+# una de las que guardamos: si no lo es, esto lo ha pintado otro.
 function Lv-Sincronizar($lv) {
     $e = Lv-Estado $lv
-    if ($e.dejadas -eq $lv.Items.Count) { return }
+    $mismas = ($lv.Items.Count -eq 0) -or (@($e.orig) -contains $lv.Items[0])
+    if ($e.dejadas -eq $lv.Items.Count -and $mismas) { return }
     $e.filtros = @{}
     $e.orig = @($lv.Items)
     $e.dejadas = $lv.Items.Count
@@ -5170,6 +5180,18 @@ function Lv-Aplicar($lv) {
     if ($e.filtros.Count -gt 0) {
         Con ("Filtro en la tabla: {0} de {1} filas a la vista. Pulsa la cabecera para quitarlo." -f $vis.Count, @($e.orig).Count) ([System.Drawing.Color]::SteelBlue)
     }
+}
+
+# Quien repinta una tabla desde fuera lo dice aqui: el filtro de columna que
+# hubiera puesto ya no aplica -sus filas son de la lista anterior- y el
+# asterisco de la cabecera se queda mintiendo hasta que alguien la pulse.
+function Lv-Reiniciar($lv) {
+    if ($null -eq $lv) { return }
+    $e = Lv-Estado $lv
+    $e.filtros = @{}
+    $e.orig = @($lv.Items)
+    $e.dejadas = $lv.Items.Count
+    for ($i = 0; $i -lt $lv.Columns.Count -and $i -lt @($e.cab).Count; $i++) { $lv.Columns[$i].Text = $e.cab[$i] + [char]0x25BE }
 }
 
 function Lv-Ordenar($lv, [int]$col, [bool]$asc) {
@@ -8168,12 +8190,90 @@ function Diag-Refrescar {
         $n++
     }
     $lvG.EndUpdate()
+    # esta tabla tiene DOS filtros: el de nivel/NCU/salud, que repinta desde
+    # $script:UltimoDiag, y el de columna, que trabaja sobre su propia copia.
+    # Al repintar aqui, el de columna deja de valer y hay que decirlo.
+    Lv-Reiniciar $lvG
     $tot = @($script:UltimoDiag).Count
     if ($niv -eq 'todo' -and $fNcu -eq 'NCU - todas' -and $sal.Count -eq 0) { $lblGVer.Text = "$tot filas" }
     else { $lblGVer.Text = "$n de $tot filas  ($(Diag-NivelNombre $niv) / $fNcu / $(if ($sal.Count) { $sal -join '+' } else { 'todas' })) - el CSV/JSON exporta siempre todo" }
 }
 
-$btnDiag.Add_Click({ Lanzar { $script:UltimoEsComm = $false; Diag-Correr } })
+# Diagnostico SOLO de las estaciones meteo. Las HSUs viven en un bloque aparte
+# de la NCU (30200+, diez huecos): UNA lectura por NCU. Diagnosticar las diez de
+# Ayora son 16 lecturas y unos segundos.
+#
+# Entrar por la hoja HSU y que barriera las 751 TCUs para luego enseñar diez
+# filas era pagar minutos por un dato que estaba a mano. Las TCUs y los
+# repetidores siguen saliendo del barrido general, que es donde tiene sentido
+# que salgan: ahi cada equipo hay que preguntarselo uno a uno.
+#
+# NO tira el diagnostico anterior: sustituye sus filas de HSU y deja las de TCU
+# como estaban. Perder un barrido de planta de 782 filas por pulsar aqui seria
+# un mal negocio.
+function Diag-SoloHsus {
+    $cx = Params-Conexion
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
+    if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
+    Ctx-Guardar 'diagnostico' $cx $trabajos
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Diagnostico de HSUs: $($trabajos.Count) NCU(s), una lectura por NCU (bloque 30200, sin Zigbee). No se leen las TCUs." ([System.Drawing.Color]::SteelBlue)
+    Prog-Iniciar $trabajos.Count
+    $filas = @(); $nMudas = 0
+    foreach ($tr in $trabajos) {
+        if (Chequear-Cancelado) { break }
+        $script:NcuLog = "$($tr.ncu)"
+        $hs = $null
+        try { Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to; $hs = @(Ncu-HsuCompat) }
+        catch { $nMudas++; Con ("NCU{0,-3} {1,-15} sin respuesta: {2}" -f $tr.ncu, $tr.ip, $_) ([System.Drawing.Color]::Salmon) }
+        finally { Modbus-Cerrar }
+        foreach ($h in @($hs)) { $h.NCU = "$($tr.ncu)"; $filas += $h }
+        Prog-Paso
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    $script:NcuLog = ''
+    # lo declarado y no leido, solo de HSUs: la que nunca ha comunicado tiene
+    # que seguir viendose, aqui igual que en el barrido completo
+    try {
+        $decl = @(@(Flota-EnAlcance (Flota-Declarada $cx) $trabajos) | Where-Object { "$($_.Tipo)" -eq 'HSU' })
+        if ($decl.Count -gt 0) { $filas = @(Diag-Completar $filas $decl) }
+    } catch { Con "AVISO: no se pudo completar la lista de estaciones ($_)" ([System.Drawing.Color]::Orange) }
+    # y lo mismo que dice el barrido completo sobre los HSU Id: es aqui, en la
+    # hoja de las estaciones, donde mas sentido tiene decirlo
+    try {
+        $decPorNcu = @{}
+        foreach ($n in @($cx.multi)) { $decPorNcu["$($n.ncu)"] = @($n.rsuLista) }
+        if (-not $cx.multi) { $decPorNcu["$(Ncu-DeNombre $cx.nombre)"] = @($cx.rsuLista) }
+        foreach ($linea in @(Hsu-QueFaltaEnTopologia $cx)) { Con $linea ([System.Drawing.Color]::Orange) }
+        foreach ($linea in @(Hsu-IdsAvisos (Hsu-IdsLeidos $filas) $decPorNcu)) { Con $linea ([System.Drawing.Color]::Orange) }
+    } catch { }
+    # sustituye las HSU del ultimo diagnostico y respeta lo demas
+    $otras = @(@($script:UltimoDiag) | Where-Object { (Fila-Tipo $_) -ne 'HSU' })
+    $script:UltimoDiag = @($otras + $filas)
+    if ($otras.Count -gt 0) {
+        Con "Las $($otras.Count) filas de NCU, TCU y repetidor son del barrido anterior: aqui solo se han releido las estaciones." ([System.Drawing.Color]::Gainsboro)
+    }
+    $nOk = @($filas | Where-Object { "$($_.Salud)" -eq 'OK' }).Count
+    $lblGResumen.Text = "HSUs -> $($filas.Count) ($nOk OK)"
+    Con ("Estaciones: {0} en total, {1} OK, {2} con algo que mirar." -f $filas.Count, $nOk, ($filas.Count - $nOk)) ([System.Drawing.Color]::SteelBlue)
+    # el desplegable de NCU se rellena desde las filas que hay: sin esto, entrar
+    # por la hoja HSU sin barrido previo dejaba el filtro vacio
+    $selV = $cbGVerNcu.SelectedItem
+    $cbGVerNcu.Items.Clear()
+    [void]$cbGVerNcu.Items.Add('NCU - todas')
+    foreach ($nv in @($script:UltimoDiag | ForEach-Object { "$($_.NCU)" } | Where-Object { $_ } | Sort-Object {[int]$_} -Unique)) { [void]$cbGVerNcu.Items.Add("NCU$nv") }
+    if ($selV -and $cbGVerNcu.Items.Contains($selV)) { $cbGVerNcu.SelectedItem = $selV } else { $cbGVerNcu.SelectedIndex = 0 }
+    Marcar-Bloque 'diag'
+    [void](Trabajo-Guardar 'diag' $script:UltimoDiag "HSUs $($filas.Count) ($nOk OK)")
+}
+
+$btnDiag.Add_Click({ Lanzar {
+    $script:UltimoEsComm = $false
+    # Estando en la vista de HSUs, DIAGNOSTICAR diagnostica HSUs. Lo otro era
+    # barrer la planta entera para enseñar diez filas.
+    if ("$($script:DiagNivel)" -eq 'HSU') { Diag-SoloHsus; Diag-Refrescar; return }
+    Diag-Correr
+} })
 
 # TEST COMM: quien habla y quien no, en segundos. Solo lastComm via NCU
 # (2 regs por TCU) + la salud de cada NCU: ni bloque compacto ni Zigbee.

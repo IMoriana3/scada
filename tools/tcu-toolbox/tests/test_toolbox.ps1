@@ -1270,6 +1270,39 @@ Check 'menu: y hay una salida explicita' ($menu.Contains("Items.Add('Cerrar')"))
 Check 'menu: la casilla aplica al vuelo' ($menu.Contains('$it.Add_Click({ & $aplicar }')) $true
 Check 'menu: ya no se aplica al cerrar' ($menu.Contains('Add_Closed')) $false
 Check 'menu: marcar todos' ($menu.Contains("Items.Add('Marcar todos')")) $true
+
+# ---------- dos filtros sobre la misma tabla ----------
+# El diagnostico tiene el de nivel (el arbol, repinta desde $script:UltimoDiag)
+# y el de columna (repinta desde su propia copia). Detectar el repintado ajeno
+# por la CUENTA de filas fallaba cuando la vista nueva tenia tantas como dejo la
+# anterior: el filtro de columna se creia vigente y resucitaba las filas viejas.
+function LvFalso($filas) {
+    return [pscustomobject]@{
+        Items = @($filas)
+        Columns = @([pscustomobject]@{Text='NCU'}, [pscustomobject]@{Text='TCU'})
+        Tag = $null
+    }
+}
+$lvF = LvFalso @('a','b','c')
+Lv-Sincronizar $lvF
+Check 'dos filtros: la primera vez coge la lista entera' (@($lvF.Tag.orig) -join ',') 'a,b,c'
+# el filtro de columna deja 2 de 3: eso NO es un repintado ajeno
+$lvF.Items = @('a','c'); $lvF.Tag.dejadas = 2
+Lv-Sincronizar $lvF
+Check 'dos filtros: filtrar no tira la copia' (@($lvF.Tag.orig) -join ',') 'a,b,c'
+# y ahora repinta el filtro de nivel, dejando OTRAS dos filas
+$lvF.Items = @('x','y')
+Lv-Sincronizar $lvF
+Check 'dos filtros: mismo numero de filas pero otras' (@($lvF.Tag.orig) -join ',') 'x,y'
+Check 'dos filtros: y se olvidan los filtros de columna' $lvF.Tag.filtros.Count 0
+# quien repinta lo dice, para que el asterisco de la cabecera no mienta
+$lvF2 = LvFalso @('a','b'); Lv-Sincronizar $lvF2
+$lvF2.Tag.filtros = @{'0'=@('a')}
+$lvF2.Items = @('p','q'); Lv-Reiniciar $lvF2
+Check 'dos filtros: al repintar se limpia el filtro' $lvF2.Tag.filtros.Count 0
+Check 'dos filtros: y la copia es la nueva' (@($lvF2.Tag.orig) -join ',') 'p,q'
+Check 'dos filtros: la cabecera se queda sin asterisco' ($lvF2.Columns[0].Text.Contains('*')) $false
+Check 'dos filtros: el diagnostico lo declara al repintar' ($src.Contains('Lv-Reiniciar $lvG')) $true
 Check 'menu: desmarcar todos' ($menu.Contains("Items.Add('Desmarcar todos')")) $true
 
 Write-Host ''
@@ -3375,6 +3408,44 @@ $filasNiv = @(
 Check 'diag: la NCU es NCU' (Fila-Tipo $filasNiv[0]) 'NCU'
 Check 'diag: la RSU cuenta como HSU' (Fila-Tipo $filasNiv[2]) 'HSU'
 Check 'diag: un repetidor no es una TCU' (Fila-Tipo $filasNiv[4]) 'REP'
+
+Write-Host ''
+Write-Host '== HSU: DIAGNOSTICAR es un barrido corto, no la planta entera =='
+# En la hoja de estaciones, DIAGNOSTICAR barria las 751 TCUs de Ayora para
+# acabar enseñando diez filas. Las HSUs viven en la cache de la NCU (30200): una
+# lectura por NCU y listo.
+Check 'hsu corto: existe el barrido propio' ($src.Contains('function Diag-SoloHsus')) $true
+Check 'hsu corto: el boton entra por ahi estando en la hoja HSU' ($src.Contains("if (`"`$(`$script:DiagNivel)`" -eq 'HSU') { Diag-SoloHsus; Diag-Refrescar; return }")) $true
+$blqHsuC = $src.Substring($src.IndexOf('function Diag-SoloHsus'), $src.IndexOf('$btnDiag.Add_Click') - $src.IndexOf('function Diag-SoloHsus'))
+Check 'hsu corto: lee el bloque de estaciones' ($blqHsuC.Contains('Ncu-HsuCompat')) $true
+# lo que NO hace: preguntar a los seguidores, ni uno a uno ni por bloque compacto
+foreach ($f in @('Ncu-DiagCompat', 'Diag-LeerTcu', 'Rep-EsclavosBarrido', 'Ncu-Salud')) {
+    Check "hsu corto: no llama a $f" ($blqHsuC.Contains($f)) $false
+}
+Check 'hsu corto: una lectura por NCU, no por TCU' ($blqHsuC.Contains('Prog-Iniciar $trabajos.Count')) $true
+# y no tira el barrido de planta anterior: sustituye SUS filas y respeta el resto
+Check 'hsu corto: conserva lo que no es HSU' ($blqHsuC.Contains("(Fila-Tipo `$_) -ne 'HSU'")) $true
+Check 'hsu corto: y avisa de que esas filas son de antes' ($blqHsuC.Contains('son del barrido anterior')) $true
+# la HSU declarada que nunca ha comunicado tiene que seguir saliendo
+Check 'hsu corto: completa lo declarado y no leido' ($blqHsuC.Contains('Flota-EnAlcance')) $true
+Check 'hsu corto: solo estaciones, no la flota entera' ($blqHsuC.Contains("`"`$(`$_.Tipo)`" -eq 'HSU'")) $true
+# eso mismo, ejecutado: una NCU con dos HSUs declaradas de la que solo contesta una
+$declHsu = @(
+  [pscustomobject]@{NCU='15'; TCU='HSU8'; Tipo='HSU'}, [pscustomobject]@{NCU='15'; TCU='HSU9'; Tipo='HSU'}
+  [pscustomobject]@{NCU='15'; TCU=3; Tipo='TCU'}, [pscustomobject]@{NCU='4'; TCU='HSU1'; Tipo='HSU'}
+)
+$trabHsu = @(@{ncu='15'; tcus=@(3)})
+$soloHsu = @(@(Flota-EnAlcance $declHsu $trabHsu) | Where-Object { "$($_.Tipo)" -eq 'HSU' })
+Check 'hsu corto: de otra NCU no se opina' (@($soloHsu | Where-Object { $_.NCU -eq '4' }).Count) 0
+Check 'hsu corto: ni de las TCUs' (@($soloHsu | Where-Object { "$($_.Tipo)" -eq 'TCU' }).Count) 0
+Check 'hsu corto: quedan las dos estaciones de esa NCU' $soloHsu.Count 2
+$leidaHsu = @([pscustomobject]@{NCU='15'; TCU='HSU8'; Salud='OK'; Alarmas=''})
+$compHsu = @(Diag-Completar $leidaHsu $soloHsu)
+Check 'hsu corto: la que nunca ha comunicado sigue en la tabla' $compHsu.Count 2
+Check 'hsu corto: y va como SIN LECTURA' ("$($compHsu[1].Salud)") 'SIN LECTURA'
+# la columna NCU tenia 45 px y el encabezado salia "NC...": con diez HSUs de
+# diez NCUs distintas, saber de cual es cada una es justo el dato
+Check 'hsu corto: la columna NCU se lee entera' ($src.Contains("[void]`$lvG.Columns.Add('NCU', 58)")) $true
 
 Write-Host ''
 Write-Host '== de que se alimenta una TCU =='

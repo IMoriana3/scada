@@ -106,6 +106,47 @@ la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
 una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
 sitio.
 
+**En la hoja de HSUs, DIAGNOSTICAR barre solo HSUs (v11.56)** — entrar por
+*Diagnóstico → HSU* y pulsar DIAGNOSTICAR barría **la planta entera** —las 751
+TCUs de Ayora, minutos— para acabar enseñando diez filas. El resultado estaba
+bien; el camino no.
+
+Las estaciones viven en un bloque aparte que la NCU cachea (30200+, diez
+huecos), así que sacarlas cuesta **una lectura por NCU**: las diez de Ayora son
+16 lecturas y unos segundos. Es el mismo trato que ya tenían los repetidores.
+
+Lo que no se toca:
+
+- **no tira el barrido anterior.** Sustituye las filas de HSU y deja como
+  estaban las de NCU, TCU y repetidor — perder un barrido de 782 filas por
+  pulsar aquí sería mal negocio —, y lo dice en la consola para que nadie lea
+  esas filas como recién medidas;
+- **la estación declarada que nunca ha comunicado sigue saliendo**, como
+  `SIN LECTURA`, igual que en el barrido completo;
+- **los avisos de HSU Id** (lo que falta en la topología, lo leído contra lo
+  declarado) salen aquí también, que es donde más sentido tienen.
+
+El barrido completo sigue en *GLOBAL → Diagnóstico de planta*, con sus vistas
+por nivel intactas.
+
+**Los dos filtros de la tabla ya se conocen (v11.56)** — el diagnóstico tiene
+**dos** filtros sobre la misma tabla: el de **nivel/NCU/salud**, que repinta
+desde el último resultado, y el de **columna** (pulsar la cabecera), que trabaja
+sobre su propia copia. Que la tabla la hubiera repintado el otro se detectaba
+**contando filas**, y dos vistas distintas pueden tener las mismas: entonces el
+filtro de columna se creía vigente y al pulsar una cabecera **resucitaba las
+filas de la vista anterior**, que ya no estaban en la tabla.
+
+Ahora se mira también si la primera fila a la vista es una de las que se
+guardaron: si no lo es, esto lo ha pintado otro. Y al cambiar de nivel, el
+filtro de columna se limpia de verdad — antes el asterisco de la cabecera se
+quedaba puesto diciendo que filtraba algo que ya no filtraba.
+
+De paso, la columna **NCU** de la tabla pasa de 45 a 58 px: el encabezado salía
+`NC…` y con diez HSUs de diez NCUs distintas, saber de cuál es cada una es justo
+el dato. El número estaba ahí desde siempre; lo que no había era sitio para el
+título.
+
 **Lo que le falta a la topología de cada planta, dicho antes de tropezarse
 (v11.55)** — Ayora es la única planta con los datos de sus estaciones. Las
 demás declaran que las tienen pero no con qué esclavo:
