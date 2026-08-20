@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.55'
+$VERSION_TOOLBOX = '11.58'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -881,6 +881,49 @@ function Hsu-Resolver($objs, [int]$unit, [string]$ncu) {
                  error=("el esclavo $unit existe en $($c.Count) NCUs (" + ($ncus -join ', ') + "): cada NCU tiene su propia Zigbee y el numero se repite. Pon la NCU en el cuadro de al lado para decir cual")}
     }
     return @{obj=$c[0]; candidatos=$c; error=''}
+}
+
+# Lo que le falta a la topologia de esta planta para poder trabajar con sus
+# estaciones sin escanear nada. Son dos datos distintos y se consiguen de forma
+# distinta, asi que se dicen por separado:
+#
+#   - hsu_esclavos: la direccion Modbus. NO se puede aprender leyendo: el bloque
+#     que la NCU cachea (30200+) trae ProductId, estado, alarmas, viento y
+#     nieve, pero no el esclavo. Sale de BUSCAR ESCLAVO o de la pagina web de
+#     la NCU.
+#   - rsu: el HSU Id, el hueco de la cache. Ese si lo aprende solo el
+#     diagnostico, porque el hueco ES el numero.
+#
+# Sin lo primero, ninguna lectura de HSU funciona con Planta completa. Y hasta
+# ahora eso no se sabia hasta tropezarse: la planta decia "tengo 9 estaciones"
+# y al ir a leerlas mandaba a escanear sin explicar por que. Pura.
+function Hsu-QueFaltaEnTopologia($cx) {
+    $sinEsclavo = @(); $sinRsu = @()
+    $ncus = @()
+    if ($cx.multi) { $ncus = @($cx.multi) }
+    elseif ($cx) { $ncus = @(@{ncu=''; hsus=$cx.hsus; hsuLista=@($cx.hsuLista); rsuLista=@($cx.rsuLista)}) }
+    foreach ($n in $ncus) {
+        $decl = [int]("0" + "$($n.hsus)")
+        $esc = @(@(Lista $n.hsuLista) | Where-Object { "$_" -match '^\d+$' })
+        $rsu = @(@(Lista $n.rsuLista) | Where-Object { "$_" -match '^\d+$' })
+        # una NCU que no declara estaciones no tiene nada que completar
+        if ($decl -le 0 -and $esc.Count -eq 0) { continue }
+        $cuantas = [Math]::Max($decl, $esc.Count)
+        if ($esc.Count -lt $cuantas) { $sinEsclavo += "$($n.ncu)" }
+        elseif ($rsu.Count -lt $cuantas) { $sinRsu += "$($n.ncu)" }
+    }
+    $av = @()
+    if ($sinEsclavo.Count -gt 0) {
+        $av += ("La topologia declara HSUs en $($sinEsclavo.Count) NCU(s) pero no dice con que esclavo (NCU " +
+                (($sinEsclavo | Sort-Object { [int]("0" + $_) }) -join ', ') +
+                "). Sin eso no se pueden leer con Planta completa: usalas con BUSCAR ESCLAVO (rango 225-235) y guarda lo que encuentre, o mira el Modbus Id en la pagina de cada NCU.")
+    }
+    if ($sinRsu.Count -gt 0) {
+        $av += ("Falta el HSU Id en $($sinRsu.Count) NCU(s) (NCU " +
+                (($sinRsu | Sort-Object { [int]("0" + $_) }) -join ', ') +
+                "). Ese lo aprende solo un diagnostico: las tablas las llamaran por su nombre en cuanto lo corras.")
+    }
+    return $av
 }
 
 function Hsu-ObjetivosDeTopologia($cx) {
@@ -3905,7 +3948,7 @@ $lvG.View = 'Details'; $lvG.FullRowSelect = $true; $lvG.GridLines = $true
 # gateway cuelga cada TCU importa aunque en modo via NCU todo se lea por el 502:
 # el equipo sigue estando en su GW y hay que saberlo para el updater y para
 # saber a que red Zigbee pertenece.
-[void]$lvG.Columns.Add('NCU', 45)
+[void]$lvG.Columns.Add('NCU', 58)
 [void]$lvG.Columns.Add('GW', 48)
 [void]$lvG.Columns.Add('TCU', 45)
 [void]$lvG.Columns.Add('Salud', 65)
@@ -3915,7 +3958,7 @@ $lvG.View = 'Details'; $lvG.FullRowSelect = $true; $lvG.GridLines = $true
 [void]$lvG.Columns.Add('Dif', 46)
 [void]$lvG.Columns.Add('SoC', 46)
 [void]$lvG.Columns.Add('Edad s', 60)
-[void]$lvG.Columns.Add('Alarmas / notas', 342)
+[void]$lvG.Columns.Add('Alarmas / notas', 329)
 $tabG.Controls.Add($lvG)
 
 # ============================ TAB AUDITORIA ============================
@@ -4842,7 +4885,16 @@ $btnHEsclavo.Location = New-Object System.Drawing.Point(443, 80)
 $btnHEsclavo.Size = New-Object System.Drawing.Size(130, 26)
 $tabH.Controls.Add($btnHEsclavo)
 
-$lblHSel = LG $tabH 'Escanea la planta para listar sus HSUs y de que NCU cuelga cada una.' 581 327 85
+# Rango del barrido. Antes iba del 1 al 247 SIEMPRE: 247 consultas por gateway,
+# y cada esclavo que no existe cuesta lo que tarde la NCU en rendirse con el
+# Zigbee. Las estaciones estan siempre por el 230 y los repetidores por el 200,
+# asi que con once numeros se encuentra lo que se busca en un minuto.
+[void](LG $tabH 'esclavos' 581 56 84)
+$txtHEscIni = TG $tabH '225' 641 82 40
+[void](LG $tabH 'a' 687 12 84)
+$txtHEscFin = TG $tabH '235' 703 82 40
+
+$lblHSel = LG $tabH 'barre 1 NCU' 749 159 84
 $lblHSel.ForeColor = [System.Drawing.Color]::Gray
 
 $lvH = New-Object System.Windows.Forms.ListView
@@ -5319,9 +5371,19 @@ function Cab-Vigentes($cache, $textos) {
 }
 
 # Vuelve a coger la lista completa si la tabla se ha repintado desde fuera.
+#
+# Detectarlo por la CUENTA de filas no basta: dos repintados distintos pueden
+# dejar el mismo numero. Pasaba en el diagnostico, que tiene DOS filtros sobre
+# la misma tabla -el de nivel del arbol, que repinta desde $script:UltimoDiag, y
+# el de columna, que repinta desde su propia copia-: si la vista nueva tenia
+# tantas filas como dejo la anterior, el filtro de columna se creia vigente y al
+# pulsar una cabecera resucitaba las filas VIEJAS, que ya no estaban en la
+# tabla. Asi que ademas de la cuenta se mira si la primera fila a la vista es
+# una de las que guardamos: si no lo es, esto lo ha pintado otro.
 function Lv-Sincronizar($lv) {
     $e = Lv-Estado $lv
-    if ($e.dejadas -eq $lv.Items.Count) { return }
+    $mismas = ($lv.Items.Count -eq 0) -or (@($e.orig) -contains $lv.Items[0])
+    if ($e.dejadas -eq $lv.Items.Count -and $mismas) { return }
     $e.filtros = @{}
     $e.orig = @($lv.Items)
     $e.dejadas = $lv.Items.Count
@@ -5352,6 +5414,35 @@ function Lv-Aplicar($lv) {
     if ($e.filtros.Count -gt 0) {
         Con ("Filtro en la tabla: {0} de {1} filas a la vista. Pulsa la cabecera para quitarlo." -f $vis.Count, @($e.orig).Count) ([System.Drawing.Color]::SteelBlue)
     }
+}
+
+# Quien repinta una tabla desde fuera lo dice aqui: el filtro de columna que
+# hubiera puesto ya no aplica -sus filas son de la lista anterior- y el
+# asterisco de la cabecera se queda mintiendo hasta que alguien la pulse.
+function Lv-Reiniciar($lv) {
+    if ($null -eq $lv) { return }
+    $e = Lv-Estado $lv
+    $e.filtros = @{}
+    $e.orig = @($lv.Items)
+    $e.dejadas = $lv.Items.Count
+    for ($i = 0; $i -lt $lv.Columns.Count -and $i -lt @($e.cab).Count; $i++) { $lv.Columns[$i].Text = $e.cab[$i] + [char]0x25BE }
+}
+
+# Rehace las columnas de una tabla que cambia de forma segun lo que se lea. La
+# de HSUs es Campo/Valor/Nota para una estacion y una fila por estacion para
+# nueve, y los filtros de columna van por NUMERO de columna: dejarlos puestos
+# es apuntar a una columna que ya no es la misma. $defs: @(@{t=titulo; w=ancho}).
+function Lv-Columnas($lv, $defs) {
+    if ($null -eq $lv) { return }
+    $lv.BeginUpdate()
+    $lv.Columns.Clear()
+    foreach ($d in @($defs)) { [void]$lv.Columns.Add("$($d.t)", [int]$d.w) }
+    $lv.EndUpdate()
+    $e = Lv-Estado $lv
+    $e.cab = @(@($defs) | ForEach-Object { "$($_.t)" })
+    $e.filtros = @{}
+    $e.orig = @()
+    $e.dejadas = -1
 }
 
 function Lv-Ordenar($lv, [int]$col, [bool]$asc) {
@@ -8260,6 +8351,11 @@ function Diag-Correr {
             $decPorNcu = @{}
             foreach ($n in @($cx.multi)) { $decPorNcu["$($n.ncu)"] = @($n.rsuLista) }
             if (-not $cx.multi) { $decPorNcu["$(Ncu-DeNombre $cx.nombre)"] = @($cx.rsuLista) }
+            # y lo que le falta a la topologia de ESTA planta, que hasta ahora
+            # no se sabia hasta ir a leer una HSU y que te mandara a escanear
+            foreach ($linea in @(Hsu-QueFaltaEnTopologia $cx)) {
+                Con $linea ([System.Drawing.Color]::Orange)
+            }
             foreach ($linea in @(Hsu-IdsAvisos (Hsu-IdsLeidos $script:UltimoDiag) $decPorNcu)) {
                 Con $linea ([System.Drawing.Color]::Orange)
             }
@@ -8345,12 +8441,90 @@ function Diag-Refrescar {
         $n++
     }
     $lvG.EndUpdate()
+    # esta tabla tiene DOS filtros: el de nivel/NCU/salud, que repinta desde
+    # $script:UltimoDiag, y el de columna, que trabaja sobre su propia copia.
+    # Al repintar aqui, el de columna deja de valer y hay que decirlo.
+    Lv-Reiniciar $lvG
     $tot = @($script:UltimoDiag).Count
     if ($niv -eq 'todo' -and $fNcu -eq 'NCU - todas' -and $sal.Count -eq 0) { $lblGVer.Text = "$tot filas" }
     else { $lblGVer.Text = "$n de $tot filas  ($(Diag-NivelNombre $niv) / $fNcu / $(if ($sal.Count) { $sal -join '+' } else { 'todas' })) - el CSV/JSON exporta siempre todo" }
 }
 
-$btnDiag.Add_Click({ Lanzar { $script:UltimoEsComm = $false; Diag-Correr } })
+# Diagnostico SOLO de las estaciones meteo. Las HSUs viven en un bloque aparte
+# de la NCU (30200+, diez huecos): UNA lectura por NCU. Diagnosticar las diez de
+# Ayora son 16 lecturas y unos segundos.
+#
+# Entrar por la hoja HSU y que barriera las 751 TCUs para luego enseñar diez
+# filas era pagar minutos por un dato que estaba a mano. Las TCUs y los
+# repetidores siguen saliendo del barrido general, que es donde tiene sentido
+# que salgan: ahi cada equipo hay que preguntarselo uno a uno.
+#
+# NO tira el diagnostico anterior: sustituye sus filas de HSU y deja las de TCU
+# como estaban. Perder un barrido de planta de 782 filas por pulsar aqui seria
+# un mal negocio.
+function Diag-SoloHsus {
+    $cx = Params-Conexion
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
+    if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
+    Ctx-Guardar 'diagnostico' $cx $trabajos
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Diagnostico de HSUs: $($trabajos.Count) NCU(s), una lectura por NCU (bloque 30200, sin Zigbee). No se leen las TCUs." ([System.Drawing.Color]::SteelBlue)
+    Prog-Iniciar $trabajos.Count
+    $filas = @(); $nMudas = 0
+    foreach ($tr in $trabajos) {
+        if (Chequear-Cancelado) { break }
+        $script:NcuLog = "$($tr.ncu)"
+        $hs = $null
+        try { Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to; $hs = @(Ncu-HsuCompat) }
+        catch { $nMudas++; Con ("NCU{0,-3} {1,-15} sin respuesta: {2}" -f $tr.ncu, $tr.ip, $_) ([System.Drawing.Color]::Salmon) }
+        finally { Modbus-Cerrar }
+        foreach ($h in @($hs)) { $h.NCU = "$($tr.ncu)"; $filas += $h }
+        Prog-Paso
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    $script:NcuLog = ''
+    # lo declarado y no leido, solo de HSUs: la que nunca ha comunicado tiene
+    # que seguir viendose, aqui igual que en el barrido completo
+    try {
+        $decl = @(@(Flota-EnAlcance (Flota-Declarada $cx) $trabajos) | Where-Object { "$($_.Tipo)" -eq 'HSU' })
+        if ($decl.Count -gt 0) { $filas = @(Diag-Completar $filas $decl) }
+    } catch { Con "AVISO: no se pudo completar la lista de estaciones ($_)" ([System.Drawing.Color]::Orange) }
+    # y lo mismo que dice el barrido completo sobre los HSU Id: es aqui, en la
+    # hoja de las estaciones, donde mas sentido tiene decirlo
+    try {
+        $decPorNcu = @{}
+        foreach ($n in @($cx.multi)) { $decPorNcu["$($n.ncu)"] = @($n.rsuLista) }
+        if (-not $cx.multi) { $decPorNcu["$(Ncu-DeNombre $cx.nombre)"] = @($cx.rsuLista) }
+        foreach ($linea in @(Hsu-QueFaltaEnTopologia $cx)) { Con $linea ([System.Drawing.Color]::Orange) }
+        foreach ($linea in @(Hsu-IdsAvisos (Hsu-IdsLeidos $filas) $decPorNcu)) { Con $linea ([System.Drawing.Color]::Orange) }
+    } catch { }
+    # sustituye las HSU del ultimo diagnostico y respeta lo demas
+    $otras = @(@($script:UltimoDiag) | Where-Object { (Fila-Tipo $_) -ne 'HSU' })
+    $script:UltimoDiag = @($otras + $filas)
+    if ($otras.Count -gt 0) {
+        Con "Las $($otras.Count) filas de NCU, TCU y repetidor son del barrido anterior: aqui solo se han releido las estaciones." ([System.Drawing.Color]::Gainsboro)
+    }
+    $nOk = @($filas | Where-Object { "$($_.Salud)" -eq 'OK' }).Count
+    $lblGResumen.Text = "HSUs -> $($filas.Count) ($nOk OK)"
+    Con ("Estaciones: {0} en total, {1} OK, {2} con algo que mirar." -f $filas.Count, $nOk, ($filas.Count - $nOk)) ([System.Drawing.Color]::SteelBlue)
+    # el desplegable de NCU se rellena desde las filas que hay: sin esto, entrar
+    # por la hoja HSU sin barrido previo dejaba el filtro vacio
+    $selV = $cbGVerNcu.SelectedItem
+    $cbGVerNcu.Items.Clear()
+    [void]$cbGVerNcu.Items.Add('NCU - todas')
+    foreach ($nv in @($script:UltimoDiag | ForEach-Object { "$($_.NCU)" } | Where-Object { $_ } | Sort-Object {[int]$_} -Unique)) { [void]$cbGVerNcu.Items.Add("NCU$nv") }
+    if ($selV -and $cbGVerNcu.Items.Contains($selV)) { $cbGVerNcu.SelectedItem = $selV } else { $cbGVerNcu.SelectedIndex = 0 }
+    Marcar-Bloque 'diag'
+    [void](Trabajo-Guardar 'diag' $script:UltimoDiag "HSUs $($filas.Count) ($nOk OK)")
+}
+
+$btnDiag.Add_Click({ Lanzar {
+    $script:UltimoEsComm = $false
+    # Estando en la vista de HSUs, DIAGNOSTICAR diagnostica HSUs. Lo otro era
+    # barrer la planta entera para enseñar diez filas.
+    if ("$($script:DiagNivel)" -eq 'HSU') { Diag-SoloHsus; Diag-Refrescar; return }
+    Diag-Correr
+} })
 
 # TEST COMM: quien habla y quien no, en segundos. Solo lastComm via NCU
 # (2 regs por TCU) + la salud de cada NCU: ni bloque compacto ni Zigbee.
@@ -10064,7 +10238,10 @@ $btnPComis.Add_Click({ Lanzar {
         # Planta completa: el estado de comisionado viaja en los bits 4:3 del
         # registro de estado que la NCU cachea (bloque compacto, puerto 502)
         # - toda la planta en segundos, sin rondas Zigbee
-        $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
+        # El cuadro de TCUs y el de GW valen aqui igual que en las demas
+        # acciones de esta pestana. Se ignoraban: escribias "1-72", pulsabas, y
+        # recorria el rango entero de cada NCU sin decir nada.
+        $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Comisionado') $txtPGw.Text)
         Ctx-Guardar 'pem' $cx $trabajos
         Con "Comisionado de Planta completa via NCU: $($trabajos.Count) NCUs (bloque compacto, sin Zigbee)" ([System.Drawing.Color]::SteelBlue)
         foreach ($tr in $trabajos) {
@@ -11174,6 +11351,9 @@ $btnHBuscar.Add_Click({ Lanzar {
         if ($m.Success) { $eti = $m.Groups[1].Value }
         $ncus += ,@{ncu=$eti; ip=$cx.ip; hsu=$(if ($p) { $p.hsu } else { $null }); gws=$cx.gws; hsus=$(if ($p) { [int]$p.hsus } else { 0 }); hsuLista=@($(if ($p) { $p.hsuLista } else { @() })); rsuLista=@($(if ($p) { $p.rsuLista } else { @() }))}
     }
+    # la lectura de varias estaciones deja la tabla en modo tabla; esto pinta
+    # con las tres columnas de siempre
+    Lv-Columnas $lvH $HSU_COLS_BASE
     $lvH.Items.Clear()
     $script:HsusPlanta = @()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
@@ -11256,12 +11436,16 @@ $btnHEsclavo.Add_Click({ Lanzar {
         $gws = @($(if ($pt -eq 'auto' -or -not $pt) { @(503, 504) } else { @([int]$pt) }))
     }
     $to = Val-Int $txtTo.Text 'Timeout' 500 60000
-    $lista = @(Esclavos-Barrido ([int]$txtHSlave.Text) 1 247)
+    $eIni = Val-Int $txtHEscIni.Text 'Esclavo inicial' 1 247
+    $eFin = Val-Int $txtHEscFin.Text 'Esclavo final' 1 247
+    if ($eFin -lt $eIni) { throw "el esclavo final ($eFin) no puede ser menor que el inicial ($eIni)" }
+    $lista = @(Esclavos-Barrido ([int]$txtHSlave.Text) $eIni $eFin)
     $tot = $lista.Count * @($gws).Count
     $r = [System.Windows.Forms.MessageBox]::Show(
-        "Buscar equipos en $ip, gateways $($gws -join ' y '), esclavos 1-247.`r`n`r`n$tot consultas. Cada esclavo que no existe cuesta lo que tarde la NCU en rendirse con el Zigbee, asi que esto puede irse a varios minutos.`r`n`r`nSe puede parar con CANCELAR en cualquier momento y lo encontrado se queda en la lista.`r`n`r`nContinuar?",
+        "Buscar equipos en $ip, gateways $($gws -join ' y '), esclavos $eIni-$eFin.`r`n`r`n$tot consultas. Cada esclavo que no existe cuesta lo que tarde la NCU en rendirse con el Zigbee, asi que esto puede irse a varios minutos.`r`n`r`nSe puede parar con CANCELAR en cualquier momento y lo encontrado se queda en la lista.`r`n`r`nContinuar?",
         'Buscar esclavo', 'YesNo', 'Warning')
     if ($r -ne 'Yes') { return }
+    Lv-Columnas $lvH $HSU_COLS_BASE
     $lvH.Items.Clear()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Barrido de esclavos en $ip$(if ($eti) { " ($eti)" }): gateways $($gws -join ', '), $tot consultas." ([System.Drawing.Color]::SteelBlue)
@@ -11551,7 +11735,99 @@ function Hsu-Recorrer($objs, $cx, [scriptblock]$leer, [scriptblock]$resumen) {
     return @{filas=$filas; oks=$oks}
 }
 
+# ---------- una fila por estacion, no una columna de 117 filas ----------
+# Cada lectura de HSU devuelve filas Campo/Valor/Nota, que es la forma correcta
+# cuando se lee UNA estacion. Con nueve, esa misma forma son 9 x 13 = 117 filas
+# y hay que hacer scroll para comparar dos numeros que deberian estar uno al
+# lado del otro. Los campos los pone la propia lectura, asi que esto vale igual
+# para METEO que para CONFIG: no hay una lista de campos escrita aqui.
+
+# Nombre corto para la cabecera. El nombre largo esta bien en una lista
+# vertical; de cabecera de columna no cabe.
+$HSU_COL_CORTA = @{
+    'Nivel de viento (0-7)'    = 'Nivel'
+    'Viento [m/s]'             = 'Viento m/s'
+    'Direccion viento [deg]'   = 'Dir deg'
+    'Nieve [m]'                = 'Nieve m'
+    'Lluvia [mm/h]'            = 'Lluvia'
+    'Temperatura ext [C]'      = 'T ext C'
+    'Humedad rel [%]'          = 'HR %'
+    'Irradiancia [W/m2]'       = 'Irrad W/m2'
+    'Alarmas (30002)'          = 'Alarmas'
+    'Bateria litio [mV]'       = 'Bat litio mV'
+    'T interna [C]'            = 'T int C'
+    'V bateria int [mV]'       = 'V bat mV'
+    'V panel/aliment [mV]'     = 'V panel mV'
+    'Esclavo Modbus (41002)'   = 'Esclavo'
+    'Sensores config. (41008)' = 'Sensores'
+    'Altura sensor nieve [cm]' = 'H nieve cm'
+    'Umbral viento ON [m/s]'   = 'ON m/s'
+    'Umbral viento OFF [m/s]'  = 'OFF m/s'
+    'Tiempo activacion [s]'    = 't ON s'
+    'Tiempo desactivacion [s]' = 't OFF s'
+}
+function Hsu-CampoCorto([string]$c) {
+    if ($HSU_COL_CORTA.ContainsKey("$c")) { return $HSU_COL_CORTA["$c"] }
+    return "$c"
+}
+
+# Ancho de columna a ojo por el nombre. Las de texto decodificado se llevan mas.
+function Hsu-AnchoCol([string]$nombre) {
+    if ("$nombre" -eq 'Alarmas' -or "$nombre" -eq 'Sensores') { return 160 }
+    return [math]::Max(58, 8 * "$nombre".Length + 14)
+}
+
+# Convierte lo leido en una tabla: @{cols; filas}. $objs manda en el ORDEN y en
+# quien sale, para que la estacion muda tenga su fila en su sitio en vez de
+# desaparecer. Pura: se prueba sin ventana.
+function Hsu-EsTexto([string]$campo) { return ("$campo" -like 'Alarmas*' -or "$campo" -like 'Sensores*') }
+
+function Hsu-Tabla($oks, $objs) {
+    $campos = @()
+    foreach ($o in @($oks)) {
+        $fs = @(@($o.datos.filas) | ForEach-Object { "$($_.Campo)" })
+        if ($fs.Count -gt $campos.Count) { $campos = $fs }
+    }
+    # las de texto decodificado al final: son las anchas, y en medio parten en
+    # dos la fila de numeros, que es lo que se mira de un vistazo
+    $campos = @(@($campos | Where-Object { -not (Hsu-EsTexto $_) }) + @($campos | Where-Object { Hsu-EsTexto $_ }))
+    $porEti = @{}
+    foreach ($o in @($oks)) { $porEti["$($o.obj.etiqueta)"] = $o.datos }
+    $filas = @()
+    foreach ($ob in @($objs)) {
+        $eti = "$($ob.etiqueta)"
+        $d = $porEti[$eti]
+        if ($null -eq $d) {
+            $vals = @(@($campos) | ForEach-Object { '' })
+            if ($vals.Count -gt 0) { $vals[0] = 'sin respuesta' }
+            $filas += ,@{eti=$eti; vals=@($vals); alarma=$true}
+            continue
+        }
+        $mapa = @{}
+        foreach ($f in @($d.filas)) { $mapa["$($f.Campo)"] = $f }
+        $vals = @()
+        foreach ($c in @($campos)) {
+            $f = $mapa["$c"]
+            if ($null -eq $f) { $vals += ''; continue }
+            # en alarmas y sensores el dato util es el texto decodificado de la
+            # nota, no el hexadecimal: "0x0000" no dice nada a pie de planta
+            if (Hsu-EsTexto $c) { $vals += "$($f.Nota)" }
+            else { $vals += "$($f.Valor)" }
+        }
+        # ojo: @($null).Count es 1, no 0. CONFIG no devuelve alarmas ni nivel, y
+        # sin filtrar los vacios todas sus filas salian en rojo.
+        $alarma = ((@(@($d.alarmas) | Where-Object { "$_" -ne '' }).Count -gt 0) -or ([int]"0$($d.nivel)" -gt 0))
+        $filas += ,@{eti=$eti; vals=@($vals); alarma=$alarma}
+    }
+    return @{campos=@($campos); cols=@(@($campos) | ForEach-Object { Hsu-CampoCorto $_ }); filas=@($filas)}
+}
+
+# Las tres columnas de siempre: BUSCAR HSUs, BUSCAR ESCLAVO y la lectura de una
+# sola estacion pintan con esta forma.
+$HSU_COLS_BASE = @(@{t='Campo'; w=240}, @{t='Valor'; w=160}, @{t='Nota'; w=480})
+
 function Hsu-Mostrar([array]$filas) {
+    Lv-Columnas $lvH $HSU_COLS_BASE
     $lvH.Items.Clear()
     foreach ($f in $filas) {
         $item = New-Object System.Windows.Forms.ListViewItem($f.Campo)
@@ -11559,6 +11835,31 @@ function Hsu-Mostrar([array]$filas) {
         if ($f.Nota -match 'ALARMA') { $item.ForeColor = [System.Drawing.Color]::Firebrick }
         $lvH.Items.Add($item) | Out-Null
     }
+    Lv-Reiniciar $lvH
+}
+
+function Hsu-MostrarTabla($t) {
+    $defs = @(@{t='HSU'; w=150})
+    foreach ($c in @($t.cols)) { $defs += ,@{t="$c"; w=(Hsu-AnchoCol $c)} }
+    Lv-Columnas $lvH $defs
+    $lvH.BeginUpdate()
+    $lvH.Items.Clear()
+    foreach ($f in @($t.filas)) {
+        $item = New-Object System.Windows.Forms.ListViewItem("$($f.eti)")
+        foreach ($v in @($f.vals)) { [void]$item.SubItems.Add("$v") }
+        if ($f.alarma) { $item.ForeColor = [System.Drawing.Color]::Firebrick }
+        $lvH.Items.Add($item) | Out-Null
+    }
+    $lvH.EndUpdate()
+    Lv-Reiniciar $lvH
+}
+
+# Con una estacion, la lista vertical de campos es la forma correcta; con
+# varias, la tabla. Lo decide lo mismo que ya decidia si poner cabeceras
+# "--- NCU5 - HSU3 ---": cuantas hay.
+function Hsu-Pintar($r, $objs) {
+    if (@($objs).Count -gt 1) { Hsu-MostrarTabla (Hsu-Tabla $r.oks $objs) }
+    else { Hsu-Mostrar $r.filas }
 }
 
 $btnHMeteo.Add_Click({ Lanzar {
@@ -11573,7 +11874,7 @@ $btnHMeteo.Add_Click({ Lanzar {
             Con "$($o.etiqueta): sin alarmas, nivel de viento 0." ([System.Drawing.Color]::LightGreen)
         }
     }
-    Hsu-Mostrar $r.filas
+    Hsu-Pintar $r $objs
     if (@($objs).Count -gt 1) {
         $conAlarma = @($r.oks | Where-Object { $_.datos.nivel -gt 0 -or $_.datos.alarmas.Count -gt 0 }).Count
         Con ("Resumen: {0} de {1} HSUs respondieron; {2} con alarma o viento." -f @($r.oks).Count, @($objs).Count, $conAlarma) ([System.Drawing.Color]::SteelBlue)
@@ -11585,7 +11886,7 @@ $btnHConfig.Add_Click({ Lanzar {
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Leyendo configuracion de $($objs.Count) HSU(s)." ([System.Drawing.Color]::SteelBlue)
     $r = Hsu-Recorrer $objs (Params-Conexion) { param($u) Hsu-LeerConfig $u } $null
-    Hsu-Mostrar $r.filas
+    Hsu-Pintar $r $objs
     if (@($r.oks).Count -eq 0) { return }
     # los cuadros de umbrales se cargan con la primera que conteste; si las
     # HSUs no llevan los mismos umbrales, se avisa en vez de disimularlo

@@ -736,6 +736,44 @@ Check 'hsus: viento de la primera' (@($rH.filas | Where-Object { "$($_.Campo)" -
 $rH1 = Hsu-Recorrer @($objsH[0]) $cxH { param($u) Hsu-LeerMeteo $u } $null
 Check 'hsu unica sin cabecera' (@($rH1.filas | Where-Object { "$($_.Campo)" -like '--- *' }).Count) 0
 
+# ---------- y con varias, en tabla: una fila por estacion ----------
+# Nueve HSUs x 13 campos son 117 filas en una sola columna, y para comparar el
+# viento de dos estaciones hay que hacer scroll. Los campos los pone la lectura,
+# asi que la misma tabla vale para METEO y para CONFIG.
+$tH = Hsu-Tabla $rH.oks $objsH
+Check 'hsu tabla: una fila por estacion' (@($tH.filas).Count) 3
+Check 'hsu tabla: en el orden en que se pidieron' (@($tH.filas | ForEach-Object { $_.eti }) -join ' | ') 'NCU1 - HSU1 | NCU2 - HSU1 | NCU9 - HSU9'
+Check 'hsu tabla: las columnas son los campos leidos' (@($tH.cols).Count) 13
+Check 'hsu tabla: con nombre corto' (@($tH.cols) -contains 'Viento m/s') $true
+Check 'hsu tabla: y el largo no se usa de cabecera' (@($tH.cols) -contains 'Viento [m/s]') $false
+Check 'hsu tabla: la muda tiene su fila igual' ("$(@($tH.filas)[2].vals[0])") 'sin respuesta'
+Check 'hsu tabla: y sale en rojo' (@($tH.filas)[2].alarma) $true
+Check 'hsu tabla: todas las filas con el mismo ancho' (@(@($tH.filas) | Where-Object { @($_.vals).Count -ne @($tH.cols).Count }).Count) 0
+# en alarmas el dato util es el texto, no el hexadecimal
+$iAl = [array]::IndexOf(@($tH.cols), 'Alarmas')
+Check 'hsu tabla: la columna de alarmas existe' ($iAl -ge 0) $true
+Check 'hsu tabla: y lleva el texto, no 0x0000' ("$(@($tH.filas)[0].vals[$iAl])".StartsWith('0x')) $false
+# la de texto es la ancha: en medio parte en dos la fila de numeros
+Check 'hsu tabla: las de texto van al final' $iAl (@($tH.cols).Count - 1)
+Check 'hsu tabla: y los numeros no se parten' (@($tH.cols)[0..($iAl - 1)] -contains 'Alarmas') $false
+# un campo que no sale en el diccionario se queda con su nombre largo
+Check 'hsu tabla: campo desconocido, nombre tal cual' (Hsu-CampoCorto 'Loquesea [xyz]') 'Loquesea [xyz]'
+# CONFIG pasa por la misma funcion sin tocar nada
+$rC = Hsu-Recorrer @($objsH[0]) $cxH { param($u) Hsu-LeerConfig $u } $null
+$tC = Hsu-Tabla $rC.oks @($objsH[0])
+Check 'hsu tabla: config sale igual de tabla' (@($tC.cols) -contains 'ON m/s') $true
+Check 'hsu tabla: config no tiene alarmas, no pinta rojo' (@($tC.filas)[0].alarma) $false
+# anchos: las de texto largo se llevan mas sitio
+Check 'hsu tabla: la de alarmas es ancha' (Hsu-AnchoCol 'Alarmas') 160
+Check 'hsu tabla: una corta no baja de 58' ((Hsu-AnchoCol 'HR %') -ge 58) $true
+# con UNA estacion se sigue pintando la lista vertical: ahi es la forma correcta
+Check 'hsu tabla: una sola sigue en vertical' ($src.Contains('if (@($objs).Count -gt 1) { Hsu-MostrarTabla (Hsu-Tabla $r.oks $objs) }')) $true
+Check 'hsu tabla: los dos botones pintan igual' (@([regex]::Matches($src, 'Hsu-Pintar \$r \$objs')).Count) 2
+# la tabla cambia de columnas: el filtro de columna va por numero y hay que
+# reiniciarlo, y quien pinta con las tres de siempre tiene que reponerlas
+Check 'hsu tabla: rehace las columnas' ($src.Contains('function Lv-Columnas')) $true
+Check 'hsu tabla: BUSCAR HSUs repone las suyas' (@([regex]::Matches($src, 'Lv-Columnas \$lvH \$HSU_COLS_BASE')).Count -ge 3) $true
+
 # ---------- la HSU puede colgar del SEGUNDO gateway (v11.32) ----------
 # Burgo I: cada NCU lleva una estacion en el GW1 y otra en el GW2. Antes se
 # preguntaba siempre por el puerto mas bajo y la del GW2 salia muda. Aqui el
@@ -1478,6 +1516,39 @@ Check 'menu: y hay una salida explicita' ($menu.Contains("Items.Add('Cerrar')"))
 Check 'menu: la casilla aplica al vuelo' ($menu.Contains('$it.Add_Click({ & $aplicar }')) $true
 Check 'menu: ya no se aplica al cerrar' ($menu.Contains('Add_Closed')) $false
 Check 'menu: marcar todos' ($menu.Contains("Items.Add('Marcar todos')")) $true
+
+# ---------- dos filtros sobre la misma tabla ----------
+# El diagnostico tiene el de nivel (el arbol, repinta desde $script:UltimoDiag)
+# y el de columna (repinta desde su propia copia). Detectar el repintado ajeno
+# por la CUENTA de filas fallaba cuando la vista nueva tenia tantas como dejo la
+# anterior: el filtro de columna se creia vigente y resucitaba las filas viejas.
+function LvFalso($filas) {
+    return [pscustomobject]@{
+        Items = @($filas)
+        Columns = @([pscustomobject]@{Text='NCU'}, [pscustomobject]@{Text='TCU'})
+        Tag = $null
+    }
+}
+$lvF = LvFalso @('a','b','c')
+Lv-Sincronizar $lvF
+Check 'dos filtros: la primera vez coge la lista entera' (@($lvF.Tag.orig) -join ',') 'a,b,c'
+# el filtro de columna deja 2 de 3: eso NO es un repintado ajeno
+$lvF.Items = @('a','c'); $lvF.Tag.dejadas = 2
+Lv-Sincronizar $lvF
+Check 'dos filtros: filtrar no tira la copia' (@($lvF.Tag.orig) -join ',') 'a,b,c'
+# y ahora repinta el filtro de nivel, dejando OTRAS dos filas
+$lvF.Items = @('x','y')
+Lv-Sincronizar $lvF
+Check 'dos filtros: mismo numero de filas pero otras' (@($lvF.Tag.orig) -join ',') 'x,y'
+Check 'dos filtros: y se olvidan los filtros de columna' $lvF.Tag.filtros.Count 0
+# quien repinta lo dice, para que el asterisco de la cabecera no mienta
+$lvF2 = LvFalso @('a','b'); Lv-Sincronizar $lvF2
+$lvF2.Tag.filtros = @{'0'=@('a')}
+$lvF2.Items = @('p','q'); Lv-Reiniciar $lvF2
+Check 'dos filtros: al repintar se limpia el filtro' $lvF2.Tag.filtros.Count 0
+Check 'dos filtros: y la copia es la nueva' (@($lvF2.Tag.orig) -join ',') 'p,q'
+Check 'dos filtros: la cabecera se queda sin asterisco' ($lvF2.Columns[0].Text.Contains('*')) $false
+Check 'dos filtros: el diagnostico lo declara al repintar' ($src.Contains('Lv-Reiniciar $lvG')) $true
 Check 'menu: desmarcar todos' ($menu.Contains("Items.Add('Desmarcar todos')")) $true
 
 Write-Host ''
@@ -2624,6 +2695,36 @@ Check 'auditoria: la linea sale aunque haya mudas' ($src.Contains('y $errTcu var
 Check 'auditoria: cuenta las mixtas' ($src.Contains('if ($desvTcu -gt 0) { $nMixtas++ }')) $true
 
 Write-Host ''
+Write-Host '== lo que le falta a la topologia de cada planta =='
+# Son dos datos distintos y se consiguen distinto: el ESCLAVO no se puede
+# aprender leyendo (el bloque que cachea la NCU no lo trae) y el HSU Id si.
+# Hasta ahora no se sabia que faltaban hasta ir a leer una HSU y que te mandara
+# a escanear sin explicar por que.
+$cxFalta = @{multi = @(
+    @{ncu='1';  hsus=1; hsuLista=@();     rsuLista=@()}      # ni esclavo ni id
+    @{ncu='2';  hsus=1; hsuLista=@(230);  rsuLista=@()}      # esclavo si, id no
+    @{ncu='3';  hsus=1; hsuLista=@(230);  rsuLista=@(3)}     # completa
+    @{ncu='4';  hsus=0; hsuLista=@();     rsuLista=@()})}    # sin estaciones
+$avF = @(Hsu-QueFaltaEnTopologia $cxFalta)
+Check 'falta: avisa de las dos cosas' $avF.Count 2
+Check 'falta: la que no tiene esclavo' ($avF[0] -like '*NCU 1*') $true
+Check 'falta: y no confunde con la que si lo tiene' ($avF[0] -like '*NCU 1, 2*') $false
+Check 'falta: dice como conseguirlo' ($avF[0] -like '*BUSCAR ESCLAVO*') $true
+Check 'falta: la que solo necesita el HSU Id' ($avF[1] -like '*NCU 2*') $true
+Check 'falta: y que eso lo aprende solo' ($avF[1] -like '*lo aprende solo un diagnostico*') $true
+# una NCU sin estaciones declaradas no tiene nada que completar
+Check 'falta: la NCU sin HSUs no sale' (($avF -join ' ') -like '*NCU 4*') $false
+# una planta entera bien puesta no dice nada
+Check 'falta: planta completa, silencio' (@(Hsu-QueFaltaEnTopologia @{multi=@(@{ncu='3'; hsus=1; hsuLista=@(230); rsuLista=@(3)})}).Count) 0
+Check 'falta: una NCU con dos estaciones necesita las dos' (@(Hsu-QueFaltaEnTopologia @{multi=@(@{ncu='15'; hsus=2; hsuLista=@(230,231); rsuLista=@(8)})})[0] -like '*HSU Id*') $true
+Check 'falta: el diagnostico lo dice' ($src.Contains('foreach ($linea in @(Hsu-QueFaltaEnTopologia $cx))')) $true
+# el barrido va acotado: 247 consultas por gateway eran minutos por NCU
+Check 'falta: el barrido lleva rango' ($src.Contains('$txtHEscIni = TG $tabH')) $true
+Check 'falta: y ya no barre siempre 1-247' ($src.Contains('Esclavos-Barrido ([int]$txtHSlave.Text) 1 247')) $false
+# el comisionado de planta completa ignoraba el cuadro de TCUs
+Check 'falta: el comisionado respeta el cuadro de TCUs' ($src.Contains("(Parse-Seleccion `$txtPTcus.Text 'Comisionado') `$txtPGw.Text")) $true
+
+Write-Host ''
 Write-Host '== las HSUs salen de la topologia, sin escanear =='
 # "pulsa BUSCAR HSUs primero" era pedir dos veces lo mismo: la topologia ya dice
 # cuantas estaciones tiene cada NCU y con que esclavo, y es lo que pinta la
@@ -3553,6 +3654,44 @@ $filasNiv = @(
 Check 'diag: la NCU es NCU' (Fila-Tipo $filasNiv[0]) 'NCU'
 Check 'diag: la RSU cuenta como HSU' (Fila-Tipo $filasNiv[2]) 'HSU'
 Check 'diag: un repetidor no es una TCU' (Fila-Tipo $filasNiv[4]) 'REP'
+
+Write-Host ''
+Write-Host '== HSU: DIAGNOSTICAR es un barrido corto, no la planta entera =='
+# En la hoja de estaciones, DIAGNOSTICAR barria las 751 TCUs de Ayora para
+# acabar enseñando diez filas. Las HSUs viven en la cache de la NCU (30200): una
+# lectura por NCU y listo.
+Check 'hsu corto: existe el barrido propio' ($src.Contains('function Diag-SoloHsus')) $true
+Check 'hsu corto: el boton entra por ahi estando en la hoja HSU' ($src.Contains("if (`"`$(`$script:DiagNivel)`" -eq 'HSU') { Diag-SoloHsus; Diag-Refrescar; return }")) $true
+$blqHsuC = $src.Substring($src.IndexOf('function Diag-SoloHsus'), $src.IndexOf('$btnDiag.Add_Click') - $src.IndexOf('function Diag-SoloHsus'))
+Check 'hsu corto: lee el bloque de estaciones' ($blqHsuC.Contains('Ncu-HsuCompat')) $true
+# lo que NO hace: preguntar a los seguidores, ni uno a uno ni por bloque compacto
+foreach ($f in @('Ncu-DiagCompat', 'Diag-LeerTcu', 'Rep-EsclavosBarrido', 'Ncu-Salud')) {
+    Check "hsu corto: no llama a $f" ($blqHsuC.Contains($f)) $false
+}
+Check 'hsu corto: una lectura por NCU, no por TCU' ($blqHsuC.Contains('Prog-Iniciar $trabajos.Count')) $true
+# y no tira el barrido de planta anterior: sustituye SUS filas y respeta el resto
+Check 'hsu corto: conserva lo que no es HSU' ($blqHsuC.Contains("(Fila-Tipo `$_) -ne 'HSU'")) $true
+Check 'hsu corto: y avisa de que esas filas son de antes' ($blqHsuC.Contains('son del barrido anterior')) $true
+# la HSU declarada que nunca ha comunicado tiene que seguir saliendo
+Check 'hsu corto: completa lo declarado y no leido' ($blqHsuC.Contains('Flota-EnAlcance')) $true
+Check 'hsu corto: solo estaciones, no la flota entera' ($blqHsuC.Contains("`"`$(`$_.Tipo)`" -eq 'HSU'")) $true
+# eso mismo, ejecutado: una NCU con dos HSUs declaradas de la que solo contesta una
+$declHsu = @(
+  [pscustomobject]@{NCU='15'; TCU='HSU8'; Tipo='HSU'}, [pscustomobject]@{NCU='15'; TCU='HSU9'; Tipo='HSU'}
+  [pscustomobject]@{NCU='15'; TCU=3; Tipo='TCU'}, [pscustomobject]@{NCU='4'; TCU='HSU1'; Tipo='HSU'}
+)
+$trabHsu = @(@{ncu='15'; tcus=@(3)})
+$soloHsu = @(@(Flota-EnAlcance $declHsu $trabHsu) | Where-Object { "$($_.Tipo)" -eq 'HSU' })
+Check 'hsu corto: de otra NCU no se opina' (@($soloHsu | Where-Object { $_.NCU -eq '4' }).Count) 0
+Check 'hsu corto: ni de las TCUs' (@($soloHsu | Where-Object { "$($_.Tipo)" -eq 'TCU' }).Count) 0
+Check 'hsu corto: quedan las dos estaciones de esa NCU' $soloHsu.Count 2
+$leidaHsu = @([pscustomobject]@{NCU='15'; TCU='HSU8'; Salud='OK'; Alarmas=''})
+$compHsu = @(Diag-Completar $leidaHsu $soloHsu)
+Check 'hsu corto: la que nunca ha comunicado sigue en la tabla' $compHsu.Count 2
+Check 'hsu corto: y va como SIN LECTURA' ("$($compHsu[1].Salud)") 'SIN LECTURA'
+# la columna NCU tenia 45 px y el encabezado salia "NC...": con diez HSUs de
+# diez NCUs distintas, saber de cual es cada una es justo el dato
+Check 'hsu corto: la columna NCU se lee entera' ($src.Contains("[void]`$lvG.Columns.Add('NCU', 58)")) $true
 
 Write-Host ''
 Write-Host '== de que se alimenta una TCU =='

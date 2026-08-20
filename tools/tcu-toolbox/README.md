@@ -106,6 +106,110 @@ la toolbox y del agente y falla si aparece un `continue` o un `break` dentro de
 una función y fuera de un bucle: a ojo no se ve, y el síntoma no apunta al
 sitio.
 
+**LEER METEO y LEER CONFIG, en tabla (v11.57)** — con nueve estaciones, la
+tabla de la pestaña HSU eran **9 × 13 = 117 filas en una sola columna**, con una
+cabecera `--- NCU5 - HSU3 ---` cada trece. Para comparar el viento de dos
+estaciones había que hacer scroll entre dos números que deberían estar uno al
+lado del otro.
+
+Con **más de una** HSU ahora es una **fila por estación** y una columna por
+campo. Con una sola sigue siendo la lista vertical, que ahí es la forma
+correcta — lo decide lo mismo que ya decidía si poner cabeceras: cuántas hay.
+
+- las **columnas las pone la lectura**, no una lista escrita en el código: vale
+  igual para METEO (viento, dirección, nieve, lluvia, T, HR, irradiancia,
+  batería, tensiones) que para CONFIG (esclavo, umbrales ON/OFF, tiempos,
+  altura del sensor de nieve) — y comparar umbrales entre estaciones es
+  justo para lo que sirve una tabla;
+- en **Alarmas** y **Sensores** va el texto decodificado, no el `0x0000`, y esas
+  dos columnas se ponen **al final**: son las anchas y en medio partían en dos la
+  fila de números;
+- la estación **muda conserva su fila**, en su sitio y en rojo. Desaparecer no
+  es información.
+
+La tabla sigue siendo ordenable y filtrable por columna, como las demás.
+
+**En la hoja de HSUs, DIAGNOSTICAR barre solo HSUs (v11.56)** — entrar por
+*Diagnóstico → HSU* y pulsar DIAGNOSTICAR barría **la planta entera** —las 751
+TCUs de Ayora, minutos— para acabar enseñando diez filas. El resultado estaba
+bien; el camino no.
+
+Las estaciones viven en un bloque aparte que la NCU cachea (30200+, diez
+huecos), así que sacarlas cuesta **una lectura por NCU**: las diez de Ayora son
+16 lecturas y unos segundos. Es el mismo trato que ya tenían los repetidores.
+
+Lo que no se toca:
+
+- **no tira el barrido anterior.** Sustituye las filas de HSU y deja como
+  estaban las de NCU, TCU y repetidor — perder un barrido de 782 filas por
+  pulsar aquí sería mal negocio —, y lo dice en la consola para que nadie lea
+  esas filas como recién medidas;
+- **la estación declarada que nunca ha comunicado sigue saliendo**, como
+  `SIN LECTURA`, igual que en el barrido completo;
+- **los avisos de HSU Id** (lo que falta en la topología, lo leído contra lo
+  declarado) salen aquí también, que es donde más sentido tienen.
+
+El barrido completo sigue en *GLOBAL → Diagnóstico de planta*, con sus vistas
+por nivel intactas.
+
+**Los dos filtros de la tabla ya se conocen (v11.56)** — el diagnóstico tiene
+**dos** filtros sobre la misma tabla: el de **nivel/NCU/salud**, que repinta
+desde el último resultado, y el de **columna** (pulsar la cabecera), que trabaja
+sobre su propia copia. Que la tabla la hubiera repintado el otro se detectaba
+**contando filas**, y dos vistas distintas pueden tener las mismas: entonces el
+filtro de columna se creía vigente y al pulsar una cabecera **resucitaba las
+filas de la vista anterior**, que ya no estaban en la tabla.
+
+Ahora se mira también si la primera fila a la vista es una de las que se
+guardaron: si no lo es, esto lo ha pintado otro. Y al cambiar de nivel, el
+filtro de columna se limpia de verdad — antes el asterisco de la cabecera se
+quedaba puesto diciendo que filtraba algo que ya no filtraba.
+
+De paso, la columna **NCU** de la tabla pasa de 45 a 58 px: el encabezado salía
+`NC…` y con diez HSUs de diez NCUs distintas, saber de cuál es cada una es justo
+el dato. El número estaba ahí desde siempre; lo que no había era sitio para el
+título.
+
+**Lo que le falta a la topología de cada planta, dicho antes de tropezarse
+(v11.55)** — Ayora es la única planta con los datos de sus estaciones. Las
+demás declaran que las tienen pero no con qué esclavo:
+
+| Planta | HSUs declaradas | Con esclavo | Con HSU Id |
+|---|---|---|---|
+| Ayora | 10 | 9 | 10 |
+| San José | 9 | **0** | 0 |
+| Fayón | 1 | **0** | 0 |
+| Túnez | 1 | **0** | 0 |
+| Bagnarelli | 2 | **0** | 0 |
+
+Sin el esclavo, leer las HSUs con *Planta completa* no funciona — y eso no se
+sabía hasta ir a leerlas y que la herramienta mandara a escanear sin explicar
+por qué. Ahora el diagnóstico lo dice, en cualquier planta:
+
+```
+La topologia declara HSUs en 9 NCU(s) pero no dice con que esclavo (NCU 1, 2,
+3, 6, 9, 12, 15, 17, 20). Sin eso no se pueden leer con Planta completa: usalas
+con BUSCAR ESCLAVO (rango 225-235) y guarda lo que encuentre, o mira el Modbus
+Id en la pagina de cada NCU.
+```
+
+Los dos datos que faltan **no se consiguen igual**, y por eso se dicen por
+separado: el **HSU Id** lo aprende solo un diagnóstico (el hueco *es* el
+número), pero el **esclavo no se puede aprender leyendo** — el bloque que la
+NCU cachea (30200+) trae ProductId, estado, alarmas, viento y nieve, y no el
+esclavo. Sale de un barrido o de la página web de la NCU.
+
+**Y el barrido ya no cuesta minutos.** `BUSCAR ESCLAVO` iba del 1 al 247
+*siempre*: 247 consultas por gateway, y cada esclavo que no existe cuesta lo
+que tarde la NCU en rendirse con el Zigbee. Ahora lleva rango, por defecto
+**225–235**: once números, donde están las estaciones. Los repetidores están por
+el 200.
+
+**El comisionado de planta completa ignoraba el cuadro de TCUs (v11.55)** —
+escribías `1-72`, pulsabas ESTADO Y MODO con *Planta completa*, y recorría el
+rango entero de cada NCU sin decir nada. Las demás acciones de PEM sí lo
+respetaban. Ahora también.
+
 **El HSU Id no hay que teclearlo: la NCU ya lo dice (v11.54)** — una estación
 tiene **dos** números y no son lo mismo:
 
