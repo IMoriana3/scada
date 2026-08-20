@@ -86,7 +86,15 @@ nube           = line protocol comprimido (gzip) + cabeceras HTTP/TLS (500 B por
 
 Los tamaños de bloque no van a mano: salen de **`config/modbus_map.yml`**, el mismo mapa que lee el driver — 22 registros por TCU en el bloque compat (base 30500), 2 por `lastComm` (29500) y 10 por HSU (30200; 30 si la HSU es la extendida del bloque 28000) —, y el troceo, de `max_regs_per_read` en `plants.yml`. Si cambia el mapa, la estimación se mueve con él y el banco lo comprueba. Lo único que sigue viniendo del código son las dos lecturas de estado de la NCU (30002 y 30100..30105), porque el driver las tiene fijas.
 
-Lo que **no** cuenta, y conviene saberlo: los ACK puros (viajan montados en el segmento siguiente; como mucho 40 B por transacción, siempre a la baja), la trama Ethernet (18 B más por trama: lo que se factura en un 4G es la carga IP) y el retorno de la nube (el colector solo escribe).
+**Qué equipos entran.** El ciclo lleva un punto por TCU, uno de estado de la NCU y uno por HSU. El reparto de la subida no está repartido: en la NCU1 de El Burgo son **98,7 % TCU**, 0,8 % HSU y 0,5 % NCU. Cualquier ahorro sale de los seguidores; recortar meteo o estado de NCU no mueve la aguja.
+
+**Qué NO entra, y no es poco.** Esto mide **el colector**, no la planta. Fuera quedan:
+
+- La **descarga nocturna de logs de la NCU** (`tools/descarga-logs/`), que baja un ZIP con un CSV por equipo y día — la TCU graba cada ~10 s, las estaciones cada ~5 s y la propia NCU **cada segundo**. Son ~4,7 MB por NCU y día en crudo, del orden de lo que cuesta el polling entero: si se automatiza, hay que sumarla aquí.
+- La **TCU Toolbox** cuando alguien trabaja en campo por el passthrough de la NCU.
+- El **webserver de la NCU**, el túnel de soporte y todo lo que no sea este colector: inversores, contadores, PPC, cámaras. Nada de eso pasa por aquí.
+
+Lo que **no** cuenta del propio colector, y conviene saberlo: los ACK puros (viajan montados en el segmento siguiente; como mucho 40 B por transacción, siempre a la baja), la trama Ethernet (18 B más por trama: lo que se factura en un 4G es la carga IP) y el retorno de la nube (el colector solo escribe).
 
 **Flota completa, con polling cada 30 s** (`python tools/trafico.py`). El inventario sale del **plano del propio SCADA** (`index.html`), donde cada TCU declara de qué NCU y de qué gateway cuelga:
 
