@@ -99,4 +99,48 @@ foreach ($padre in ($porPadre.Keys | Sort-Object)) {
 }
 if ($solapes.Count -eq 0) { Write-Output 'SIN SOLAPES al agrandar la ventana' }
 else { $solapes | ForEach-Object { Write-Output "SOLAPE  $_" } }
+
+# ---------------------------------------------------------------------------
+#  DESBORDES: lo que cae fuera de la ventana en su tamano MINIMO
+# ---------------------------------------------------------------------------
+# La auditoria de arriba comprueba que nada se monte encima de nada al AGRANDAR
+# la ventana. No comprobaba lo contrario, y es el hueco por el que se colo un
+# defecto real (v11.55): cinco campos de la pestana SAT se colocaron de x=892 a
+# x=1222 y la pestana tiene 919 px utiles, asi que en un portatil -donde la
+# ventana arranca en su MinimumSize- eran INVISIBLES.
+#
+# Y no era un problema de estetica. Esos cinco campos existen para no dar por
+# supuesto el criterio de una planta (si abandera cara al sol o cara al viento,
+# el limite de mediodia, el lado de la suelta pasiva); colocados fuera de la
+# ventana, daban por supuesto el criterio de una planta. Un control que no se
+# ve es un default silencioso con otro disfraz.
+#
+# La ventana no se puede encoger por debajo de su MinimumSize, asi que este
+# tamano es el PEOR CASO real y la comprobacion es exacta, no una estimacion.
+$ANCHO_TABS = 925; $ALTO_TABS = 400      # $tabs.Size del script
+$MARGEN = 6                              # borde interior de una pestana
+$ANCHO_UTIL = $ANCHO_TABS - 2 * $MARGEN
+$ALTO_UTIL  = $ALTO_TABS - 26 - $MARGEN  # menos la fila de solapas
+
+$desbordes = @()
+foreach ($k in ($ctrl.Keys | Sort-Object)) {
+    $g = $ctrl[$k]
+    if (-not $g.padre -or $g.oculto) { continue }
+    if ($g.padre -notmatch '^tab') { continue }       # solo pestanas
+    if ($g.ancho -le 0 -and $g.alto -le 0) { continue }
+    $der = $g.left + $g.ancho
+    $aba = $g.top + $g.alto
+    if ($der -gt $ANCHO_UTIL) {
+        $desbordes += ("{0} : {1} llega a x={2} y la pestana tiene {3} px utiles ({4} px fuera)" -f
+                       $g.padre, $k, $der, $ANCHO_UTIL, ($der - $ANCHO_UTIL))
+    }
+    if ($aba -gt $ALTO_UTIL) {
+        $desbordes += ("{0} : {1} llega a y={2} y la pestana tiene {3} px utiles ({4} px fuera)" -f
+                       $g.padre, $k, $aba, $ALTO_UTIL, ($aba - $ALTO_UTIL))
+    }
+}
+if ($desbordes.Count -eq 0) { Write-Output 'SIN DESBORDES en la ventana minima' }
+else { $desbordes | ForEach-Object { Write-Output "DESBORDE  $_" } }
+
 Write-Output "controles analizados: $($ctrl.Count)"
+if ($solapes.Count -gt 0 -or $desbordes.Count -gt 0) { exit 1 }
