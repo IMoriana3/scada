@@ -3049,6 +3049,38 @@ function Aband-FilaCsv([string]$ensayo, [string]$ncu, [int]$tcu, $cr, $pas,
     }
 }
 
+# La FILA del CSV de meteo del cronometro, tambien pura y por el mismo motivo:
+# se construia dentro del temporizador, fuera del alcance del banco.
+#
+# Y ahi se perdian los NUMEROS. Ncu-HsuCompat devuelve viento, rumbo, nivel y
+# nieve como campos -- lo hace a proposito, y su propio comentario dice por que:
+# "quien consuma el export no deberia tener que volver a parsear 'viento 1,4 m/s
+# (nivel 0)'" --, y este consumidor guardaba solo Salud y el texto. O sea que el
+# unico sitio donde la meteo acompana a una medida CONTRACTUAL, en su mismo eje
+# de tiempos, era el sitio donde se tiraba a la basura.
+#
+# El rumbo importa mas de lo que parece: una suelta pasiva cae al tope del lado
+# del que sopla, y un motor agarrotado cae siempre al mismo. Con las dos series
+# esa diferencia se puede llegar a mirar algun dia; sin registrarlas, un ensayo
+# hecho es un ensayo perdido para esa pregunta, porque el dato no se recupera.
+# Aqui NO se afirma nada de eso: es una columna, sin veredicto y sin marca.
+function Cron-FilaMeteo([int]$ts, [string]$ncu, $h) {
+    return [pscustomobject]@{
+        ts = $ts
+        hora_utc = ([DateTimeOffset]::FromUnixTimeSeconds($ts).UtcDateTime.ToString('yyyy-MM-dd HH:mm:ss'))
+        ncu = $ncu
+        hsu = $h.TCU
+        salud = $h.Salud
+        # $null -no cadena vacia- cuando la HSU no contesta: un 0 en una curva
+        # de viento es un dato, y ahi no lo hay. Ncu-HsuCompat ya lo deja asi.
+        Viento_ms = $h.Viento_ms
+        Dir_deg = $h.Dir_deg
+        Nivel = $h.Nivel
+        Nieve_m = $h.Nieve_m
+        detalle = $h.Alarmas
+    }
+}
+
 # Traduccion del veredicto para el CSV. Las funciones puras devuelven '' para
 # "no evaluable", que es lo correcto en codigo; pero una CELDA EN BLANCO en una
 # columna de SI/NO se lee como "nada que objetar" -- y quien abre el CSV en una
@@ -10939,10 +10971,7 @@ $tmrCron.Add_Tick({
                 if (-not $script:CronMuestras.ContainsKey($k)) { $script:CronMuestras[$k] = New-Object System.Collections.ArrayList }
                 [void]$script:CronMuestras[$k].Add(@{ts=$ts; real=[double]$dm[$t].Tilt; obj=[double]$dm[$t].Objetivo})
             }
-            foreach ($h in $hs) {
-                [void]$script:CronMeteo.Add([pscustomobject]@{ts=$ts; hora_utc=([DateTimeOffset]::FromUnixTimeSeconds($ts).UtcDateTime.ToString('yyyy-MM-dd HH:mm:ss'))
-                    ncu=$tr.ncu; hsu=$h.TCU; salud=$h.Salud; detalle=$h.Alarmas})
-            }
+            foreach ($h in $hs) { [void]$script:CronMeteo.Add((Cron-FilaMeteo $ts $tr.ncu $h)) }
         }
     } catch { Sat-Log 'ERROR' "$_" }
     finally { $script:Ocupado = $false; Modbus-Cerrar }

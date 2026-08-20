@@ -1293,6 +1293,34 @@ Check 'fila: ninguna celda de veredicto en blanco' (
   ($fila.Lado_correcto -ne '') -and ($fila.Lado_esperado -ne '') -and
   ($fila.Suelta_pasiva -ne '') -and ($filaV.Lado_correcto -ne '')) $true
 
+# -- la fila del CSV de meteo del cronometro --------------------------------
+# Ncu-HsuCompat da la meteo como NUMEROS ademas de como texto. El cronometro
+# guardaba solo Salud y el texto, asi que el unico sitio donde la meteo va en
+# el mismo eje de tiempos que una medida contractual era el sitio donde se
+# perdia. Sin numero no hay serie, y sin serie no hay pregunta que contestar.
+Write-Host ''
+Write-Host '== fila de meteo del cronometro =='
+$hsuOk = [pscustomobject]@{TCU='HSU1'; Salud='AVISO'; Viento_ms=12.4; Dir_deg=287.5; Nivel=2
+                           Nieve_m=0.0; Alarmas='ALARMA VIENTO | viento 12,4 m/s (nivel 2), dir 288 deg'}
+$fm = Cron-FilaMeteo 1755000000 'NCU1' $hsuOk
+Check 'meteo: viento como numero'   $fm.Viento_ms 12.4
+Check 'meteo: rumbo como numero'    $fm.Dir_deg 287.5
+Check 'meteo: nivel'                $fm.Nivel 2
+Check 'meteo: nieve'                $fm.Nieve_m 0.0
+Check 'meteo: de que NCU y HSU'     "$($fm.ncu)/$($fm.hsu)" 'NCU1/HSU1'
+Check 'meteo: el texto sigue'       ($fm.detalle -like '*ALARMA VIENTO*') $true
+# el eje de tiempos es el MISMO que el de las posiciones: la marca que se guarda
+# es el ts crudo del ciclo, no una hora formateada de la que haya que volver
+Check 'meteo: mismo eje que la posicion' $fm.ts 1755000000
+Check 'meteo: y la hora UTC del mismo ts' $fm.hora_utc '2025-08-12 12:00:00'
+# una HSU muda deja HUECO, no cero: un 0 en una curva de viento es un dato
+$hsuMuda = [pscustomobject]@{TCU='HSU2'; Salud='OFFLINE'; Viento_ms=$null; Dir_deg=$null; Nivel=$null
+                             Nieve_m=$null; Alarmas='sin datos en la NCU desde hace 400 s'}
+$fmMudo = Cron-FilaMeteo 1755000000 'NCU1' $hsuMuda
+Check 'meteo: HSU muda deja hueco'  ($null -eq $fmMudo.Viento_ms) $true
+Check 'meteo: y el rumbo tambien'   ($null -eq $fmMudo.Dir_deg) $true
+Check 'meteo: pero dice por que'    $fmMudo.salud 'OFFLINE'
+
 # --------------------------------------------------------------------------
 #  Rangos plausibles e identidad de red
 # --------------------------------------------------------------------------

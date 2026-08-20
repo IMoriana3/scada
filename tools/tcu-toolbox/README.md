@@ -1764,6 +1764,30 @@ pasa cualquier rango por separado, pero tener el mismo valor en los dos límites
 no se sostiene. El CSV de corrección recoge también estas, proponiendo el valor
 mayoritario de la planta.
 
+**El CSV de meteo del cronómetro guardaba el texto y tiraba los números** — el
+cronómetro de D.2 ya leía la caché de HSUs de la NCU en cada ciclo (bloque
+30200, una `FC03`, sin Zigbee) y ya dejaba un CSV de meteo aparte, en el **mismo
+eje de tiempos** que las posiciones. Pero de cada HSU guardaba solo `Salud` y la
+frase (`"viento 12,4 m/s (nivel 2), dir 288 deg"`). `Ncu-HsuCompat` devuelve
+esos mismos valores como **campos numéricos** justamente para no tener que
+volver a parsear la frase — su propio comentario lo dice—, y el único consumidor
+donde la meteo acompaña a una medida **contractual** era el que los tiraba.
+
+Ahora la fila lleva `Viento_ms`, `Dir_deg`, `Nivel` y `Nieve_m`, con hueco
+(`$null`) y no cero cuando la HSU no contesta. La fila sale a `Cron-FilaMeteo`,
+pura y con banco, por el mismo motivo que `Aband-FilaCsv`: se construía dentro
+del temporizador, fuera del alcance de las pruebas.
+
+**Qué NO es esto.** No hay veredicto, ni marca, ni nota en el informe. Es una
+columna. La razón de registrarla es que **no se recupera**: una suelta pasiva
+cae al tope del lado del que sopla y un motor agarrotado cae siempre al mismo,
+así que con las dos series esa diferencia se podrá llegar a mirar algún día —
+pero un ensayo hecho sin la columna es un ensayo perdido para esa pregunta, para
+siempre. Y con un solo ensayo no se contesta: en un sitio con rumbo dominante,
+la suelta pasiva perfecta y la mecánica agarrotada dan la misma tabla durante
+meses. Hasta que no haya episodios con rumbos distintos, esto **no es un
+discriminante**.
+
 **La maqueta audita también DESBORDES** (del banco, no del producto: no lleva
 número de versión porque no cambia la herramienta) — auditaba que nada se montase
 encima de nada al *agrandar* la ventana, y no lo contrario. Por ese hueco se
