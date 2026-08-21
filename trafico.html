@@ -21,7 +21,15 @@
 *{box-sizing:border-box}
 body{margin:0;background:var(--void);color:var(--text);font:15px/1.55 var(--sans);}
 a{color:var(--dato)}
-.wrap{max-width:1080px;margin:0 auto;padding:26px 18px 60px}
+/* Tope de la casa, el mismo que las demas fichas: con 1080 px fijos se usaba el 42 % del ancho en
+   una pantalla de 2560 y el 56 % en una de 1920. */
+.wrap{max-width:min(2560px,96vw);margin:0 auto;padding:26px 18px 60px}
+/* Las cinco secciones iban en una tira de 2.807 px de alto, entre 1,9 y 3,1 pantallas de bajar.
+   Con sitio fluyen en dos o tres columnas -`columns`, que empaqueta por altura- sin partir ninguna
+   por la mitad. Las tablas mandan el ancho minimo de cada columna, por eso los saltos son tardios. */
+.wrap > section{break-inside:avoid}
+@media(min-width:1500px){ .wrap{columns:2;column-gap:26px} }
+@media(min-width:2200px){ .wrap{columns:3} }
 header h1{font:600 26px/1.2 var(--sans);margin:0 0 6px}
 header p.sub{color:var(--muted);margin:0 0 4px;max-width:70ch}
 .migas{font:500 12px var(--mono);color:var(--muted-2);margin-bottom:18px}
