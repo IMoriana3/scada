@@ -20,6 +20,35 @@ class NCUDriver(ABC):
         self.mmap = mmap
         self.word_order = word_order
         self.meter = meter          # TrafficMeter opcional (medidor de tráfico)
+        #: Reloj de la NCU (30104, U32), refrescado por `read_ncu()` en cada
+        #: ciclo. Es el minuendo de `comms_age_s`: ver `edad_comms()`.
+        self.ncu_clock = None
+
+    def edad_comms(self, last_comm: int, ahora_host: float):
+        """Edad de la última comunicación NCU↔TCU, y de dónde sale.
+
+        `tcu_lastcomm` (29500) es una marca que pone **la NCU** con SU reloj.
+        Restarle la hora del host del colector mezcla dos relojes distintos, y
+        el desvío entra entero en el resultado. No es teórico: la toolbox tiene
+        un aviso «RELOJ NCU DESVIADO» justo para eso, y `tracker_health()` da
+        por `offline` todo lo que pase de 300 s — o sea que una NCU media hora
+        atrasada daba **su flota entera por offline**, con los TCUs hablando.
+
+        La resta correcta es NCU−NCU: `date_time` (30104) menos `tcu_lastcomm`
+        (29500), los dos del mismo reloj, así que el desvío se cancela por
+        construcción y no hay que estimarlo.
+
+        El desvío no se tira: sale como `skew_s`, que es el diagnóstico que
+        antes había que deducir de una flota apagada de golpe.
+        """
+        if last_comm <= 0:
+            return None, None, "sin_marca"
+        skew = round(ahora_host - self.ncu_clock, 1) if self.ncu_clock else None
+        if self.ncu_clock:
+            return round(self.ncu_clock - last_comm, 1), skew, "ncu"
+        # Primer ciclo o NCU que no publica su reloj: se cae al host y se DICE.
+        # Callarlo sería volver al bug con mejor letra.
+        return round(ahora_host - last_comm, 1), None, "host"
 
     # --- contabilidad de tráfico (no cuesta nada si no hay medidor) ---
     def _count_read(self, n_regs: int):
@@ -115,12 +144,15 @@ class ModbusNCUDriver(NCUDriver):
             alarms = decode_alarms(fields.get("alarms1", 0), fields.get("alarms2", 0),
                                    self.mmap["alarm_bits"])
             last_comm = regs_to_u32(lc[i * 2], lc[i * 2 + 1], self.word_order)
+            edad, skew, origen = self.edad_comms(last_comm, now)
             out.append({
                 "tcu": i + 1,
                 "fields": fields,
                 "alarms": alarms,
                 "last_comm": last_comm,
-                "comms_age_s": round(now - last_comm, 1) if last_comm > 0 else None,
+                "comms_age_s": edad,
+                "comms_age_src": origen,   # "ncu" (bueno) | "host" (fallback) | "sin_marca"
+                "skew_s": skew,
             })
         return out
 
@@ -140,6 +172,11 @@ class ModbusNCUDriver(NCUDriver):
             raw = hsu_g if spec["addr"] == 30002 else blk[spec["addr"] - 30100]
             for bit_name, (lsb, msb) in spec.get("bits", {}).items():
                 out[bit_name] = extract_bits(raw, lsb, msb)
+        # El reloj de la NCU se guarda para que `read_trackers()` pueda hacer la
+        # resta NCU−NCU. NO cuesta una lectura extra: 30104 ya venía en este
+        # bloque de seis registros, solo que nadie lo usaba para esto.
+        if out.get("date_time"):
+            self.ncu_clock = out["date_time"]
         return out
 
     async def read_meteo(self) -> list[dict]:
