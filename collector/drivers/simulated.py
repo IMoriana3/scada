@@ -73,10 +73,19 @@ class SimulatedNCUDriver(NCUDriver):
         base_angle = solar_tracker_angle(now)
         day = 7 <= now.hour + 1 <= 21
         out = []
+        ahora = time.time()
+        # `tcu_lastcomm` lo escribe LA NCU con SU reloj, no el host. Y lo escribe
+        # SIEMPRE: el hierro tiene su hora la lea el colector o no. Por eso sale
+        # de `_reloj_ncu()` y no de `self.ncu_clock`, que es lo que el COLECTOR
+        # sabe -- confundir las dos cosas dejaba el simulado incapaz de
+        # reproducir el bug que este driver existe para poder probar.
+        reloj = self._reloj_ncu()
         for i in range(1, self.cfg["tcu_count"] + 1):
             if i in self.offline:
-                out.append({"tcu": i, "fields": {}, "alarms": [],
-                            "last_comm": int(time.time()) - 7200, "comms_age_s": 7200.0})
+                lc = int(reloj) - 7200
+                edad, skew, origen = self.edad_comms(lc, ahora)
+                out.append({"tcu": i, "fields": {}, "alarms": [], "last_comm": lc,
+                            "comms_age_s": edad, "comms_age_src": origen, "skew_s": skew})
                 continue
             jitter = random.uniform(-0.4, 0.4)
             tilt = base_angle + jitter
@@ -106,17 +115,25 @@ class SimulatedNCUDriver(NCUDriver):
                 "system_ok": 0 if alarms else 1,
                 "alarms1": 0, "alarms2": 0,
             }
-            out.append({"tcu": i, "fields": fields, "alarms": alarms,
-                        "last_comm": int(time.time()),
-                        "comms_age_s": round(random.uniform(0, 25), 1)})
+            lc = int(reloj) - int(random.uniform(0, 25))
+            edad, skew, origen = self.edad_comms(lc, ahora)
+            out.append({"tcu": i, "fields": fields, "alarms": alarms, "last_comm": lc,
+                        "comms_age_s": edad, "comms_age_src": origen, "skew_s": skew})
         return out
+
+    def _reloj_ncu(self) -> int:
+        """La hora que marca ESTA NCU. `ncu_skew_s` en la config la desvía, que
+        es el caso que daba la flota entera por offline (positivo = atrasada)."""
+        return int(time.time() - self.cfg.get("ncu_skew_s", 0))
 
     async def read_ncu(self) -> dict:
         self._count_read(1)   # 30002 (HSU global)
         self._count_read(6)   # 30100..30105
-        return {"alarm_any_wind": 0, "wind_highest_level": 0, "alarm_any_snow": 0,
-                "gw1_alarm": 0, "gw2_alarm": 0, "battery_low": 0,
-                "ups_power_fault": 0, "date_time": int(time.time())}
+        out = {"alarm_any_wind": 0, "wind_highest_level": 0, "alarm_any_snow": 0,
+               "gw1_alarm": 0, "gw2_alarm": 0, "battery_low": 0, "ups_power_fault": 0,
+               "date_time": self._reloj_ncu()}
+        self.ncu_clock = out["date_time"]
+        return out
 
     async def read_meteo(self) -> list[dict]:
         h = self.mmap["hsu_ext"] if self.cfg.get("hsu_extended") else self.mmap["hsu"]

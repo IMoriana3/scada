@@ -99,8 +99,11 @@ async def poll_ncu(cfg, mmap, ncu_cfg, write_api):
     while True:
         try:
             await drv.connect()
-            trackers = await drv.read_trackers()
+            # La NCU va PRIMERO: su bloque trae el reloj (30104) con el que
+            # `read_trackers()` hace la resta NCU−NCU de `comms_age_s`. No
+            # cuesta una lectura más -- es la misma de siempre, movida de sitio.
             ncu_status = await drv.read_ncu()
+            trackers = await drv.read_trackers()
             meteo = await drv.read_meteo()
             await drv.close()
 
@@ -118,6 +121,13 @@ async def poll_ncu(cfg, mmap, ncu_cfg, write_api):
             estado = [Point("ncu_status").tag("plant", plant_id).tag("ncu", ncu_cfg["id"])]
             for k, v in ncu_status.items():
                 estado[0].field(k, float(v))
+            # El desvío del reloj de la NCU contra el del colector. Ya no entra
+            # en `comms_age_s` -- la resta es NCU−NCU --, pero se PUBLICA: es el
+            # sintoma que antes solo se veia como una flota apagada de golpe, y
+            # ahora es un numero que se puede vigilar antes de que moleste.
+            skew = next((t["skew_s"] for t in trackers if t.get("skew_s") is not None), None)
+            if skew is not None:
+                estado[0].field("clock_skew_s", float(skew))
             for m in meteo:
                 p = (Point("meteo").tag("plant", plant_id)
                      .tag("ncu", ncu_cfg["id"]).tag("hsu", str(m["hsu"])))
