@@ -24,8 +24,38 @@ BUCKET = os.environ.get("INFLUXDB_BUCKET", "trackers")
 client = InfluxDBClient(url=URL, token=os.environ["INFLUXDB_TOKEN"], org=ORG)
 
 
+#: Patrón de un tag interpolable (ncu, tcu). Mismo criterio que en
+#: `/meteo/history`: nada entra en el texto de una consulta Flux sin pasar por
+#: aquí. Y aquí importa MÁS, porque `ncu`/`tcu` de `/history` vienen de la RUTA,
+#: y la ficha de TCU los toma de un enlace pegable en un correo.
+_RE_TAG = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")      # ncu, tcu, hsu
+
+#: Lo que un TCU publica, tal y como lo escribe el colector
+#: (`collector/main.py:tracker_points`). Lista BLANCA: un campo nuevo no entra
+#: solo, hay que añadirlo aquí, y así una `?fields=` inventada no llega a Flux.
+_TRACKER_FIELDS = (
+    "tilt_angle", "target_angle", "soc", "soh", "battery_voltage",
+    "battery_current", "temp_battery", "temp_pcb", "motor_current",
+    "panel_voltage", "main_state", "bt_active", "safe_position",
+    "system_ok", "alarms1", "alarms2", "comms_age_s",
+)
+#: Lo que `/live` devuelve por TCU: los campos numéricos de arriba más los dos
+#: que el colector escribe como texto (`health`, `alarms`) y las dos etiquetas.
+#:
+#: Antes esta lista estaba escrita a mano y dejaba fuera `battery_current`,
+#: `motor_current`, `soh`, `temp_pcb`, `panel_voltage` y los dos registros de
+#: alarma en crudo -- todos ellos YA en el bucket, escritos en cada ciclo. Una
+#: ficha de campo que quiere decir por qué un tracker no se mueve necesita la
+#: corriente de motor; que estuviera medida, guardada y no servida es de la
+#: misma familia que guardar la meteo como frase en vez de como número.
+_LIVE_KEYS = ("ncu", "tcu", "health", "alarms") + _TRACKER_FIELDS
+
+
 @app.get("/live")
 def live(ncu: str | None = None):
+    if ncu is not None and not _RE_TAG.match(ncu):
+        raise HTTPException(400, f"`ncu` inválido: {ncu!r}. Solo letras, "
+                                 "dígitos, punto, guion y guion bajo")
     flt = f' and r.ncu == "{ncu}"' if ncu else ""
     q = f'''
 from(bucket: "{BUCKET}")
@@ -39,19 +69,29 @@ from(bucket: "{BUCKET}")
     for table in tables:
         for rec in table.records:
             v = rec.values
-            out.append({k: v.get(k) for k in
-                        ("ncu", "tcu", "health", "alarms", "tilt_angle",
-                         "target_angle", "soc", "battery_voltage", "temp_battery",
-                         "main_state", "bt_active", "safe_position", "comms_age_s",
-                         "system_ok")})
+            out.append({k: v.get(k) for k in _LIVE_KEYS})
     return {"count": len(out), "trackers": out}
 
 
 @app.get("/history/{ncu}/{tcu}")
 def history(ncu: str, tcu: str,
-            hours: int = Query(24, le=720),
+            hours: int = Query(24, ge=1, le=720),
             fields: str = "tilt_angle,target_angle,soc"):
-    field_list = [f.strip() for f in fields.split(",")]
+    """Series de un TCU. Ventana de agregación FIJA de 5 min: `hours=720` son
+    8.640 puntos por serie, así que no hace falta tope de puntos como en
+    `/meteo/history` -- el tope lo pone el `le=720`.
+    """
+    for nombre, valor in (("ncu", ncu), ("tcu", tcu)):
+        if not _RE_TAG.match(valor):
+            raise HTTPException(400, f"`{nombre}` inválido: {valor!r}. Solo "
+                                     "letras, dígitos, punto, guion y guion bajo")
+    field_list = [f.strip() for f in fields.split(",") if f.strip()]
+    desconocidos = [f for f in field_list if f not in _TRACKER_FIELDS]
+    if desconocidos:
+        raise HTTPException(400, f"campos no reconocidos: {desconocidos}. "
+                                 f"Disponibles: {sorted(_TRACKER_FIELDS)}")
+    if not field_list:
+        return {"ncu": ncu, "tcu": tcu, "series": {}}
     flt = " or ".join(f'r._field == "{f}"' for f in field_list)
     q = f'''
 from(bucket: "{BUCKET}")
@@ -101,6 +141,9 @@ def traffic(hours: int = Query(24, le=720), ncu: str | None = None):
     tiempo REALMENTE medido (`period_s`), no con la ventana pedida: si el
     colector ha estado parado dos horas, la proyección a día no se infla.
     """
+    if ncu is not None and not _RE_TAG.match(ncu):
+        raise HTTPException(400, f"`ncu` inválido: {ncu!r}. Solo letras, "
+                                 "dígitos, punto, guion y guion bajo")
     flt = f' and r.ncu == "{ncu}"' if ncu else ""
     campos = " or ".join(f'r._field == "{f}"' for f in TRAFFIC_FIELDS)
     q = f"""
@@ -144,7 +187,6 @@ def _rates(fila: dict) -> dict:
 #: se sale del literal y puede leer otro `measurement` o `bucket` —datos de
 #: otra planta— o lanzar una consulta que tumbe el servicio. Que la API sea de
 #: solo lectura no lo evita: lee lo que no debe.
-_RE_TAG = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")      # hsu, ncu
 #: La ventana tiene que ser POSITIVA y sin ceros a la izquierda: `0s` daba una
 #: división por cero al calcular los puntos y `00s` un KeyError al partir la
 #: unidad. Las dos pasaban el filtro y morían con un 500 — un valor que se
