@@ -356,6 +356,7 @@ Backend Docker (`tracker-scada.tar.gz`) + frontend de un solo fichero (`index.ht
 | `tools/trafico.py` | Estimador de tráfico por planta y por flota (LAN, nube, malla Zigbee) |
 | `tools/gen_trafico.py` | Hornea en `trafico.html` los bytes por ciclo de cada NCU (fuente: el modelo) |
 | `tools/test_trafico.py` | Banco del medidor: modelo de bytes, estimación ≡ medida, line protocol |
+| `tools/test_comms_age.py` | Banco del reloj: la resta NCU−NCU, medida en color de flota |
 | `tools/test_eventos.py` | Banco de eventos: flancos, hora del dato, ámbitos reales |
 | `tools/test_modbus_map.py` | Banco del mapa: el subconjunto contra el R7 publicado (bloques, offsets, tipos, alarmas) |
 | `tools/calibrar_zigbee.py` | Calibra la malla: saltos de la captura de rutas, reintentos del `zigbee_log.csv` |
@@ -398,13 +399,27 @@ se queda con la última muestra. `/history` agrega en ventanas **fijas de 5 min*
 `hours` de 1 a 720 y solo los campos de la tabla — lista **blanca**: un campo que no esté ahí se
 rechaza con 400 en vez de llegar al texto de la consulta.
 
-> ⚠️ **`comms_age_s` resta dos relojes distintos.** `tcu_lastcomm` (29500) es la marca que pone **la
-> NCU** cuando habló con cada TCU, y el colector le resta la hora de **su propio host**
-> (`drivers/modbus_ncu.py`). Si el reloj de la NCU va desviado —y va: la toolbox tiene un aviso
-> «RELOJ NCU DESVIADO» justo para eso— la edad sale mal por esa misma cantidad. Y `tracker_health()`
-> marca `offline` por encima de 300 s, así que una NCU media hora atrasada puede dar **su flota
-> entera por offline**. Está sin arreglar a propósito: tocarlo cambia el color del estado de todos
-> los trackers y es decisión del mantenedor.
+**`comms_age_s` es una resta NCU−NCU**, y conviene saber por qué se dice así. `tcu_lastcomm` (29500)
+es la marca que pone **la NCU** cuando habló con cada TCU, con **su** reloj. El colector le restaba
+la hora de **su propio host**, así que el desvío entre los dos relojes entraba entero en la edad —y
+va desviado: la toolbox tiene un aviso «RELOJ NCU DESVIADO» justo para eso—. Como `tracker_health()`
+marca `offline` por encima de 300 s, una NCU media hora atrasada daba **su flota entera por
+offline**, con los TCUs hablando. Medido en el banco: **108 de 108**.
+
+Ahora el minuendo es `date_time` (30104), el reloj de la propia NCU, que ya venía en el bloque de
+estado —**no cuesta una lectura más**, solo se lee la NCU antes que los TCUs—, y el desvío se
+cancela por construcción en vez de estimarse. Los mismos 108 quedan en 2, los que el simulado apaga
+a propósito.
+
+**El desvío no se tira, se publica**: `clock_skew_s` en `ncu_status`, y `comms_age_src` por TCU dice
+si la edad salió del reloj de la NCU (`ncu`), del host porque la NCU no publica el suyo (`host`) o
+si no hay marca (`sin_marca`). El fallback existe y va **declarado**: callarlo sería volver al mismo
+error con mejor letra. Un síntoma que antes solo se veía como una flota apagada de golpe es ahora un
+número que se puede vigilar antes de que moleste.
+
+**Banco:** `python tools/test_comms_age.py` — 12 comprobaciones, sin hierro. No mide la aritmética
+de la resta (los dos números siempre estuvieron bien; lo que estaba mal era de dónde salía cada
+uno), sino la **consecuencia**: el reparto de colores de la flota antes y después, con su mutante.
 
 **Un campo que falta sale como `null`, no se omite.** Con la NCU pre-R7 de El Burgo el bloque no
 existe y el `pivot` no trae esos campos: la clave está igual, con valor nulo, para que un consumidor
