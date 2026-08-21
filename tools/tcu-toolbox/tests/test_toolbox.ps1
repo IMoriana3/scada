@@ -3684,6 +3684,44 @@ Check 'diag: la RSU cuenta como HSU' (Fila-Tipo $filasNiv[2]) 'HSU'
 Check 'diag: un repetidor no es una TCU' (Fila-Tipo $filasNiv[4]) 'REP'
 
 Write-Host ''
+Write-Host '== el fichero exportado lleva la hora del DATO, no la de guardarlo =='
+# Un barrido de Ayora son minutos. Si lo exportas a media tarde, el fichero se
+# llamaba con la hora de la tarde: dos diagnosticos de la misma mañana acababan
+# con nombres que no dicen cual es cual.
+Check 'sello: una fecha se formatea' (Sello-De ([datetime]'2026-08-21 07:05:00')) '20260821_0705'
+Check 'sello: y con el formato que se le pida' (Sello-De ([datetime]'2026-08-21 07:05:09') 'yyyy-MM-dd HH:mm:ss') '2026-08-21 07:05:09'
+# sin sello, "ahora": el que no sella se comporta como antes
+Check 'sello: sin dato, la hora de ahora' ((Sello-De $null) -eq (Get-Date -Format 'yyyyMMdd_HHmm')) $true
+Check 'sello: una cadena no es una fecha' ((Sello-De '20260821_0705') -eq (Get-Date -Format 'yyyyMMdd_HHmm')) $true
+Check 'sello: ni un cero' ((Sello-De 0) -eq (Get-Date -Format 'yyyyMMdd_HHmm')) $true
+# el nombre del fichero sale de ahi, no de Get-Date
+$blqGC = $src.Substring($src.IndexOf('function Guardar-Como'), 500)
+Check 'sello: el nombre del fichero lo usa' ($blqGC.Contains('(Sello-De $script:SelloDe[$bloque])')) $true
+Check 'sello: y ya no pone la hora de guardar' ($blqGC.Contains("`$dlg.FileName = `$pref + '_' + (Get-Date")) $false
+# y el campo de dentro del JSON tambien, que es el que se queda en la plataforma
+foreach ($b in @('diag', 'aud', 'inv', 'pem', 'bat')) {
+    Check "sello: el JSON de $b lleva la hora de la lectura" ($src.Contains("(Sello-De `$script:SelloDe['$b'] 'yyyy-MM-dd HH:mm:ss')")) $true
+}
+Check 'sello: y la de exportar va aparte, no se pierde' (@([regex]::Matches($src, "exportado *= *\(Get-Date")).Count -ge 5) $true
+# ---------- que no vuelva a pasar en una pantalla nueva ----------
+# La regla es mecanica: TODA llamada a un exportador dice de que bloque es. Si
+# alguien añade una pantalla y se olvida, falla aqui y no en campo tres meses
+# despues, mirando dos CSV que no se sabe cual es cual.
+$sinBloque = @()
+foreach ($ln in @($src -split "`r?`n")) {
+    if ($ln -match '^\s*(function|#)') { continue }
+    if ($ln -notmatch '\b(Exportar-Csv|Exportar-Json|Guardar-Como)\s') { continue }
+    if ($ln -notmatch '-bloque\s') { $sinBloque += $ln.Trim() }
+}
+Check 'sello: ninguna exportacion sin bloque' ($sinBloque -join ' || ') ''
+# y todo bloque que se exporta tiene quien lo selle (salvo los que no leen)
+$SIN_LECTURA = @('cierre', 'caja')   # cierre se acumula a mano; la caja pide el nombre ANTES de leer
+$usados = @([regex]::Matches($src, "-bloque '([a-z]+)'") | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+Check 'sello: hay bloques declarados' ($usados.Count -ge 15) $true
+$huerfanos = @($usados | Where-Object { $SIN_LECTURA -notcontains $_ -and -not $src.Contains("Sellar '$_'") })
+Check 'sello: todos tienen quien los selle' ($huerfanos -join ',') ''
+
+Write-Host ''
 Write-Host '== HSU: DIAGNOSTICAR es un barrido corto, no la planta entera =='
 # En la hoja de estaciones, DIAGNOSTICAR barria las 751 TCUs de Ayora para
 # acabar enseñando diez filas. Las HSUs viven en la cache de la NCU (30200): una
