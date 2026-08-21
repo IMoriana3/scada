@@ -1447,12 +1447,23 @@ function scadaTip(m){
   const H={ok:"#7be0a8",warn:"#ffd35c",alarm:"#ff8a80",offline:"#aab6c2"};
   let h=`<br><span style="color:${H[d.health]||'#fff'};font-weight:600">\u25cf ${d.health.toUpperCase()}</span>`;
   if(d.health==="offline") return h+(d.comms_age_s!=null?` \u00b7 sin comms ${fmtAge(d.comms_age_s)}`:"");
+  /* El modo, arriba y en ambar, cuando NO es AUTO: es lo que distingue un
+     seguidor parado de uno operando, y el angulo no lo distingue. */
+  if(scNoSigue(d)) h+=`<br><span style="color:#ffd35c;font-weight:600">${scModo(d)} \u00b7 no sigue</span>`;
   if(d.tilt_angle!=null) h+=`<br>\u00e1ngulo ${(+d.tilt_angle).toFixed(1)}\u00b0 / obj ${(+d.target_angle).toFixed(1)}\u00b0`;
   if(d.soc!=null) h+=`<br>SoC ${Math.round(d.soc)}%${d.battery_voltage!=null?' \u00b7 '+(d.battery_voltage/1000).toFixed(2)+' V':''}${d.temp_battery!=null?' \u00b7 '+d.temp_battery+' \u00b0C':''}`;
   if(d.alarms) h+=`<br><span style="color:#ff8a80">\u26a0 ${d.alarms}</span>`;
   return h;
 }
 function fmtAge(s){ return s<120?Math.round(s)+" s":s<7200?Math.round(s/60)+" min":(s/3600).toFixed(1)+" h"; }
+/* El MODO del seguidor. Mismo criterio que `decode.MAIN_STATE`: 2 = AUTO es el
+   unico en el que esta siguiendo. Se muestra SIEMPRE que no sea AUTO -- y no es
+   cosmetica: un seguidor parado en OFF a la misma altura que sus vecinos se veia
+   verde e identico a ellos (reportado sobre la 14·14), porque lo unico que lo
+   habria delatado era la desviacion, y en la coincidencia no hay desviacion. */
+const SC_MODO={0:"OFF",1:"MANUAL",2:"AUTO"};
+function scModo(d){ const m=d&&d.main_state; return m==null?null:(SC_MODO[+m]||("? ("+m+")")); }
+function scNoSigue(d){ const m=d&&d.main_state; return m!=null&&+m!==2; }
 /* ===================== Ficha de campo por TCU (B2) =====================
    DOS CLAVES, y la distincion es el corazon de esto:
 
@@ -1518,6 +1529,7 @@ function fiRender(r){
   h+=`<div class="eq-sub">Posicion</div><div class="fi-grid">`
    + fiStat("Angulo",fiNum(d.tilt_angle,1,"°"))+fiStat("Objetivo",fiNum(d.target_angle,1,"°"))
    + fiStat("Desviacion",(d.tilt_angle!=null&&d.target_angle!=null)?fiNum(d.tilt_angle-d.target_angle,1,"°"):null)
+   + fiStat("Modo",scModo(d))
    + fiStat("Backtracking",d.bt_active==null?null:(+d.bt_active?"activo":"no"))
    + fiStat("Posicion segura",d.safe_position==null?null:(+d.safe_position?"SI":"no"))+`</div>`;
   h+=`<div class="eq-sub">Bateria y panel</div><div class="fi-grid">`
