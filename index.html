@@ -145,6 +145,20 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 .eq-sub{margin:18px 0 9px;font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
 .chip{display:inline-flex;gap:5px;align-items:center;background:var(--surface-2);border:1px solid var(--line);border-radius:20px;padding:3px 10px;font-size:12px;margin:0 6px 6px 0}
 .eq-foot{display:flex;gap:8px;padding:14px 18px;border-top:1px solid var(--line);flex-wrap:wrap}
+/* ---- Ficha de campo por TCU (B2). Reutiliza la caja de `eq-modal`: misma
+       persiana, mismo cierre, misma tipografía. Lo propio es el estandarte y
+       la rejilla de medidas. ---- */
+.fi-flag{border-radius:9px;padding:9px 12px;font-size:12.5px;line-height:1.45;margin-bottom:14px;border:1px solid}
+.fi-flag.warn{background:#fff8e1;border-color:#e8c96a;color:#6b4e00}
+.fi-flag.stale{background:#fdeaea;border-color:#e39c9c;color:#7a2222}
+.fi-flag b{font-weight:700}
+.fi-id{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin-bottom:12px}
+.fi-id .big{font-family:var(--mono);font-size:19px;font-weight:700;letter-spacing:-.4px}
+.fi-id .sub{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.fi-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.fi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:8px}
+.fi-grid .stat .v{font-size:17px}
+.fi-grid .stat.na .v{color:var(--muted);font-size:14px;font-weight:400}
 /* ---- Identidad Factiun: back-link, marca y footer ---- */
 .header .back{color:rgba(231,238,244,.72);text-decoration:none;font:600 12px/1 var(--mono);padding:5px 9px;border:1px solid rgba(231,238,244,.18);border-radius:8px;white-space:nowrap}
 .header .back:hover{color:#fff;border-color:var(--accent)}
@@ -322,6 +336,19 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
     <div class="eq-foot">
       <button class="btn" id="eq-csv1">Inventario de equipos (CSV)</button>
       <button class="btn" id="eq-csv2">Asignación por TCU (CSV)</button>
+    </div>
+  </div>
+</div>
+
+<div class="eq-modal" id="fi-modal">
+  <div class="eq-box">
+    <div class="eq-head">
+      <h3>Ficha de campo · TCU</h3>
+      <button class="x" id="fi-close" title="Cerrar">×</button>
+    </div>
+    <div class="eq-body" id="fi-body"></div>
+    <div class="eq-foot">
+      <button class="btn" id="fi-link">Copiar enlace a esta ficha</button>
     </div>
   </div>
 </div>
@@ -940,7 +967,8 @@ const S={motors:[],ncus:[],rsus:[],reps:[],hull:[],sc:"compacta",
   v:{circles:false,gw:false,blocks:true,grid:true,tables:false},
   T:{scale:1,ox:0,oy:0}, sel:null, hover:null, assignMode:false, placeMode:false, numMode:"rows", preset:false, fromAyora:false, measureMode:false, measure:{a:null,b:null}, projOX:null, projOY:null, ncuColor:{}, pbColor:{},
   tablesUser:null, hasDims:false,   // tablesUser: null hasta que el operador elige formato (mesas/marcas); luego manda él
-  scada:{on:false, url:null, interval:20, data:{}, last:null, err:null, timer:null}};
+  scada:{on:false, url:null, interval:20, data:{}, last:null, err:null, timer:null},
+  ficha:null};   // ficha: {m, ncu, gw, tn, stale} del TCU abierto, o null
 const PB_PALETTE=["#215E99","#1f9d57","#d98300","#8e44ad","#16a0a0","#c0392b"];
 function hueColor(i,light){ const h=(i*137.508)%360; return `hsl(${h.toFixed(0)} 62% ${light?64:46}%)`; }
 function assignColors(){
@@ -1261,9 +1289,25 @@ cv.addEventListener("pointerup",e=>{
   if(pinch){ if(ptrs.size<2)pinch=null; drag=null; return; }
   if(drag&&drag.mode==="rect"){ handleRect(drag); drag=null; draw(); return; }
   if(drag&&drag.mode==="ncu"&&drag.moved){ const _mv=drag.ncu; reassignToNearest(S.motors,S.ncus,S.ncus._adj,S.p.radius,S.p.capNCU,S.p.capGW,S.p.gwAxis); applyNumbering(); S.sel=_mv.id; assignColors(); updatePanel(); }
-  else if(drag&&drag.mode==="pan"&&!drag.moved){ S.sel=null; updatePanel(); }
+  else if(drag&&drag.mode==="pan"&&!drag.moved){
+    /* Clic limpio sobre un tracker -> ficha. Mismo criterio de acierto que el
+       tooltip (10 px), para que lo que se ve al pasar por encima sea lo que se
+       abre al pulsar. En modo medir/asignar/colocar no interrumpe: ahi el clic
+       ya significa otra cosa. */
+    const mm=(!S.measureMode&&!S.assignMode&&!S.placeMode)?motorAt(e.clientX,e.clientY):null;
+    if(mm&&mm.ncu!=null&&mm.tn!=null) fiOpen({m:mm, ncu:mm.ncu, gw:mm.gw||1, tn:mm.tn, stale:false});
+    else { S.sel=null; updatePanel(); }
+  }
   drag=null; draw();
 });
+/* Acierto sobre un motor en coordenadas de pantalla. Extraido para que el
+   tooltip (hover) y la ficha (clic) no puedan usar criterios distintos. */
+function motorAt(clientX,clientY){
+  const rect=cv.getBoundingClientRect(), mx=(clientX-rect.left)*DPR, my=(clientY-rect.top)*DPR;
+  let bm=null,bd=10*DPR;
+  for(let i=0;i<S.motors.length;i++){ const s=w2s(S.motors[i]); const d=Math.hypot(s.x-mx,s.y-my); if(d<bd){bd=d;bm=i;} }
+  return bm==null?null:S.motors[bm];
+}
 cv.addEventListener("wheel",e=>{
   e.preventDefault(); const rect=cv.getBoundingClientRect(); const mx=(e.clientX-rect.left)*DPR,my=(e.clientY-rect.top)*DPR;
   const wx=(mx-S.T.ox)/S.T.scale, wy=(S.T.oy-my)/S.T.scale;
@@ -1365,6 +1409,18 @@ document.getElementById("assign-mode").onclick=function(){ if(S.measureMode){ S.
 document.getElementById("eq-open").onclick=openEquip;
 document.getElementById("eq-close").onclick=closeEquip;
 document.getElementById("eq-modal").onclick=e=>{ if(e.target.id==="eq-modal") closeEquip(); };
+document.getElementById("fi-close").onclick=fiClose;
+document.getElementById("fi-modal").onclick=e=>{ if(e.target.id==="fi-modal") fiClose(); };
+document.getElementById("fi-link").onclick=function(){
+  if(!S.ficha||!S.ficha.m) return;
+  const u=location.origin+location.pathname+location.search+fiHash(S.ficha.m);
+  const ok=()=>{ this.textContent="Enlace copiado"; setTimeout(()=>{this.textContent="Copiar enlace a esta ficha";},1600); };
+  /* Sin `navigator.clipboard` (http plano, que es como se sirve esto en planta)
+     se cae al textarea de toda la vida en vez de no hacer nada. */
+  if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(u).then(ok,()=>prompt("Copia el enlace:",u));
+  else { const t=document.createElement("textarea"); t.value=u; document.body.appendChild(t); t.select();
+         try{ document.execCommand("copy"); ok(); }catch(e){ prompt("Copia el enlace:",u); } t.remove(); }
+};
 document.getElementById("eq-csv1").onclick=csvEquip;
 document.getElementById("eq-csv2").onclick=csvAssign;
 window.addEventListener("resize",resize);
@@ -1397,6 +1453,107 @@ function scadaTip(m){
   return h;
 }
 function fmtAge(s){ return s<120?Math.round(s)+" s":s<7200?Math.round(s/60)+" min":(s/3600).toFixed(1)+" h"; }
+/* ===================== Ficha de campo por TCU (B2) =====================
+   DOS CLAVES, y la distincion es el corazon de esto:
+
+     · identidad de RUNTIME -> `ncu|scadaIdx`. Es lo que `scadaOf()` consulta
+       contra `S.scada.data`. No cambia.
+     · ancla del DEEP-LINK  -> `ncu + gw + tn`. Es lo que viaja en el hash.
+
+   Por que el enlace NO se ancla a `scadaIdx`: lo numera `buildScadaIndex()`
+   ordenando los motores de cada NCU por (gw, tn), asi que es un indice DERIVADO
+   del plano. El dia que el plano se toque -- y esta pendiente, la conciliacion
+   219-vs-215 con la TCU 109 en "confirmar en campo" -- todos los scadaIdx se
+   corren, y un enlace guardado en un correo de postventa caeria en OTRO tracker
+   con cara de correcto. Un enlace verosimil al hierro equivocado es peor que un
+   404: el 404 se ve.
+
+   Y `tn` no es "un indice mas estable", que seria la razon equivocada para
+   elegirlo. Es el MODELO DEL NUMERO FISICO: la linea que lo asigna espeja
+   `TCU_SUNNER_ID_nnn`, el identificador real medido en la malla de El Burgo,
+   corrido de GW1 a GW2 sin reiniciar. De ahi la consecuencia que hace correcto
+   el criterio -- cuando el numero fisico cambie, el enlace DEBE romperse.
+
+   `gw` viaja aunque para identificar sea redundante (`tn` ya es unico por NCU),
+   y no de adorno: si al resolver no cuadra con el del motor que devuelve `tn`,
+   el enlace es de un plano ANTERIOR, y la ficha lo DICE en vez de aterrizar
+   callada por el lado que cuadre. Un cable-trampa que no suena no es un cable
+   trampa. */
+const FI_R7=["battery_current","motor_current","soh","temp_pcb","panel_voltage","alarms1","alarms2"];
+function fiHash(m){ return (m&&m.ncu!=null&&m.tn!=null)?`#tcu/${encodeURIComponent(m.ncu)}/${m.gw||1}/${m.tn}`:""; }
+/* Devuelve el motor y, si procede, el aviso. `null` = el hash no nombra un TCU
+   de este plano; ahi la ficha no se abre (mejor no abrir que abrir otra). */
+function fiResolve(hash){
+  const mm=/^#tcu\/([^/]+)\/(\d+)\/(\d+)$/.exec(hash||"");
+  if(!mm) return null;
+  const ncu=decodeURIComponent(mm[1]), gw=+mm[2], tn=+mm[3];
+  const m=S.motors.find(o=>o.ncu===ncu&&o.tn===tn);
+  if(!m) return {m:null, ncu, gw, tn};
+  return {m, ncu, gw, tn, stale:(m.gw||1)!==gw};
+}
+function fiNum(v,d,u){ return v==null?null:(+v).toFixed(d==null?1:d)+(u||""); }
+function fiStat(k,v){ return `<div class="stat${v==null?" na":""}"><div class="k">${k}</div><div class="v">${v==null?"—":v}</div></div>`; }
+function fiRender(r){
+  const m=r.m, d=scadaOf(m), H={ok:"#2f9e68",warn:"#b8860b",alarm:"#c0392b",offline:"#7b8794"};
+  let h="";
+  if(r.stale) h+=`<div class="fi-flag stale"><b>Enlace de un plano anterior.</b> El enlace dice GW${r.gw} y este TCU esta hoy en GW${m.gw||1}. Se abre el tracker cuyo numero fisico (T${String(m.tn).padStart(3,"0")}) coincide, que es el que manda — pero comprueba que es el que buscabas antes de actuar sobre el.</div>`;
+  h+=`<div class="fi-id"><span class="big">${m.tcu||(m.ncu+"·T"+m.tn)}</span>`
+   + `<span class="sub">${m.ncu} · GW${m.gw||1} · nº fisico ${m.tn} · indice SCADA ${m.scadaIdx!=null?m.scadaIdx:"—"}</span></div>`;
+  if(!S.scada.on) return h+`<div class="fi-flag warn">El modo SCADA esta apagado: la ficha muestra la identidad del equipo, no su estado. Pulsa <b>SCADA</b> para conectar la API.</div>`;
+  if(!d) return h+`<div class="fi-flag warn">La API no ha devuelto este TCU en el ultimo ciclo. No es lo mismo que estar offline: <b>no ha llegado la respuesta</b>.</div>`;
+  h+=`<div style="margin-bottom:12px"><span class="fi-dot" style="background:${H[d.health]||"#7b8794"}"></span>`
+   + `<b style="color:${H[d.health]||"#7b8794"}">${String(d.health||"?").toUpperCase()}</b>`
+   + (d.comms_age_s!=null?` <span class="sub" style="color:var(--muted)">· ultima comunicacion hace ${fmtAge(d.comms_age_s)}</span>`:"")
+   + (d.alarms?`<div style="color:#c0392b;margin-top:5px">⚠ ${d.alarms}</div>`:"")+`</div>`;
+  /* El estandarte pre-R7. Un campo que el firmware no expone llega como `null`,
+     NO omitido -- contrato del #205 --, asi que el bloque entero en null es
+     firmware viejo, y la ficha lo dice UNA vez arriba en lugar de pintar siete
+     guiones que el tecnico tendria que interpretar. Si la clave ni siquiera
+     viene, el que se ha quedado atras es el otro lado: la API. */
+  const faltan=FI_R7.filter(k=>!(k in d)), nulos=FI_R7.filter(k=>k in d&&d[k]==null);
+  if(faltan.length===FI_R7.length)
+    h+=`<div class="fi-flag warn"><b>La API no sirve el bloque ampliado.</b> Es una API anterior al #205; el firmware de esta NCU no se puede saber desde aqui.</div>`;
+  else if(nulos.length===FI_R7.length)
+    h+=`<div class="fi-flag warn"><b>Firmware anterior a R7.</b> Esta NCU no publica el bloque ampliado (corriente de bateria y de motor, SoH, temperatura de placa, tension de panel y los dos registros de alarma). Los campos van vacios porque <b>el equipo no los expone</b>, no porque falte el dato.</div>`;
+  h+=`<div class="eq-sub">Posicion</div><div class="fi-grid">`
+   + fiStat("Angulo",fiNum(d.tilt_angle,1,"°"))+fiStat("Objetivo",fiNum(d.target_angle,1,"°"))
+   + fiStat("Desviacion",(d.tilt_angle!=null&&d.target_angle!=null)?fiNum(d.tilt_angle-d.target_angle,1,"°"):null)
+   + fiStat("Backtracking",d.bt_active==null?null:(+d.bt_active?"activo":"no"))
+   + fiStat("Posicion segura",d.safe_position==null?null:(+d.safe_position?"SI":"no"))+`</div>`;
+  h+=`<div class="eq-sub">Bateria y panel</div><div class="fi-grid">`
+   + fiStat("SoC",d.soc==null?null:Math.round(d.soc)+" %")+fiStat("SoH",d.soh==null?null:Math.round(d.soh)+" %")
+   + fiStat("Tension bat.",d.battery_voltage==null?null:(d.battery_voltage/1000).toFixed(2)+" V")
+   + fiStat("Corriente bat.",d.battery_current==null?null:(d.battery_current/1000).toFixed(2)+" A")
+   + fiStat("Tension panel",d.panel_voltage==null?null:(d.panel_voltage/1000).toFixed(2)+" V")+`</div>`;
+  /* La corriente de motor es la razon de ser de la ficha: es lo que distingue
+     "no se mueve porque no le mandan" de "no se mueve porque no puede". */
+  h+=`<div class="eq-sub">Motor y salud</div><div class="fi-grid">`
+   + fiStat("Corriente motor",d.motor_current==null?null:(d.motor_current/1000).toFixed(2)+" A")
+   + fiStat("Temp. bateria",fiNum(d.temp_battery,1," °C"))+fiStat("Temp. placa",fiNum(d.temp_pcb,1," °C"))
+   + fiStat("Sistema OK",d.system_ok==null?null:(+d.system_ok?"si":"NO"))
+   + fiStat("Alarmas 1/2",(d.alarms1==null&&d.alarms2==null)?null:`0x${(d.alarms1||0).toString(16)} / 0x${(d.alarms2||0).toString(16)}`)+`</div>`;
+  return h;
+}
+function fiOpen(r){
+  if(!r||!r.m) return false;
+  S.ficha=r;
+  document.getElementById("fi-body").innerHTML=fiRender(r);
+  document.getElementById("fi-modal").classList.add("open");
+  const nh=fiHash(r.m); if(nh&&location.hash!==nh) history.replaceState(null,"",location.pathname+location.search+nh);
+  return true;
+}
+function fiClose(){
+  document.getElementById("fi-modal").classList.remove("open"); S.ficha=null;
+  if(location.hash.startsWith("#tcu/")) history.replaceState(null,"",location.pathname+location.search);
+}
+/* Un solo sitio decide si el hash abre ficha, lo llamen el arranque o el
+   `hashchange`: asi pegar la URL y navegar a ella no pueden divergir. */
+function fiFromHash(){
+  const r=fiResolve(location.hash);
+  if(!r) { if(S.ficha) fiClose(); return false; }
+  return fiOpen(r);
+}
+window.addEventListener("hashchange",fiFromHash);
 function scadaChip(){
   let c=document.getElementById("scada-chip");
   if(!c){ c=document.createElement("div"); c.id="scada-chip";
@@ -1451,6 +1608,10 @@ async function scadaPoll(){
     sc.err=String(e.message||e);
     scadaChip().innerHTML=`SCADA \u00b7 <span style="color:#ff8a80">error: ${sc.err}</span>${sc.last?` \u00b7 \u00faltimo dato ${sc.last.toLocaleTimeString().slice(0,8)}`:""}`+trafficLine(sc);
   }
+  /* La ficha abierta se repinta con cada ciclo: es una vista de campo, y una
+     que se queda congelada mientras el chip de arriba sigue latiendo es peor
+     que no tenerla -- el tecnico la lee como el estado de ahora. */
+  if(S.ficha&&S.ficha.m) document.getElementById("fi-body").innerHTML=fiRender(S.ficha);
   draw();
 }
 function scadaStart(){
@@ -1482,6 +1643,11 @@ resize(); recomputeNewData();
    mismo parámetro y los mismos alias que el siting, la Cobertura y el Layout 2D, para que un enlace
    del Panel valga en cualquiera de las cuatro sin traducir el nombre. */
 (function(){ try{ var p=new URLSearchParams(location.search).get("planta"); if(!p)return; p=p.toLowerCase().trim(); if(p==="elburgo"||p==="el_burgo"||p==="el-burgo")p="burgo"; var b=document.querySelector('#scn button[data-sc="'+p+'"]'); if(b){ b.click(); b.scrollIntoView({block:"nearest"}); } }catch(e){} })();
+/* El `#tcu/...` se resuelve DESPUES de `?planta=`, y por eso convive con el en
+   vez de sustituirlo: el hash nombra un TCU DENTRO de un plano, asi que primero
+   tiene que estar cargado el plano. Un enlace completo de postventa es
+   `...?planta=burgo#tcu/NCU-01/1/7`. */
+(function(){ try{ fiFromHash(); }catch(e){} })();
 </script>
 <footer class="app-foot">Factiun · Tracker SCADA — <a href="https://imoriana3.github.io/proyectos/">Panel de Proyectos</a></footer>
 </body>
