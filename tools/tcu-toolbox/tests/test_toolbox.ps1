@@ -347,6 +347,37 @@ Check 'via NCU t1 vbat' $dm[1].Vbat_mV 26600
 Check 'via NCU t2 offline (lastComm 0)' $dm[2].Salud 'OFFLINE'
 Check 'via NCU t3 alarma eje' (($dm[3].Salud -eq 'ALARMA') -and ($dm[3].Alarmas -like '*eje*')) 'True'
 Check 'via NCU t3 modo manual' $dm[3].Modo 'MANUAL'
+
+# ---------- el caso de campo: un TCU parado no puede salir verde ----------
+# Viene del scada#210: "la 14.14 en OFF salia verde". El modo se decodificaba
+# -sale en su columna- pero la salud no lo miraba, asi que un seguidor PARADO,
+# sin alarmas y con el eje donde el resto, era indistinguible de los que si
+# estaban siguiendo. Y el uso tipico de esta herramienta -el barrido de despues
+# de tocar algo- es justo cuando esa coincidencia es mas probable.
+#
+# El 4 es identico al 1 salvo los bits 9:8 del MSR. Sin la condicion de modo,
+# los dos dan 'OK'.
+$dmModo = Ncu-DiagCompat @(1,4,6)
+Check 'modo: el parado esta en OFF' $dmModo[4].Modo 'OFF'
+Check 'modo: y sin desviacion' $dmModo[4].Dif 0
+Check 'modo: sin alarmas de por medio' ("$($dmModo[4].alarmas_1)/$($dmModo[4].alarmas_2)") '0x0000/0x0000'
+Check 'modo: PARADO NO ES OK' $dmModo[4].Salud 'AVISO'
+Check 'modo: y dice por que' ($dmModo[4].Alarmas -like '*no sigue*') $true
+Check 'modo: en MANUAL igual' $dmModo[6].Salud 'AVISO'
+Check 'modo: el que sigue de verdad sigue OK' $dmModo[1].Salud 'OK'
+Check 'modo: y no le cuelga ninguna nota' $dmModo[1].Alarmas ''
+# AVISO, no ALARMA: parar uno en OFF es mantenimiento legitimo. Lo que no puede
+# es ser invisible.
+Check 'modo: no escala a ALARMA' (@($dmModo[4].Salud, $dmModo[6].Salud) -contains 'ALARMA') $false
+# y por Zigbee directo, que es el otro camino con el mismo punto ciego
+$d10 = Diag-LeerTcu 10
+Check 'modo directo: esta en OFF' $d10.Modo 'OFF'
+Check 'modo directo: sin desviacion' $d10.Dif 0
+Check 'modo directo: PARADO NO ES OK' $d10.Salud 'AVISO'
+Check 'modo directo: y dice por que' ($d10.Alarmas -like '*no sigue*') $true
+# la condicion NO depende de $dif: sin mando, la desviacion no mide seguimiento
+Check 'modo: la nota no habla de desviacion' ($dmModo[4].Alarmas -like '*dif *') $false
+
 $hsus = @(Ncu-HsuCompat)
 Check 'via NCU 1 HSU detectada' ($hsus.Count) 1
 Check 'via NCU HSU aviso viento' (($hsus[0].Salud -eq 'AVISO') -and ($hsus[0].Alarmas -like '*ALARMA VIENTO*')) 'True'
@@ -3307,6 +3338,38 @@ Check 'rep salud: un fallo de comunicacion, AVISO' (Rep-Salud ([pscustomobject]@
 Check 'rep salud: el eje bloqueado no le afecta' (Rep-Salud ([pscustomobject]@{SoC=90}) (Rep-Alarmas 'eje bloqueado')) 'OK'
 Check 'rep salud: ni el tilt fuera de rango'     (Rep-Salud ([pscustomobject]@{SoC=90}) (Rep-Alarmas 'tilt fuera de rango')) 'OK'
 Check 'rep salud: ni la desviacion de posicion'  (Rep-Salud ([pscustomobject]@{SoC=90; Dif=45; Tilt=-5; Objetivo=40}) '') 'OK'
+# un repetidor esta atornillado a un poste: "no esta en AUTO" no le dice nada a
+# nadie. Sin filtrarlo, meter el modo en la salud ponia en AVISO a los cinco
+# repetidores de Ayora, que es cambiar un punto ciego por ruido.
+Check 'rep salud: ni que no este en AUTO' (Rep-Salud ([pscustomobject]@{SoC=90}) (Rep-Alarmas 'en OFF: no sigue')) 'OK'
+Check 'rep salud: la nota de modo se filtra entera' (Rep-Alarmas 'en MANUAL: no sigue') ''
+# pero lo suyo sigue llegando aunque venga en la misma linea
+Check 'rep salud: y lo suyo no se pierde' (Rep-Alarmas 'en OFF: no sigue; fallo com con Xbee') 'fallo com con Xbee'
+
+# --- el modo en la salud de un seguidor (relevo de scada#210) ---
+# $st con bit15=1 (system OK) y bit11=0 (sin alarma de motor enclavada)
+$stOk = 0x8000
+Check 'tcu salud: AUTO, sin alarmas y en su sitio' (Tcu-Salud $false @() $stOk 0.0 'AUTO') 'OK'
+# EL CASO DE CAMPO: parada en OFF, angulo COINCIDIENDO con el del resto
+Check 'tcu salud: OFF con el angulo coincidiendo NO es OK' (Tcu-Salud $false @() $stOk 0.0 'OFF') 'AVISO'
+Check 'tcu salud: MANUAL tampoco es seguir' (Tcu-Salud $false @() $stOk 0.0 'MANUAL') 'AVISO'
+Check 'tcu salud: un modo desconocido no es AUTO' (Tcu-Salud $false @() $stOk 0.0 '?') 'AVISO'
+# el regimen donde el fallo NO se podia ver: aqui ya avisaba antes de esto
+Check 'tcu salud: OFF y desviada seguia dando AVISO' (Tcu-Salud $false @() $stOk 12.0 'OFF') 'AVISO'
+Check 'tcu salud: AUTO desviada, AVISO como siempre' (Tcu-Salud $false @() $stOk 12.0 'AUTO') 'AVISO'
+# lo que manda sobre el modo
+Check 'tcu salud: una alarma critica manda sobre el modo' (Tcu-Salud $true @() $stOk 0.0 'OFF') 'ALARMA'
+Check 'tcu salud: system OK = 0 sigue avisando' (Tcu-Salud $false @() 0 0.0 'AUTO') 'AVISO'
+Check 'tcu salud: alarma de motor enclavada' (Tcu-Salud $false @() 0x8800 0.0 'AUTO') 'AVISO'
+# ausencia de dato NO es un modo: la NCU que nunca ha hablado con un equipo deja
+# su hueco a ceros, y eso se clasifica por OFFLINE, no por modo
+Check 'tcu salud: sin dato de modo, como antes' (Tcu-Salud $false @() $stOk 0.0 '-') 'OK'
+Check 'tcu salud: y con la cadena vacia igual' (Tcu-Salud $false @() $stOk 0.0 '') 'OK'
+Check 'modo: AUTO si sigue' (Modo-NoSigue 'AUTO') $false
+Check 'modo: OFF no' (Modo-NoSigue 'OFF') $true
+Check 'modo: sin dato no se opina' (Modo-NoSigue '-') $false
+Check 'modo nota: lleva el modo dentro' (Modo-Nota 'OFF') 'en OFF: no sigue'
+Check 'modo nota: en AUTO no hay nota' (Modo-Nota 'AUTO') ''
 # y el diagnostico lo filtra ANTES de pintarlo, no solo para el veredicto
 Check 'rep: la columna Alarmas sale filtrada' ($src.Contains('$alR = $(if ($d) { Rep-Alarmas "$($d.Alarmas)" }')) $true
 

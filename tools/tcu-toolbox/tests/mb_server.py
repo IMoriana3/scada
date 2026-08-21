@@ -41,6 +41,12 @@ preset(6, 30094, [26000, 200, (98 << 8) | 90, 220, 300])
 preset(6, 30111, [100, 100])
 preset(6, 30153, [7])
 # TCU 8: solo SoC bajo L3 (bit 12) -> AVISO (criterio decode.py: L3 no es critico)
+# TCU 10: el mismo caso de campo por Zigbee directo. Copia del 6 salvo el modo.
+preset(10, 30001, [0x0080, 0, 0, 0, 0, 1 << 15])   # OFF, de dia, system OK, sin alarmas
+preset(10, 30094, [26000, 200, (98 << 8) | 90, 220, 300])
+preset(10, 30111, [100, 100])                      # tilt = objetivo -> dif 0
+preset(10, 30153, [7])
+
 preset(8, 30001, [0x0280, 1 << 12, 0, 0, 0, 1 << 15])
 preset(8, 30094, [26000, 200, (98 << 8) | 20, 220, 300])
 preset(8, 30111, [100, 100])
@@ -82,6 +88,12 @@ def compat(tcu, msr, al1, al2, fl, tilt_rad, targ_rad, soc, soh, lastcomm):
 compat(1, 0x0200, 0, 0, 0x8000, -0.9599, -0.9599, 90, 100, epoch - 30)   # OK, AUTO
 compat(2, 0x0200, 0, 0, 0x8000, 0.0, 0.0, 50, 99, 0)                     # nunca leido -> OFFLINE
 compat(3, 0x0100, 0, 1 << 8, 0x8000, 0.1, 0.1, 80, 98, epoch - 10)       # eje bloqueado -> ALARMA
+# El caso de campo (scada#210): un TCU PARADO, sin alarmas, con el eje en la
+# misma posicion que el resto. Identico al 1 salvo los bits 9:8 del MSR. Si el
+# modo no entra en la salud, sale verde y en el barrido de despues de una
+# intervencion no se distingue de los que si estan siguiendo.
+compat(4, 0x0000, 0, 0, 0x8000, -0.9599, -0.9599, 90, 100, epoch - 30)   # OFF,    dif 0
+compat(6, 0x0100, 0, 0, 0x8000, -0.9599, -0.9599, 90, 100, epoch - 30)   # MANUAL, dif 0
 
 # HSU 1 cacheada por la NCU (30200+): alarma de viento activa, nivel 2
 preset(1, 30200, [0x040F, 2, 1 << 9] + f32w(12.5) + f32w(270.0) + f32w(0.05) + [0])

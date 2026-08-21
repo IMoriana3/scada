@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.59'
+$VERSION_TOOLBOX = '11.60'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -735,6 +735,49 @@ function Viento-Seguro([string]$ipNcu, [int]$to, [int]$puerto = 0) {
 $MODOS_TCU = @('OFF','MANUAL','AUTO','?')
 function Modo-De([int]$mainStatus) { return $MODOS_TCU[(($mainStatus -shr 8) -band 0x3)] }
 function Comis-De([int]$mainStatus) { return (($mainStatus -shr 3) -band 0x3) }
+
+# ---------- un seguidor parado no puede salir verde ----------
+# El modo se leia, se pintaba en su columna y NO se miraba para la salud. Un
+# seguidor que no esta en AUTO no esta siguiendo, tenga el angulo que tenga, y
+# el unico que lo delataba era la desviacion: un vigilante correlacionado, que
+# solo se separa cuando el sol se ha movido lo bastante. Con el angulo
+# coincidiendo con el del resto, un TCU PARADO salia OK, identico a uno
+# operando (scada#210, sobre la 14-14).
+#
+# En esta herramienta eso no es un caso raro: se usa en barridos de despues de
+# tocar algo, que es justo cuando un seguidor se queda en OFF en la posicion en
+# la que esta el resto. El tecnico barre, ve verde, y se va.
+#
+# '-' y '' quedan fuera A PROPOSITO: no son un modo, son la ausencia de dato
+# -la NCU nunca ha hablado con ese equipo-, y eso ya se clasifica por otro
+# sitio (OFFLINE). '?' SI cuenta: es una lectura de verdad, y un modo que no se
+# sabe no es seguimiento. Puras.
+function Modo-NoSigue([string]$modo) {
+    $m = "$modo"
+    return -not ($m -eq '' -or $m -eq '-' -or $m -eq 'AUTO')
+}
+# "AVISO" a secas obliga a salir a mirar para saber de que: el motivo va pegado
+# al estado, igual que 'dif ... deg' o 'system OK = 0'.
+function Modo-Nota([string]$modo) {
+    if (-not (Modo-NoSigue $modo)) { return '' }
+    return "en ${modo}: no sigue"
+}
+
+# La salud de un seguidor, con el modo dentro. Es AVISO y no ALARMA a
+# proposito: parar uno en OFF o en MANUAL es mantenimiento legitimo. Lo que no
+# es legitimo es que se vea igual que uno operando. Pura.
+function Tcu-Salud([bool]$esAlarma, $alarmas, [int]$st, [double]$dif, [string]$modo) {
+    if ($esAlarma) { return 'ALARMA' }
+    # el modo se evalua con independencia de $dif: sin nadie mandando, la
+    # desviacion no mide seguimiento
+    $hayAviso = (@($alarmas).Count -gt 0) `
+            -or ((($st -shr 15) -band 1) -eq 0) `
+            -or ($dif -gt 5) `
+            -or ((($st -shr 11) -band 1) -eq 1) `
+            -or (Modo-NoSigue $modo)
+    if ($hayAviso) { return 'AVISO' }
+    return 'OK'
+}
 
 $ESTADOS_COMIS = @{3='Factory'; 2='TCU configurado'; 1='Motor verificado'; 0='COMISIONADO'}
 
@@ -2177,6 +2220,12 @@ function Ncu-DiagCompat([int[]]$tcus) {
                 $edad = -1
                 if ($reloj -gt 1000000000 -and $lastc[$tcu] -gt 1000000000) { $edad = $reloj - $lastc[$tcu] }
                 $alarmas = @(Bits-Texto $al1 $BITS_AL1_NCU) + @(Bits-Texto $al2 $BITS_AL2_NCU)
+                # Este es el camino POR DEFECTO ("via NCU") y el del barrido de
+                # planta: tenia el mismo punto ciego que el directo. Aqui la
+                # nota basta -toda nota es AVISO-, y si el equipo esta OFFLINE
+                # las notas se reemplazan mas abajo, asi que un modo leido de
+                # una cache a ceros no se cuela.
+                $modoTcu = Modo-De $msr
                 $notas = @()
                 if ($dif -gt 5) { $notas += ("dif {0:0.0} deg" -f $dif) }
                 if ((($fl -shr 15) -band 1) -eq 0) { $notas += 'system OK = 0' }
@@ -2184,6 +2233,8 @@ function Ncu-DiagCompat([int[]]$tcus) {
                 # la edad va en su columna; aqui solo si es tanta que el dato
                 # ya no vale para decidir nada
                 if ($edad -gt 90) { $notas += "dato viejo" }
+                $nModo = Modo-Nota $modoTcu
+                if ($nModo -ne '') { $notas += $nModo }
                 $salud = 'OK'
                 if ($lastc[$tcu] -eq 0 -or ($edad -ge 0 -and $edad -gt 300)) {
                     $salud = 'OFFLINE'
@@ -2200,7 +2251,7 @@ function Ncu-DiagCompat([int[]]$tcus) {
                 $vacio = ($lastc[$tcu] -eq 0)
                 $res[$tcu] = [pscustomobject]@{
                     TCU = $tcu; Salud = $salud
-                    Modo = $(if ($vacio) { '-' } else { Modo-De $msr })
+                    Modo = $(if ($vacio) { '-' } else { $modoTcu })
                     Tilt = $(if ($vacio) { '' } else { [math]::Round($tilt, 1) })
                     Objetivo = $(if ($vacio) { '' } else { [math]::Round($targ, 1) })
                     Dif = $(if ($vacio) { '' } else { [math]::Round($dif, 1) })
@@ -6030,7 +6081,11 @@ $REP_NO_APLICA = @(
     'tilt fuera de rango', 'cortocircuito de motor', 'sobrecorriente de motor',
     'eje bloqueado', 'motor mas lento de lo esperado', 'fallo en driver de motor',
     'V motor baja', 'V motor alta', 'limite Oeste alcanzado', 'limite Este alcanzado',
-    'alarma de motor enclavada', 'SoC insuficiente para modo auto'
+    'alarma de motor enclavada', 'SoC insuficiente para modo auto',
+    # un repetidor esta atornillado a un poste: no sigue a nada, asi que "no
+    # esta en AUTO" no le dice nada a nadie. Sin esto, meter el modo en la
+    # salud (scada#210) ponia en AVISO a los cinco repetidores de Ayora.
+    'no sigue'
 )
 # La desviacion no llega como bit de alarma sino como NOTA de texto ("dif 63,7
 # deg"), asi que la lista de arriba no la cazaba: en la v11.22 los repetidores
@@ -8068,18 +8123,16 @@ function Diag-LeerTcu([byte]$tcu) {
     $alarmas += Bits-Texto $al4 $BITS_AL4
 
     $esAlarma = (($al1 -band $CRIT_AL1) -ne 0) -or (($al2 -band $CRIT_AL2) -ne 0) -or ($al3 -ne 0) -or (($al4 -band 0x100) -ne 0)
-    $hayAviso = ($alarmas.Count -gt 0) -or ((($st -shr 15) -band 1) -eq 0) -or ($dif -gt 5) -or ((($st -shr 11) -band 1) -eq 1)
-
-    $salud = 'OK'
-    if ($esAlarma) { $salud = 'ALARMA' }
-    elseif ($hayAviso) { $salud = 'AVISO' }
+    # el modo se lee ANTES de clasificar: es una de las condiciones, no un adorno
+    $modo = Modo-De $r1[0]
+    $salud = Tcu-Salud $esAlarma $alarmas $st $dif $modo
 
     $notas = @()
     if ($dif -gt 5) { $notas += ("dif {0:0.0} deg" -f $dif) }
     if ((($st -shr 15) -band 1) -eq 0) { $notas += 'system OK = 0' }
     if ((($st -shr 11) -band 1) -eq 1) { $notas += 'alarma motor enclavada' }
-
-    $modo = @('OFF','MANUAL','AUTO','?')[(($r1[0] -shr 8) -band 0x3)]
+    $nModo = Modo-Nota $modo
+    if ($nModo -ne '') { $notas += $nModo }
 
     return [pscustomobject]@{
         TCU = [int]$tcu; Salud = $salud; Modo = $modo

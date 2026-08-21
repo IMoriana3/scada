@@ -35,6 +35,46 @@ En las operaciones de **planta completa**, cada línea de la consola lleva delan
 
 Consola común con colores, botón **CANCELAR** para abortar operaciones largas, y **log automático** a `logs/tcu_toolbox_AAAAMMDD.log`. La ventana es **redimensionable y maximizable** (v4.6): al agrandarla crecen las tablas y la consola, que es lo que interesa en una planta de cientos de TCUs.
 
+**Un seguidor parado ya no sale verde (v11.60)** — el **modo** se leía, se
+pintaba en su columna y **no se miraba para la salud**. Un TCU que no está en
+AUTO no está siguiendo, tenga el ángulo que tenga, y el único que lo delataba
+era la desviación (`dif > 5°`) — un vigilante *correlacionado*: solo se separa
+cuando el sol se ha movido lo bastante. **Con el ángulo coincidiendo con el del
+resto, un seguidor PARADO salía `OK`**, idéntico a uno operando.
+
+Aquí eso no es un caso raro: esta herramienta se usa en barridos de **después de
+tocar algo**, que es justo cuando un seguidor se queda en OFF *en la posición en
+la que está el resto*. El técnico barre, ve verde, y se va del que ha dejado
+parado — delante del equipo. Mismo fallo que se arregló en el SCADA (scada#210,
+sobre la 14·14).
+
+Ahora el modo entra en la salud, **en los dos caminos**: el compacto *vía NCU*
+(el de por defecto y el del barrido de planta) y el directo por Zigbee. Es
+**AVISO, no ALARMA**: parar uno en OFF o en MANUAL es mantenimiento legítimo; lo
+que no es legítimo es que se vea igual que uno operando. Y lleva el motivo
+pegado, `en OFF: no sigue`, porque «AVISO» a secas obliga a salir a mirar.
+
+Tres cosas que quedan **fuera a propósito**:
+
+- **la ausencia de dato no es un modo.** Si la NCU nunca ha hablado con un
+  equipo, su hueco de la caché está a ceros y el modo sale `-`: eso ya se
+  clasifica como `OFFLINE`, no por modo;
+- **la desviación no interviene.** Sin nadie mandando, `dif` no mide
+  seguimiento, así que la condición se evalúa aparte;
+- **los repetidores.** Uno está atornillado a un poste: no sigue a nada, así que
+  «no está en AUTO» no le dice nada a nadie. La nota se filtra en `Rep-Alarmas`
+  como ya se filtran las de motor y posición — si no, esto ponía en AVISO a los
+  cinco repetidores de Ayora, que es cambiar un punto ciego por ruido.
+
+**Lo que se mueve en los números.** El KPI *Seguidores operativos* de la portada
+del informe cuenta los que están en `OK`, así que **baja** con esto. Medido
+sobre un barrido de 100 seguidores con 3 parados: **95 % → 92 %** (el semáforo
+sigue en `medio`; los umbrales son 98 y 90). *Con alarma o sin comunicación* **no
+se mueve** — un AVISO por modo no es una visita. Y en el historial,
+`Cmp-Salud` marcará como **«peor»** un `OK → AVISO` de un equipo que alguien
+acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
+comparador enseña entre dos barridos.
+
 **El fichero exportado lleva la hora del DATO, no la de guardarlo (v11.59)** —
 un barrido de Ayora son minutos. Si lo exportabas a media tarde, el fichero se
 llamaba `diagnostico_20260821_1640.csv` con la hora de la tarde: **dos
