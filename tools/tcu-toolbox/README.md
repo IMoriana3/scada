@@ -35,6 +35,32 @@ En las operaciones de **planta completa**, cada línea de la consola lleva delan
 
 Consola común con colores, botón **CANCELAR** para abortar operaciones largas, y **log automático** a `logs/tcu_toolbox_AAAAMMDD.log`. La ventana es **redimensionable y maximizable** (v4.6): al agrandarla crecen las tablas y la consola, que es lo que interesa en una planta de cientos de TCUs.
 
+**El fichero exportado lleva la hora del DATO, no la de guardarlo (v11.59)** —
+un barrido de Ayora son minutos. Si lo exportabas a media tarde, el fichero se
+llamaba `diagnostico_20260821_1640.csv` con la hora de la tarde: **dos
+diagnósticos de la misma mañana acababan con nombres que no dicen cuál es
+cuál**, y el que abre el CSV una semana después no tiene forma de saber a qué
+momento de la planta corresponde.
+
+Ahora cada pantalla **sella el momento en que lanza su lectura**, y ese es el
+sello que va al nombre del fichero. En todas: diagnóstico, auditoría,
+inventario, PEM, baterías, comparación, lectura de señales, identificación,
+volcado, plan de firmware, Comm esclavos, Diagnóstico NCU, estabilidad,
+auditoría de NCU / HSU / repetidores y sus firmwares.
+
+**Y el campo `fecha` de dentro del JSON igual** — ese es el que se queda en la
+plataforma, así que era el que más daño hacía. La hora de exportar no se pierde:
+va aparte, en `exportado`.
+
+Dos excepciones, a propósito: el **cierre** se va acumulando a mano, no sale de
+una lectura; y la **caja negra de la HSU** pide el nombre del fichero *antes* de
+leer, así que ahí la hora de guardar ya era la de la lectura.
+
+Para que no se cuele en la próxima pantalla, la regla es mecánica y la suite la
+exige: **toda llamada a un exportador dice de qué bloque es** (`-bloque 'diag'`),
+y todo bloque declarado tiene quien lo selle. Si alguien añade una pantalla y se
+olvida, falla en la suite y no en campo tres meses después.
+
 **Tabla de resultados de Leer variable (v5.4)** — al rehacer la pestaña en la v5.2 se borró sin querer la tabla de resultados: la lectura fallaba nada más empezar con `No se puede llamar a un método en una expresión con valor NULL`. Restaurada, con la tabla de elección de variables arriba y la de resultados debajo (solo la de abajo crece al agrandar la ventana). La suite gana un chequeo estático que recorre el árbol sintáctico y falla si alguna variable se usa sin haberse creado nunca — que es exactamente lo que se escapó aquí.
 
 **La auditoría no se cree la primera lectura (v9.1)** — salía esto: *«Esperado

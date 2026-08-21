@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.58'
+$VERSION_TOOLBOX = '11.59'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1367,6 +1367,17 @@ function Tcu-TipoAlim($nibble) {
     $n = [int]$nibble
     if ($TCU_TIPO_ALIM.ContainsKey($n)) { return "$($TCU_TIPO_ALIM[$n])" }
     return "sin confirmar (tipo $n)"
+}
+
+# El sello de tiempo que lleva el nombre de un export: la hora a la que se tomo
+# el DATO, no la de guardarlo. Un diagnostico de Ayora son minutos, y si luego
+# lo exportas a media tarde el fichero se llama con la hora de la tarde: dos
+# diagnosticos de la misma manana acaban con nombres que no dicen cual es cual.
+# $cuando = $null -o cualquier cosa que no sea una fecha- significa "ahora".
+# Pura: se prueba sin ventana.
+function Sello-De($cuando, [string]$fmt = 'yyyyMMdd_HHmm') {
+    if ($cuando -is [datetime]) { return $cuando.ToString($fmt) }
+    return (Get-Date -Format $fmt)
 }
 
 function Fila-Tipo($f) {
@@ -5627,6 +5638,21 @@ $script:UltimoEsComm = $false   # el ultimo resultado de la lista es un TEST COM
 $script:HoraDe = @{}            # hora a la que se ejecuto cada bloque, para el informe
 $script:OrdenDe = @{}           # y en que orden, para que el informe empiece por lo ultimo
 $script:NBloque = 0
+
+# ---------- cuando se tomo cada dato ----------
+# El nombre de un fichero exportado llevaba la hora de EXPORTARLO. Un barrido de
+# Ayora son minutos, y si lo guardas a media tarde el fichero se llama con la
+# hora de la tarde: dos diagnosticos de la misma manana acaban con nombres que
+# no dicen cual es cual, y el que abre el CSV una semana despues no tiene forma
+# de saber a que momento de la planta corresponde.
+#
+# Cada pantalla sella el momento en que LANZA su lectura, que es lo que
+# identifica ese barrido. El que no sella se comporta como antes -la hora de
+# ahora-, y por eso la suite exige que toda llamada a un exportador diga de que
+# bloque es.
+$script:SelloDe = @{}
+function Sellar([string]$clave) { $script:SelloDe[$clave] = (Get-Date) }
+
 # Deja constancia de que un bloque se acaba de ejecutar. El informe ordena sus
 # secciones con esto: si acabas de hacer un inventario, el inventario va
 # primero aunque en la sesion hubiera un diagnostico anterior.
@@ -6995,7 +7021,7 @@ $btnLeer.Add_Click({ Lanzar {
     $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtLTcus.Text 'Leer') $txtLGw.Text)
     if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
     Ctx-Guardar 'lectura' $cx $trabajos
-    $lvL.Items.Clear(); $lvL.Columns.Clear(); $script:UltimaLectura = @()
+    $lvL.Items.Clear(); $lvL.Columns.Clear(); $script:UltimaLectura = @(); Sellar 'lectura'
     $script:ReconfIntentos = 0; $script:ReconfConfirmados = 0; $script:ReconfCambios = 0; $script:ReconfSinAcuerdo = 0
     [void]$lvL.Columns.Add('NCU', 44)
     [void]$lvL.Columns.Add('TCU', 48)
@@ -7162,7 +7188,7 @@ $btnLeer.Add_Click({ Lanzar {
 } })
 
 $btnLCsv.Add_Click({
-    [void](Exportar-Csv $script:UltimaLectura 'lectura')
+    [void](Exportar-Csv $script:UltimaLectura 'lectura' -bloque 'lectura')
 })
 
 # ---------------------------------------------------------------------------
@@ -7437,16 +7463,18 @@ function Cmp-TipoDe([string]$titulo) {
 # expresion regular en cinco exportadores. Pura.
 function Planta-Fichero { return ((Nombre-Planta) -replace '[^\w\-\.]', '_') }
 
-function Guardar-Como([string]$pref, [string]$ext, [string]$etiqueta = '') {
+# $bloque = de que pantalla salen estos datos, para sellar el fichero con la
+# hora de la LECTURA y no con la de guardarlo (ver $script:SelloDe).
+function Guardar-Como([string]$pref, [string]$ext, [string]$etiqueta = '', [string]$bloque = '') {
     $dlg = New-Object System.Windows.Forms.SaveFileDialog
     $dlg.Filter = $(if ($ext -eq 'csv') { 'CSV (*.csv)|*.csv' } else { "$(if ($etiqueta) { $etiqueta } else { 'JSON' }) (*.$ext)|*.$ext" })
-    $dlg.FileName = $pref + '_' + (Get-Date -Format 'yyyyMMdd_HHmm') + ".$ext"
+    $dlg.FileName = $pref + '_' + (Sello-De $script:SelloDe[$bloque]) + ".$ext"
     if ($dlg.ShowDialog() -ne 'OK') { return '' }
     return $dlg.FileName
 }
-function Exportar-Csv($filas, [string]$pref, [string]$que = 'CSV') {
+function Exportar-Csv($filas, [string]$pref, [string]$que = 'CSV', [string]$bloque = '') {
     if (@($filas).Count -eq 0) { Con "No hay nada que exportar." ([System.Drawing.Color]::Orange); return '' }
-    $f = Guardar-Como $pref 'csv'
+    $f = Guardar-Como $pref 'csv' -bloque $bloque
     if ($f -eq '') { return '' }
     try {
         # ';' siempre: es lo que espera el Excel de los portatiles de campo.
@@ -7457,8 +7485,8 @@ function Exportar-Csv($filas, [string]$pref, [string]$que = 'CSV') {
         return $f
     } catch { Con "No se ha podido escribir el CSV: $_" ([System.Drawing.Color]::Salmon); return '' }
 }
-function Exportar-Json($obj, [string]$pref, [string]$que = 'JSON', [int]$prof = 5) {
-    $f = Guardar-Como $pref 'json'
+function Exportar-Json($obj, [string]$pref, [string]$que = 'JSON', [int]$prof = 5, [string]$bloque = '') {
+    $f = Guardar-Como $pref 'json' -bloque $bloque
     if ($f -eq '') { return '' }
     try {
         ConvertTo-Json $obj -Depth $prof | Set-Content $f -Encoding UTF8
@@ -7848,7 +7876,7 @@ function Ident-Leer([byte]$tcu) {
 $btnIdent.Add_Click({ Lanzar {
     $tcu = Val-Int $txtITcu.Text 'TCU' 1 247
     $cx = Params-Conexion
-    $lvI.Items.Clear(); $script:UltimaIdent = @()
+    $lvI.Items.Clear(); $script:UltimaIdent = @(); Sellar 'ident'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     $segs = @(Plan-Segmentos @($tcu) $cx)
     if ($segs.Count -eq 0 -or $segs[0].tcus.Count -eq 0) { Con "TCU $tcu fuera de los gateways de la NCU" ([System.Drawing.Color]::Salmon); return }
@@ -7876,14 +7904,14 @@ $btnIdent.Add_Click({ Lanzar {
 } })
 
 $btnICsv.Add_Click({
-    [void](Exportar-Csv $script:UltimaIdent ('identidad_tcu' + $txtITcu.Text))
+    [void](Exportar-Csv $script:UltimaIdent ('identidad_tcu' + $txtITcu.Text) -bloque 'ident')
 })
 
 # ------------------------- logica VOLCAR TCU -------------------------
 $btnVolcar.Add_Click({ Lanzar {
     $tcu = Val-Int $txtDTcu.Text 'TCU' 1 247
     $cx = Params-Conexion
-    $lvD.Items.Clear(); $script:UltimoVolcado = @()
+    $lvD.Items.Clear(); $script:UltimoVolcado = @(); Sellar 'volcado'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     $segs = @(Plan-Segmentos @($tcu) $cx)
     if ($segs.Count -eq 0 -or $segs[0].tcus.Count -eq 0) { Con "TCU $tcu fuera de los gateways de la NCU" ([System.Drawing.Color]::Salmon); return }
@@ -7950,7 +7978,7 @@ $btnVolcar.Add_Click({ Lanzar {
 } })
 
 $btnDCsv.Add_Click({
-    [void](Exportar-Csv $script:UltimoVolcado ('volcado_tcu' + $txtDTcu.Text))
+    [void](Exportar-Csv $script:UltimoVolcado ('volcado_tcu' + $txtDTcu.Text) -bloque 'volcado')
 })
 
 $btnBackupJson.Add_Click({
@@ -8072,7 +8100,7 @@ function Diag-LeerTcu([byte]$tcu) {
 # Un pase completo de diagnostico (usado por DIAGNOSTICAR y por el registrador)
 function Diag-Correr {
     $cx = Params-Conexion
-    $lvG.Items.Clear(); $script:UltimoDiag = @(); $lblGResumen.Text = ''
+    $lvG.Items.Clear(); $script:UltimoDiag = @(); $lblGResumen.Text = ''; Sellar 'diag'
     $script:UltimaCarga = @{}   # lo leido de carga era de la lectura anterior
     # trabajos: una entrada por NCU (planta completa) o una sola (modo normal)
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
@@ -8565,7 +8593,7 @@ $btnGComm.Add_Click({ Lanzar {
     $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtGTcus.Text 'Test comm') $txtGGw.Text)
     if ($trabajos.Count -eq 0) { Con 'El filtro de NCUs no coincide con ninguna NCU de la planta.' ([System.Drawing.Color]::Orange); return }
     Ctx-Guardar 'diagnostico' $cx $trabajos
-    $lvG.Items.Clear(); $script:UltimoDiag = @(); $lblGResumen.Text = ''
+    $lvG.Items.Clear(); $script:UltimoDiag = @(); $lblGResumen.Text = ''; Sellar 'diag'
     $script:UltimaCarga = @{}   # lo leido de carga era de la lectura anterior
     $script:UltimoEsComm = $true
     $reloj0 = Get-Date
@@ -8647,7 +8675,7 @@ function Bat-Pintar {
         [void][System.Windows.Forms.MessageBox]::Show('Haz primero un DIAGNOSTICAR: estas son sus baterias, no se lee nada nuevo.','Falta el diagnostico'); return $false
     }
     $script:UltimaBat = @(Bat-Auditar $script:UltimoDiag)
-    $script:UltimaBatTabla = @(Bat-Tabla $script:UltimoDiag $script:UltimaBat $script:UltimaCarga)
+    $script:UltimaBatTabla = @(Bat-Tabla $script:UltimoDiag $script:UltimaBat $script:UltimaCarga); Sellar 'bat'
     $lvB.BeginUpdate(); $lvB.Items.Clear()
     foreach ($f in $script:UltimaBatTabla) {
         $item = New-Object System.Windows.Forms.ListViewItem("$($f.NCU)")
@@ -8823,7 +8851,7 @@ function Cmp-Ventana([string]$titulo, $filas) {
     $bCsv.Location = New-Object System.Drawing.Point(12, 482)
     $bCsv.Size = New-Object System.Drawing.Size(130, 30)
     $bCsv.Anchor = 'Bottom,Left'
-    $bCsv.Add_Click({ [void](Exportar-Csv $script:UltimaCmp "comparacion_$(Planta-Fichero)") }.GetNewClosure())
+    $bCsv.Add_Click({ [void](Exportar-Csv $script:UltimaCmp "comparacion_$(Planta-Fichero)" -bloque 'cmp') }.GetNewClosure())
     $d.Controls.Add($bCsv)
     $lblN = LG $d "$($script:UltimaCmpNota)" 156 740 488
     $lblN.Anchor = 'Bottom,Left'
@@ -8846,7 +8874,7 @@ function Comparar-Trabajos {
     $fa = @($oa.filas); $fb = @($ob.filas)
     $alcance = Cmp-Alcance $fa $fb
     $filas = @(Cmp-Trabajos $tipo $fa $fb)
-    $script:UltimaCmp = $filas
+    $script:UltimaCmp = $filas; Sellar 'cmp'
     $script:UltimaCmpNota = "$($CMP_TIPOS["$tipo"].titulo): $($oa.fecha) -> $($ob.fecha) - $alcance"
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "COMPARAR $($CMP_TIPOS["$tipo"].titulo) - $($oa.planta)" ([System.Drawing.Color]::SteelBlue)
@@ -8931,7 +8959,7 @@ $btnBCar.Add_Click({ Lanzar {
 
 $btnBCsv.Add_Click({
     if (@($script:UltimaBatTabla).Count -eq 0) { return }
-    [void](Exportar-Csv $script:UltimaBatTabla 'baterias' 'Baterias')
+    [void](Exportar-Csv $script:UltimaBatTabla 'baterias' 'Baterias' -bloque 'bat')
 })
 
 $btnBJson.Add_Click({
@@ -8940,10 +8968,11 @@ $btnBJson.Add_Click({
     # discutir con fabrica hacen falta los registros tal cual
     $ctx = Ctx-Leer 'diagnostico'
     $o = @{tipo='baterias_tcu'; planta=$ctx.planta; alcance=$ctx.alcance; ncus=@($ctx.ncus)
-           ip=$ctx.ip; fecha=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+           ip=$ctx.ip; fecha=(Sello-De $script:SelloDe['bat'] 'yyyy-MM-dd HH:mm:ss')
+           exportado=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
            toolbox=$VERSION_TOOLBOX; tecnico=$script:Usuario; tcus=@($script:UltimaBatTabla)
            carga=$script:UltimaCarga}
-    [void](Exportar-Json $o 'baterias' 'Baterias en JSON')
+    [void](Exportar-Json $o 'baterias' 'Baterias en JSON' -bloque 'bat')
 })
 
 $btnGBat.Add_Click({
@@ -8951,7 +8980,7 @@ $btnGBat.Add_Click({
         [void][System.Windows.Forms.MessageBox]::Show('Haz primero un DIAGNOSTICAR: la auditoria de baterias se hace con esos datos, sin volver a leer.','Falta el diagnostico'); return
     }
     $script:UltimaBat = @(Bat-Auditar $script:UltimoDiag)
-    $script:UltimaBatTabla = @(Bat-Tabla $script:UltimoDiag $script:UltimaBat $script:UltimaCarga)
+    $script:UltimaBatTabla = @(Bat-Tabla $script:UltimoDiag $script:UltimaBat $script:UltimaCarga); Sellar 'bat'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     $vistos = @($script:UltimoDiag | Where-Object { "$($_.TCU)" -match '^\d+$' -and "$($_.Salud)" -ne 'OFFLINE' }).Count
     if ($script:UltimaBat.Count -eq 0) {
@@ -9044,7 +9073,7 @@ $btnGCsv.Add_Click({
         foreach ($k in $des.Keys) { $o[$k] = $des[$k] }
         [pscustomobject]$o
     }
-    [void](Exportar-Csv $filas 'diagnostico' 'CSV con alarmas desglosadas')
+    [void](Exportar-Csv $filas 'diagnostico' 'CSV con alarmas desglosadas' -bloque 'diag')
 })
 
 $btnGJson.Add_Click({
@@ -9065,10 +9094,13 @@ $btnGJson.Add_Click({
         ncus    = @($ctx.ncus)
         ip      = $ctx.ip
         puerto  = $ctx.puerto
-        fecha   = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        # la hora del BARRIDO, no la de pulsar exportar: es la que dice a que
+        # momento de la planta corresponden estas filas
+        fecha   = (Sello-De $script:SelloDe['diag'] 'yyyy-MM-dd HH:mm:ss')
+        exportado = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         tcus    = @($script:UltimoDiag)
     }
-    [void](Exportar-Json $obj $(if ($script:UltimoEsComm) { 'test_comm' } else { 'diagnostico' }))
+    [void](Exportar-Json $obj $(if ($script:UltimoEsComm) { 'test_comm' } else { 'diagnostico' }) -bloque 'diag')
 })
 
 # ------------------------- SINCRONIZAR RELOJ -------------------------
@@ -9598,7 +9630,7 @@ $btnCCsv.Add_Click({
     $filas = @($script:Cierre.Values | Sort-Object { [int]("0" + "$($_.ncu)") }, { [int]$_.tcu } | ForEach-Object {
         [pscustomobject]@{NCU=$_.ncu; TCU=$_.tcu; Firmware=$_.fw; Parametros=$_.params; NVM=$_.nvm; Modo=$_.modo; Desde=$_.desde; Estado=(Cierre-Estado $_)}
     })
-    [void](Exportar-Csv $filas ('cierre_' + (Planta-Fichero)) 'CSV de cierre')
+    [void](Exportar-Csv $filas ('cierre_' + (Planta-Fichero)) 'CSV de cierre' -bloque 'cierre')
 })
 
 # PREPARAR: esta pestana no escribe. Deja Escribir cargado con el preset y las
@@ -9714,7 +9746,7 @@ $btnAud.Add_Click({ Lanzar {
     $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtATcus.Text 'Auditoria') $txtAGw.Text)
     if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
     Ctx-Guardar 'auditoria' $cx $trabajos
-    $lvA.Items.Clear(); $script:UltimaAud = @()
+    $lvA.Items.Clear(); $script:UltimaAud = @(); Sellar 'aud'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     if ($cx.multi) {
         $totTcus = 0; foreach ($tr in $trabajos) { $totTcus += @($tr.tcus).Count }
@@ -9857,7 +9889,7 @@ $btnAud.Add_Click({ Lanzar {
 } })
 
 $btnAudCsv.Add_Click({
-    [void](Exportar-Csv $script:UltimaAud 'auditoria')
+    [void](Exportar-Csv $script:UltimaAud 'auditoria' -bloque 'aud')
 })
 
 # JSON de auditoria para el Historico de la plataforma (solo desviaciones +
@@ -9873,13 +9905,14 @@ $btnAudJson.Add_Click({
         alcance = $ctx.alcance
         ncus    = @($ctx.ncus)
         ip      = $ctx.ip
-        fecha   = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        fecha   = (Sello-De $script:SelloDe['aud'] 'yyyy-MM-dd HH:mm:ss')
+        exportado = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         preset  = $script:PresetRefNombre
         tcus_auditadas = $script:SegAud.Count
         conformes      = $conformes
         desviaciones   = @($script:UltimaAud)
     }
-    if ((Exportar-Json $obj ('auditoria_' + (Planta-Fichero)) 'JSON de auditoria') -ne '') {
+    if ((Exportar-Json $obj ('auditoria_' + (Planta-Fichero)) 'JSON de auditoria' -bloque 'aud') -ne '') {
         Con "  $($script:SegAud.Count) TCUs, $conformes conformes, $($script:UltimaAud.Count) desviaciones. Subelo en la pagina Historico." ([System.Drawing.Color]::Gainsboro)
     }
 })
@@ -9892,7 +9925,7 @@ $btnInvF.Add_Click({ Lanzar {
     $trabajos = @(Trabajos-Planta $cx $tcus (Ncus-Filtro))
     if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
     Ctx-Guardar 'inventario' $cx $trabajos
-    $lvV.Items.Clear(); $script:UltimoInv = @(); $lblInvF.Text = ''
+    $lvV.Items.Clear(); $script:UltimoInv = @(); $lblInvF.Text = ''; Sellar 'inv'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     if ($cx.multi) {
         $totTcus = 0; foreach ($tr in $trabajos) { $totTcus += @($tr.tcus).Count }
@@ -9967,7 +10000,7 @@ $btnInvF.Add_Click({ Lanzar {
 } })
 
 $btnInvFCsv.Add_Click({
-    [void](Exportar-Csv $script:UltimoInv 'inventario')
+    [void](Exportar-Csv $script:UltimoInv 'inventario' -bloque 'inv')
 })
 
 # JSON de inventario para el Historico de la plataforma
@@ -9981,10 +10014,11 @@ $btnInvJson.Add_Click({
         alcance = $ctx.alcance
         ncus    = @($ctx.ncus)
         ip      = $ctx.ip
-        fecha   = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        fecha   = (Sello-De $script:SelloDe['inv'] 'yyyy-MM-dd HH:mm:ss')
+        exportado = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         tcus    = @($script:UltimoInv)
     }
-    if ((Exportar-Json $obj ('inventario_' + (Planta-Fichero)) 'JSON de inventario') -ne '') {
+    if ((Exportar-Json $obj ('inventario_' + (Planta-Fichero)) 'JSON de inventario' -bloque 'inv') -ne '') {
         Con "  $($script:UltimoInv.Count) TCUs. Subelo en la pagina Historico." ([System.Drawing.Color]::Gainsboro)
     }
 })
@@ -10115,7 +10149,7 @@ $btnPMotor.Add_Click({ Lanzar {
     # La guardia de viento es por NCU (cada una tiene su HSU): con una sola
     # entrada se comprueba aqui, y con Planta completa antes de cada NCU.
     if (-not $cx.multi) { if (-not (Guardia-Viento $cx)) { return } }
-    $lvP.Items.Clear(); $script:UltimoPem = @(); $lblPResumen.Text = ''
+    $lvP.Items.Clear(); $script:UltimoPem = @(); $lblPResumen.Text = ''; Sellar 'pem'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "TEST DE MOTOR: $nTcus TCUs, pulso ${pulso}s, umbral $umbral deg" ([System.Drawing.Color]::SteelBlue)
     # hashtable y no variables sueltas: el bloque corre en otro ambito
@@ -10187,7 +10221,7 @@ $btnPModo.Add_Click({ Lanzar {
     $nTcus = Cuantas-Tcus $trabajos
     $modo = @{'OFF'=0; 'MANUAL'=1; 'AUTO'=2}[[string]$cbPModo.SelectedItem]
     if (-not (Pem-Confirmar $cx $trabajos $nTcus "Pasar $nTcus TCUs a modo $($cbPModo.SelectedItem)?" 'Cambio de modo')) { return }
-    $lvP.Items.Clear(); $script:UltimoPem = @()
+    $lvP.Items.Clear(); $script:UltimoPem = @(); Sellar 'pem'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Cambio de modo a $($cbPModo.SelectedItem) en $nTcus TCUs" ([System.Drawing.Color]::SteelBlue)
     $cM = @{ya=0; cambiadas=0; fallo=0}
@@ -10217,7 +10251,7 @@ $btnPClear.Add_Click({ Lanzar {
     $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Clear') $txtPGw.Text)
     $nTcus = Cuantas-Tcus $trabajos
     if (-not (Pem-Confirmar $cx $trabajos $nTcus "Desenclavar alarmas de motor (40007 bit 13) en $nTcus TCUs?" 'Clear alarmas')) { return }
-    $lvP.Items.Clear(); $script:UltimoPem = @()
+    $lvP.Items.Clear(); $script:UltimoPem = @(); Sellar 'pem'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Clear de alarmas enclavadas en $nTcus TCUs" ([System.Drawing.Color]::SteelBlue)
     Pem-PorTcu $trabajos {
@@ -10238,7 +10272,7 @@ function Stow-Aplicar([int]$n) {
     $nTcus = Cuantas-Tcus $trabajos
     $txtAccion = $(if ($n -gt 0) { "ACTIVAR safe position $n" } else { 'QUITAR el stow' })
     if (-not (Pem-Confirmar $cx $trabajos $nTcus "$txtAccion en $nTcus TCUs? Los seguidores se moveran." 'Stow')) { return }
-    $lvP.Items.Clear(); $script:UltimoPem = @()
+    $lvP.Items.Clear(); $script:UltimoPem = @(); Sellar 'pem'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "$txtAccion en $nTcus TCUs" ([System.Drawing.Color]::SteelBlue)
     Pem-PorTcu $trabajos {
@@ -10263,7 +10297,7 @@ $btnPUnstow.Add_Click({ Lanzar { Stow-Aplicar 0 } })
 
 $btnPComis.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    $lvP.Items.Clear(); $script:UltimoPem = @()
+    $lvP.Items.Clear(); $script:UltimoPem = @(); Sellar 'pem'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     $cuenta = @{}
     if ($cx.multi) {
@@ -10340,7 +10374,7 @@ $btnPComisSet.Add_Click({ Lanzar {
     $nTcus = Cuantas-Tcus $trabajos
     $obj = [int]([string]$cbPComis.SelectedItem).Split(' ')[0]
     if (-not (Pem-Confirmar $cx $trabajos $nTcus "Fijar estado de comisionado '$($ESTADOS_COMIS[$obj])' ($obj) en $nTcus TCUs?`r`nRecuerda GUARDAR EN NVM despues." 'Comisionado')) { return }
-    $lvP.Items.Clear(); $script:UltimoPem = @()
+    $lvP.Items.Clear(); $script:UltimoPem = @(); Sellar 'pem'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Fijando comisionado=$obj ($($ESTADOS_COMIS[$obj])) en $nTcus TCUs" ([System.Drawing.Color]::SteelBlue)
     Pem-PorTcu $trabajos {
@@ -10358,7 +10392,7 @@ $btnPComisSet.Add_Click({ Lanzar {
 } })
 
 $btnPCsv.Add_Click({
-    [void](Exportar-Csv $script:UltimoPem 'pem')
+    [void](Exportar-Csv $script:UltimoPem 'pem' -bloque 'pem')
 })
 
 # Seguimiento PEM de la sesion: una fila por TCU con las tres tareas de la
@@ -10377,11 +10411,12 @@ $btnPSeg.Add_Click({
         alcance = $ctx.alcance
         ncus    = @($ctx.ncus)
         ip      = $ctx.ip
-        fecha   = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        fecha   = (Sello-De $script:SelloDe['pem'] 'yyyy-MM-dd HH:mm:ss')
+        exportado = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         tecnico = "$env:USERNAME"
         tcus    = $filas
     }
-    if ((Exportar-Json $obj ('seguimiento_pem_' + (Planta-Fichero)) 'Seguimiento PEM') -ne '') {
+    if ((Exportar-Json $obj ('seguimiento_pem_' + (Planta-Fichero)) 'Seguimiento PEM' -bloque 'pem') -ne '') {
         $nOk = @($filas | Where-Object { $_.cold_commissioning -eq 'OK' -and $_.config_tcu -eq 'OK' -and $_.prueba_movimiento -eq 'OK' }).Count
         Con "  $($filas.Count) TCUs, $nOk con las 3 tareas OK. Subelo en la pagina Historico de la plataforma." ([System.Drawing.Color]::Gainsboro)
     }
@@ -10408,7 +10443,7 @@ $btnFwPlan.Add_Click({ Lanzar {
         $gws[$k] = $(if ($tr.cx.gws) { $tr.cx.gws } else { @(@{puerto=$tr.cx.puerto; ini=1; fin=247}) })
     }
     $plan = Plan-Firmware $script:UltimoInv $txtFwObj.Text $gws $script:UltimoDiag
-    $script:PlanFw = @($plan.tramos)
+    $script:PlanFw = @($plan.tramos); Sellar 'planfw'
     $script:PlanFwDetalle = @($plan.detalle)
     $lvFW.Items.Clear(); $lvFWd.Items.Clear()
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
@@ -10686,7 +10721,7 @@ $btnFwCsv.Add_Click({
     # el plan de verdad son las VENTANAS: lo que se abre y lo que se pega en
     # cada una. Los tramos sueltos van igualmente, para quien los quiera.
     $vv = @($script:PlanFwVentanas)
-    $f = Exportar-Csv $(if ($vv.Count -gt 0) { $vv } else { $script:PlanFw }) 'plan_firmware' 'Plan'
+    $f = Exportar-Csv $(if ($vv.Count -gt 0) { $vv } else { $script:PlanFw }) 'plan_firmware' 'Plan' -bloque 'planfw'
     if ($f -ne '' -and @($script:PlanFwDetalle).Count -gt 0) {
         # el detalle por TCU va en su propio fichero: son dos cosas distintas,
         # los tramos se pegan en el updater y la lista es para seguimiento
@@ -11183,7 +11218,7 @@ $btnNComm.Add_Click({ Lanzar {
     $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
     if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
     Ctx-Guardar 'comm' $cx $trabajos
-    $lvN.Items.Clear(); $script:UltimoComm = @(); $lblNRes.Text = ''
+    $lvN.Items.Clear(); $script:UltimoComm = @(); $lblNRes.Text = ''; Sellar 'comm'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Comm NCU: $($trabajos.Count) NCU(s) por el puerto $PUERTO_NCU" ([System.Drawing.Color]::SteelBlue)
     Prog-Iniciar $trabajos.Count
@@ -11240,7 +11275,7 @@ $btnNDiag.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
     if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
-    $lvND.Items.Clear(); $script:UltimoNcuDiag = @(); $lblNDRes.Text = ''; $btnNDCsv.Enabled = $false
+    $lvND.Items.Clear(); $script:UltimoNcuDiag = @(); $lblNDRes.Text = ''; $btnNDCsv.Enabled = $false; Sellar 'diagncu'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Diagnostico de $($trabajos.Count) NCU(s) por el puerto ${PUERTO_NCU}: solo la NCU, ningun esclavo." ([System.Drawing.Color]::SteelBlue)
     Prog-Iniciar $trabajos.Count
@@ -11289,12 +11324,12 @@ $btnNDiag.Add_Click({ Lanzar {
 } })
 $btnNDCsv.Add_Click({
     if (@($script:UltimoNcuDiag).Count -eq 0) { return }
-    [void](Exportar-Csv $script:UltimoNcuDiag 'diagnostico_ncu' 'Diagnostico NCU')
+    [void](Exportar-Csv $script:UltimoNcuDiag 'diagnostico_ncu' 'Diagnostico NCU' -bloque 'diagncu')
 })
 
 $btnNCsv.Add_Click({
     if (@($script:UltimoComm).Count -eq 0) { return }
-    [void](Exportar-Csv $script:UltimoComm 'comm_ncu' 'Comm NCU')
+    [void](Exportar-Csv $script:UltimoComm 'comm_ncu' 'Comm NCU' -bloque 'comm')
 })
 
 # ------------------------- ESTABILIDAD -------------------------
@@ -11311,7 +11346,7 @@ $btnEIni.Add_Click({ Lanzar {
         "Medir estabilidad de $nT TCUs en $($trabajos.Count) NCU(s) durante $mins min, una muestra cada $cada s ($pases pases)?`r`n`r`nSolo LEE el lastComm por el puerto ${PUERTO_NCU}: no toca la Zigbee ni mueve nada.`r`n`r`nOJO: no es potencia de senal (el mapa no la da), es cuanto tiempo esta fresca cada TCU.",
         'Medir estabilidad', 'YesNo', 'Question')
     if ($r -ne 'Yes') { return }
-    $lvE.Items.Clear(); $script:UltimaEstab = @(); $lblERes.Text = ''
+    $lvE.Items.Clear(); $script:UltimaEstab = @(); $lblERes.Text = ''; Sellar 'estab'
     Ctx-Guardar 'estab' $cx $trabajos
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Estabilidad: $nT TCUs, $pases pases cada $cada s (~$mins min). CANCELAR para parar antes y quedarse con lo medido." ([System.Drawing.Color]::SteelBlue)
@@ -11365,7 +11400,7 @@ $btnEIni.Add_Click({ Lanzar {
 
 $btnECsv.Add_Click({
     if (@($script:UltimaEstab).Count -eq 0) { return }
-    [void](Exportar-Csv $script:UltimaEstab 'estabilidad' 'Estabilidad')
+    [void](Exportar-Csv $script:UltimaEstab 'estabilidad' 'Estabilidad' -bloque 'estab')
 })
 
 $btnHBuscar.Add_Click({ Lanzar {
@@ -12021,7 +12056,9 @@ $btnHNvm.Add_Click({ Lanzar {
 
 $btnHCaja.Add_Click({ Lanzar {
     $cx = Params-Hsu
-    $fCaja = Guardar-Como 'hsu_cajanegra' 'csv'
+    # aqui el nombre se pide ANTES de leer, asi que la hora de guardarlo ya es
+    # la de la lectura: 'caja' nunca se sella y cae en el "ahora", que es lo bueno
+    $fCaja = Guardar-Como 'hsu_cajanegra' 'csv' -bloque 'caja'
     if ($fCaja -eq '') { return }
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Descargando caja negra 24h de la HSU $($cx.unitHsu) (1440 minutos, 58 lecturas)..." ([System.Drawing.Color]::SteelBlue)
@@ -12071,7 +12108,7 @@ $btnHist.Add_Click({
     $lineas = @()
     foreach ($f in $fs) { $lineas += @(Get-Content $f.FullName -ErrorAction SilentlyContinue) }
     $cambios = @(Historial-Cambios $lineas '' $tcu '')
-    $lvI.Items.Clear(); $script:UltimaIdent = @()
+    $lvI.Items.Clear(); $script:UltimaIdent = @(); Sellar 'ident'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Historial local de $(@($fs).Count) fichero(s), $($lineas.Count) lineas: $($cambios.Count) cambios$(if ($tcu) { " en la TCU $tcu" } else { ' (todas las TCUs)' })" ([System.Drawing.Color]::SteelBlue)
     if ($cambios.Count -eq 0) {
@@ -12747,7 +12784,7 @@ $btnANLeer.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
     if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
-    $lvAN.Items.Clear(); $script:UltimaAudNcu = @(); $lblANRes.Text = ''; $btnANCsv.Enabled = $false
+    $lvAN.Items.Clear(); $script:UltimaAudNcu = @(); $lblANRes.Text = ''; $btnANCsv.Enabled = $false; Sellar 'audncu'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Auditoria de $($trabajos.Count) NCU(s) por el puerto ${PUERTO_NCU}: $($NCU_RW.Count) parametro(s)." ([System.Drawing.Color]::SteelBlue)
     Prog-Iniciar $trabajos.Count
@@ -12783,7 +12820,7 @@ $btnANLeer.Add_Click({ Lanzar {
 } })
 $btnANCsv.Add_Click({
     if (@($script:UltimaAudNcu).Count -eq 0) { return }
-    [void](Exportar-Csv $script:UltimaAudNcu 'auditoria_ncu' 'Auditoria NCU')
+    [void](Exportar-Csv $script:UltimaAudNcu 'auditoria_ncu' 'Auditoria NCU' -bloque 'audncu')
 })
 
 # ------------------------- FIRMWARE NCU (solo lectura) -------------------------
@@ -12792,7 +12829,7 @@ $btnFNLeer.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
     if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
-    $lvFN.Items.Clear(); $script:UltimoFwNcu = @(); $lblFNRes.Text = ''; $btnFNCsv.Enabled = $false
+    $lvFN.Items.Clear(); $script:UltimoFwNcu = @(); $lblFNRes.Text = ''; $btnFNCsv.Enabled = $false; Sellar 'fwncu'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Versiones de $($trabajos.Count) NCU(s): registro 50 (texto) y registros 0/1." ([System.Drawing.Color]::SteelBlue)
     Prog-Iniciar $trabajos.Count
@@ -12825,7 +12862,7 @@ $btnFNLeer.Add_Click({ Lanzar {
 } })
 $btnFNCsv.Add_Click({
     if (@($script:UltimoFwNcu).Count -eq 0) { return }
-    [void](Exportar-Csv $script:UltimoFwNcu 'firmware_ncu' 'Firmware NCU')
+    [void](Exportar-Csv $script:UltimoFwNcu 'firmware_ncu' 'Firmware NCU' -bloque 'fwncu')
 })
 
 # ------------------------- AUDITORIA HSU -------------------------
@@ -12833,7 +12870,7 @@ $script:UltimaAudHsu = @()
 $btnAHLeer.Add_Click({ Lanzar {
     $objs = @(Hsu-Objetivos)
     if ($objs.Count -eq 0) { Con 'No hay ninguna HSU a la que preguntar.' ([System.Drawing.Color]::Orange); return }
-    $lvAH.Items.Clear(); $script:UltimaAudHsu = @(); $lblAHRes.Text = ''; $btnAHCsv.Enabled = $false
+    $lvAH.Items.Clear(); $script:UltimaAudHsu = @(); $lblAHRes.Text = ''; $btnAHCsv.Enabled = $false; Sellar 'audhsu'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Auditoria de $($objs.Count) HSU(s): se leen y se comparan entre si." ([System.Drawing.Color]::SteelBlue)
     $r = Hsu-Recorrer $objs (Params-Conexion) { param($u) Hsu-LeerConfig $u } $null
@@ -12860,7 +12897,7 @@ $btnAHLeer.Add_Click({ Lanzar {
 } })
 $btnAHCsv.Add_Click({
     if (@($script:UltimaAudHsu).Count -eq 0) { return }
-    [void](Exportar-Csv $script:UltimaAudHsu 'auditoria_hsu' 'Auditoria HSU')
+    [void](Exportar-Csv $script:UltimaAudHsu 'auditoria_hsu' 'Auditoria HSU' -bloque 'audhsu')
 })
 
 # ------------------------- FIRMWARE HSU -------------------------
@@ -12966,7 +13003,7 @@ $btnRALeer.Add_Click({ Lanzar {
     if ($reps.Count -eq 0) { Con 'La topologia no declara repetidores en esta seleccion.' ([System.Drawing.Color]::Orange); return }
     $vars = @(Rep-VarsAuditables $VARIABLES)
     if ($vars.Count -eq 0) { Con 'No hay parametros auditables definidos para un repetidor.' ([System.Drawing.Color]::Orange); return }
-    $lvRA.Items.Clear(); $script:UltimaAudRep = @(); $lblRARes.Text = ''; $btnRACsv.Enabled = $false
+    $lvRA.Items.Clear(); $script:UltimaAudRep = @(); $lblRARes.Text = ''; $btnRACsv.Enabled = $false; Sellar 'audrep'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Auditoria de $($reps.Count) repetidor(es), $($vars.Count) parametros cada uno. Solo lo que aplica a un equipo fijo." ([System.Drawing.Color]::SteelBlue)
     Prog-Iniciar $reps.Count
@@ -13005,7 +13042,7 @@ $btnRALeer.Add_Click({ Lanzar {
 } })
 $btnRACsv.Add_Click({
     if (@($script:UltimaAudRep).Count -eq 0) { return }
-    [void](Exportar-Csv $script:UltimaAudRep 'auditoria_repetidores' 'Auditoria repetidores')
+    [void](Exportar-Csv $script:UltimaAudRep 'auditoria_repetidores' 'Auditoria repetidores' -bloque 'audrep')
 })
 
 # ------------------------- REPETIDORES: FIRMWARE -------------------------
@@ -13016,7 +13053,7 @@ $btnRFLeer.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $reps = @(Reps-Nombrar (Reps-DeCx $cx ''))
     if ($reps.Count -eq 0) { Con 'La topologia no declara repetidores en esta seleccion.' ([System.Drawing.Color]::Orange); return }
-    $lvRF.Items.Clear(); $script:UltimoFwRep = @(); $lblRFRes.Text = ''; $btnRFCsv.Enabled = $false
+    $lvRF.Items.Clear(); $script:UltimoFwRep = @(); $lblRFRes.Text = ''; $btnRFCsv.Enabled = $false; Sellar 'fwrep'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Firmware de $($reps.Count) repetidor(es); objetivo $obj." ([System.Drawing.Color]::SteelBlue)
     Prog-Iniciar $reps.Count
@@ -13074,7 +13111,7 @@ $btnRFLeer.Add_Click({ Lanzar {
 } })
 $btnRFCsv.Add_Click({
     if (@($script:UltimoFwRep).Count -eq 0) { return }
-    [void](Exportar-Csv $script:UltimoFwRep 'firmware_repetidores' 'Firmware repetidores')
+    [void](Exportar-Csv $script:UltimoFwRep 'firmware_repetidores' 'Firmware repetidores' -bloque 'fwrep')
 })
 
 # ------------------------- REPETIDORES: BUSCAR -------------------------
