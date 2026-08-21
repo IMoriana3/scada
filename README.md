@@ -85,6 +85,45 @@ dice cuál de las condiciones lo explica, así los dos no pueden separarse.
 mutante (mover el criterio de AUTO devuelve la 14·14 a `ok`) y la medida de cuánto cambia el color de
 flota: **solo los que no están en AUTO**; los que sí, no se mueven.
 
+### Histórico de eventos
+
+`tracker_status` guarda una muestra cada 30 s. Para *«¿qué pasó anoche?»* esa es la pregunta
+equivocada: hay que barrer 2.880 muestras por TCU para encontrar el instante en que una pasó de `ok`
+a `alarm`, y quien la mira acaba deduciendo el flanco a ojo sobre una gráfica. La serie **`event`**
+guarda ese flanco, escrito **una vez** (`collector/events.py`).
+
+| etiqueta | valores |
+|---|---|
+| `scope` | `tcu` · `ncu` · `hsu` — el ámbito donde **de verdad** ocurre |
+| `kind` | `health` · `modo` · `alarma` · `inventario` · el bit de NCU/HSU que cambió |
+| `tcu` / `hsu` | **solo en su ámbito** (en InfluxDB una etiqueta vacía es otra serie) |
+
+Campos: `from`, `to`, `res_s` y, en las alarmas, `detail` con el **nombre** de la alarma — «entró
+`axis_blocked`» se puede filtrar; «aparecieron dos alarmas», no.
+
+Tres decisiones que son el módulo entero:
+
+- **La hora es la del dato, no la de guardarlo.** Cada punto lleva `.time()` explícito. Sin él,
+  InfluxDB sella con la hora de **escritura**, y el ciclo puede reintentar tras un backoff: el
+  flanco quedaría archivado minutos después de ocurrir, justo en el incidente donde el **orden** de
+  los sucesos es lo único que se está mirando. Misma lección que la toolbox v11.59 (#206), en el otro
+  extremo del sistema. Y con ella la que la hace honesta: **un flanco visto por muestreo no se conoce
+  mejor que el periodo de muestreo** — sabemos que ocurrió *entre* dos ciclos. Por eso se publica
+  `res_s`: fingir el instante exacto sería inventar dato; callarlo, dejar que se lo inventen.
+- **Ámbitos reales.** Una alarma de viento es de la NCU: ocurre **una vez, no 108**. Replicarla por
+  TCU sería falso en el histórico y caro en la nube.
+- **Arrancar no es un flanco.** Sin estado anterior se aprende, no se emite: si no, cada reinicio del
+  colector metería 108 transiciones falsas con la hora del arranque — el ruido que enterraría los
+  eventos de verdad.
+
+**Lo que cuesta, dicho:** un ciclo tranquilo son **cero puntos y cero bytes**. El peor caso realista
+—la flota entera cayendo a `alarm` a la vez más la alarma de NCU— son 217 eventos, **25 kB** una vez.
+El estimador (`tools/trafico.py`) modela el ciclo **estacionario** y no incluye eventos, a propósito:
+son esporádicos por definición. El medidor sí los cuenta, porque cuenta lo que se escribe.
+
+**Banco:** `python tools/test_eventos.py` — 24 comprobaciones, sin hierro ni InfluxDB. Dos mutantes
+verificados: quitar el `.time()` explícito cae 2, replicar el evento de NCU por TCU cae 1.
+
 ### Medidor de tráfico
 
 Dos preguntas con la misma respuesta: **qué mete el SCADA en la LAN de planta** (por si el enlace a las NCU es un túnel flojo o un 4G) y **cuánto subiría a la nube cada planta** (por si hay que contratar el plan de datos). Se resuelven con el mismo modelo de bytes, para que la estimación y la medida sean comparables:
@@ -338,6 +377,7 @@ Backend Docker (`tracker-scada.tar.gz`) + frontend de un solo fichero (`index.ht
 | `tools/gen_trafico.py` | Hornea en `trafico.html` los bytes por ciclo de cada NCU (fuente: el modelo) |
 | `tools/test_trafico.py` | Banco del medidor: modelo de bytes, estimación ≡ medida, line protocol |
 | `tools/test_comms_age.py` | Banco del reloj: la resta NCU−NCU, medida en color de flota |
+| `tools/test_eventos.py` | Banco de eventos: flancos, hora del dato, ámbitos reales |
 | `tools/test_health_modo.py` | Banco del modo en `health`: OFF no puede verse como OK |
 | `tools/test_modbus_map.py` | Banco del mapa: el subconjunto contra el R7 publicado (bloques, offsets, tipos, alarmas) |
 | `tools/calibrar_zigbee.py` | Calibra la malla: saltos de la captura de rutas, reintentos del `zigbee_log.csv` |
