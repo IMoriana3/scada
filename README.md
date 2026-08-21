@@ -333,6 +333,47 @@ Backend Docker (`tracker-scada.tar.gz`) + frontend de un solo fichero (`index.ht
 | `GET /meteo/history?hours=720&every=10m&hsu=1` | Series de las HSU (viento, dirección, temperatura, GHI) sobre un único eje de tiempos |
 | `GET /health` | Healthcheck del servicio |
 
+#### El contrato por TCU (`/live` y `/history`)
+
+Lo que `/live` devuelve por tracker, y que es lo que puede consumir una ficha de campo:
+
+| Campo | Unidad | Origen |
+|---|---|---|
+| `ncu`, `tcu` | — | etiquetas de la serie |
+| `health` | `ok · warn · alarm · offline` | `tracker_health()` en el colector |
+| `alarms` | lista separada por comas | `decode_alarms()` en el colector |
+| `tilt_angle`, `target_angle` | ° (el mapa los da en rad) | bloque compat, offsets 6 y 10 |
+| `soc`, `soh` | % | offsets 13 y 21 (byte bajo) |
+| `battery_voltage`, `panel_voltage` | mV | offsets 16 y 5 |
+| `battery_current`, `motor_current` | mA (la de batería con signo) | offsets 18 y 8 |
+| `temp_battery`, `temp_pcb` | °C (el mapa los da en K×10) | offsets 20 y 19 |
+| `main_state` | 0 OFF · 1 MANUAL · 2 AUTO | bits 8–9 de `msr` |
+| `safe_position` | 0 ninguna · 1 viento · 3 nieve · 4 limpieza | bits 13–15 de `msr` |
+| `bt_active`, `system_ok` | 0/1 | bit 0 de `msr`, bit 15 de `flags_a` |
+| `alarms1`, `alarms2` | palabra cruda | offsets 2 y 3 |
+| `comms_age_s` | s — **ver el aviso de abajo** | `now` − `tcu_lastcomm` |
+
+**Cadencia:** el colector cicla cada 30 s (`polling.interval_s`); `/live` mira los últimos 10 min y
+se queda con la última muestra. `/history` agrega en ventanas **fijas de 5 min** por media, admite
+`hours` de 1 a 720 y solo los campos de la tabla — lista **blanca**: un campo que no esté ahí se
+rechaza con 400 en vez de llegar al texto de la consulta.
+
+> ⚠️ **`comms_age_s` resta dos relojes distintos.** `tcu_lastcomm` (29500) es la marca que pone **la
+> NCU** cuando habló con cada TCU, y el colector le resta la hora de **su propio host**
+> (`drivers/modbus_ncu.py`). Si el reloj de la NCU va desviado —y va: la toolbox tiene un aviso
+> «RELOJ NCU DESVIADO» justo para eso— la edad sale mal por esa misma cantidad. Y `tracker_health()`
+> marca `offline` por encima de 300 s, así que una NCU media hora atrasada puede dar **su flota
+> entera por offline**. Está sin arreglar a propósito: tocarlo cambia el color del estado de todos
+> los trackers y es decisión del mantenedor.
+
+**Un campo que falta sale como `null`, no se omite.** Con la NCU pre-R7 de El Burgo el bloque no
+existe y el `pivot` no trae esos campos: la clave está igual, con valor nulo, para que un consumidor
+pueda distinguir *«este firmware no lo expone»* de *«no ha llegado la respuesta»*.
+
+**Banco:** `python tools/test_api.py` (necesita `fastapi`, `influxdb-client` y `httpx`; no necesita
+InfluxDB: usa un `query_api` de mentira y comprueba también el texto de la consulta que se habría
+lanzado).
+
 `/meteo/history` es lo que convierte a las HSU en dato de análisis y no solo de pantalla: lo consume
 el simulador de abanderamiento del Panel
 ([`sim-viento.html`](https://imoriana3.github.io/proyectos/sim-viento.html)) para estudiar un
