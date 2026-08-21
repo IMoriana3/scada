@@ -58,12 +58,32 @@ El colector clasifica cada TCU en uno de cinco estados, que determinan el color 
 | Estado | Color | Significado |
 |---|---|---|
 | `ok` | Verde | Comunica, sin alarmas, ángulo real ≈ objetivo |
-| `warn` | Ámbar | Alarma no crítica, `system_ok`=0, o desviación >5° entre ángulo real y objetivo |
+| `warn` | Ámbar | Alarma no crítica, `system_ok`=0, **no está en AUTO**, o desviación >5° entre ángulo real y objetivo |
 | `alarm` | Rojo | Alarma crítica: eje bloqueado, sobrecorriente de motor, batería crítica, stop, fuera de rango |
 | `offline` | Gris | Sin `lastComm` o antigüedad >5 min |
 | sin datos | Gris claro | El seguidor existe en el plano pero la API no devolvió telemetría suya |
 
 El estado de comunicaciones lo da la propia NCU mediante el registro `lastComm` por TCU (timestamp Unix), no se infiere.
+
+**El modo entra en la clasificación, y no siempre fue así.** Un seguidor que no está en `AUTO` no
+está siguiendo, tenga el ángulo que tenga. El modo se decodificaba, se guardaba y se servía en
+`/live` — y la clasificación lo ignoraba. Reportado en campo sobre la **14·14**: *«sale bien porque
+está en off, pero coincide que está en la posición en la que estaban los demás… y no está ok»*.
+
+Lo que hacía el fallo difícil de ver es que el modo **sí** acababa detectándose, pero **de rebote**:
+una parada en OFF daba `warn` cuando el sol se movía lo bastante como para separar el ángulo del
+objetivo. El aviso llegaba por un síntoma que no era el modo, y **en la coincidencia no llegaba** —
+verde, idéntico al vecino que sí seguía. Por eso el caso de referencia del banco es el ángulo **que
+coincide**: en el otro, el fallo no se puede ver.
+
+Es `warn` y no `alarm` a propósito: parar un seguidor en OFF o MANUAL es una operación legítima de
+mantenimiento. Lo que no es legítimo es que en el mapa se vea igual que uno operando. El motivo del
+color viaja en `motivo_health()`, que **no reimplanta el criterio** — pregunta por el estado y luego
+dice cuál de las condiciones lo explica, así los dos no pueden separarse.
+
+**Banco:** `python tools/test_health_modo.py` — 17 comprobaciones, con el caso de campo tal cual, el
+mutante (mover el criterio de AUTO devuelve la 14·14 a `ok`) y la medida de cuánto cambia el color de
+flota: **solo los que no están en AUTO**; los que sí, no se mueven.
 
 ### Histórico de eventos
 
@@ -358,6 +378,7 @@ Backend Docker (`tracker-scada.tar.gz`) + frontend de un solo fichero (`index.ht
 | `tools/test_trafico.py` | Banco del medidor: modelo de bytes, estimación ≡ medida, line protocol |
 | `tools/test_comms_age.py` | Banco del reloj: la resta NCU−NCU, medida en color de flota |
 | `tools/test_eventos.py` | Banco de eventos: flancos, hora del dato, ámbitos reales |
+| `tools/test_health_modo.py` | Banco del modo en `health`: OFF no puede verse como OK |
 | `tools/test_modbus_map.py` | Banco del mapa: el subconjunto contra el R7 publicado (bloques, offsets, tipos, alarmas) |
 | `tools/calibrar_zigbee.py` | Calibra la malla: saltos de la captura de rutas, reintentos del `zigbee_log.csv` |
 | `config/malla_medida.json` | Evidencia derivada de la campaña (lo que el banco contrasta) |
