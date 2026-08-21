@@ -8,12 +8,14 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime, timezone
 
 import yaml
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 from decode import tracker_health
+from events import RegistroEventos
 from traffic import TrafficMeter
 
 logging.basicConfig(level=logging.INFO,
@@ -43,12 +45,26 @@ def make_driver(cfg, ncu_cfg, mmap, meter=None):
     return SimulatedNCUDriver(ncu_cfg, mmap, word_order, meter=meter, max_regs=max_regs)
 
 
+def clasificar(trackers):
+    """Anota `health` en cada TCU, UNA vez por ciclo.
+
+    Lo consumen la muestra (`tracker_points`) y el histórico de eventos, y por
+    eso se calcula aquí y no en cada uno: dos llamadas a `tracker_health()`
+    sobre los mismos datos son dos sitios donde el criterio puede separarse, y
+    un evento que diga `ok → alarm` mientras la muestra de ese mismo instante
+    dice `warn` es peor que no tener eventos.
+    """
+    for t in trackers:
+        t["health"] = tracker_health(t["fields"], t["alarms"], t["comms_age_s"])
+    return trackers
+
+
 def tracker_points(plant_id, ncu_id, trackers):
     """Puntos InfluxDB de un ciclo de TCUs (se escriben en un solo POST)."""
     points = []
     for t in trackers:
         f = t["fields"]
-        health = tracker_health(f, t["alarms"], t["comms_age_s"])
+        health = t["health"]
         p = (Point("tracker_status")
              .tag("plant", plant_id).tag("ncu", ncu_id).tag("tcu", str(t["tcu"]))
              .field("health", health)
@@ -93,6 +109,7 @@ async def poll_ncu(cfg, mmap, ncu_cfg, write_api):
     bucket, org = cfg["influxdb"]["bucket"], cfg["influxdb"]["org"]
     interval = cfg["polling"]["interval_s"]
     meter = TrafficMeter() if cfg.get("traffic", {}).get("enabled", True) else None
+    eventos = RegistroEventos(plant_id, ncu_cfg["id"], interval)
     drv = make_driver(cfg, ncu_cfg, mmap, meter)
     first = True
     t_prev = time.monotonic()
@@ -103,9 +120,13 @@ async def poll_ncu(cfg, mmap, ncu_cfg, write_api):
             # `read_trackers()` hace la resta NCU−NCU de `comms_age_s`. No
             # cuesta una lectura más -- es la misma de siempre, movida de sitio.
             ncu_status = await drv.read_ncu()
-            trackers = await drv.read_trackers()
+            trackers = clasificar(await drv.read_trackers())
             meteo = await drv.read_meteo()
             await drv.close()
+            # El sello del evento se toma AQUI, con la lectura recien hecha, no
+            # al escribir: entre las dos cosas hay una escritura HTTP que puede
+            # reintentar. Ver la cabecera de events.py.
+            ts_ciclo = datetime.now(timezone.utc)
 
             if first:
                 sample = next((t for t in trackers if t["fields"]), None)
@@ -134,6 +155,10 @@ async def poll_ncu(cfg, mmap, ncu_cfg, write_api):
                 for k, v in m["fields"].items():
                     p.field(k, float(v))
                 estado.append(p)
+            # Los flancos van en el MISMO POST que estado y meteo: casi siempre
+            # son cero puntos, y cuando no lo son no merecen una escritura HTTP
+            # propia con sus cabeceras.
+            estado += eventos.flancos(trackers, ncu_status, meteo, ts_ciclo)
             write_points(write_api, bucket, org, estado, meter)
 
             if meter:
@@ -142,8 +167,7 @@ async def poll_ncu(cfg, mmap, ncu_cfg, write_api):
                 t_prev = now_m
                 write_traffic(write_api, bucket, org, plant_id, ncu_cfg["id"], snap, meter)
 
-            n_off = sum(1 for t in trackers if tracker_health(
-                t["fields"], t["alarms"], t["comms_age_s"]) == "offline")
+            n_off = sum(1 for t in trackers if t["health"] == "offline")
             log.info("[%s] %d TCUs leídos (%d offline)%s", ncu_cfg["id"],
                      len(trackers), n_off,
                      "" if not meter else
