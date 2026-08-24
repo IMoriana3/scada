@@ -27,6 +27,18 @@ $src = Get-Content $rutaTb -Raw
 $ini = $src.IndexOf('$VERSION_TOOLBOX')
 $fin = $src.IndexOf('$form = New-Object System.Windows.Forms.Form')
 if ($ini -lt 0 -or $fin -lt 0) { throw 'No se pudo extraer la logica de la toolbox (marcadores no encontrados)' }
+# ── LA FECHA VA CON SU HUSO ───────────────────────────────────────────────────
+# `Get-Date -Format 'yyyy-MM-dd HH:mm:ss'` da la hora LOCAL del PC de planta y no dice
+# de que reloj habla. Esa cadena acaba en la columna `timestamptz` de Supabase, que al
+# no ver huso aplica el de la sesion —UTC—, asi que una auditoria de las 10:24 se
+# guardaba y se le ensenaba al perito como las 12:24. Y la tabla es append-only a
+# proposito: cada registro torcido se queda torcido.
+# 'o' es ISO-8601 redondo, con desplazamiento (2026-08-24T10:24:00.0000000+02:00). No
+# hay nada que suponer, y los cambios de hora de marzo y octubre salen solos.
+# Los lectores toleran las dos formas: la vieja no lleva 'T' ni signo, y se sigue
+# leyendo como hasta ahora.
+function Ahora-ISO { (Get-Date).ToString('o') }
+
 function Con([string]$t, $color = $null) { Write-Host $t }   # shim de consola para funciones extraidas
 $logica = $src.Substring($ini, $fin - $ini).Replace('$PSScriptRoot', '$dirToolbox')
 # funciones de la seccion de handlers que tambien necesitamos (mismos
@@ -80,7 +92,7 @@ function Baterias-Planta {
         foreach ($pr in $_.PSObject.Properties) { if ($pr.Name -notin @('NCU','TCU')) { $o[$pr.Name] = $pr.Value } }
         [pscustomobject]$o })
     return [ordered]@{tipo = 'baterias_tcu'; planta = $cfg.planta; toolbox = $VERSION_TOOLBOX
-        fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        fecha = (Ahora-ISO)
         hallazgos = $hall
         tcus = $tabla}
 }
@@ -170,7 +182,7 @@ function Trabajo-Estado {
         if ($t.tipo -eq 'diagnostico') { $filas = @(Diag-Completar $filas (Flota-Agente)) }
         $o.resultado = [ordered]@{tipo = $(if ($t.tipo -eq 'diagnostico') { 'diagnostico_tcu' } else { 'inventario_tcu' })
                                   mapa = $VERSION_MAPA; toolbox = $VERSION_TOOLBOX
-                                  planta = $cfg.planta; fecha = $t.fin.ToString('yyyy-MM-dd HH:mm:ss'); tcus = @($filas)}
+                                  planta = $cfg.planta; fecha = $t.fin.ToString('o'); tcus = @($filas)}
     }
     return $o
 }
@@ -254,7 +266,7 @@ function Inventario-Planta([string]$tcusTxt = '', [string]$gw = '') {
         }
     }
     return [ordered]@{tipo = 'inventario_tcu'; mapa = $VERSION_MAPA; toolbox = $VERSION_TOOLBOX
-        planta = $cfg.planta; fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); tcus = $filas}
+        planta = $cfg.planta; fecha = (Ahora-ISO); tcus = $filas}
 }
 
 # Plan de firmware: puro, a partir de un inventario. Si no se le pasa uno hecho,
@@ -268,7 +280,7 @@ function Plan-Fw($objetivo, $inv = $null, $minTcu = 20) {
     foreach ($n in (Ncus-DePlanta)) { $k = "$($n.ncu)"; $ips[$k] = $n.ip; $gws[$k] = $n.gws }
     $plan = Plan-Firmware $inv "$objetivo" $gws @()
     $vent = @(Plan-Ventanas $plan.tramos $ips ([int]$minTcu))
-    return [ordered]@{planta = $cfg.planta; objetivo = "$objetivo"; fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+    return [ordered]@{planta = $cfg.planta; objetivo = "$objetivo"; fecha = (Ahora-ISO)
         pendientes = $plan.pendientes; al_dia = $plan.al_dia; sin_respuesta = @($plan.sin_respuesta)
         ventanas = @($vent | ForEach-Object { @{ventana = $_.Orden; ncu = $_.NCU; ip = $_.IP; puerto = $_.Puerto
                                                 rangos = $_.Rangos; tcus = $_.TCUs; horas = [math]::Round([double]$_.Horas, 2)} })
@@ -326,7 +338,7 @@ function Leer-Planta($nombresTxt, $ncuPedida, $tcusTxt, $gw = '') {
             Modbus-Cerrar
         }
     }
-    return [ordered]@{planta = $cfg.planta; fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+    return [ordered]@{planta = $cfg.planta; fecha = (Ahora-ISO)
         variables = @($defs | ForEach-Object { $_.nombre }); tcus = $filas}
 }
 
@@ -348,7 +360,7 @@ function Hsus-Detalle([string]$que) {
         } catch { $filas += [pscustomobject]@{NCU = "$($n.ncu)"; Esclavo = $c.unit; Campo = 'ERROR'; Valor = "$_"} }
         Modbus-Cerrar
     }
-    return [ordered]@{planta = $cfg.planta; que = $que; fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); filas = $filas}
+    return [ordered]@{planta = $cfg.planta; que = $que; fecha = (Ahora-ISO); filas = $filas}
 }
 # La caja negra son 24 h minuto a minuto: 5760 registros de una HSU concreta.
 function Hsu-CajaNegra($ncuPedida) {
@@ -370,7 +382,7 @@ function Hsu-CajaNegra($ncuPedida) {
     $filas = @()
     for ($m = 0; $m -lt $min; $m++) { $filas += Hsu-CajaFila @($palabras[$m*4], $palabras[$m*4+1], $palabras[$m*4+2], $palabras[$m*4+3]) $m }
     return [ordered]@{planta = $cfg.planta; ncu = "$($n.ncu)"; esclavo = $c.unit; minutos = $min
-        completa = ($min -ge 1440); fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); filas = $filas}
+        completa = ($min -ge 1440); fecha = (Ahora-ISO); filas = $filas}
 }
 
 # --- Auditoria contra un preset que llega en el cuerpo ---
@@ -403,7 +415,7 @@ function Auditar-Preset($body) {
         if ($malas -eq 0) { $ok++ }
     }
     return [ordered]@{tipo = 'auditoria_tcu'; planta = $cfg.planta; toolbox = $VERSION_TOOLBOX
-        fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        fecha = (Ahora-ISO)
         variables = @($pares | ForEach-Object { $_.nombre })
         tcus_auditadas = @($lec.tcus).Count; conformes = $ok; sin_respuesta = $mudas
         desviaciones = $desv}
@@ -763,7 +775,7 @@ function Diag-Planta {
         agente  = $VERSION_AGENTE
         planta  = "$($cfg.planta) (Planta completa)"
         ip      = 'NA'
-        fecha   = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        fecha   = (Ahora-ISO)
         tcus    = $filas
     }
 }
@@ -787,7 +799,7 @@ function Comis-Planta {
             $filas += @{ncu=$et; tcu=[int]$tcu; estado=[int]$e; nombre=$ESTADOS_COMIS[[int]$e]}
         }
     }
-    return [ordered]@{tipo='comisionado'; planta=$cfg.planta; fecha=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); tcus=$filas}
+    return [ordered]@{tipo='comisionado'; planta=$cfg.planta; fecha=(Ahora-ISO); tcus=$filas}
 }
 
 # HSUs de la planta (bloque compacto de cada NCU)
@@ -799,7 +811,7 @@ function Hsus-Planta {
         catch { Modbus-Cerrar; $filas += @{ncu=$et; hsu='?'; salud='AVISO'; texto="NCU sin respuesta: $_"}; continue }
         foreach ($h in $hs) { $filas += @{ncu=$et; hsu=$h.TCU; salud=$h.Salud; texto=$h.Alarmas} }
     }
-    return [ordered]@{tipo='hsus'; planta=$cfg.planta; fecha=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); hsus=$filas}
+    return [ordered]@{tipo='hsus'; planta=$cfg.planta; fecha=(Ahora-ISO); hsus=$filas}
 }
 
 # ----------------- Supabase (alertas y sincronizacion) -----------------
@@ -847,7 +859,11 @@ function Sincronizar {
     try {
         $subido = Sb-Insertar 'diagnosticos' @{
             planta = $d.planta; ip = $d.ip
-            fecha = ([datetime]::ParseExact($d.fecha, 'yyyy-MM-dd HH:mm:ss', $null)).ToString('yyyy-MM-ddTHH:mm:ss')
+            # `$d.fecha` ya sale de `Ahora-ISO`, o sea ISO con huso. Antes se
+            # re-parseaba con el formato viejo y se volvia a formatear SIN huso, que es
+            # el mismo bug dos veces en la misma linea: parsear y luego tirar el dato
+            # que hacia falta. Se pasa tal cual.
+            fecha = $d.fecha
             resumen = (Resumen-Diag $d); datos = $d
         }
         # sin el "no subido" del final: la web ya lo antepone y salia dos veces
@@ -895,7 +911,7 @@ function Vigilar {
 
 function Auditar([string]$usuario, [string]$op, $params, $res) {
     $linea = [ordered]@{
-        fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); usuario = $usuario; planta = $cfg.planta
+        fecha = (Ahora-ISO); usuario = $usuario; planta = $cfg.planta
         operacion = $op; parametros = $params
         ok = @($res | Where-Object { $_.ok }).Count; fallos = @($res | Where-Object { -not $_.ok }).Count
     }
@@ -1241,7 +1257,7 @@ while ($true) {
                     $gwsInfo = @(Ncus-DePlanta | ForEach-Object { $_.gws } | ForEach-Object { "$($_.puerto)" } |
                                  Where-Object { $_ -and $_ -ne '' } | Sort-Object -Unique)
                     $out = @{ok=$true; planta=$cfg.planta; agente=$VERSION_AGENTE; toolbox=$VERSION_TOOLBOX; mapa=$VERSION_MAPA
-                             hora=(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'); escritura=$escritura; ncus=$ncusInfo; gws=$gwsInfo}
+                             hora=(Ahora-ISO); escritura=$escritura; ncus=$ncusInfo; gws=$gwsInfo}
                 }
                 '/diagnostico'  { $out = Diag-Planta }
                 '/comisionado'  { $out = Comis-Planta }
