@@ -161,6 +161,43 @@ planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
 
 ## Puntos abiertos (escribir aquí lo que afecte al otro)
 
+- **[Cobertura → Toolbox / Ignacio, 26-08] La hoja SI dice de que gateway cuelga cada RSU, y lo
+  estabamos tirando. Hace falta UNA pasada de `make_plantas.py --excel`.** Lo dijo Ignacio: en San
+  Jose unas RSU van en el GW1 y otras en el GW2. Mirando la hoja por dentro, es literal: hay **dos
+  columnas `RSU`, una por gateway**, igual que las dos de `Esclavos`.
+
+      Nº | Proyecto | NCU | IP NCU | … | Esclavos | RSU | … | IP GW 2 | … | Esclavos | RSU
+                                         └── GW1 ────────┘                 └── GW2 ────────┘
+
+  `make_plantas.py` las leia las dos pero **solo para sumarlas**, y escribia el total en las dos
+  filas de gateway de la NCU. Su propio comentario decia lo contrario —«la HSU cuelga de UN gateway
+  … pero cual es no lo dice el Excel»— y sobre esa frase se construyo todo lo de arriba:
+  `gen_coords_cobertura.py` acabo adivinando el gateway de cada HSU por el TCU mas cercano, y yo
+  repeti la frase como si fuera cierta. **No lo es.**
+
+  Y habia un segundo fallo, este SILENCIOSO: la segunda columna se buscaba por el texto EXACTO
+  `RSU`. Si la hoja pone `RSU 2`, `RSU GW2` o le sobra un espacio, no se encontraba y **se contaban
+  solo las del GW1**, sin decir nada. El sintoma esta a la vista: **El Burgo tiene DOS estaciones por
+  NCU —una por gateway, comprobado en campo— y su JSON sale con `hsus: 1`.**
+
+  **Ya esta arreglado en el codigo** (`tools/tcu-toolbox/make_plantas.py`), de forma ADITIVA para no
+  romper a quien lea `hsus`:
+
+  · `hsus` se queda **exactamente como estaba**: el total de la NCU, repetido en sus dos filas.
+  · **`hsus_gw` es nuevo**: cuantas van EN ESE gateway, que es lo que la columna sabe.
+  · las dos columnas se buscan ahora por prefijo (`RSU`, `RSU 2`, `RSU GW2`…) y **si no aparece la
+    segunda, se avisa** en vez de contar de menos en silencio.
+
+  `tools/tcu-toolbox/test_columnas_rsu.py` prueba las dos cosas con cabeceras y filas sinteticas —12
+  casos, pasan— pero **no se puede probar contra la hoja de verdad desde aqui**, que no esta en
+  ningun repo. **Lo que hace falta es una pasada:** `python3 make_plantas.py --excel <hoja>`. La
+  comprobacion de que ha ido bien es directa: **El Burgo tiene que salir con `hsus_gw: 1` en cada uno
+  de sus gateways** (hoy sale `hsus: 1` y sin `hsus_gw`). Si sigue saliendo solo el GW1, la cabecera
+  de la segunda columna se llama de otra forma y el aviso nuevo lo dira.
+
+  **Lo que desbloquea:** el gateway de las 49 HSU deja de ser una deduccion por cercania. Y de paso
+  esa misma pasada re-exporta San Jose, que es lo que faltaba para cerrar sus tres HSU sin NCU.
+
 - **[Cobertura → Toolbox / Ignacio, 26-08] Cada HSU y cada repetidor llevan ya su NCU en el layout, y
   con su procedencia. Faltan cuatro, y dos las puede cerrar la toolbox.** `<planta>_layout.json` trae
   ahora `meteo[].ncu` en las diez plantas, más `gw` y `esclavo` donde se saben, y cada uno con su
@@ -622,6 +659,7 @@ planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
 
 | fecha | sesión | cambio |
 |---|---|---|
+| 2026-08-26 | Cobertura | **`make_plantas.py` conserva el gateway de cada RSU** en un campo nuevo `hsus_gw` (`hsus` no cambia), y busca las dos columnas `RSU` por prefijo avisando si falta la segunda. Antes se sumaban y se perdia el reparto, y si la cabecera no era exacta se contaban solo las del GW1 en silencio. Hace falta **una pasada con `--excel`**: ver Puntos abiertos. |
 | 2026-08-26 | Cobertura | **`meteo[].ncu` + `gw` + `esclavo` en los diez layouts, con `*_origen`**, y `reps[]` de Ayora con gateway y esclavo. `test_plants_yml.py` distingue lo medido de lo derivado y no falla contra lo segundo. Benante, Panbianco y El Polvorín entran en `cobertura_coords/`. Ver Puntos abiertos: quedan cuatro HSU sin NCU y dos las cierra la toolbox. |
 | 2026-08-11 | Toolbox | **Respondido el checklist online**: las tres tareas se quedan como están (no vamos a emitir otras). Dos de las tres las puede dar ya el agente (`/comisionado` y el POST `auditoria`); la tercera es el test de motor, que **mueve seguidores** y va detrás de la escritura remota. Aviso de formato: **nunca emitimos `N.A.`**, y el vacío significa «no se ha hecho», no «no aplica». |
 | 2026-08-11 | Toolbox | **v11.40 a v11.42 y agente v3.7**: pestañas **Comm NCU** (una fila por NCU: gateways, UPS, seta, reloj, FW de la NCU y TCUs que comunican) y **Estabilidad** (calidad de enlace inferida del `lastComm`: el mapa de Sunner **no expone RSSI ni LQI**). Y un `continue` dentro de una función hacía que la NCU sin respuesta perdiera el motivo del fallo. |

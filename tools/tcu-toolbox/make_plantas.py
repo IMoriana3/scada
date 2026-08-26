@@ -100,13 +100,25 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
     # el esclavo Modbus: volcarlo en hsu_esclavo mandaria a la toolbox a hablar
     # con el esclavo 5, que es un TCU. Solo se cuenta, para poder decir cuantas
     # deberia encontrar BUSCAR HSUs.
-    i_rsu1 = col_opcional("RSU")
+    # La PRIMERA columna 'RSU' (la del GW1) con la misma manga ancha que la segunda:
+    # 'RSU', 'RSU 1', 'RSU GW1'... y si no aparece ninguna, no se cuentan estaciones.
+    i_rsu1 = next((k for k in range(len(head))
+                   if str(head[k] or "").strip().upper().startswith("RSU")), None)
     i_rsu2 = None
     if i_rsu1 is not None and "IP GW 2" in head:
-        try:
-            i_rsu2 = head.index("RSU", head.index("IP GW 2"))
-        except ValueError:
-            i_rsu2 = None
+        # LA SEGUNDA COLUMNA 'RSU' NO SIEMPRE SE LLAMA IGUAL. Buscar el texto exacto
+        # 'RSU' falla si la hoja pone 'RSU 2', 'RSU GW2' o le sobra un espacio, y el
+        # fallo es SILENCIOSO: se cuentan solo las del GW1 y nadie se entera. El
+        # sintoma esta a la vista en El Burgo, que tiene DOS estaciones por NCU -una
+        # por gateway, comprobado en campo- y sale con hsus 1.
+        desde = head.index("IP GW 2")
+        for k in range(desde, len(head)):
+            if str(head[k] or "").strip().upper().startswith("RSU"):
+                i_rsu2 = k
+                break
+        if i_rsu2 is None:
+            print(f"aviso: la hoja '{hoja}' no tiene una segunda columna 'RSU' despues de "
+                  "'IP GW 2'; solo se contaran las estaciones del GW1")
 
     plantas = {}
     actual = None
@@ -131,10 +143,19 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
         # quedaba con 15 de 16 NCUs.
         proy = actual[1]
 
+        def rsus_por_gw():
+            """CUANTAS RSU declara esta fila EN CADA GATEWAY, [gw1, gw2].
+
+               La hoja lo dice por la COLUMNA: hay una 'RSU' antes de 'IP GW 2' y otra
+               despues, exactamente igual que las dos de 'Esclavos'. Se leia asi desde
+               siempre —`i_rsu1` e `i_rsu2`— pero solo para SUMARLAS, y el reparto se
+               tiraba a la basura."""
+            return [1 if (i is not None and re.match(r"^\d+$", re.sub(r"\.0$", "", v(i)))) else 0
+                    for i in (i_rsu1, i_rsu2)]
+
         def rsus_fila():
             """Cuantas RSU/HSU declara esta fila, entre los dos gateways."""
-            return sum(1 for i in (i_rsu1, i_rsu2)
-                       if i is not None and re.match(r"^\d+$", re.sub(r"\.0$", "", v(i))))
+            return sum(rsus_por_gw())
 
         def esclavos_fila():
             """Los esclavos Modbus que declara esta fila: '230' o '230,231'."""
@@ -150,8 +171,15 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
             # Ayora es asi: la NCU15 tiene la 8 y la 9. Saltandola entera se
             # perdia una de las diez.
             if ultima_entrada is not None and rsus_fila():
+                porgw = rsus_por_gw()
                 for e in ultima_entrada:
                     e["hsus"] = e.get("hsus", 0) + rsus_fila()
+                    # `hsus_gw` es lo mismo pero SIN mezclar los gateways: la fila de
+                    # continuacion trae su RSU en una de las dos columnas, igual que
+                    # cualquier otra, asi que se suma a la del gateway que le toca.
+                    k = e.get("_gwidx")
+                    if k is not None and porgw[k]:
+                        e["hsus_gw"] = e.get("hsus_gw", 0) + porgw[k]
                     for esc in esclavos_fila():
                         e.setdefault("hsu_esclavos", []).append(esc)
             continue
@@ -159,13 +187,16 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
         ntxt = re.sub(r"\.0$", "", v(i_ncu))
         n = int(ntxt) if re.match(r"^\d+$", ntxt) else ncu_auto
         rangos = [parse_rango(v(i_esc1)), parse_rango(v(i_esc2))]
-        gws = [(puertos[k], r) for k, r in enumerate(rangos) if r and k < len(puertos)]
+        # Se guarda el indice REAL (0=GW1, 1=GW2), no la posicion entre los presentes:
+        # una NCU con rango solo en el GW2 tendria gidx 1 y su RSU esta en la columna 2.
+        gws = [(k, puertos[k], r) for k, r in enumerate(rangos) if r and k < len(puertos)]
         if not gws:
             continue
         escl = esclavos_fila()
         nRsu = rsus_fila()
         ultima_entrada = []
-        for gidx, (puerto, (ini, fin)) in enumerate(gws, start=1):
+        porgw = rsus_por_gw()
+        for gidx, (kgw, puerto, (ini, fin)) in enumerate(gws, start=1):
             sufijo = f" GW{gidx}" if len(gws) > 1 else ""
             entrada = {
                 "nombre": f"{proy} NCU{n}{sufijo}",
@@ -174,15 +205,30 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
                 "tcu_ini": ini,
                 "tcu_fin": fin,
             }
-            # La HSU cuelga de UN gateway, no de los dos, pero cual es no lo
-            # dice el Excel: se pone en las entradas de la NCU y la toolbox ya
-            # avisa de cambiar el puerto si no responde por ese.
+            # La HSU cuelga de UN gateway, no de los dos, y el Excel SI dice cual:
+            # lo dice la columna 'RSU' en la que va el numero, que hay una por
+            # gateway. Eso es `hsus_gw`, unas lineas mas abajo. Aqui el ESCLAVO se
+            # sigue poniendo en las dos entradas porque ese si falta en la hoja, y
+            # la toolbox ya avisa de cambiar el puerto si no responde por ese.
             if escl:
                 entrada["hsu_esclavos"] = list(escl)
             if nRsu:
                 entrada["hsus"] = nRsu
+            # LO QUE FALTABA. `hsus` es el total de la NCU repetido en sus dos filas
+            # -asi ha sido siempre y asi se queda, que hay quien lo lee- y `hsus_gw`
+            # dice cuantas van EN ESTE gateway, que es lo que la columna sabe y se
+            # estaba perdiendo. Con eso deja de hacer falta adivinarlo por cercania.
+            if porgw[kgw]:
+                entrada["hsus_gw"] = porgw[kgw]
+            entrada["_gwidx"] = kgw            # interno, se quita antes de escribir
             plantas[actual].append(entrada)
             ultima_entrada.append(entrada)
+
+    # El indice de gateway era solo para repartir las RSU de las filas de continuacion:
+    # fuera del bucle ya no pinta nada y no tiene por que acabar en el JSON.
+    for entradas in plantas.values():
+        for e in entradas:
+            e.pop("_gwidx", None)
 
     ficheros = []
     for (num, proy), entradas in sorted(plantas.items()):
