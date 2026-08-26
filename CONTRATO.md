@@ -161,6 +161,43 @@ planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
 
 ## Puntos abiertos (escribir aquí lo que afecte al otro)
 
+- **[Cobertura → Toolbox / Ignacio, 26-08] Cada HSU y cada repetidor llevan ya su NCU en el layout, y
+  con su procedencia. Faltan cuatro, y dos las puede cerrar la toolbox.** `<planta>_layout.json` trae
+  ahora `meteo[].ncu` en las diez plantas, más `gw` y `esclavo` donde se saben, y cada uno con su
+  `*_origen` diciendo de dónde sale. `gen_coords_cobertura.py` ya lo prefiere a cualquier deducción,
+  así que los CSV de cobertura de Ayora salen con los esclavos de sus repetidores en vez de en blanco.
+  El orden de autoridad es: la toolbox (Excel) → campo → el nombre del DWG → única NCU → dos fuentes
+  → derivado por cercanía, y **lo derivado NO se cuenta como fallo** en `tools/test_plants_yml.py`,
+  porque diría que el yml está mal cuando lo que puede estar mal es la deducción.
+
+  **Lo que hace falta de vuestro lado:**
+
+  1. **Re-exportar `plantas/24019-san-jose.json` desde IPs.** Ya está pedido más abajo (10/08) y esto
+     le pone precio: su fichero no trae las NCU 7, 12, 16, 17 y 19 —que son EXACTAMENTE las cinco de
+     San José con varios tramos, comprobado una a una— y por eso **tres de sus ocho HSU siguen sin
+     NCU**. Con el re-export se cierran las tres. Cuidado al leer ese fichero mientras tanto: los CSV
+     de `cobertura_coords/sanjose/` traen las ocho con NCU, pero esas tres están puestas por «NCU más
+     cercana», que se equivoca en 3 de los 24 casos conocidos. El manifiesto las nombra una a una.
+  2. **Un export de la toolbox para 25082 (El Polvorín)**, o su listado del cliente con la columna de
+     NCU. Su HSU 2 cae justo en la COSTURA de los dos campos —de los 3 seguidores más cercanos dos
+     son de la NCU 1 y uno de la 2; de los 20, diez y diez; el más cercano es de la NCU 2 a 24 m y el
+     de la 1 a 27— así que con geometría **no se puede**, y no es cuestión de mirarlo mejor.
+  3. **El gateway del repetidor 4 (NCU 8 de Ayora)** sigue provisional, como decís abajo. Va escrito
+     como tal en `ayora_layout.json` (`reps_nota`) y NO se ha metido en `reps`, porque de los once
+     repetidores del Excel el DWG solo dibuja cinco y de los otros seis no tenemos coordenada.
+
+  **Un aviso de lectura, que nos costó un error:** `make_plantas.py` escribe el MISMO `hsus` en las
+  DOS filas de gateway de una NCU, así que **sumarlas da el doble** — San José salía con 9 HSU cuando
+  son 5. Pero el máximo tampoco vale: en El Burgo las dos filas traen esclavos DISTINTOS (230 en el
+  GW1, 231 en el GW2) y ahí sí son cuatro estaciones. La cuenta buena es **el número de esclavos
+  distintos cuando el fichero los trae, y el máximo cuando no**: da 4, 10 y 5, correcto en las tres.
+
+  **Y un patrón que NO generaliza:** en El Burgo las dos HSU de una NCU van una por gateway con
+  esclavos 230 y 231. En la NCU 15 de Ayora las dos cuelgan del MISMO gateway, el GW1, con esas dos
+  mismas direcciones (confirmado por Ignacio, 26-08). Lo constante es el PAR 230/231 por NCU; el
+  reparto entre gateways, no. Si el colector de Ayora asume el reparto por gateway, leerá una de las
+  dos.
+
 - **[Backtracking → Toolbox] Propuesta: que la telemetría entre SOLA cada noche (aprobada por
   Ignacio, 13-08 — «un sistema, dos puertas»).** Hoy los logs diarios entran a mano por
   `importar-logs.html`. La propuesta es que el agente/collector del PC de planta suba cada noche el
@@ -585,6 +622,7 @@ planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
 
 | fecha | sesión | cambio |
 |---|---|---|
+| 2026-08-26 | Cobertura | **`meteo[].ncu` + `gw` + `esclavo` en los diez layouts, con `*_origen`**, y `reps[]` de Ayora con gateway y esclavo. `test_plants_yml.py` distingue lo medido de lo derivado y no falla contra lo segundo. Benante, Panbianco y El Polvorín entran en `cobertura_coords/`. Ver Puntos abiertos: quedan cuatro HSU sin NCU y dos las cierra la toolbox. |
 | 2026-08-11 | Toolbox | **Respondido el checklist online**: las tres tareas se quedan como están (no vamos a emitir otras). Dos de las tres las puede dar ya el agente (`/comisionado` y el POST `auditoria`); la tercera es el test de motor, que **mueve seguidores** y va detrás de la escritura remota. Aviso de formato: **nunca emitimos `N.A.`**, y el vacío significa «no se ha hecho», no «no aplica». |
 | 2026-08-11 | Toolbox | **v11.40 a v11.42 y agente v3.7**: pestañas **Comm NCU** (una fila por NCU: gateways, UPS, seta, reloj, FW de la NCU y TCUs que comunican) y **Estabilidad** (calidad de enlace inferida del `lastComm`: el mapa de Sunner **no expone RSSI ni LQI**). Y un `continue` dentro de una función hacía que la NCU sin respuesta perdiera el motivo del fallo. |
 | 2026-08-11 | Toolbox | **v11.33 / agente v3.3**: el bit de «GW2 desconectado» de una NCU que **solo tiene un gateway** ya no es alarma — el primer arranque del vigilante en Ayora dio 19 alertas y 15 eran esa. `Ncu-Salud` mira ahora los gateways que declara la topología. Y el agente solo menciona el reloj de la NCU cuando está desviado. |
