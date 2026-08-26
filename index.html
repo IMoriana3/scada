@@ -780,14 +780,29 @@ function parseProjectXLSX(wb, fname){
     if(iCli>=0) altName = hdr[iCli].indexOf("ACCIONA")>=0?"ACC":(hdr[iCli].indexOf("GZ")>=0?"GZ":"CLI");
     let iTr=idx("ACCIONA"); if(iTr<0)iTr=idx("CLIENT"); if(iTr<0)iTr=idx("TCU");
     if(iPS>=0) hasPS=true;
+    /* Una celda vacia de Excel puede llegar de tres formas y solo UNA se
+       estaba filtrando. `null` se guardaba (bien), pero un NaN numerico
+       —lo que devuelve la hoja cuando la celda tiene una formula rota o un
+       valor no numerico en columna numerica— pasaba el `!=null` y
+       `String(NaN)` lo convertia en la CADENA "NaN". A partir de ahi es un
+       dato como cualquier otro: `mode()` lo cuenta como etiqueta legitima y
+       puede acabar eligiendolo como el cliente de una NCU, que es como
+       "NaN" acaba pintado en un visor. Ausente es ausente: cadena vacia,
+       que es lo que `mode()` ya sabe descartar. */
+    const celdaTexto = (col,fila) => {
+      if(col<0) return "";
+      const v = fila[col];
+      if(v==null) return "";
+      if(typeof v==="number" && !isFinite(v)) return "";   // NaN / Infinity
+      const s = String(v).trim();
+      return (/^(nan|nat|#n\/a|null|undefined)$/i.test(s)) ? "" : s;
+    };
     for(let ri=1; ri<rows.length; ri++){ const r=rows[ri]; if(!r) continue;
       const x=Number(r[iX]), y=Number(r[iY]), nv=r[iN];
       if(isFinite(x)&&isFinite(y)&&nv!=null&&/^\d+$/.test(String(nv).trim())){
         tcus.push({x,y,ncu:parseInt(String(nv).trim(),10),
           gw:(iGW>=0&&isFinite(Number(r[iGW])))?parseInt(r[iGW],10):1,
-          cli:(iCli>=0&&r[iCli]!=null)?String(r[iCli]).trim():"",
-          ps:(iPS>=0&&r[iPS]!=null)?String(r[iPS]).trim():"",
-          tr:(iTr>=0&&r[iTr]!=null)?String(r[iTr]).trim():""});
+          cli:celdaTexto(iCli,r), ps:celdaTexto(iPS,r), tr:celdaTexto(iTr,r)});
       }
       for(let c=9;c<r.length;c++){ const v=r[c]; if(typeof v!=="string") continue; const up=v.trim().toUpperCase();
         if(up.indexOf("NCU ")===0||up.indexOf("HSU")===0||up.indexOf("REP")===0){
