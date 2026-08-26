@@ -84,20 +84,44 @@ for ncu in cfg.get("ncus") or []:
        % (num, dice, mide, "" if dice == mide else "   ← manda el DWG"))
 
 # ── HSU por NCU ──────────────────────────────────────────────────────────────────────────────
+# NO TODA `meteo[].ncu` VALE LO MISMO, y este careo se rompería si las tratase igual. El layout dice
+# de dónde sale cada una en `ncu_origen`: en El Burgo es de campo, en Benante y Panbianco la dice el
+# nombre del DWG, y en Ayora, San José, Páramo y El Polvorín está DERIVADA por cercanía de seguidores
+# (tools/meteo_ncu.mjs, en cobertura-zigbee). Contra un dato derivado esto no puede FALLAR: diría que
+# el yml está mal cuando lo que puede estar mal es la deducción. Se informa y no se cuenta.
+# Y si alguna HSU se quedó SIN ncu —porque la derivación no llegaba al margen mínimo— el recuento por
+# NCU está incompleto por definición, así que tampoco se puede exigir que cuadre.
 hsu_ncu = {}
+derivadas = 0
 for m in METEO:
     n = m.get("ncu")
     if n is not None:
         hsu_ncu[n] = hsu_ncu.get(n, 0) + 1
+        if str(m.get("ncu_origen", "")).startswith("DERIVADO"):
+            derivadas += 1
+sin_ncu = sum(1 for m in METEO if m.get("ncu") is None)
+
 if not hsu_ncu:
     print("  ??    el layout no dice de qué NCU cuelga cada HSU (meteo[].ncu): no se puede carear")
 else:
+    firme = not derivadas and not sin_ncu
+    if derivadas:
+        print("  ojo   %d de las %d HSU tienen la NCU DERIVADA por cercanía, no medida. Se compara "
+              "para verte, pero no cuenta como fallo" % (derivadas, len(METEO)))
+    if sin_ncu:
+        print("  ojo   %d HSU del layout no traen NCU (la derivación no llegaba al margen mínimo): "
+              "el recuento por NCU está incompleto y no cuenta como fallo" % sin_ncu)
     for ncu in cfg.get("ncus") or []:
         num = int("".join(c for c in str(ncu.get("id", "")) if c.isdigit()) or 0)
         dice = ncu.get("hsu_count")
         mide = hsu_ncu.get(num, 0)
-        di(dice == mide, "NCU%d: HSU  yml %s  ·  DWG %d%s"
-           % (num, dice, mide, "" if dice == mide else "   ← manda el DWG"))
+        txt = "NCU%d: HSU  yml %s  ·  DWG %d" % (num, dice, mide)
+        if dice == mide:
+            di(True, txt)
+        elif firme:
+            di(False, txt + "   ← manda el DWG")
+        else:
+            print("  ojo   %s   ← con la NCU derivada o incompleta, esto es un aviso, no un fallo" % txt)
 
 # ── los rangos de esclavos de cada gateway ───────────────────────────────────────────────────
 esc = {}
