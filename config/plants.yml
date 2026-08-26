@@ -54,7 +54,10 @@ ncus:
       # TCU 109 suelta en GW2 (rangos sacados de los .bat de Sunner; la 108
       # no existe). Confirmar en campo. Va sin hsu_esclavo: la estación del
       # GW2 ya está declarada arriba, en la fila del rango bueno.
-      - { puerto: 504, tcu_ini: 109, tcu_fin: 109 }
+      # `fuera_de_dwg` lo dice como DATO y no solo en este comentario: el careo
+      # contra el layout (tools/test_plants_yml.py) lo informa en vez de darlo
+      # por divergencia, porque es un hecho conocido y no un despiste.
+      - { puerto: 504, tcu_ini: 109, tcu_fin: 109, fuera_de_dwg: [109] }
 
 # Medidor de tráfico: el colector cuenta los bytes de cada ciclo (Modbus contra
 # la NCU y subida a InfluxDB) y los publica en la serie `traffic`. Cuesta un
