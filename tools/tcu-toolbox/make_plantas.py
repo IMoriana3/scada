@@ -95,11 +95,12 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
     if i_hsu is None:
         print(f"aviso: la hoja '{hoja}' no tiene columna 'HSU esclavo'; se conservan "
               "los que ya tenga el JSON y el resto saldra sin el (la toolbox usara 185)")
-    # CUANTAS estaciones lleva cada NCU si lo dicen las columnas 'RSU' (una por
-    # gateway). Ahi va un numero de orden dentro de la planta (1, 2, 3...), NO
-    # el esclavo Modbus: volcarlo en hsu_esclavo mandaria a la toolbox a hablar
-    # con el esclavo 5, que es un TCU. Solo se cuenta, para poder decir cuantas
-    # deberia encontrar BUSCAR HSUs.
+    # QUE estaciones lleva cada NCU, si lo dicen las columnas 'RSU' (una por gateway).
+    # En esa celda va el ORDEN DE LA ESTACION dentro de la planta (1, 2, 3...), NO el
+    # esclavo Modbus: volcarlo en hsu_esclavo mandaria a la toolbox a hablar con el
+    # esclavo 5, que es un TCU. Pero tampoco vale con contarlo, que es lo que se hacia:
+    # ese numero es lo que dice QUE HSU cuelga de QUE NCU, y sin el hay que deducirlo
+    # por cercania. Va a `rsu`, que es el campo que ya lee la toolbox.
     # La PRIMERA columna 'RSU' (la del GW1) con la misma manga ancha que la segunda:
     # 'RSU', 'RSU 1', 'RSU GW1'... y si no aparece ninguna, no se cuentan estaciones.
     i_rsu1 = next((k for k in range(len(head))
@@ -144,18 +145,29 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
         proy = actual[1]
 
         def rsus_por_gw():
-            """CUANTAS RSU declara esta fila EN CADA GATEWAY, [gw1, gw2].
+            """QUE RSU declara esta fila EN CADA GATEWAY: [[n del gw1], [n del gw2]].
 
-               La hoja lo dice por la COLUMNA: hay una 'RSU' antes de 'IP GW 2' y otra
-               despues, exactamente igual que las dos de 'Esclavos'. Se leia asi desde
-               siempre —`i_rsu1` e `i_rsu2`— pero solo para SUMARLAS, y el reparto se
-               tiraba a la basura."""
-            return [1 if (i is not None and re.match(r"^\d+$", re.sub(r"\.0$", "", v(i)))) else 0
-                    for i in (i_rsu1, i_rsu2)]
+               Dos cosas que la hoja dice y se tiraban:
+
+               EL GATEWAY, por la COLUMNA. Hay una 'RSU' antes de 'IP GW 2' y otra despues,
+               exactamente igual que las dos de 'Esclavos'. Se leian las dos desde siempre
+               —`i_rsu1` e `i_rsu2`— pero solo para SUMARLAS.
+
+               Y EL NUMERO, que es lo gordo. En esa celda va el ORDEN DE LA ESTACION dentro
+               de la planta: un 5 ahi significa «la HSU 5 cuelga de esta NCU». Se estaba
+               comprobando con un regex y tirando: solo se contaba. Con el numero, la hoja
+               dice cada HSU con su NCU y su gateway sin deducir nada — es justo lo que
+               Ayora ya tiene como `rsu: [8, 9]` y lo que a San Jose le falta."""
+            out = []
+            for i in (i_rsu1, i_rsu2):
+                txt = re.sub(r"\.0$", "", v(i)) if i is not None else ""
+                # Admite varias en una celda ('8,9'), como la NCU15 de Ayora
+                out.append([int(x) for x in re.split(r"[,;/ ]+", txt) if re.match(r"^\d+$", x)])
+            return out
 
         def rsus_fila():
             """Cuantas RSU/HSU declara esta fila, entre los dos gateways."""
-            return sum(rsus_por_gw())
+            return sum(len(x) for x in rsus_por_gw())
 
         def esclavos_fila():
             """Los esclavos Modbus que declara esta fila: '230' o '230,231'."""
@@ -174,12 +186,14 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
                 porgw = rsus_por_gw()
                 for e in ultima_entrada:
                     e["hsus"] = e.get("hsus", 0) + rsus_fila()
-                    # `hsus_gw` es lo mismo pero SIN mezclar los gateways: la fila de
-                    # continuacion trae su RSU en una de las dos columnas, igual que
-                    # cualquier otra, asi que se suma a la del gateway que le toca.
+                    # `hsus_gw` y `rsu` SIN mezclar los gateways: la fila de continuacion
+                    # trae su RSU en una de las dos columnas, igual que cualquier otra, asi
+                    # que va a la del gateway que le toca. Asi la NCU15 de Ayora acaba con
+                    # rsu [8, 9] en su GW1, que es donde estan las dos.
                     k = e.get("_gwidx")
                     if k is not None and porgw[k]:
-                        e["hsus_gw"] = e.get("hsus_gw", 0) + porgw[k]
+                        e["hsus_gw"] = e.get("hsus_gw", 0) + len(porgw[k])
+                        e["rsu"] = e.get("rsu", []) + porgw[k]
                     for esc in esclavos_fila():
                         e.setdefault("hsu_esclavos", []).append(esc)
             continue
@@ -219,7 +233,10 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
             # dice cuantas van EN ESTE gateway, que es lo que la columna sabe y se
             # estaba perdiendo. Con eso deja de hacer falta adivinarlo por cercania.
             if porgw[kgw]:
-                entrada["hsus_gw"] = porgw[kgw]
+                entrada["hsus_gw"] = len(porgw[kgw])
+                # QUE estaciones, no solo cuantas. Es el campo que ya lee la toolbox y con
+                # el que `meteo_ncu.mjs` empareja cada HSU del DWG con su NCU sin deducir.
+                entrada["rsu"] = list(porgw[kgw])
             entrada["_gwidx"] = kgw            # interno, se quita antes de escribir
             plantas[actual].append(entrada)
             ultima_entrada.append(entrada)
