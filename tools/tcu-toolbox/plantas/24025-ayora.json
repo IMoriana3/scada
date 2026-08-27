@@ -16,11 +16,12 @@
       "tcu_ini": 1,
       "tcu_fin": 69,
       "hsus": 1,
-      "hsu_esclavos": [
-        230
-      ],
+      "hsus_gw": 1,
       "rsu": [
         1
+      ],
+      "hsu_esclavos": [
+        230
       ]
     },
     {
@@ -30,11 +31,12 @@
       "tcu_ini": 1,
       "tcu_fin": 66,
       "hsus": 1,
-      "hsu_esclavos": [
-        230
-      ],
+      "hsus_gw": 1,
       "rsu": [
         2
+      ],
+      "hsu_esclavos": [
+        230
       ]
     },
     {
@@ -42,13 +44,7 @@
       "ip": "192.168.4.40",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 30,
-      "repetidores": [
-        {
-          "nombre": "Repetidor 1",
-          "esclavo": 200
-        }
-      ]
+      "tcu_fin": 30
     },
     {
       "nombre": "Ayora NCU5",
@@ -57,11 +53,12 @@
       "tcu_ini": 1,
       "tcu_fin": 48,
       "hsus": 1,
-      "hsu_esclavos": [
-        230
-      ],
+      "hsus_gw": 1,
       "rsu": [
         3
+      ],
+      "hsu_esclavos": [
+        230
       ]
     },
     {
@@ -76,12 +73,7 @@
       "ip": "192.168.4.55",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 25,
-      "huecos": [
-        14,
-        24,
-        25
-      ]
+      "tcu_fin": 25
     },
     {
       "nombre": "Ayora NCU8",
@@ -90,11 +82,12 @@
       "tcu_ini": 1,
       "tcu_fin": 44,
       "hsus": 1,
-      "hsu_esclavos": [
-        230
-      ],
+      "hsus_gw": 1,
       "rsu": [
         4
+      ],
+      "hsu_esclavos": [
+        230
       ]
     },
     {
@@ -118,11 +111,12 @@
       "tcu_ini": 1,
       "tcu_fin": 65,
       "hsus": 1,
-      "hsu_esclavos": [
-        230
-      ],
+      "hsus_gw": 1,
       "rsu": [
         5
+      ],
+      "hsu_esclavos": [
+        230
       ]
     },
     {
@@ -132,21 +126,12 @@
       "tcu_ini": 1,
       "tcu_fin": 53,
       "hsus": 1,
-      "hsu_esclavos": [
-        230
-      ],
-      "repetidores": [
-        {
-          "nombre": "Repetidor 2",
-          "esclavo": 200
-        },
-        {
-          "nombre": "Repetidor 3",
-          "esclavo": 201
-        }
-      ],
+      "hsus_gw": 1,
       "rsu": [
         6
+      ],
+      "hsu_esclavos": [
+        230
       ]
     },
     {
@@ -156,11 +141,12 @@
       "tcu_ini": 1,
       "tcu_fin": 72,
       "hsus": 1,
-      "hsu_esclavos": [
-        230
-      ],
+      "hsus_gw": 1,
       "rsu": [
         7
+      ],
+      "hsu_esclavos": [
+        230
       ]
     },
     {
@@ -168,13 +154,7 @@
       "ip": "192.168.4.95",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 24,
-      "repetidores": [
-        {
-          "nombre": "Repetidor 4",
-          "esclavo": 200
-        }
-      ]
+      "tcu_fin": 24
     },
     {
       "nombre": "Ayora NCU15",
@@ -183,19 +163,14 @@
       "tcu_ini": 1,
       "tcu_fin": 43,
       "hsus": 2,
-      "hsu_esclavos": [
-        230,
-        231
-      ],
-      "repetidores": [
-        {
-          "nombre": "Repetidor 5",
-          "esclavo": 200
-        }
-      ],
+      "hsus_gw": 2,
       "rsu": [
         8,
         9
+      ],
+      "hsu_esclavos": [
+        230,
+        231
       ]
     },
     {
@@ -205,11 +180,12 @@
       "tcu_ini": 1,
       "tcu_fin": 45,
       "hsus": 1,
-      "hsu_esclavos": [
-        230
-      ],
+      "hsus_gw": 1,
       "rsu": [
         10
+      ],
+      "hsu_esclavos": [
+        230
       ]
     }
   ]

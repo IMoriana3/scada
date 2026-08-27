@@ -37,15 +37,59 @@ import unicodedata
 from pathlib import Path
 
 
+# Plantas que ya tienen fichero con otro nombre, del modo plants.yml. Ver `destino`, abajo.
+MISMO_FICHERO = {"23003": "elburgo.json"}
+
+
+def rsus_de_celda(texto):
+    """Los NUMEROS de estacion de una celda 'RSU': '8' -> [8]; '8\n9' -> [8, 9]; '-' -> [].
+
+    A NIVEL DE MODULO A PROPOSITO, para que `test_columnas_rsu.py` pruebe ESTA y no una copia.
+    Tenerla copiada en el banco ya se quedo atras una vez: el banco daba verde con la version
+    vieja mientras el codigo real hacia otra cosa, que es la peor manera de tener un banco.
+
+    Separadores: salto de linea, coma, punto y coma, barra y espacio. El salto de linea es el
+    que importa —la NCU15 de Ayora trae sus dos, la 8 y la 9, en dos lineas de la misma celda—
+    y el `.0` se quita POR TROZO, que Excel lo mete en cada numero y no solo al final.
+    """
+    trozos = [re.sub(r"\.0$", "", t.strip()) for t in re.split(r"[\n\r,;/ ]+", str(texto or ""))]
+    return [int(x) for x in trozos if re.match(r"^\d+$", x)]
+
+
+def parse_rangos(texto):
+    """Los TRAMOS de una celda de 'Esclavos': [(ini, fin), ...], vacio si no hay ninguno.
+
+    UNA NCU NO SIEMPRE TIENE UN SOLO TRAMO. En la hoja, la celda de la NCU 16 de San Jose
+    trae CINCO, uno por linea:
+
+        15-19
+        27-35
+        53-61
+        68-76
+        95-103
+
+    Esto entendia un solo rango y devolvia None para esas celdas, y sin rango la NCU se
+    caia ENTERA del fichero, en silencio. Es el bug que dejo a San Jose con 16 NCU de 21 y
+    con tres HSU sin poder asignar: las cinco que faltaban -7, 12, 16, 17 y 19- son
+    exactamente las cinco con varios tramos. Ya estaba arreglado en `ips.html`; aqui no.
+
+    Se parte por saltos de linea, comas y puntos y coma.
+    """
+    out = []
+    for trozo in re.split(r"[\n\r,;]+", str(texto or "")):
+        t = trozo.strip()
+        m = re.match(r"^(\d+)\s*-\s*(\d+)$", t)
+        if m:
+            out.append((int(m.group(1)), int(m.group(2))))
+        elif re.match(r"^\d+$", t):
+            out.append((int(t), int(t)))
+    return out
+
+
 def parse_rango(texto):
-    """'1-56' -> (1, 56); '109' -> (109, 109); '-'/vacio -> None."""
-    t = str(texto or "").strip()
-    m = re.match(r"^(\d+)\s*-\s*(\d+)$", t)
-    if m:
-        return int(m.group(1)), int(m.group(2))
-    if re.match(r"^\d+$", t):
-        return int(t), int(t)
-    return None
+    """El PRIMER tramo de la celda, para quien solo pueda con uno. '-'/vacio -> None."""
+    r = parse_rangos(texto)
+    return r[0] if r else None
 
 
 def slug(texto):
@@ -101,10 +145,20 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
     # esclavo 5, que es un TCU. Pero tampoco vale con contarlo, que es lo que se hacia:
     # ese numero es lo que dice QUE HSU cuelga de QUE NCU, y sin el hay que deducirlo
     # por cercania. Va a `rsu`, que es el campo que ya lee la toolbox.
-    # La PRIMERA columna 'RSU' (la del GW1) con la misma manga ancha que la segunda:
-    # 'RSU', 'RSU 1', 'RSU GW1'... y si no aparece ninguna, no se cuentan estaciones.
-    i_rsu1 = next((k for k in range(len(head))
-                   if str(head[k] or "").strip().upper().startswith("RSU")), None)
+    # LA COLUMNA 'RSU' DEL GW1, y OJO CON LA CABECERA DE LA IZQUIERDA. La hoja abre con un
+    # bloque de totales por planta —'NCUs', 'RSUs', 'TCUs'— y 'RSUs' TAMBIEN empieza por RSU.
+    # Buscar por prefijo desde el principio agarra ESA: San Jose tiene 8 RSU en total, asi que
+    # su primera NCU salia con rsu [8], que es el numero de la estacion de la NCU 21. Se busca
+    # solo dentro del bloque del gateway, o sea a partir de 'IP GW 1', y se descarta el plural.
+    def col_rsu(desde):
+        for k in range(desde, len(head)):
+            t = str(head[k] or "").strip().upper()
+            if t.startswith("RSU") and t != "RSUS":
+                return k
+        return None
+
+    _gw1 = head.index("IP GW 1") if "IP GW 1" in head else 0
+    i_rsu1 = col_rsu(_gw1)
     i_rsu2 = None
     if i_rsu1 is not None and "IP GW 2" in head:
         # LA SEGUNDA COLUMNA 'RSU' NO SIEMPRE SE LLAMA IGUAL. Buscar el texto exacto
@@ -112,11 +166,7 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
         # fallo es SILENCIOSO: se cuentan solo las del GW1 y nadie se entera. El
         # sintoma esta a la vista en El Burgo, que tiene DOS estaciones por NCU -una
         # por gateway, comprobado en campo- y sale con hsus 1.
-        desde = head.index("IP GW 2")
-        for k in range(desde, len(head)):
-            if str(head[k] or "").strip().upper().startswith("RSU"):
-                i_rsu2 = k
-                break
+        i_rsu2 = col_rsu(head.index("IP GW 2"))
         if i_rsu2 is None:
             print(f"aviso: la hoja '{hoja}' no tiene una segunda columna 'RSU' despues de "
                   "'IP GW 2'; solo se contaran las estaciones del GW1")
@@ -158,12 +208,7 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
                comprobando con un regex y tirando: solo se contaba. Con el numero, la hoja
                dice cada HSU con su NCU y su gateway sin deducir nada — es justo lo que
                Ayora ya tiene como `rsu: [8, 9]` y lo que a San Jose le falta."""
-            out = []
-            for i in (i_rsu1, i_rsu2):
-                txt = re.sub(r"\.0$", "", v(i)) if i is not None else ""
-                # Admite varias en una celda ('8,9'), como la NCU15 de Ayora
-                out.append([int(x) for x in re.split(r"[,;/ ]+", txt) if re.match(r"^\d+$", x)])
-            return out
+            return [rsus_de_celda(v(i)) if i is not None else [] for i in (i_rsu1, i_rsu2)]
 
         def rsus_fila():
             """Cuantas RSU/HSU declara esta fila, entre los dos gateways."""
@@ -200,18 +245,30 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
         ncu_auto += 1
         ntxt = re.sub(r"\.0$", "", v(i_ncu))
         n = int(ntxt) if re.match(r"^\d+$", ntxt) else ncu_auto
-        rangos = [parse_rango(v(i_esc1)), parse_rango(v(i_esc2))]
-        # Se guarda el indice REAL (0=GW1, 1=GW2), no la posicion entre los presentes:
-        # una NCU con rango solo en el GW2 tendria gidx 1 y su RSU esta en la columna 2.
-        gws = [(k, puertos[k], r) for k, r in enumerate(rangos) if r and k < len(puertos)]
+        rangos = [parse_rangos(v(i_esc1)), parse_rangos(v(i_esc2))]
+        # UNA ENTRADA POR TRAMO, no por gateway. La toolbox ya sabe de varias entradas para
+        # el mismo gateway -El Burgo tiene la del TCU 109 suelto- y es lo unico que respeta
+        # los huecos: un rango 1-103 que en realidad son cinco tramos haria sondear TCU que
+        # no existen. Se guarda ademas el indice REAL del gateway (0=GW1, 1=GW2), no la
+        # posicion entre los presentes: una NCU con rango solo en el GW2 tendria gidx 1 y su
+        # RSU esta en la columna 2.
+        gws = [(k, puertos[k], r, j) for k, rr in enumerate(rangos) if k < len(puertos)
+               for j, r in enumerate(rr)]
         if not gws:
             continue
         escl = esclavos_fila()
         nRsu = rsus_fila()
         ultima_entrada = []
         porgw = rsus_por_gw()
-        for gidx, (kgw, puerto, (ini, fin)) in enumerate(gws, start=1):
-            sufijo = f" GW{gidx}" if len(gws) > 1 else ""
+        # Cuantos gateways DISTINTOS hay: el sufijo " GW1"/" GW2" depende de eso, no del
+        # numero de entradas, que ahora puede ser mayor por los tramos.
+        _kgws = sorted({k for k, _p, _r, _j in gws})
+        for kgw, puerto, (ini, fin), jtramo in gws:
+            sufijo = f" GW{_kgws.index(kgw) + 1}" if len(_kgws) > 1 else ""
+            # Y si ese gateway tiene VARIOS tramos, el rango en el nombre para distinguirlos,
+            # igual que "El Burgo I NCU2 GW2 (TCU 109-109)" en el modo plants.yml.
+            if sum(1 for k, _p, _r, _j in gws if k == kgw) > 1:
+                sufijo += f" (TCU {ini}-{fin})"
             entrada = {
                 "nombre": f"{proy} NCU{n}{sufijo}",
                 "ip": ip,
@@ -232,7 +289,7 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
             # -asi ha sido siempre y asi se queda, que hay quien lo lee- y `hsus_gw`
             # dice cuantas van EN ESTE gateway, que es lo que la columna sabe y se
             # estaba perdiendo. Con eso deja de hacer falta adivinarlo por cercania.
-            if porgw[kgw]:
+            if porgw[kgw] and jtramo == 0:
                 entrada["hsus_gw"] = len(porgw[kgw])
                 # QUE estaciones, no solo cuantas. Es el campo que ya lee la toolbox y con
                 # el que `meteo_ncu.mjs` empareja cada HSU del DWG con su NCU sin deducir.
@@ -251,7 +308,12 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
     for (num, proy), entradas in sorted(plantas.items()):
         if not entradas or num in excluir:
             continue
-        destino = Path("plantas") / f"{num}-{slug(proy)}.json"
+        # DOS MODOS, UN SOLO FICHERO POR PLANTA. El modo plants.yml nombra por `plant.id`
+        # (`elburgo.json`) y este nombra por numero y nombre (`23003-burgo-i.json`), asi que
+        # El Burgo acababa DUPLICADO en plantas/ y el portatil de campo lo veria dos veces.
+        # El emparejamiento va escrito a la vista porque es una decision, no algo deducible:
+        # el Excel llama a esa planta «Burgo I» y plants.yml «El Burgo I», y de ahi no sale.
+        destino = Path("plantas") / MISMO_FICHERO.get(str(num), f"{num}-{slug(proy)}.json")
         destino.parent.mkdir(parents=True, exist_ok=True)
         # Los esclavos de las HSUs no estan en el Excel (todavia): si el JSON
         # anterior los traia puestos a mano, regenerar no puede borrarlos. Solo
@@ -260,18 +322,42 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
         if destino.exists():
             try:
                 previo = json.loads(destino.read_text(encoding="utf-8"))
-                antes = {e.get("nombre"): e for e in previo.get("plantas", [])}
             except (ValueError, OSError):
-                antes = {}
+                previo = {"plantas": []}
+
+            # NO SE EMPAREJA POR NOMBRE. El Excel llama a la planta «Burgo I» y plants.yml
+            # «El Burgo I», asi que emparejar por `nombre` no casaba NINGUNA entrada y la
+            # regeneracion se llevaba por delante los esclavos 230/231 de El Burgo, que son
+            # dato de campo. La identidad de una entrada es su NCU, su puerto y su rango.
+            def clave(e):
+                m = re.search(r"NCU\s*(\d+)", str(e.get("nombre") or ""))
+                return (m.group(1) if m else "", e.get("puerto"), e.get("tcu_ini"), e.get("tcu_fin"))
+
+            antes = {clave(e): e for e in previo.get("plantas", [])}
             conservados = 0
             for e in entradas:
-                viejo = antes.get(e.get("nombre"))
-                if viejo and "hsu_esclavos" not in e and viejo.get("hsu_esclavos"):
-                    e["hsu_esclavos"] = viejo["hsu_esclavos"]
-                    conservados += 1
+                viejo = antes.pop(clave(e), None)
+                if not viejo:
+                    continue
+                # Lo mismo para `rsu` y `hsus_gw`: los pone el Excel, y el modo plants.yml no
+                # sabe de ellos. Sin esto, la regeneracion automatica del workflow los borraria
+                # en cada push a plants.yml y habria que volver a pasar el Excel.
+                for k in ("hsu_esclavos", "rsu", "hsus_gw"):
+                    if k not in e and viejo.get(k) is not None:
+                        e[k] = viejo[k]
+                        conservados += 1
+            # Y LAS ENTRADAS QUE EL EXCEL NO TRAE TAMPOCO SE TIRAN. En El Burgo hay una fila
+            # que no sale de ninguna hoja: el TCU 109 suelto en el GW2 de la NCU2, sacado de
+            # los .bat de Sunner. Regenerar desde el Excel la borraba en silencio.
+            sobrantes = [e for e in antes.values() if e.get("tcu_ini") is not None]
+            if sobrantes:
+                entradas.extend(sobrantes)
+                entradas.sort(key=lambda e: (clave(e)[0].zfill(3), e.get("puerto") or 0, e.get("tcu_ini") or 0))
+                print(f"  {destino}: conservadas {len(sobrantes)} entradas que el Excel no trae "
+                      + ", ".join(str(e.get("nombre")) for e in sobrantes))
             if conservados:
-                print(f"  {destino}: conservados los esclavos de HSU de {conservados} entradas "
-                      "(no estan en el Excel)")
+                print(f"  {destino}: conservados {conservados} campos de HSU del JSON anterior "
+                      "(esclavos, rsu o hsus_gw que la hoja no manda)")
         destino.write_text(json.dumps({
             "_comentario": (f"Planta {num} ({proy}) generada desde el Excel maestro "
                             f"(hoja '{hoja}') por make_plantas.py --excel. Solo topologia: "

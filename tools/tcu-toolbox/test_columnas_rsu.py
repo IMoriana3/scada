@@ -32,6 +32,7 @@ real, y la comprobacion de que sale bien es que El Burgo pase a `hsus_gw: 1` en 
 
     python3 tools/tcu-toolbox/test_columnas_rsu.py
 """
+import os
 import re
 import sys
 
@@ -72,15 +73,17 @@ for head, esperado, que in [
 
 
 # ── el reparto por gateway ───────────────────────────────────────────────────────────────────────
+# LA DE VERDAD, no una copia. Tener la logica duplicada aqui ya se quedo atras una vez: el banco
+# daba verde con la version vieja mientras make_plantas hacia otra cosa. Se importa.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from make_plantas import rsus_de_celda
+
+
 def por_gw(i1, i2, fila):
-    """Lo mismo que rsus_por_gw(): QUE RSU declara la fila en cada gateway."""
+    """QUE RSU declara la fila en cada gateway, con la funcion de verdad."""
     def v(i):
         return str(fila[i]).strip() if (i is not None and i < len(fila) and fila[i] is not None) else ""
-    out = []
-    for i in (i1, i2):
-        txt = re.sub(r"\.0$", "", v(i)) if i is not None else ""
-        out.append([int(x) for x in re.split(r"[,;/ ]+", txt) if re.match(r"^\d+$", x)])
-    return out
+    return [rsus_de_celda(v(i)) if i is not None else [] for i in (i1, i2)]
 
 
 print("\n· QUE RSU va en cada gateway, no solo cuantas")
@@ -93,6 +96,8 @@ for fila, esperado, que in [
     ([None, "8,9", None, None], [[8, 9], []], "dos en la misma celda (la NCU15 de Ayora)"),
     ([None, "8 9", None, None], [[8, 9], []], "dos separadas por espacio"),
     ([None, "s/n", None, None], [[], []], "texto que no es un numero"),
+    ([None, "8\n9", None, None], [[8, 9], []], "dos en DOS LINEAS de la misma celda: la NCU15 de Ayora"),
+    ([None, "8\n9.0", None, None], [[8, 9], []], "y con el «.0» en la segunda linea"),
 ]:
     g = por_gw(1, 3, fila)
     di(g == esperado, "%s → %s" % (que, g))
@@ -100,8 +105,7 @@ g = por_gw(1, None, [None, "3"])
 di(g == [[3], []], "hoja sin segunda columna → %s" % (g,))
 
 print("\n%s" % ("%d fallo(s)" % len(fallos) if fallos else
-                "se comporta como debe. Falta la pasada de verdad contra la hoja: "
-                "`make_plantas.py --excel`. Que ha ido bien se ve en dos sitios: El Burgo con "
-                "hsus_gw 1 en cada gateway, y San Jose con `rsu` en sus NCU (que es lo que cierra "
-                "sus tres HSU sin NCU)"))
+                "se comporta como debe. La pasada de verdad ya esta hecha (2026-08-27): El Burgo "
+                "salio con hsus_gw 1 en cada gateway y rsu 1..4, y San Jose con sus ocho, incluida "
+                "la NCU16 con DOS -la HSU 5 en el GW2 y la 6 en el GW1-"))
 sys.exit(1 if fallos else 0)

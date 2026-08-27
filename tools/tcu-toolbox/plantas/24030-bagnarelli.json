@@ -8,7 +8,12 @@
       "puerto": 503,
       "tcu_ini": 1,
       "tcu_fin": 17,
-      "hsus": 2
+      "hsus": 2,
+      "hsus_gw": 2,
+      "rsu": [
+        1,
+        2
+      ]
     }
   ]
 }
