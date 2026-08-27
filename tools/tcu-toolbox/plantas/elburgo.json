@@ -1,47 +1,63 @@
 {
-  "_comentario": "Generado desde plants.yml por make_plantas.py. NO editar a mano: declara los gateways en plants.yml y regenera.",
+  "_comentario": "Planta 23003 (Burgo I) generada desde el Excel maestro (hoja 'Direcciones IP') por make_plantas.py --excel. Solo topologia: sin credenciales. NO subir el Excel al repo.",
   "version": 1,
   "plantas": [
     {
-      "nombre": "El Burgo I NCU1 GW1",
+      "nombre": "Burgo I NCU1 GW1",
       "ip": "10.100.1.52",
       "puerto": 503,
       "tcu_ini": 1,
       "tcu_fin": 56,
-      "hsus": 1,
+      "hsus": 2,
+      "hsus_gw": 1,
+      "rsu": [
+        1
+      ],
       "hsu_esclavos": [
         230
       ]
     },
     {
-      "nombre": "El Burgo I NCU1 GW2",
+      "nombre": "Burgo I NCU1 GW2",
       "ip": "10.100.1.52",
       "puerto": 504,
       "tcu_ini": 57,
       "tcu_fin": 108,
-      "hsus": 1,
+      "hsus": 2,
+      "hsus_gw": 1,
+      "rsu": [
+        2
+      ],
       "hsu_esclavos": [
         231
       ]
     },
     {
-      "nombre": "El Burgo I NCU2 GW1",
+      "nombre": "Burgo I NCU2 GW1",
       "ip": "10.100.1.56",
       "puerto": 503,
       "tcu_ini": 1,
       "tcu_fin": 45,
-      "hsus": 1,
+      "hsus": 2,
+      "hsus_gw": 1,
+      "rsu": [
+        3
+      ],
       "hsu_esclavos": [
         230
       ]
     },
     {
-      "nombre": "El Burgo I NCU2 GW2",
+      "nombre": "Burgo I NCU2 GW2",
       "ip": "10.100.1.56",
       "puerto": 504,
       "tcu_ini": 46,
       "tcu_fin": 107,
-      "hsus": 1,
+      "hsus": 2,
+      "hsus_gw": 1,
+      "rsu": [
+        4
+      ],
       "hsu_esclavos": [
         231
       ]
