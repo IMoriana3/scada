@@ -1,0 +1,25 @@
+# Este repo no tenía ninguna comprobación sobre `index.html`, que es donde vive
+# el visor entero: los dos importadores, el reparto de gateways y el dibujado.
+# VIS-01 estuvo aquí meses después de corregirse en `siting`, y nada lo dijo.
+# Un banco que no corre nadie es decoración.
+name: tests
+on:
+  push:
+  pull_request:
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: banco de pruebas
+        run: |
+          set -o pipefail
+          rc=0
+          for f in tests/test_*.js; do
+            echo "── $f ──"
+            node "$f" || rc=1
+          done
+          exit $rc
