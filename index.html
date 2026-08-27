@@ -767,7 +767,7 @@ function scatter(shapes,W,H,mx,my,tries=500){
 }
 function parseProjectXLSX(wb, fname){
   if(typeof XLSX==="undefined"){ alert("No se pudo cargar el lector de Excel (sin conexión)."); return null; }
-  const tcus=[], ncusRaw=[], hsus=[], reps=[]; let hasPS=false, altName="CLI";
+  const tcus=[], ncusRaw=[], hsus=[], reps=[], excluidas=[]; let hasPS=false, altName="CLI";
   wb.SheetNames.forEach(sh=>{
     const ws=wb.Sheets[sh]; if(!ws) return;
     const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:null});
@@ -798,11 +798,22 @@ function parseProjectXLSX(wb, fname){
       return (/^(nan|nat|#n\/a|null|undefined)$/i.test(s)) ? "" : s;
     };
     for(let ri=1; ri<rows.length; ri++){ const r=rows[ri]; if(!r) continue;
-      const x=Number(r[iX]), y=Number(r[iY]), nv=r[iN];
-      if(isFinite(x)&&isFinite(y)&&nv!=null&&/^\d+$/.test(String(nv).trim())){
-        tcus.push({x,y,ncu:parseInt(String(nv).trim(),10),
-          gw:(iGW>=0&&isFinite(Number(r[iGW])))?parseInt(r[iGW],10):1,
-          cli:celdaTexto(iCli,r), ps:celdaTexto(iPS,r), tr:celdaTexto(iTr,r)});
+      /* `celdaTexto` ya filtraba los centinelas —y por eso la etiqueta de una
+         NCU no salía siendo la cadena "NaN"—, pero devuelve "": indistinguible
+         de un nombre vacío. `visTxt` devuelve null, que sí se distingue. Y lo
+         que no entra se anota: antes de esto, de cuatro filas de datos entraban
+         tres y nadie lo decía. */
+      const x=visNum(r[iX]), y=visNum(r[iY]), nv=visTxt(r[iN]);
+      if(x!=null&&y!=null&&nv!=null&&/^\d+$/.test(nv)){
+        tcus.push({x,y,ncu:parseInt(nv,10),
+          gw:(iGW>=0&&visNum(r[iGW])!=null)?parseInt(visNum(r[iGW]),10):1,
+          cli:(iCli>=0)?visTxt(r[iCli]):null,
+          ps:(iPS>=0)?visTxt(r[iPS]):null,
+          tr:(iTr>=0)?visTxt(r[iTr]):null});
+      } else if(r.some(c=>c!=null&&String(c).trim()!=="")){
+        excluidas.push({hoja:sh,fila:ri+1,
+          motivo:(x==null||y==null)?"coordenada no numérica"
+                :(nv==null)?"sin NCU":"la NCU no es un número entero"});
       }
       for(let c=9;c<r.length;c++){ const v=r[c]; if(typeof v!=="string") continue; const up=v.trim().toUpperCase();
         if(up.indexOf("NCU ")===0||up.indexOf("HSU")===0||up.indexOf("REP")===0){
@@ -816,7 +827,10 @@ function parseProjectXLSX(wb, fname){
     }
   });
   if(!tcus.length||!ncusRaw.length){ alert("No se reconoció el formato del Excel. Se esperan pestañas con columnas 'Coordenada X', 'Coordenada Y', 'NCU' y la posición de NCU/HSU/REP a la derecha."); return null; }
-  const mode=arr=>{ const c={}; arr.forEach(v=>{ if(v)c[v]=(c[v]||0)+1; }); let b="",n=0; for(const k in c) if(c[k]>n){n=c[k];b=k;} return b; };
+  /* `mode` sobre valores ya limpios: null no cuenta, y devuelve null —no ""—
+     si no hay ninguno, para que la ausencia siga siendo distinguible. */
+  const mode=arr=>{ const c={}; arr.forEach(v=>{ if(v!=null&&v!=="")c[v]=(c[v]||0)+1; });
+    let b=null,n=0; for(const k in c) if(c[k]>n){n=c[k];b=k;} return b; };
   const seen={}, NC=[];
   ncusRaw.forEach(n=>{ if(n.factiun!=null&&!seen[n.factiun]){ seen[n.factiun]=1; const ts=tcus.filter(t=>t.ncu===n.factiun); n.ps=mode(ts.map(t=>t.ps)); n.cli=mode(ts.map(t=>t.cli)); NC.push(n); } });
   NC.sort((a,b)=>a.factiun-b.factiun);
@@ -824,7 +838,7 @@ function parseProjectXLSX(wb, fname){
   const ys=tcus.map(t=>t.y).concat(NC.map(n=>n.y)).concat(hsus.map(h=>h.y)).concat(reps.map(r=>r.y));
   const ox=Math.min.apply(null,xs), oy=Math.min.apply(null,ys);
   const rx=v=>Math.round((v-ox)*10)/10, ry=v=>Math.round((v-oy)*10)/10;
-  return { ox:Math.round(ox*10)/10, oy:Math.round(oy*10)/10, name:fname.replace(/\.[^.]+$/,""), usePS:hasPS, showGZ:NC.some(n=>n.cli), alt:altName,
+  return { excluidas:excluidas, ox:Math.round(ox*10)/10, oy:Math.round(oy*10)/10, name:fname.replace(/\.[^.]+$/,""), usePS:hasPS, showGZ:NC.some(n=>n.cli), alt:altName,
     ncus:NC.map(n=>[n.factiun, n.cli||String(n.factiun), n.tipo, rx(n.x), ry(n.y), n.ps||""]),
     tcus:tcus.map(t=>[rx(t.x), ry(t.y), t.ncu, t.gw, t.tr||("T"+t.ncu), t.ps||""]),
     hsus:hsus.map(h=>[h.label,"",rx(h.x),ry(h.y),""]),
@@ -950,26 +964,116 @@ function scenario(name){
   return m.map((p,i)=>({...p,id:"M"+(i+1)}));
 }
 /* ===================== CSV ===================== */
+/* ── VIS-01, portado desde `siting` ──────────────────────────────────────────
+   Este fichero lleva una copia de los dos importadores. Cuando VIS-01 se
+   corrigió allí quedó anotado que aquí seguían las mismas averías; esto las
+   cierra. Medido sobre ESTE fichero antes de tocar nada:
+
+     celda VACÍA en largo/ancho/azimut   ->  0      (`+""` es cero: un ancho de
+                                                     cero metros, un azimut
+                                                     norte-sur que nadie puso)
+     celda con basura o con "nan"        ->  NaN    (viaja a la exportación)
+     4 filas de datos, 1 con coordenada  ->  entran 3 y NADIE lo dice
+       no numérica
+     dos columnas de X en la hoja        ->  se coge una en silencio, y aquí
+                                             sale x=10 donde en `siting` salía
+                                             111: la respuesta depende del
+                                             orden de la lista de candidatos
+     reimportar lo que exporta           ->  null, «no se reconocen columnas»
+       csvAssign()
+
+   Lo que YA estaba aquí y no se toca: `celdaTexto` filtra los centinelas de
+   texto («nan», «nat», «#n/a»…) y por eso la etiqueta de una NCU ya no salía
+   siendo la cadena "NaN". Filtra bien, pero devuelve "" — indistinguible de un
+   nombre vacío—, así que `visTxt` lo sustituye devolviendo null, que es lo que
+   el resto del fichero ya sabe leer con `(x!=null?x:defecto)`. */
+const VIS_AUSENTES = ["", "NAN", "NAT", "NA", "N/A", "#N/A", "NULL", "NONE",
+                      "UNDEFINED", "INFINITY", "-INFINITY", "-", "--"];
+function visTxt(v){
+  if(v==null) return null;
+  if(typeof v === "number" && !isFinite(v)) return null;   // NaN / Infinity
+  const t = String(v).trim();
+  return VIS_AUSENTES.indexOf(t.toUpperCase()) >= 0 ? null : t;
+}
+function visNum(v){
+  if(visTxt(v) == null) return null;          // vacío o centinela de ausencia
+  const n = Number(v);
+  return isFinite(n) ? n : null;              // basura: ausente, no NaN
+}
+/* Resumen legible de lo descartado: una lista de 87 números no se lee, «87 sin
+   NCU, filas 12, 13, 14…» sí. */
+function visResumenExclusiones(ex, nEntran){
+  const porMotivo={};
+  ex.forEach(e=>{ (porMotivo[e.motivo]=porMotivo[e.motivo]||[]).push(
+    (e.hoja?e.hoja+"!":"")+e.fila); });
+  const lineas=Object.keys(porMotivo).map(k=>{
+    const f=porMotivo[k];
+    return "  "+f.length+" · "+k+" (fila "+f.slice(0,5).join(", ")+
+           (f.length>5?", …":"")+")";
+  });
+  return "Se han descartado "+ex.length+" filas y entran "+nEntran+":\n"+
+         lineas.join("\n")+"\nCorrígelas en el origen o acepta que no están.";
+}
 function parseCSV(text){
   const lines=text.replace(/\r/g,"").split("\n").filter(l=>l.trim());
   if(!lines.length)return [];
   const H=lines[0].split(",").map(s=>s.trim().toLowerCase());
-  const idx=(names)=>H.findIndex(h=>names.includes(h));
-  const ix=idx(["x","este","easting"]),iy=idx(["y","norte","northing"]);
+  /* COINCIDENCIA ÚNICA. Era `H.findIndex(h=>names.includes(h))`: la primera
+     columna de la hoja cuya cabecera estuviera en la lista de candidatos. Con
+     dos columnas de X se cogía una en silencio, y CUÁL dependía del orden —
+     medido, aquí salía x=10 donde en `siting` salía 111 con la misma hoja. */
+  const ambiguas=[];
+  const idx=(names)=>{
+    const hits=[]; for(let i=0;i<H.length;i++) if(names.indexOf(H[i])>=0) hits.push(i);
+    if(hits.length>1){ ambiguas.push(hits.map(i=>H[i]).join(" / ")); return -1; }
+    return hits.length ? hits[0] : -1;
+  };
+  /* `x_m`/`y_m`/`tracker_id` son las cabeceras que escribe csvAssign(): sin
+     ellas esta herramienta no podía reimportar su propia exportación —medido:
+     devolvía null—. No son nombres inventados, son los suyos. */
+  const ix=idx(["x","este","easting","coordenada x","x_m"]),iy=idx(["y","norte","northing","coordenada y","y_m"]);
   const ilat=idx(["lat","latitud","latitude"]),ilng=idx(["lng","lon","long","longitud","longitude"]);
   const ipb=idx(["pb","power_block","powerblock","power block","zona","zone","block"]);
-  const iid=idx(["id","etiqueta","name","nombre"]);
+  const iid=idx(["id","etiqueta","name","nombre","tracker_id"]);
   const ilen=idx(["length","largo","len","longitud","l_m"]); const iwid=idx(["width","ancho","wid","w_m"]); const iaz=idx(["azimuth","azimut","az","orientacion","orientation"]);
   const rows=lines.slice(1).map(l=>l.split(","));
+  const campos=(c,i)=>({pb:ipb>=0?visTxt(c[ipb]):null,
+                        id:iid>=0?(visTxt(c[iid])||("M"+(i+1))):("M"+(i+1)),
+                        len:ilen>=0?visNum(c[ilen]):null,
+                        wid:iwid>=0?visNum(c[iwid]):null,
+                        az:iaz>=0?visNum(c[iaz]):null});
   let pts=[];
-  if(ix>=0&&iy>=0){ pts=rows.map((c,i)=>({x:+c[ix],y:+c[iy],pb:ipb>=0?(c[ipb]||"").trim()||null:null,id:iid>=0?c[iid]:("M"+(i+1)),len:ilen>=0?+c[ilen]:undefined,wid:iwid>=0?+c[iwid]:undefined,az:iaz>=0?+c[iaz]:undefined})); }
+  if(ix>=0&&iy>=0){ pts=rows.map((c,i)=>Object.assign({x:visNum(c[ix]),y:visNum(c[iy])},campos(c,i))); }
   else if(ilat>=0&&ilng>=0){
-    const lat=rows.map(c=>+c[ilat]),lng=rows.map(c=>+c[ilng]);
-    const lat0=lat.reduce((a,b)=>a+b,0)/lat.length,lng0=lng.reduce((a,b)=>a+b,0)/lng.length,k=111320;
-    pts=rows.map((c,i)=>({x:(lng[i]-lng0)*k*Math.cos(lat0*Math.PI/180),y:(lat[i]-lat0)*k,pb:ipb>=0?(c[ipb]||"").trim()||null:null,id:iid>=0?c[iid]:("M"+(i+1)),len:ilen>=0?+c[ilen]:undefined,wid:iwid>=0?+c[iwid]:undefined,az:iaz>=0?+c[iaz]:undefined}));
-  } else return null;
-  pts=pts.filter(p=>isFinite(p.x)&&isFinite(p.y));
-  if(pts.length>6000)pts=pts.slice(0,6000);
+    const lat=rows.map(c=>visNum(c[ilat])),lng=rows.map(c=>visNum(c[ilng]));
+    const ok=lat.map((v,i)=>v!=null&&lng[i]!=null);
+    const nv=ok.filter(Boolean).length||1;
+    const lat0=lat.reduce((a,b,i)=>a+(ok[i]?b:0),0)/nv, lng0=lng.reduce((a,b,i)=>a+(ok[i]?b:0),0)/nv, k=111320;
+    pts=rows.map((c,i)=>Object.assign(
+      ok[i]?{x:(lng[i]-lng0)*k*Math.cos(lat0*Math.PI/180),y:(lat[i]-lat0)*k}:{x:null,y:null},
+      campos(c,i)));
+  } else {
+    /* Sin columnas de coordenadas puede ser porque NO estén o porque haya
+       VARIAS y no se elija por ti. Devolver null en los dos casos hacía que el
+       aviso dijera «no se reconocen columnas» cuando el problema era que
+       sobraban. */
+    if(ambiguas.length){ const vacio=[]; vacio.excluidas=[]; vacio.ambiguas=ambiguas; return vacio; }
+    return null;
+  }
+  /* LAS EXCLUSIONES SE MANIFIESTAN. Antes un `.filter()` mudo y un
+     `.slice(0,6000)` igual de mudo: quien cargaba una hoja con filas rotas veía
+     el dibujo y no sabía que faltaba nada. El número de fila es el de la HOJA
+     (+2: la cabecera y el índice base 1). */
+  const excluidas=[], buenas=[];
+  pts.forEach((p,i)=>{ if(p.x!=null&&p.y!=null) buenas.push(p);
+    else excluidas.push({fila:i+2,motivo:"coordenada no numérica"}); });
+  pts=buenas;
+  if(pts.length>6000){
+    for(let i=6000;i<pts.length;i++) excluidas.push({fila:i+2,motivo:"por encima del tope de 6.000 filas"});
+    pts=pts.slice(0,6000);
+  }
+  pts.excluidas=excluidas;
+  pts.ambiguas=ambiguas;
   return pts;
 }
 function downloadTpl(){
@@ -1395,7 +1499,15 @@ document.getElementById("csv").onchange=e=>{
   const f=e.target.files[0]; if(!f)return; const r=new FileReader();
   r.onload=()=>{ const pts=parseCSV(r.result);
     if(!pts){ alert("No se reconocen columnas de coordenadas. Usa x,y (metros) o lat,lng. Opcional: power_block."); return; }
+    /* Lo que no entra, se dice. Antes se filtraba en silencio y el dibujo salía
+       igual de convincente con las filas que faltaran. */
+    if(pts.ambiguas&&pts.ambiguas.length){
+      alert("Hay columnas ambiguas y no se elige por ti:\n  "+pts.ambiguas.join("\n  ")+
+            "\nDeja una sola de cada.");
+      return;
+    }
     if(!pts.length){ alert("CSV vacío o sin filas válidas."); return; }
+    if(pts.excluidas&&pts.excluidas.length) alert(visResumenExclusiones(pts.excluidas, pts.length));
     document.querySelectorAll("#scn button").forEach(x=>x.classList.remove("active"));
     S.motors=pts; recomputeNewData();
   }; r.readAsText(f);
@@ -1403,6 +1515,7 @@ document.getElementById("csv").onchange=e=>{
 document.getElementById("xlsx").onchange=e=>{
   const f=e.target.files[0]; if(!f) return; const r=new FileReader();
   r.onload=()=>{ try{ const wb=XLSX.read(new Uint8Array(r.result),{type:"array"}); const P=parseProjectXLSX(wb,f.name);
+      if(P&&P.excluidas&&P.excluidas.length) alert(visResumenExclusiones(P.excluidas, P.tcus.length));
     if(P){ document.querySelectorAll("#scn button").forEach(x=>x.classList.remove("active")); loadProject(P); }
   }catch(err){ alert("Error leyendo el Excel: "+err.message); } };
   r.readAsArrayBuffer(f);
