@@ -75,6 +75,53 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**Analizador de baterías (v11.63)** — hoja nueva bajo **TCUs**, junto a
+*Baterías*. La pestaña *Baterías* es una **foto**: el último barrido contra unos
+umbrales y contra la mediana de la flota. Eso contesta *«cuál está mal ahora»*.
+Lo que no contesta —y es lo que se pregunta uno delante del camión— son otras
+cuatro cosas:
+
+| | Cómo |
+|---|---|
+| **Cómo va** | La pendiente de SoH y SoC sobre los barridos ya guardados en `trabajos/` |
+| **Por qué está mal** | Cruza Vpanel, corriente de entrada, día/noche y el estado del cargador y da una **causa**, no un síntoma |
+| **A cuál voy** | La peor arriba, con el motivo al lado |
+| **Cuánto le queda** | Meses hasta el SoH de fin de vida, **siempre con su confianza** |
+
+**ANALIZAR** lee la planta y sitúa lo leído contra lo guardado. Con *«Leer la
+planta ahora»* desmarcado usa el último diagnóstico, sin tocar la planta.
+
+**Las causas**, en orden de precedencia — lo que dice el cargador manda sobre lo
+deducido:
+
+- `sin batería` — Vbat por debajo de 15 V: no hay batería útil conectada
+- `cargador en fallo` — lo reporta él, si se ha pulsado *LEER CARGA*
+- `panel sin dar` — de día y con el panel a cero: tapado, sucio, sombreado o cable suelto
+- `no entra corriente` — de día, el panel da, pero no entran mA: cargador o cableado
+- `batería no admite` — entra corriente y el SoC no sube
+- `de noche` / `sin juzgar` — **no son averías**: sin sol no se puede juzgar la carga, y sin saber si era de día tampoco
+
+Ese último punto es el falso positivo gordo que había que evitar: de noche
+ninguna batería carga, y una lista de «no entra corriente» a las diez de la
+noche manda a campo a mirar equipos sanos.
+
+**Lo que el analizador NO dice**, a propósito:
+
+- **Sin al menos 3 barridos separados 14 días no hay tendencia**, y se dice — no
+  se rellena con un cero. Dos lecturas de la misma semana no son una pendiente.
+- Una batería que **no baja** no tiene fecha de caducidad; se dice `no baja`.
+- Una caída **más pequeña que el ruido de medida** (2 puntos de SoH en todo el
+  recorrido) no cuenta como caída.
+- Los meses restantes llevan **siempre** su confianza: `con recorrido` (≥6
+  muestras y ≥90 días), `orientativa`, o `MUY provisional: menos de un mes de
+  historia`. Un número de estos sin su margen es una invitación a creérselo.
+
+⚠️ **La estimación de vida restante es lo más útil de decir y lo más fácil de
+mentir.** Sale de una recta sobre barridos espaciados de forma irregular. Sirve
+para ordenar y para planificar recambios, no para prometer una fecha.
+
+El análisis se guarda como trabajo y se puede volver a abrir desde *Trabajos*.
+
 **«Cargar preset» se comía el backup del volcado (v11.62)** — el camino para
 clonar una TCU en otra es *Volcar TCU → Backup JSON → Escribir*. Pero en
 *Escribir* hay **dos** botones de carga, y el de arriba, `Cargar preset`, **no
