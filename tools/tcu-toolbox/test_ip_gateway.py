@@ -113,5 +113,31 @@ ent = pasada([["24021", "Tunez", 1, "10.0.0.9", "1-19", "", "", "", ""]], cab=CA
 di(len(ent) == 1 and "ip_gw" not in ent[0] and ent[0]["ip"] == "10.0.0.9",
    "una hoja SIN la columna sigue pasando, solo que sin ip_gw", ent[0])
 
-print("\n%d comprobaciones, %d fallos" % (12, len(fallos)))
+# ── una ip_gw puesta A MANO no se pierde al regenerar ────────────────────────────────────────────
+# Quien no pueda correr esto la escribira en el JSON. Si la siguiente pasada del Excel se la lleva,
+# no sirve de nada. Se conserva igual que los esclavos de HSU: la hoja manda cuando la trae.
+print("· una ip_gw escrita a mano sobrevive a la regeneracion")
+import json as _json
+import tempfile as _tmp
+_prev, _dir = os.getcwd(), _tmp.mkdtemp()
+try:
+    os.chdir(_dir)
+    os.makedirs("plantas", exist_ok=True)
+    # un JSON previo con la ip_gw a mano, y una hoja que NO la trae
+    _json.dump({"plantas": [{"nombre": "Tunez NCU1", "ip": "10.0.0.9", "ip_gw": "10.0.0.77",
+                             "puerto": 503, "tcu_ini": 1, "tcu_fin": 19}]},
+               open("plantas/24021-tunez.json", "w"), ensure_ascii=False)
+    ruta = hoja([["24021", "Tunez", 1, "10.0.0.9", "1-19", "", "", "", ""]], cab=CAB_VIEJA)
+    salidas = modo_excel(ruta, "Direcciones IP", [503, 504], [], "")
+    ent = _json.load(open(salidas[0][0], encoding="utf-8"))["plantas"]
+    di(ent[0].get("ip_gw") == "10.0.0.77", "la hoja no la trae y se conserva", ent[0].get("ip_gw"))
+    # y si la hoja SI la trae, manda la hoja
+    ruta = hoja([["24021", "Tunez", 1, "10.0.0.9", "10.0.0.10", "1-19", "", "", "", ""]])
+    salidas = modo_excel(ruta, "Direcciones IP", [503, 504], [], "")
+    ent = _json.load(open(salidas[0][0], encoding="utf-8"))["plantas"]
+    di(ent[0].get("ip_gw") == "10.0.0.10", "y cuando la trae, manda la hoja", ent[0].get("ip_gw"))
+finally:
+    os.chdir(_prev)
+
+print("\n%d comprobaciones, %d fallos" % (14, len(fallos)))
 sys.exit(1 if fallos else 0)

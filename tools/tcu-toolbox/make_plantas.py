@@ -363,7 +363,11 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
                 # Lo mismo para `rsu` y `hsus_gw`: los pone el Excel, y el modo plants.yml no
                 # sabe de ellos. Sin esto, la regeneracion automatica del workflow los borraria
                 # en cada push a plants.yml y habria que volver a pasar el Excel.
-                for k in ("hsu_esclavos", "rsu", "hsus_gw"):
+                # `ip_gw` va en la misma lista: la hoja la trae, pero mientras no se
+                # rehaga la pasada puede estar puesta a mano —hay quien no tiene Python
+                # para correr esto y la escribe en el JSON—. Regenerar no puede
+                # borrarla; en cuanto la hoja la mande, manda la hoja.
+                for k in ("hsu_esclavos", "rsu", "hsus_gw", "ip_gw"):
                     if k not in e and viejo.get(k) is not None:
                         e[k] = viejo[k]
                         conservados += 1
