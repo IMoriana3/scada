@@ -105,18 +105,73 @@ Lectura (GET, siempre disponibles):
 | `/comisionado` | estado de comisionado (bits 4:3 del bloque compacto) por TCU |
 | `/hsus` | HSUs de cada NCU con salud y viento/nieve |
 | `/sincronizar` | lee toda la planta y **sube él mismo el diagnóstico al Histórico** (requiere credenciales Supabase en la config) |
-| `/baterias` | SoC, SoH, tensiones, corrientes y temperaturas de toda la planta, con la auditoría — **del diagnóstico, sin lecturas extra** |
+| `/baterias` | SoC, SoH, tensiones, corrientes y temperaturas de toda la planta, con la auditoría — **del diagnóstico, sin lecturas extra**. ⚠️ **No trae ciclos ni capacidad**: el bloque compacto de la NCU se acaba en el SoH declarado (ver *Ciclos y capacidad* abajo) |
 | `/trabajo/inventario?tcus=&gw=` | **arranca** el inventario como trabajo y devuelve su id. Es la forma buena de inventariar una planta entera |
 | `/trabajo/diagnostico?ncus=&tcus=&gw=` | igual, pero el diagnóstico, troceado **por NCU**. Con 21 NCUs (San José) el barrido de una petición se sale del corte de ~100 s del túnel |
-| `/trabajo` | por dónde va: `hechas`, `total`, `pct`, `faltan_s`, y el `resultado` completo cuando termina |
+| `/trabajo` | por dónde va: `hechas`, `total`, `pct`, **`unidad`** (TCU o NCU: el inventario se trocea por TCU y el diagnóstico por NCU, así que no son comparables), **`faltan_s`** (segundos que quedan al ritmo que lleva — para una barra de progreso vale más que el `pct`) y el `resultado` completo cuando termina. **Solo hay un trabajo a la vez**: lanzar otro con uno en curso devuelve error diciendo cuál corre y por dónde va |
 | `/trabajo/parar` | corta el que esté en curso; lo hecho hasta ahí se conserva |
 | `/inventario?tcus=&gw=` | FW, nº de serie, MAC, HW y fecha de fabricación. ⚠️ **Lenta**: va TCU a TCU por Zigbee, minutos en una planta entera. Acotarla con `tcus` o `gw` la hace usable |
 | `/plan-firmware?objetivo=v1.6.0` | el plan por ventanas del updater (qué abrir, qué pegar, cuánto tarda) — hace el inventario primero, así que hereda su lentitud |
-| `/leer?vars=41010,41111&tcus=1-20&gw=504` | leer variables, como la pestaña *Leer variable*. `vars` admite el prefijo (`41010`); `tcus` admite `12/10, 15/5-12`; `gw` filtra por gateway |
+| `/leer?vars=41010,41111&tcus=1-20&gw=504` | leer variables, como la pestaña *Leer variable*. `vars` admite el prefijo (`41010`); `tcus` admite `12/10, 15/5-12`; `gw` filtra por gateway. **Desde la v3.9 alcanza también el bloque de LECTURA (`3xxxx`)**: SoC, SoH, alarmas, tilt, capacidad, ciclos… Antes solo llegaba a las 125 de configuración |
 | `/cierre` | las TCUs actualizadas que aún no están cerradas, leído del disco de **este** PC |
 | `/trabajos` | los trabajos guardados en `trabajos/` de este PC |
 | `/sat` | estado del ensayo SAT: si está registrando, hasta cuándo, cuántos pases lleva y los ficheros de la carpeta |
 | `/sat/descargar?f=` | un fichero del ensayo, tal cual (solo nombres de esa carpeta: no admite rutas) |
+
+### Las dos recetas que pide el SCADA
+
+**Inventario de una planta entera** — nº de serie, MAC, FW, FW de fábrica, HW y
+fecha de fabricación. Va **TCU a TCU por Zigbee**, así que son minutos: se lanza
+como trabajo y se sondea. Una petición HTTP colgada tanto rato se corta en el
+túnel.
+
+```
+GET /trabajo/inventario?tcus=1-72        →  arranca, devuelve el id al momento
+GET /trabajo                             →  cada pocos segundos
+GET /trabajo/parar                       →  aborta; lo hecho se conserva
+```
+
+```json
+{ "hay": true, "id": "a3f1c9d2", "tipo": "inventario", "estado": "en curso",
+  "hechas": 34, "total": 72, "pct": 47.2, "segundos": 61,
+  "unidad": "TCU", "faltan_s": 68, "error": "" }
+```
+
+Para un puñado de TCUs vale el síncrono: `GET /inventario?tcus=1-5`.
+
+**Auditoría de baterías** — rápida y síncrona, porque sale del bloque compacto:
+
+```
+GET /baterias
+```
+
+Devuelve ya auditado, no en crudo: `hallazgos` son las desviaciones que encuentra
+`Bat-Auditar` (umbrales, y comparación contra la **mediana de la flota**), y
+`tcus` la tabla completa.
+
+### Ciclos y capacidad: por qué NO están en `/baterias`
+
+El bloque compacto que la NCU cachea son **22 registros por TCU** y se acaban en
+el SoH **declarado por el BMS**. La capacidad real, los ciclos y los días en
+conservación viven en `30099`–`30102` y **solo salen por Zigbee**:
+
+```
+GET /leer?vars=30099,30100,30101,30102&ncu=13&tcus=1-72
+```
+
+| Registro | Qué es |
+|---|---|
+| `30099` | capacidad actual [mAh] |
+| `30100` | capacidad nominal [mAh] — con las dos sale el **SoH medido**, que no es el declarado |
+| `30101` | ciclos de carga: el envejecimiento real del elemento |
+| `30102` | días en modo conservación: la batería que lleva N días sin cargarse de verdad |
+
+⚠️ `/leer` hace **una lectura por (TCU × variable)**. Cuatro variables en 72 TCUs
+son **288 lecturas**. Es para leer **de vez en cuando** —los ciclos se mueven
+despacio—, no en el refresco.
+
+⚠️ Un registro con **dos campos** no se resuelve a ciegas: `30096` es SoC *y* SoH,
+así que a secas devuelve error diciendo que es ambiguo. Se acota: `30096 SoC`.
 
 **Auditoría (POST, no depende de `permitir_escritura`)**: `/auditoria`. Va en POST solo porque **el preset viaja en el cuerpo**; no escribe nada. Cuerpo: `{"preset":[{"variable":"41010 longitud [deg]","valor":"-1.685"}],"ncu":1,"tcus":"1-20"}`. Devuelve **solo las desviaciones**, con el valor esperado, el leído y si además es un valor imposible para esa variable.
 
