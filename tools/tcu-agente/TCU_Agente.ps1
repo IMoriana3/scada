@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '4.0'
+$VERSION_AGENTE = '4.1'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -878,6 +878,109 @@ function Sincronizar {
     return [ordered]@{ok=$true; guardado=$subido; aviso=$aviso; resumen=(Resumen-Diag $d); fecha=$d.fecha; filas=@($d.tcus).Count}
 }
 
+# ----------------- configuracion en remoto -----------------
+# El agente leia agente_config.json AL ARRANCAR y nada mas: cambiar cada cuanto
+# vigila obligaba a entrar al PC de planta, editar y reiniciar. Ahora se puede
+# desde la web. Lo que se cambia se APLICA en caliente, se PERSISTE en el
+# fichero -un reinicio no lo deshace- y queda AUDITADO como cualquier escritura.
+#
+# QUE SE PUEDE CAMBIAR Y QUE NO
+#
+# Va todo abierto, incluida permitir_escritura, por decision explicita del
+# dueno: hoy lo usa una sola persona. Conviene tener presente lo que eso
+# significa: con la escritura gobernable en remoto, EL TOKEN ES LO UNICO que
+# separa a alguien de mover seguidores, porque el candado deja de exigir
+# presencia fisica en el PC de planta.
+#
+# Por eso queda 'config_remota_bloqueada': poniendolo a true en el fichero, el
+# agente rechaza TODO cambio remoto y se vuelve a gobernar solo desde el PC. Va
+# a false -abierto- como se pidio; esta para el dia que lo use mas gente, y para
+# que cerrarlo no exija tocar codigo.
+#
+# Los SECRETOS se pueden cambiar pero NO se devuelven: GET /config dice si estan
+# puestos, no cuanto valen. Devolverlos no habilita nada -quien pregunta ya
+# tiene el token- y en cambio los deja en el historial del navegador, en los
+# logs del tunel y en cualquier proxy por el que pase.
+$CFG_SECRETOS = @('token', 'supabase_key', 'supabase_pass', 'supabase_email')
+# Cambian de verdad al vuelo; el resto se guarda pero pide reinicio.
+$CFG_EN_CALIENTE = @('intervalo_vigilancia_min', 'timeout_ms', 'permitir_escritura')
+$CFG_CON_REINICIO = @('planta', 'puerto', 'toolbox', 'dir_datos', 'puerto_ncu')
+
+function Cfg-Publica {
+    $o = [ordered]@{}
+    foreach ($p in $cfg.PSObject.Properties) {
+        $n = $p.Name
+        if ($n -like '_*') { continue }
+        if ($CFG_SECRETOS -contains $n) { $o[$n] = $(if ("$($p.Value)" -ne '') { '(puesto)' } else { '(vacio)' }); continue }
+        $o[$n] = $p.Value
+    }
+    # lo que de verdad esta corriendo ahora mismo, que puede no ser lo del
+    # fichero si algo se cambio en caliente
+    $o['_en_curso'] = [ordered]@{
+        intervalo_vigilancia_min = $script:intervaloVig
+        timeout_ms = $script:timeoutMs
+        permitir_escritura = $script:escritura
+        version_agente = $VERSION_AGENTE
+    }
+    $o['_cambiables'] = @($CFG_EN_CALIENTE + $CFG_CON_REINICIO + $CFG_SECRETOS)
+    $o['_bloqueada'] = [bool]$cfg.config_remota_bloqueada
+    return $o
+}
+
+# Guarda el fichero conservando lo que no se toca (comentarios '_' incluidos).
+function Cfg-Guardar {
+    $tmp = "$rutaCfg.tmp"
+    ConvertTo-Json $cfg -Depth 6 | Set-Content $tmp -Encoding UTF8
+    Move-Item -Force $tmp $rutaCfg
+}
+
+function Cfg-Cambiar($body, [string]$usuario) {
+    if ([bool]$cfg.config_remota_bloqueada) {
+        throw 'la configuracion remota esta bloqueada en este agente (config_remota_bloqueada=true): se cambia en el PC de planta'
+    }
+    if ($null -eq $body) { throw 'falta el cuerpo con los campos a cambiar' }
+    $permitidos = @($CFG_EN_CALIENTE + $CFG_CON_REINICIO + $CFG_SECRETOS + @('config_remota_bloqueada'))
+    $hechos = @(); $reinicio = @(); $rechazados = @()
+    foreach ($p in $body.PSObject.Properties) {
+        $n = $p.Name
+        if ($n -like '_*') { continue }
+        if ($permitidos -notcontains $n) { $rechazados += $n; continue }
+        # el valor de ANTES es el que estaba EN CURSO, no el que ponia el
+        # fichero: si el campo no estaba escrito, lo que habia era el valor por
+        # defecto del arranque, y decir '' seria mentir sobre de donde se viene
+        $antes = $cfg.$n
+        if ($null -eq $antes) {
+            $antes = switch ($n) {
+                'intervalo_vigilancia_min' { $script:intervaloVig }
+                'timeout_ms'               { $script:timeoutMs }
+                'permitir_escritura'       { $script:escritura }
+                default { $null }
+            }
+        }
+        if ($null -eq $cfg.PSObject.Properties[$n]) { $cfg | Add-Member -NotePropertyName $n -NotePropertyValue $p.Value -Force }
+        else { $cfg.$n = $p.Value }
+        # los secretos no se escriben en el log ni en la respuesta
+        $vAntes = $(if ($CFG_SECRETOS -contains $n) { '(secreto)' } else { "$antes" })
+        $vAhora = $(if ($CFG_SECRETOS -contains $n) { '(secreto)' } else { "$($p.Value)" })
+        $hechos += @{campo = $n; antes = $vAntes; ahora = $vAhora}
+        switch ($n) {
+            'intervalo_vigilancia_min' { $script:intervaloVig = [int]$p.Value }
+            'timeout_ms'               { $script:timeoutMs = [int]$p.Value }
+            'permitir_escritura'       { $script:escritura = [bool]$p.Value }
+            default { if ($CFG_CON_REINICIO -contains $n) { $reinicio += $n } }
+        }
+    }
+    if ($hechos.Count -eq 0 -and $rechazados.Count -gt 0) { throw ("no se reconoce ningun campo: " + ($rechazados -join ', ')) }
+    Cfg-Guardar
+    foreach ($h in $hechos) { Write-Host ("CONFIG  {0}: {1} -> {2}" -f $h.campo, $h.antes, $h.ahora) }
+    Auditar $usuario 'config' @{cambios = ($hechos | ForEach-Object { "$($_.campo)=$($_.ahora)" }) -join '; '} @()
+    return [ordered]@{ok = $true; cambiados = $hechos
+        # que un campo no se aplique hasta reiniciar se DICE, no se calla
+        requieren_reinicio = @($reinicio)
+        ignorados = @($rechazados)
+        config = (Cfg-Publica)}
+}
+
 # ----------------- vigilante de alarmas (segundo plano) -----------------
 # Cada intervalo_vigilancia_min lee la planta; cuando una TCU/NCU/HSU ENTRA
 # en ALARMA (o se recupera de una) inserta una fila en la tabla 'alertas'.
@@ -1224,6 +1327,7 @@ Write-Host "Lectura (GET, X-Token): /ping /diagnostico /comisionado /hsus /hsus/
 Write-Host ("Lectura (POST, el preset va en el cuerpo): {0}" -f ($OPS_LECTURA_POST -join ' '))
 Write-Host ("SAT (POST): {0}  - se graba en {1}" -f ($OPS_SAT -join ' '), $script:SatDir)
 Write-Host ("Escritura (POST, X-Token + confirmar): {0}  [{1}]" -f ($OPS_POST -join ' '), $(if ($escritura) { 'HABILITADA' } else { 'DESHABILITADA (permitir_escritura=false)' }))
+Write-Host ("Config remota: GET/POST /config  [{0}]" -f $(if ([bool]$cfg.config_remota_bloqueada) { 'BLOQUEADA (config_remota_bloqueada=true)' } else { 'ABIERTA' }))
 Write-Host ("Vigilante de alarmas: {0}" -f $(if ($intervaloVig -gt 0) { "cada $intervaloVig min" } else { 'apagado' }))
 Write-Host "Expon el puerto con: cloudflared tunnel --url http://localhost:$puerto"
 
@@ -1278,6 +1382,7 @@ while ($true) {
                 '/trabajo/parar' { $out = Trabajo-Parar }
                 '/cierre'       { $out = Cierre-Planta }
                 '/trabajos'     { $out = @{planta = $cfg.planta; trabajos = @(Trabajos-Lista)} }
+                '/config'       { $out = Cfg-Publica }
                 '/plan-firmware' { $out = Plan-Fw "$($req.QueryString['objetivo'])" $null "$($req.QueryString['min_tcu'])" }
                 '/leer'         { $out = Leer-Planta "$($req.QueryString['vars'])" "$($req.QueryString['ncu'])" "$($req.QueryString['tcus'])" "$($req.QueryString['gw'])" }
                 '/hsus/meteo'   { $out = Hsus-Detalle 'meteo' }
@@ -1304,6 +1409,18 @@ while ($true) {
                 $body = $sr.ReadToEnd() | ConvertFrom-Json
             }
             $out = Auditar-Preset $body
+        }
+        elseif ($req.HttpMethod -eq 'POST' -and $req.Url.AbsolutePath -eq '/config') {
+            # No va detras de permitir_escritura: no toca la planta, y ademas es
+            # justo quien puede encender esa llave. Lo que lo protege es el
+            # token, y el cerrojo local config_remota_bloqueada.
+            $body = $null
+            if ($req.HasEntityBody) {
+                $sr = New-Object IO.StreamReader($req.InputStream, $req.ContentEncoding)
+                $body = $sr.ReadToEnd() | ConvertFrom-Json
+            }
+            $usuario = "$($req.Headers['X-Usuario'])"; if (-not $usuario) { $usuario = '(desconocido)' }
+            $out = Cfg-Cambiar $body $usuario
         }
         elseif ($req.HttpMethod -eq 'POST' -and $OPS_SAT -contains $req.Url.AbsolutePath.TrimStart('/')) {
             $body = $null

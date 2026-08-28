@@ -118,6 +118,45 @@ Lectura (GET, siempre disponibles):
 | `/sat` | estado del ensayo SAT: si está registrando, hasta cuándo, cuántos pases lleva y los ficheros de la carpeta |
 | `/sat/descargar?f=` | un fichero del ensayo, tal cual (solo nombres de esa carpeta: no admite rutas) |
 
+### Configuración en remoto (v4.1)
+
+El agente leía `agente_config.json` **al arrancar y nada más**: cambiar cada
+cuánto vigila obligaba a entrar al PC de planta, editar y reiniciar.
+
+```
+GET  /config    lo que hay y lo que está corriendo AHORA
+POST /config    cambia lo que se le mande
+```
+
+Lo que se cambia **se aplica en caliente**, **se persiste** —un reinicio no lo
+deshace— y **queda auditado** como cualquier escritura.
+
+| | |
+|---|---|
+| En caliente | `intervalo_vigilancia_min`, `timeout_ms`, `permitir_escritura` |
+| Se guarda, pide reinicio | `planta`, `puerto`, y las rutas de pruebas |
+| Se puede cambiar, **no se devuelve** | `token` y las credenciales de Supabase |
+
+Tres cosas que hace y conviene saber: lo que **no se aplica hasta reiniciar lo
+dice** en la respuesta (`requieren_reinicio`), un campo que no existe **se
+nombra** en vez de tragárselo (`ignorados`), y si **nada** de lo enviado es
+reconocible es un **error**, no un éxito vacío.
+
+Los secretos se pueden cambiar pero `GET /config` devuelve `(puesto)` o
+`(vacio)`, nunca el valor. Devolverlos no habilita nada —quien pregunta ya tiene
+el token— y en cambio los deja en el historial del navegador, en los logs del
+túnel y en cualquier proxy por el que pase.
+
+**⚠️ `permitir_escritura` se gobierna en remoto**, por decisión explícita. Conviene
+tener presente lo que eso significa: **el token pasa a ser lo único** que separa
+a alguien de mover seguidores, porque el candado deja de exigir presencia física
+en el PC de planta.
+
+Para eso está **`config_remota_bloqueada`**. A `true`, el agente rechaza todo
+cambio remoto y vuelve a gobernarse solo desde su PC. Va a `false` —abierto—
+mientras lo use una sola persona. Y una vez cerrado **no se puede reabrir en
+remoto**: hay que ir al PC. Eso es lo que lo hace un cerrojo y no un aviso.
+
 ### Las dos recetas que pide el SCADA
 
 **Inventario de una planta entera** — nº de serie, MAC, FW, FW de fábrica, HW y

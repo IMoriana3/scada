@@ -31,7 +31,8 @@ Copy-Item (Join-Path $raizAg 'TCU_Agente.ps1')  (Join-Path $tmp 'tcu-agente')  -
 ]}
 '@ | Set-Content (Join-Path $tmp 'tcu-toolbox/plantas/sim.json') -Encoding UTF8
 (@{planta='Sim'; token=$TOKEN; puerto=$PUERTO; puerto_ncu=15020; timeout_ms=3000
-   permitir_escritura=$true; intervalo_vigilante_min=0} | ConvertTo-Json) |
+   permitir_escritura=$true; intervalo_vigilancia_min=0
+   _comentario='config de pruebas'} | ConvertTo-Json) |
    Set-Content (Join-Path $tmp 'tcu-agente/agente_config.json') -Encoding UTF8
 
 $pwshExe = (Get-Process -Id $PID).Path
@@ -201,6 +202,7 @@ try {
     $l4 = Pedir '/leer?vars=41010&gw=9999'
     Check 'leer: y con un gateway que no existe, nada' (@($l4.tcus).Count) 0
 
+
     # ---- el bloque de ESTADO (3xxxx), que el /leer no alcanzaba ----
     # Resolver-Variable solo miraba en las 125 de configuracion, asi que por el
     # agente el SCADA no podia leer ni SoC, ni SoH, ni alarmas, ni tilt, ni los
@@ -290,6 +292,72 @@ try {
     # la descarga no puede salirse de su carpeta
     try { $null = Pedir '/sat/descargar?f=../../TCU_Toolbox.ps1'; Check 'sat: la descarga no sale de su carpeta' 'sale' 'no sale' }
     catch { Check 'sat: la descarga no sale de su carpeta' 'no sale' 'no sale' }
+
+    $srcAg2Cfg = Get-Content (Join-Path $raizAg 'TCU_Agente.ps1') -Raw
+    # ---- configuracion en remoto ----
+    # VA AL FINAL A PROPOSITO: apaga la escritura y cierra el cerrojo, y el
+    # cerrojo NO se puede reabrir en remoto. Cualquier prueba puesta detras se
+    # quedaria sin poder hacer nada, que es justo lo que paso al escribirlas.
+    # El agente leia la config AL ARRANCAR y nada mas: cambiar cada cuanto
+    # vigila obligaba a entrar al PC de planta y reiniciar.
+    $c0 = Pedir '/config'
+    Check 'config: se puede consultar' ($null -ne $c0.planta) $true
+    Check 'config: dice lo que esta corriendo AHORA' ($null -ne $c0._en_curso.intervalo_vigilancia_min) $true
+    Check 'config: y su version' ($c0._en_curso.version_agente) '4.1'
+    # LOS SECRETOS NO SE DEVUELVEN: quien pregunta ya tiene el token, y
+    # devolverlo solo lo deja en el historial del navegador y en el tunel
+    Check 'config: el token no se devuelve' ($c0.token) '(puesto)'
+    # la config de pruebas no trae credenciales de Supabase: lo que se
+    # comprueba es que NINGUN secreto salga en claro, no que existan
+    Check 'config: ningun secreto sale en claro' (
+        @(@('token','supabase_key','supabase_pass','supabase_email') | Where-Object {
+            $v = "$($c0.$_)"; $v -ne '' -and $v -ne '(puesto)' -and $v -ne '(vacio)' }).Count) 0
+    # cambiar y que se aplique EN CALIENTE
+    $c1 = Pedir '/config' 'POST' @{intervalo_vigilancia_min = 17}
+    Check 'config: acepta el cambio' $c1.ok $true
+    Check 'config: y lo aplica al vuelo' ((Pedir '/config')._en_curso.intervalo_vigilancia_min) 17
+    Check 'config: dice que cambio y desde que' ((@($c1.cambiados)[0].campo)) 'intervalo_vigilancia_min'
+    Check 'config: con el valor de antes' ((@($c1.cambiados)[0].antes)) '0'
+    # lo que NO se aplica hasta reiniciar se DICE, no se calla
+    $c2 = Pedir '/config' 'POST' @{planta = 'Otra'}
+    Check 'config: avisa de lo que pide reinicio' (@($c2.requieren_reinicio) -contains 'planta') $true
+    [void](Pedir '/config' 'POST' @{planta = 'Sim'})
+    # un campo inventado no se traga en silencio
+    $c3 = Pedir '/config' 'POST' @{intervalo_vigilancia_min = 5; loquesea = 1}
+    Check 'config: ignora lo que no existe' (@($c3.ignorados) -contains 'loquesea') $true
+    Check 'config: pero aplica lo que si' ((Pedir '/config')._en_curso.intervalo_vigilancia_min) 5
+    # y si NADA es reconocible, es un error, no un exito vacio
+    $malo = $null
+    try { $malo = Pedir '/config' 'POST' @{soloBasura = 1} } catch { $malo = 'error' }
+    Check 'config: solo campos desconocidos es error' ($malo -eq 'error') $true
+    # la escritura tambien se gobierna en remoto: es lo que se pidio
+    $c4 = Pedir '/config' 'POST' @{permitir_escritura = $true}
+    Check 'config: la escritura se puede encender en remoto' ((Pedir '/config')._en_curso.permitir_escritura) $true
+    [void](Pedir '/config' 'POST' @{permitir_escritura = $false})
+    Check 'config: y apagar' ((Pedir '/config')._en_curso.permitir_escritura) $false
+    # el cambio se PERSISTE: un reinicio no lo deshace
+    $cfgDisco = Get-Content (Join-Path $tmp 'tcu-agente/agente_config.json') -Raw | ConvertFrom-Json
+    Check 'config: se guarda en el fichero' ($cfgDisco.intervalo_vigilancia_min) 5
+    Check 'config: y no se pierde lo que no se toca' ($cfgDisco._comentario) 'config de pruebas'
+    # y queda AUDITADO como cualquier escritura
+    Check 'config: el cambio queda auditado' ($srcAg2Cfg -like '*Auditar $usuario ''config''*') $true
+    # EL CERROJO: va abierto por decision del dueno -hoy lo usa una sola
+    # persona- pero tiene que poder cerrarse sin tocar codigo, porque con la
+    # config abierta el token es lo unico que separa a alguien de mover
+    # seguidores. Se cierra en remoto y a partir de ahi NO se puede reabrir en
+    # remoto: hay que ir al PC. Eso es lo que lo hace un cerrojo y no un aviso.
+    [void](Pedir '/config' 'POST' @{config_remota_bloqueada = $true})
+    Check 'cerrojo: queda cerrado' ((Pedir '/config')._bloqueada) $true
+    $tras = $null
+    try { $tras = Pedir '/config' 'POST' @{intervalo_vigilancia_min = 99} } catch { $tras = 'rechazado' }
+    Check 'cerrojo: ya no acepta cambios' ($tras -eq 'rechazado') $true
+    Check 'cerrojo: y no ha cambiado nada' ((Pedir '/config')._en_curso.intervalo_vigilancia_min) 5
+    $reabrir = $null
+    try { $reabrir = Pedir '/config' 'POST' @{config_remota_bloqueada = $false} } catch { $reabrir = 'rechazado' }
+    Check 'cerrojo: NI SIQUIERA para reabrirse' ($reabrir -eq 'rechazado') $true
+    Check 'cerrojo: sigue cerrado' ((Pedir '/config')._bloqueada) $true
+    # leer sigue funcionando: el cerrojo es de escritura de config, no una mordaza
+    Check 'cerrojo: consultar sigue valiendo' ($null -ne (Pedir '/config').planta) $true
 
     try { $null = Pedir '/no-existe'; Check 'ruta desconocida' 'pasa' '404' }
     catch { Check 'ruta desconocida da 404' '404' '404' }

@@ -8,8 +8,11 @@
   "_escritura": "false = agente de solo lectura. Ponlo a true SOLO cuando quieras ejecutar comandos desde la web (cada comando exige ademas confirmacion y queda auditado).",
   "permitir_escritura": false,
 
-  "_vigilante": "cada cuantos minutos vigilar la planta y avisar de alarmas nuevas (0 = apagado)",
+  "_vigilante": "cada cuantos minutos vigilar la planta y avisar de alarmas nuevas (0 = apagado). Se puede cambiar en remoto con POST /config.",
   "intervalo_vigilancia_min": 5,
+
+  "_config_remota": "false = desde la web se puede cambiar la configuracion (incluida permitir_escritura) con POST /config. Ponlo a true y el agente solo se gobierna desde ESTE PC: es el cerrojo para cuando lo use mas de una persona, porque con la config abierta el token es lo unico que separa a alguien de mover seguidores.",
+  "config_remota_bloqueada": false,
 
   "_supabase": "credenciales de un usuario dedicado (crea p.ej. agente@factiun.com en Supabase Auth) para subir alertas, acciones y sincronizaciones. Sin ellas, todo eso queda solo en consola/log local.",
   "supabase_url": "https://icqiwmbbeoeswbcbgflc.supabase.co",
