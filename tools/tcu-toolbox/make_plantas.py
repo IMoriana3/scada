@@ -129,6 +129,17 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
     i_ip = col("IP NCU")
     i_esc1 = col("Esclavos")
     i_esc2 = col("Esclavos", col("IP GW 2"))   # segundo 'Esclavos', tras IP GW 2
+    # LA IP DE CADA GATEWAY. Esta en la hoja desde siempre y no se leia: 'IP GW 1'
+    # e 'IP GW 2' solo se usaban como MARCADOR de columna para encontrar el
+    # segundo 'Esclavos' y las RSU. Sin su valor, el JSON solo lleva la IP de la
+    # NCU —que es su MODBUS TCP, 503/504— y quien tiene que hablar con el gateway
+    # (el ConnectPort DIGI, por HTTP/RCI y telnet) se queda sin direccion: la pone
+    # a mano o, peor, usa la del Modbus y mide contra el sitio equivocado.
+    i_gw1 = col_opcional("IP GW 1", "IP GW1", "IP GW")
+    i_gw2 = col_opcional("IP GW 2", "IP GW2")
+    if i_gw1 is None:
+        print(f"aviso: la hoja '{hoja}' no tiene columna 'IP GW 1'; el JSON saldra sin "
+              "la IP de los gateways y habra que ponerla a mano para medir cobertura")
     # El numero de esclavo Modbus de la HSU (estacion meteo) de cada NCU. La
     # hoja no lo trae todavia: en cuanto exista una columna 'HSU' (o
     # 'HSU esclavo'), con el numero por fila de NCU, sale solo en el JSON y la
@@ -245,6 +256,11 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
         ncu_auto += 1
         ntxt = re.sub(r"\.0$", "", v(i_ncu))
         n = int(ntxt) if re.match(r"^\d+$", ntxt) else ncu_auto
+        def ip_valida(i):
+            x = v(i) if i is not None else ""
+            return x if re.match(r"^\d+\.\d+\.\d+\.\d+$", x) else ""
+
+        ips_gw = [ip_valida(i_gw1), ip_valida(i_gw2)]
         rangos = [parse_rangos(v(i_esc1)), parse_rangos(v(i_esc2))]
         # UNA ENTRADA POR TRAMO, no por gateway. La toolbox ya sabe de varias entradas para
         # el mismo gateway -El Burgo tiene la del TCU 109 suelto- y es lo unico que respeta
@@ -272,6 +288,11 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
             entrada = {
                 "nombre": f"{proy} NCU{n}{sufijo}",
                 "ip": ip,
+                # La del ConnectPort DIGI, que NO es la de arriba: `ip` es el
+                # Modbus de la NCU y esta es a quien se pregunta por HTTP/RCI y
+                # telnet cuando se mide cobertura. `kgw` es el indice REAL del
+                # gateway (0=GW1, 1=GW2), que es lo que indexa la columna.
+                **({"ip_gw": ips_gw[kgw]} if kgw < len(ips_gw) and ips_gw[kgw] else {}),
                 "puerto": puerto,
                 "tcu_ini": ini,
                 "tcu_fin": fin,
