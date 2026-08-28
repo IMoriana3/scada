@@ -1419,6 +1419,8 @@ Al elegir una HSU en el desplegable se fija **su** esclavo, no el de la NCU. El
 campo antiguo `hsu_esclavo` (un solo número) se sigue leyendo.
 
 Como el Excel maestro todavía no trae esa columna, **regenerar no los borra**:
+> ⚠️ **Una celda de «Esclavos» que no se sabe leer tira la NCU entera del fichero.** No es un rango mal puesto: es una NCU que la toolbox no lee jamás —ni inventario, ni firmware, ni baterías, ni cobertura— y solo se descubre cuando alguien va a la planta y le faltan seguidores. Pasó dos veces con el mismo fallo y separadores distintos: San José perdió cinco NCUs con las celdas de varias **líneas**, y Ayora la NCU7 con `1-13 15-23`, separada por un **espacio**. Ahora se parte por líneas, comas, puntos y coma y espacios (`1 - 13` sigue siendo un tramo, no los TCU 1 y 13), y una celda con texto que no da ningún tramo se **canta por consola** con la NCU y la celda. Comprobado en `test_tramos.py` (21 comprobaciones, 5 mutaciones).
+
 `make_plantas.py` conserva los que ya tenga el JSON y lo dice por consola. En
 cuanto la hoja tenga una columna **HSU esclavo** —admite `230` o `230,231`—
 manda la hoja.

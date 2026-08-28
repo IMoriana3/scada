@@ -69,11 +69,18 @@
       "tcu_fin": 26
     },
     {
-      "nombre": "Ayora NCU7",
+      "nombre": "Ayora NCU7 (TCU 1-13)",
       "ip": "192.168.4.55",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 25
+      "tcu_fin": 13
+    },
+    {
+      "nombre": "Ayora NCU7 (TCU 15-23)",
+      "ip": "192.168.4.55",
+      "puerto": 503,
+      "tcu_ini": 15,
+      "tcu_fin": 23
     },
     {
       "nombre": "Ayora NCU8",

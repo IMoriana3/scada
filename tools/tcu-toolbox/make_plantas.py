@@ -73,10 +73,15 @@ def parse_rangos(texto):
     con tres HSU sin poder asignar: las cinco que faltaban -7, 12, 16, 17 y 19- son
     exactamente las cinco con varios tramos. Ya estaba arreglado en `ips.html`; aqui no.
 
-    Se parte por saltos de linea, comas y puntos y coma.
+    Se parte por saltos de linea, comas, puntos y coma Y ESPACIOS. Lo de los espacios
+    es el mismo bug otra vez, un separador mas tarde: la tabla de topologia guarda esa
+    celda en una linea -«1-13 15-23»- y aqui se partia solo por lineas y comas, asi que
+    la celda entera no casaba con nada, devolvia [] y la NCU volvia a caerse ENTERA del
+    fichero en silencio. Le paso a la NCU7 de Ayora. Los espacios se quitan antes de
+    los guiones, para que «1 - 13» siga siendo un tramo y no los TCU 1 y 13.
     """
     out = []
-    for trozo in re.split(r"[\n\r,;]+", str(texto or "")):
+    for trozo in re.split(r"[\n\r,;\s]+", re.sub(r"\s*-\s*", "-", str(texto or ""))):
         t = trozo.strip()
         m = re.match(r"^(\d+)\s*-\s*(\d+)$", t)
         if m:
@@ -271,6 +276,15 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
         gws = [(k, puertos[k], r, j) for k, rr in enumerate(rangos) if k < len(puertos)
                for j, r in enumerate(rr)]
         if not gws:
+            # Y QUE NO VUELVA A PASAR EN SILENCIO. Una celda con texto que no produce
+            # ningun tramo tira la NCU entera del fichero sin decir nada: asi se
+            # perdieron cinco NCUs de San Jose y la 7 de Ayora, y solo se ve cuando
+            # alguien va a la planta y le faltan seguidores.
+            crudo = " ".join(x for x in (v(i_esc1), v(i_esc2)) if x and x.strip("- "))
+            if crudo:
+                print(f"aviso: {proy} NCU{re.sub(r'[.]0$', '', v(i_ncu)) or ncu_auto + 1}: "
+                      f"la celda de esclavos «{crudo}» no da ningun tramo; esa NCU NO sale "
+                      "en el fichero")
             continue
         escl = esclavos_fila()
         nRsu = rsus_fila()
