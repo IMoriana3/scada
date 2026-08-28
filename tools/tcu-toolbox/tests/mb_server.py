@@ -38,6 +38,13 @@ preset(5, 30326, [2024, 77, 88, 3])
 # TCU 6: sin alarmas, todo OK
 preset(6, 30001, [0x0280, 0, 0, 0, 0, 1 << 15])
 preset(6, 30094, [26000, 200, (98 << 8) | 90, 220, 300])
+# 30099..30102: el envejecimiento MEDIDO, que solo sale por Zigbee (el bloque
+# compacto de la NCU se acaba en el SoH). capacidad actual/nominal, ciclos y
+# dias en conservacion.
+# OJO: son u16, o sea tope 65535 mAh. Una bateria de mas de 65,5 Ah no cabria
+# en ese registro; las de tracker andan muy por debajo.
+preset(6, 30099, [7800, 10000, 1240, 0])      # 7,8 Ah de 10 -> SoH medido 78 %
+preset(9, 30099, [3000, 10000, 3100, 45])     # 30 % y 45 dias en conservacion
 preset(6, 30111, [100, 100])
 preset(6, 30153, [7])
 # TCU 8: solo SoC bajo L3 (bit 12) -> AVISO (criterio decode.py: L3 no es critico)

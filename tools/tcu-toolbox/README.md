@@ -75,6 +75,40 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**El `/leer` del agente no alcanzaba el bloque de estado (agente v3.9)** — el
+SCADA pide variables al agente por `GET /leer?vars=...`, y `Resolver-Variable`
+**solo buscaba en las 125 de configuración** (`4xxxx`). Las 43 de lectura
+(`3xxxx`) no las encontraba, así que por ahí no se podía leer **ni SoC, ni SoH,
+ni alarmas, ni tilt, ni el tiempo de motor** — ni, ahora, capacidad y ciclos.
+
+Y `Leer-Planta` ya estaba escrito para admitirlas:
+
+```powershell
+$d.vdef = $(if ($d.nombre -like 'ESTADO *') { $ESTADO[...] } else { $VARIABLES[...] })
+```
+
+Esa rama era **código muerto**: el resolver nunca podía devolver un nombre
+`ESTADO ...`.
+
+`Resolver-Variable` gana un interruptor `-conEstado`, **apagado por defecto a
+propósito**: la misma función la usan los caminos de **escritura** —uno en la
+toolbox y dos en el agente—, y resolver ahí el nombre de un registro de solo
+lectura sería abrir la puerta a escribir contra él. Solo lo enciende quien lee.
+El banco lo fija: de los tres sitios que resuelven en el agente, exactamente
+**uno** lleva el interruptor.
+
+Desde el SCADA, y para lo que se lee de vez en cuando:
+
+```
+GET /leer?vars=30099,30100,30101,30102&ncu=13&tcus=1-72
+```
+
+Un registro con dos campos —`30096` es SoC y SoH— **no se resuelve a ciegas**:
+dice que es ambiguo y se acota con `30096 SoC`.
+
+⚠️ El `/leer` va **por Zigbee, una lectura por (TCU × variable)**: cuatro
+variables en 72 TCUs son 288 lecturas. No es un endpoint de refresco.
+
 **Analizador de baterías (v11.63)** — hoja nueva bajo **TCUs**, junto a
 *Baterías*. La pestaña *Baterías* es una **foto**: el último barrido contra unos
 umbrales y contra la mediana de la flota. Eso contesta *«cuál está mal ahora»*.
@@ -119,6 +153,38 @@ noche manda a campo a mirar equipos sanos.
 ⚠️ **La estimación de vida restante es lo más útil de decir y lo más fácil de
 mentir.** Sale de una recta sobre barridos espaciados de forma irregular. Sirve
 para ordenar y para planificar recambios, no para prometer una fecha.
+
+**El envejecimiento, medido en vez de estimado.** La lectura directa de una TCU
+se paraba en el registro 30098 — **un registro antes** de esto:
+
+```
+30099  capacidad_actual [mAh]
+30100  capacidad_nominal [mAh]
+30101  ciclos_carga
+30102  dias_preservacion
+```
+
+Alargar **la misma trama** de 8 a 12 registros no cuesta una lectura Modbus más,
+y con ellos el envejecimiento se **mide**:
+
+- **SoH medido** = capacidad actual / nominal. Y si el BMS declara un SoH que se
+  aparta 15 puntos de lo que dice la capacidad, **eso es un hallazgo por sí
+  solo**: o el BMS está descalibrado o la medida no vale.
+- **Ciclos de carga**: la edad real del elemento, no una pendiente sobre
+  barridos irregulares.
+- **Días en conservación** (`dias_preservacion`): es una **causa**, no un
+  síntoma — la batería que lleva N días sin cargarse de verdad.
+
+⚠️ **Los ciclos NO se convierten en meses de vida**, a propósito. Para eso haría
+falta saber cuántos ciclos aguanta el elemento, y eso el mapa no lo dice y el
+fabricante no lo ha dado. Poner «le quedan N meses» a partir de un número de
+ciclos y una vida nominal inventada sería fabricar el dato. Los ciclos ordenan y
+contrastan; la vida restante sigue saliendo de la capacidad.
+
+**El bloque compacto de la NCU no trae nada de esto**: sus 22 registros por TCU
+se acaban en el SoH declarado. Así que va en su propio botón, **LEER CICLOS Y
+CAPACIDAD**, que recorre las TCUs **por Zigbee, una a una**, con su aviso de
+coste delante. Los ciclos se mueven despacio: esto no hace falta a diario.
 
 El análisis se guarda como trabajo y se puede volver a abrir desde *Trabajos*.
 

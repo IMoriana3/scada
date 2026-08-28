@@ -1693,6 +1693,43 @@ function Bat-Tendencia($serie, $cfg = $null) {
     return $r
 }
 
+# El SoH MEDIDO: lo que de verdad queda de capacidad, no lo que declara el BMS.
+# Sale de 30099/30100, que solo se leen por Zigbee. $null si no hay dato o si la
+# nominal viene a cero -dividir por ella daria un infinito con pinta de dato-.
+# Pura.
+function Bat-SohMedido($cap, $capNom) {
+    $c = Num-O-Nulo $cap; $n = Num-O-Nulo $capNom
+    if ($null -eq $c -or $null -eq $n -or $n -le 0) { return $null }
+    return [math]::Round(100.0 * $c / $n, 1)
+}
+
+# Lo que dicen los registros de envejecimiento, si se han leido. Devuelve una
+# lista de notas: son observaciones, no causas.
+#
+# OJO CON LOS CICLOS: son el envejecimiento medido, y eso esta muy bien, pero
+# NO se convierten en vida restante. Para eso haria falta saber cuantos ciclos
+# aguanta el elemento, y eso el mapa no lo dice y el fabricante no nos lo ha
+# dado. Poner "le quedan N meses" a partir de un numero de ciclos y una vida
+# nominal inventada seria fabricar un dato. Los ciclos ordenan y contrastan; la
+# vida restante sigue saliendo de la capacidad. Pura.
+function Bat-NotasEdad($fila, $cfg = $null) {
+    if ($null -eq $cfg) { $cfg = $BAT }
+    $n = @()
+    $medido = Bat-SohMedido $fila.Cap_mAh $fila.CapNom_mAh
+    $decl = Num-O-Nulo $fila.SoH
+    if ($null -ne $medido) {
+        $n += ("SoH medido {0}% ({1} de {2} mAh)" -f $medido, [int](Num-O-Nulo $fila.Cap_mAh), [int](Num-O-Nulo $fila.CapNom_mAh))
+        # que el BMS declare una cosa y la capacidad diga otra es un hallazgo por
+        # si solo: o el BMS esta descalibrado o la medida no vale
+        if ($null -ne $decl -and [math]::Abs($decl - $medido) -ge 15) {
+            $n += ("el BMS declara SoH {0}% pero la capacidad dice {1}%" -f [int]$decl, $medido)
+        }
+    }
+    $ciclos = Num-O-Nulo $fila.Ciclos
+    if ($null -ne $ciclos -and $ciclos -gt 0) { $n += "$([int]$ciclos) ciclos de carga" }
+    return $n
+}
+
 # POR QUE esta mal. Cruza lo que ya se lee -tension de bateria, corriente que
 # entra, tension de panel, de dia o de noche, y el estado del cargador si se ha
 # pulsado LEER CARGA- y devuelve una causa, no un sintoma. Pura.
@@ -1711,6 +1748,12 @@ function Bat-Causa($fila, $cfg = $null) {
     # el cargador lo dice el, si se le ha preguntado: manda sobre lo deducido
     if ($carga -match '(?i)fallo|error|fault') {
         return @{causa = 'cargador en fallo'; nota = "el cargador reporta: $carga"}
+    }
+    # dias_preservacion (30102) es la bateria que lleva sin cargarse de verdad:
+    # no es un sintoma difuso, es un contador. Solo esta si se leyo por Zigbee.
+    $preserv = Num-O-Nulo $fila.DiasPreserv
+    if ($null -ne $preserv -and $preserv -gt 0) {
+        return @{causa = 'en conservacion'; nota = "lleva $([int]$preserv) dias en modo conservacion: no se esta cargando"}
     }
     if ($null -ne $soc -and $soc -ge $cfg.soc_sin_carga) { return @{causa = 'ok'; nota = ''} }
     # de noche no entra corriente y eso no es un fallo: sin sol no se juzga
@@ -1764,6 +1807,11 @@ function Bat-Gravedad($fila, $causa, $tend, $vida, $cfg = $null) {
     $soh = Num-O-Nulo $fila.SoH
     if ($null -ne $soc -and $soc -lt $cfg.soc_bajo) { $pts += (40 - $soc); $por += "SoC $([int]$soc)%" }
     if ($null -ne $soh -and $soh -lt $cfg.soh_bajo) { $pts += (60 - $soh); $por += "SoH $([int]$soh)%" }
+    # el SoH MEDIDO manda sobre el declarado: es capacidad, no estimacion
+    $medido = Bat-SohMedido $fila.Cap_mAh $fila.CapNom_mAh
+    if ($null -ne $medido -and $medido -lt $cfg.soh_bajo) { $pts += (60 - $medido); $por += "SoH medido $medido%" }
+    $preserv = Num-O-Nulo $fila.DiasPreserv
+    if ($null -ne $preserv -and $preserv -gt 0) { $pts += 50; $por += "$([int]$preserv) dias en conservacion" }
     if ($null -ne $vida -and $null -ne $vida.meses -and $vida.meses -le $BAT_ANAL.meses_alarma) {
         $pts += 30; $por += "quedan ~$($vida.meses) meses"
     }
@@ -3077,10 +3125,28 @@ function Nombres-Ordenados([string[]]$nombres) {
 
 # Resuelve el nombre de una variable de forma tolerante: clave exacta, o una
 # unica coincidencia por subcadena ("41010" -> '41010 longitud [deg]').
-function Resolver-Variable([string]$texto) {
+# $conEstado abre la busqueda a las 43 variables de LECTURA (3xxxx), que salen
+# con el prefijo 'ESTADO ' porque asi las nombra Nombres-Legibles.
+#
+# Va apagado por defecto A PROPOSITO: esta funcion la usan tambien los caminos
+# de ESCRITURA -en la toolbox y en dos sitios del agente-, y resolver ahi el
+# nombre de un registro de solo lectura seria abrir la puerta a escribir contra
+# el. Solo lo enciende quien lee.
+#
+# Sin esto, el /leer del agente no alcanzaba NADA del bloque de estado: ni SoC,
+# ni SoH, ni alarmas, ni tilt, ni los ciclos. Y Leer-Planta ya estaba escrito
+# para admitirlos -mira el nombre por 'ESTADO *'-, asi que esa rama era codigo
+# muerto: el resolver nunca podia devolver uno.
+function Resolver-Variable([string]$texto, [switch]$conEstado) {
     $t = "$texto".Trim()
     if ($VARIABLES.Contains($t)) { return $t }
-    $m = @(Filtrar-Nombres @($VARIABLES.Keys) $t)
+    $candidatos = @($VARIABLES.Keys)
+    if ($conEstado) {
+        if ($ESTADO.Contains($t)) { return "ESTADO $t" }
+        if ($t -like 'ESTADO *' -and $ESTADO.Contains($t.Substring(7))) { return $t }
+        $candidatos += @(@($ESTADO.Keys) | ForEach-Object { "ESTADO $_" })
+    }
+    $m = @(Filtrar-Nombres $candidatos $t)
     if ($m.Count -eq 1) { return $m[0] }
     if ($m.Count -eq 0) { throw "'$t' no coincide con ninguna variable del mapa" }
     throw "'$t' es ambiguo ($($m.Count) coincidencias: $($m[0]), $($m[1])...)"
@@ -5530,6 +5596,14 @@ $chkBAnSolo.Size = New-Object System.Drawing.Size(166, 22)
 $chkBAnSolo.Checked = $true
 $tabBA.Controls.Add($chkBAnSolo)
 
+# El pase de edad va en su propio boton: obliga a ir por Zigbee TCU a TCU
+# porque el bloque compacto de la NCU no trae ni capacidad ni ciclos.
+$btnBAnEdad = New-Object System.Windows.Forms.Button
+$btnBAnEdad.Text = 'LEER CICLOS Y CAPACIDAD'
+$btnBAnEdad.Location = New-Object System.Drawing.Point(478, 18)
+$btnBAnEdad.Size = New-Object System.Drawing.Size(180, 28)
+$tabBA.Controls.Add($btnBAnEdad)
+
 $btnBAnCsv = New-Object System.Windows.Forms.Button
 $btnBAnCsv.Text = 'CSV'
 $btnBAnCsv.Location = New-Object System.Drawing.Point(838, 18)
@@ -5537,20 +5611,20 @@ $btnBAnCsv.Size = New-Object System.Drawing.Size(70, 28)
 $btnBAnCsv.Enabled = $false
 $tabBA.Controls.Add($btnBAnCsv)
 
-$lblBAnRes = LG $tabBA '' 480 350 24
+$lblBAnRes = LG $tabBA '' 664 168 24
 $lblBAnRes.ForeColor = [System.Drawing.Color]::DimGray
 
 $lvBA = New-Object System.Windows.Forms.ListView
 $lvBA.Location = New-Object System.Drawing.Point(10, 56)
 $lvBA.Size = New-Object System.Drawing.Size(898, 274)
 $lvBA.View = 'Details'; $lvBA.FullRowSelect = $true; $lvBA.GridLines = $true
-foreach ($c in @(@('NCU',45), @('TCU',45), @('SoC %',50), @('SoH %',50), @('Causa',130),
-                 @('SoH pts/mes',80), @('Muestras',65), @('Dias',48), @('Quedan',70),
-                 @('Confianza',150), @('Por que',330))) {
+foreach ($c in @(@('NCU',45), @('TCU',45), @('SoC %',50), @('SoH %',50), @('SoH med',60),
+                 @('Ciclos',55), @('Causa',130), @('SoH pts/mes',80), @('Muestras',65),
+                 @('Dias',48), @('Quedan',70), @('Confianza',150), @('Por que',330))) {
     [void]$lvBA.Columns.Add($c[0], $c[1])
 }
 $tabBA.Controls.Add($lvBA)
-$lblBAnNota = LG $tabBA 'La tendencia sale de los barridos de baterias ya guardados en trabajos/ (los 20 ultimos por planta): sin al menos 3 barridos separados 14 dias no se opina, y se dice en vez de rellenar con un cero. "Quedan" es orientativo y lleva SIEMPRE su confianza al lado.' 10 890 336
+$lblBAnNota = LG $tabBA 'Ciclos y capacidad NO estan en el bloque compacto de la NCU: se leen por Zigbee, TCU a TCU, con LEER CICLOS Y CAPACIDAD. La tendencia sale de los barridos de baterias ya guardados en trabajos/ (los 20 ultimos por planta): sin al menos 3 barridos separados 14 dias no se opina, y se dice en vez de rellenar con un cero. "Quedan" es orientativo y lleva SIEMPRE su confianza al lado.' 10 890 336
 $lblBAnNota.ForeColor = [System.Drawing.Color]::Gray
 
 # ============================ TAB AUDITORIA HSU ============================
@@ -7799,7 +7873,7 @@ $TRABAJO_TIPOS = @{
   baterias   = @{titulo='Baterias';    var='UltimaBatTabla'
                  cols=@('NCU','TCU','SoC','SoH','Vbat_mV','Ibat_mA','Vpanel_mV','Ientrada_mA','Tbat_C','Tpcb_C','Dia','Carga','Estado')}
   analisis_baterias = @{titulo='Analisis baterias'; var='UltimoBatAnal'
-                 cols=@('NCU','TCU','SoC','SoH','Causa','SoH_pts_mes','Muestras','Dias','Quedan_meses','Confianza','Por_que','Gravedad')}
+                 cols=@('NCU','TCU','SoC','SoH','SoH_medido','Ciclos','Causa','SoH_pts_mes','Muestras','Dias','Quedan_meses','Confianza','Por_que','Gravedad')}
 }
 $TRABAJOS_MAX = 20        # por tipo y planta: lo viejo se va solo
 
@@ -8598,7 +8672,14 @@ function Diag-LeerTcu([byte]$tcu) {
     # 30091..30098 de un tiron: bus, panel (V e I), bateria (V e I), SoC/SoH y
     # las dos temperaturas. El panel y su corriente estan en el mapa de la TCU
     # (30092/30093), asi que el modo directo tampoco tiene por que ir sin ellos.
-    $r2 = FC03-Leer $tcu (Dir-Trama 30091) 8
+    # 12 y no 8: la lectura se paraba en 30098 y los cuatro siguientes -capacidad
+    # actual, capacidad nominal, ciclos de carga y dias en conservacion- estan
+    # pegados detras. Alargar la MISMA trama cuatro registros no cuesta una
+    # lectura mas, y con ellos el envejecimiento se MIDE (ciclos, y la capacidad
+    # que de verdad queda) en vez de estimarse con una pendiente sobre barridos
+    # espaciados a ojo. El bloque compacto de la NCU no los trae: son 22
+    # registros que se acaban en el SoH, asi que esto solo sale por Zigbee.
+    $r2 = FC03-Leer $tcu (Dir-Trama 30091) 12
     $r3 = FC03-Leer $tcu (Dir-Trama 30111) 2    # tilt, target
 
     $al1 = $r1[1]; $al2 = $r1[2]; $al3 = $r1[3]; $al4 = $r1[4]; $st = $r1[5]
@@ -8637,6 +8718,8 @@ function Diag-LeerTcu([byte]$tcu) {
         Vpanel_mV = $r2[1]; Ientrada_mA = $r2[2]; Imotor_mA = ''; ImotorPico_mA = ''
         Dia = (($r1[0] -shr 7) -band 1)
         Tbat_C = [math]::Round($tbat/10.0, 1); Tpcb_C = [math]::Round($tpcb/10.0, 1)
+        # 30099..30102: el envejecimiento medido. Solo por Zigbee.
+        Cap_mAh = $r2[8]; CapNom_mAh = $r2[9]; Ciclos = $r2[10]; DiasPreserv = $r2[11]
         Alarmas = (($alarmas + $notas) -join '; ')
         main_status = ("0x{0:X4}" -f $r1[0]); alarmas_1 = ("0x{0:X4}" -f $al1); alarmas_2 = ("0x{0:X4}" -f $al2)
         alarmas_3 = ("0x{0:X4}" -f $al3); alarmas_4 = ("0x{0:X4}" -f $al4); system_status = ("0x{0:X4}" -f $st)
@@ -9452,6 +9535,8 @@ $lvT.Add_DoubleClick({ Trabajo-Cargar })
 
 # ------------------------- ANALIZADOR DE BATERIAS (interfaz) -------------------------
 $script:UltimoBatAnal = @()
+# ciclos/capacidad leidos por Zigbee: 'ncu|tcu' -> @{cap; capnom; ciclos; preserv}
+$script:BatEdad = @{}
 
 # Los barridos de baterias guardados de ESTA planta, ya leidos de disco y en
 # orden. Son los que dan la tendencia: sin ellos esto es otra foto mas.
@@ -9468,6 +9553,51 @@ function BatAnal-Guardados([string]$planta) {
         }
     } catch { }
     return @($r)
+}
+
+# El pase de EDAD: capacidad, ciclos y dias en conservacion. Va aparte porque
+# el bloque compacto de la NCU no los trae -sus 22 registros se acaban en el
+# SoH- y hay que ir por Zigbee, TCU a TCU. Los ciclos se mueven despacio: esto
+# no hace falta a diario.
+function BatAnal-Edad {
+    $cx = Params-Conexion
+    $trabajos = @(Trabajos-Planta $cx (Parse-Seleccion $txtGTcus.Text 'Edad de baterias') (Ncus-Filtro))
+    if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
+    $n = 0; foreach ($tr in $trabajos) { $n += @($tr.tcus).Count }
+    $r = [System.Windows.Forms.MessageBox]::Show(
+        ("Capacidad, ciclos y dias en conservacion de $n TCUs.`r`n`r`n" +
+         "El bloque compacto de la NCU no los trae, asi que van por Zigbee UNA A UNA: $n lecturas.`r`n`r`n" +
+         "Los ciclos se mueven despacio y esto no hace falta a diario. Se puede parar con CANCELAR y lo leido se queda.`r`n`r`nContinuar?"),
+        'Leer edad de baterias', 'YesNo', 'Warning')
+    if ($r -ne 'Yes') { return }
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Edad de baterias: $n TCUs por Zigbee (30099-30102)." ([System.Drawing.Color]::SteelBlue)
+    Prog-Iniciar $n
+    $leidas = 0; $mudas = 0
+    foreach ($tr in $trabajos) {
+        if (Chequear-Cancelado) { break }
+        $script:NcuLog = "$($tr.ncu)"
+        foreach ($seg in @(Plan-Segmentos $tr.tcus $tr.cx)) {
+            if (Chequear-Cancelado) { break }
+            $ok = $true
+            try { Modbus-Conectar $tr.ip $seg.puerto $tr.cx.to } catch { $ok = $false; Con "ERROR ($($tr.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
+            foreach ($tcu in $seg.tcus) {
+                if (Chequear-Cancelado) { break }
+                if ($ok) {
+                    try {
+                        $w = FC03-Leer ([byte]$tcu) (Dir-Trama 30099) 4
+                        $script:BatEdad["$($tr.ncu)|$tcu"] = @{cap = [int]$w[0]; capnom = [int]$w[1]; ciclos = [int]$w[2]; preserv = [int]$w[3]}
+                        $leidas++
+                    } catch { $mudas++ }
+                } else { $mudas++ }
+                Prog-Paso
+                [System.Windows.Forms.Application]::DoEvents()
+            }
+            Modbus-Cerrar
+        }
+    }
+    $script:NcuLog = ''
+    Con "Edad: $leidas leidas, $mudas sin respuesta. Vuelve a pulsar ANALIZAR para que entren en el veredicto." ([System.Drawing.Color]::SteelBlue)
 }
 
 function BatAnal-Correr {
@@ -9498,6 +9628,14 @@ function BatAnal-Correr {
     # 3) el veredicto, TCU a TCU
     $filas = @()
     foreach ($f in $ahora) {
+        # si se ha hecho el pase de edad, se le pega a la fila antes de juzgar
+        $ed = $script:BatEdad["$($f.NCU)|$($f.TCU)"]
+        if ($ed) {
+            $f | Add-Member -NotePropertyName Cap_mAh -NotePropertyValue $ed.cap -Force
+            $f | Add-Member -NotePropertyName CapNom_mAh -NotePropertyValue $ed.capnom -Force
+            $f | Add-Member -NotePropertyName Ciclos -NotePropertyValue $ed.ciclos -Force
+            $f | Add-Member -NotePropertyName DiasPreserv -NotePropertyValue $ed.preserv -Force
+        }
         $serie = @(Bat-Serie $guard "$($f.NCU)" "$($f.TCU)")
         $tend  = Bat-Tendencia $serie
         $causa = Bat-Causa $f
@@ -9506,10 +9644,13 @@ function BatAnal-Correr {
         $porQue = @()
         if ("$($causa.nota)" -ne '') { $porQue += "$($causa.nota)" }
         if ("$($grav.motivo)" -ne '') { $porQue += "$($grav.motivo)" }
+        $porQue += @(Bat-NotasEdad $f)
         $filas += ,[pscustomobject]@{
             NCU = "$($f.NCU)"; TCU = [int]$f.TCU
             SoC = "$($f.SoC)"; SoH = "$($f.SoH)"
             Causa = "$($causa.causa)"
+            SoH_medido = (Bat-SohMedido $f.Cap_mAh $f.CapNom_mAh)
+            Ciclos = $(if ($ed) { $ed.ciclos } else { $null })
             SoH_pts_mes = $(if ($tend.hay -and $null -ne $tend.soh_mes) { [math]::Round($tend.soh_mes, 2) } else { $null })
             Muestras = $tend.muestras; Dias = $tend.dias
             Quedan_meses = $vida.meses
@@ -9547,7 +9688,10 @@ function BatAnal-Pintar {
     foreach ($f in @($script:UltimoBatAnal)) {
         if ($solo -and $f.Gravedad -le 0) { continue }
         $item = New-Object System.Windows.Forms.ListViewItem("$($f.NCU)")
-        foreach ($c in @($f.TCU, $f.SoC, $f.SoH, $f.Causa,
+        foreach ($c in @($f.TCU, $f.SoC, $f.SoH,
+                         $(if ($null -ne $f.SoH_medido) { "$($f.SoH_medido)" } else { '-' }),
+                         $(if ($null -ne $f.Ciclos) { "$($f.Ciclos)" } else { '-' }),
+                         $f.Causa,
                          $(if ($null -ne $f.SoH_pts_mes) { "{0:0.00}" -f $f.SoH_pts_mes } else { '-' }),
                          $f.Muestras, $f.Dias,
                          $(if ($null -ne $f.Quedan_meses) { "$($f.Quedan_meses) m" } else { '-' }),
@@ -9564,6 +9708,7 @@ function BatAnal-Pintar {
 }
 
 $btnBAn.Add_Click({ Lanzar { BatAnal-Correr } })
+$btnBAnEdad.Add_Click({ Lanzar { BatAnal-Edad } })
 $chkBAnSolo.Add_CheckedChanged({ if (@($script:UltimoBatAnal).Count -gt 0) { BatAnal-Pintar } })
 $btnBAnCsv.Add_Click({ [void](Exportar-Csv $script:UltimoBatAnal 'analisis_baterias' 'Analisis de baterias' -bloque 'batanal') })
 

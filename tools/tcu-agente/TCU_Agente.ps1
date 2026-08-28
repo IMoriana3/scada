@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '3.8'
+$VERSION_AGENTE = '3.9'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -313,7 +313,10 @@ function Trabajos-Lista {
 function Leer-Planta($nombresTxt, $ncuPedida, $tcusTxt, $gw = '') {
     $nombres = @("$nombresTxt".Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     if ($nombres.Count -eq 0) { throw 'falta "vars" (nombres separados por comas; vale el prefijo, p. ej. 41010)' }
-    $defs = @($nombres | ForEach-Object { @{nombre = (Resolver-Variable $_); vdef = $null} })
+    # -conEstado: aqui se LEE, asi que valen tambien las 3xxxx (SoC, SoH,
+    # alarmas, tilt, capacidad, ciclos...). Los dos sitios que ESCRIBEN llaman
+    # sin el interruptor, para no poder resolver un registro de solo lectura.
+    $defs = @($nombres | ForEach-Object { @{nombre = (Resolver-Variable $_ -conEstado); vdef = $null} })
     foreach ($d in $defs) { $d.vdef = $(if ($d.nombre -like 'ESTADO *') { $ESTADO[$d.nombre.Substring(7)] } else { $VARIABLES[$d.nombre] }) }
     $filas = @()
     foreach ($n in (Ncus-DePlanta)) {
