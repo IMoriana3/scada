@@ -120,6 +120,38 @@ noche manda a campo a mirar equipos sanos.
 mentir.** Sale de una recta sobre barridos espaciados de forma irregular. Sirve
 para ordenar y para planificar recambios, no para prometer una fecha.
 
+**El envejecimiento, medido en vez de estimado.** La lectura directa de una TCU
+se paraba en el registro 30098 — **un registro antes** de esto:
+
+```
+30099  capacidad_actual [mAh]
+30100  capacidad_nominal [mAh]
+30101  ciclos_carga
+30102  dias_preservacion
+```
+
+Alargar **la misma trama** de 8 a 12 registros no cuesta una lectura Modbus más,
+y con ellos el envejecimiento se **mide**:
+
+- **SoH medido** = capacidad actual / nominal. Y si el BMS declara un SoH que se
+  aparta 15 puntos de lo que dice la capacidad, **eso es un hallazgo por sí
+  solo**: o el BMS está descalibrado o la medida no vale.
+- **Ciclos de carga**: la edad real del elemento, no una pendiente sobre
+  barridos irregulares.
+- **Días en conservación** (`dias_preservacion`): es una **causa**, no un
+  síntoma — la batería que lleva N días sin cargarse de verdad.
+
+⚠️ **Los ciclos NO se convierten en meses de vida**, a propósito. Para eso haría
+falta saber cuántos ciclos aguanta el elemento, y eso el mapa no lo dice y el
+fabricante no lo ha dado. Poner «le quedan N meses» a partir de un número de
+ciclos y una vida nominal inventada sería fabricar el dato. Los ciclos ordenan y
+contrastan; la vida restante sigue saliendo de la capacidad.
+
+**El bloque compacto de la NCU no trae nada de esto**: sus 22 registros por TCU
+se acaban en el SoH declarado. Así que va en su propio botón, **LEER CICLOS Y
+CAPACIDAD**, que recorre las TCUs **por Zigbee, una a una**, con su aviso de
+coste delante. Los ciclos se mueven despacio: esto no hace falta a diario.
+
 El análisis se guarda como trabajo y se puede volver a abrir desde *Trabajos*.
 
 **«Cargar preset» se comía el backup del volcado (v11.62)** — el camino para

@@ -290,6 +290,20 @@ $d6 = Diag-LeerTcu 6
 Check 'diag salud TCU6' $d6.Salud 'OK'
 Check 'diag modo TCU6' $d6.Modo 'AUTO'
 Check 'diag sin cargador' ($null -eq $d6.PSObject.Properties['Cargador']) 'True'
+# ---- el envejecimiento MEDIDO (30099..30102), que solo sale por Zigbee ----
+# La lectura se paraba en 30098, un registro antes. Alargar la misma trama de 8
+# a 12 registros no cuesta una lectura mas y trae capacidad, ciclos y dias en
+# conservacion: eso es envejecimiento medido, no una pendiente estimada.
+foreach ($c in @('Vpanel_mV','Ientrada_mA','SoC','SoH','Tbat_C','Tpcb_C','Cap_mAh','CapNom_mAh','Ciclos','DiasPreserv')) {
+    Check "directo: la lectura del 30091 trae $c" ($null -ne $d6.PSObject.Properties[$c]) $true
+}
+Check 'directo: capacidad actual' $d6.Cap_mAh 7800
+Check 'directo: capacidad nominal' $d6.CapNom_mAh 10000
+Check 'directo: ciclos de carga' $d6.Ciclos 1240
+Check 'directo: dias en conservacion' $d6.DiasPreserv 0
+$d9 = Diag-LeerTcu 9
+Check 'directo: una gastada, con sus ciclos' $d9.Ciclos 3100
+Check 'directo: y con dias en conservacion' $d9.DiasPreserv 45
 Check 'leer modo decodificado' (Leer-Decodificado 5 @{addr=30001; tipo='modo'}) 'AUTO'
 $d8 = Diag-LeerTcu 8
 Check 'diag L3 (bit12) = AVISO' $d8.Salud 'AVISO'
@@ -2278,8 +2292,12 @@ Check 'tabla: hay tablas que registrar' ($lvsCreadas.Count -ge 20) $true
 Check 'tabla: todas filtrables, ninguna suelta' ($noReg -join ',') ''
 Check 'tabla: y la que se crea al vuelo tambien' ($src.Contains('Lv-Filtrable $lvX')) $true
 Check 'tabla: sale del ultimo diagnostico' ($src.Contains('Bat-Tabla $script:UltimoDiag $script:UltimaBat')) $true
-# y el modo directo ya trae panel y corriente de panel, que estan en el mapa
-Check 'directo: lee desde el 30091' ($src.Contains('$r2 = FC03-Leer $tcu (Dir-Trama 30091) 8')) $true
+# y el modo directo ya trae panel y corriente de panel, que estan en el mapa.
+# La prueba mide el RESULTADO -que los campos salgan- y no la longitud exacta de
+# la trama: escrita sobre "(Dir-Trama 30091) 8" se ponia roja al alargar la
+# lectura para traer los ciclos, que es justo lo contrario de lo que queria
+# proteger.
+Check 'directo: arranca en el 30091' ($src.Contains('$r2 = FC03-Leer $tcu (Dir-Trama 30091)')) $true
 Check 'directo: panel del 30092' ($src.Contains('Vpanel_mV = $r2[1]; Ientrada_mA = $r2[2]')) $true
 Check 'directo: la bateria se corre al 3' ($src.Contains('Vbat_mV = $r2[3]; Ibat_mA = $ibat')) $true
 Check 'directo: y el SoC al 5' ($src.Contains('SoC = ($r2[5] -band 0xFF)')) $true
@@ -3988,6 +4006,46 @@ Check 'orden: y una con causa va antes que una sana' ($gPanel.puntos -gt $gSano.
 Check 'orden: el motivo va con la nota' ($gPanel.motivo -like '*panel sin dar*') $true
 Check 'orden: y una sana no lleva motivo' $gSano.motivo ''
 
+# ---- el envejecimiento MEDIDO: ciclos y capacidad (30099-30102, solo Zigbee) ----
+# El bloque compacto de la NCU se acaba en el SoH declarado. Estos cuatro
+# registros dan el envejecimiento medido y estaban a un registro de la lectura
+# que ya se hacia.
+Check 'edad: SoH medido de la capacidad' (Bat-SohMedido 7800 10000) 78
+Check 'edad: sin capacidad no hay SoH medido' ($null -eq (Bat-SohMedido '' 10000)) $true
+# dividir por una nominal a cero daria infinito con pinta de dato
+Check 'edad: nominal a cero no se divide' ($null -eq (Bat-SohMedido 7800 0)) $true
+Check 'edad: ni negativa' ($null -eq (Bat-SohMedido 7800 -5)) $true
+$fEdad = [pscustomobject]@{SoC='90'; SoH='95'; Vbat_mV='26000'; Vpanel_mV='18000'; Ientrada_mA='700'; Dia='si'; Carga=''
+                           Cap_mAh=7800; CapNom_mAh=10000; Ciclos=1240; DiasPreserv=0}
+$notas = @(Bat-NotasEdad $fEdad)
+Check 'edad: la nota trae el SoH medido' (@($notas | Where-Object { $_ -like '*SoH medido 78*' }).Count) 1
+Check 'edad: y los ciclos' (@($notas | Where-Object { $_ -like '*1240 ciclos*' }).Count) 1
+# EL HALLAZGO: que el BMS declare una cosa y la capacidad diga otra
+Check 'edad: BMS 95% contra capacidad 78% se canta' (@($notas | Where-Object { $_ -like '*el BMS declara*' }).Count) 1
+$fCuadra = [pscustomobject]@{SoH='80'; Cap_mAh=7800; CapNom_mAh=10000; Ciclos=100; DiasPreserv=0}
+Check 'edad: si cuadran, no se canta nada' (@(@(Bat-NotasEdad $fCuadra) | Where-Object { $_ -like '*el BMS declara*' }).Count) 0
+# sin el pase de Zigbee no hay notas de edad, y no se inventan
+Check 'edad: sin leer, sin notas' (@(Bat-NotasEdad ([pscustomobject]@{SoH='90'})).Count) 0
+# dias en conservacion es una CAUSA, no un sintoma
+$fPres = [pscustomobject]@{SoC='35'; SoH='90'; Vbat_mV='23000'; Vpanel_mV='18000'; Ientrada_mA='600'; Dia='si'; Carga=''; DiasPreserv=45}
+Check 'edad: 45 dias en conservacion es la causa' (Bat-Causa $fPres).causa 'en conservacion'
+Check 'edad: y lo dice con el numero' ((Bat-Causa $fPres).nota -like '*45 dias*') $true
+Check 'edad: cero dias no es conservacion' ((Bat-Causa ([pscustomobject]@{SoC='90'; SoH='95'; Vbat_mV='26000'; Vpanel_mV='18000'; Ientrada_mA='700'; Dia='si'; Carga=''; DiasPreserv=0})).causa) 'ok'
+# y pesa en el orden
+$gPres = Bat-Gravedad $fPres (Bat-Causa $fPres) (Bat-Tendencia @()) $null
+$gOk = Bat-Gravedad $fSano (Bat-Causa $fSano) (Bat-Tendencia @()) $null
+Check 'edad: la que esta en conservacion sube en la lista' ($gPres.puntos -gt $gOk.puntos) $true
+# LO QUE NO SE HACE: convertir ciclos en meses de vida. No sabemos cuantos
+# aguanta el elemento y el mapa no lo dice; inventar una vida nominal seria
+# fabricar el dato.
+Check 'edad: los ciclos NO se convierten en vida restante' (
+    $src.Substring($src.IndexOf('function Bat-VidaRestante'), 1200) -match 'Ciclos|ciclos_nominales') $false
+Check 'edad: y se dice por que' ($src.Contains('NO se convierten en vida restante')) $true
+# el pase va aparte y con su aviso de coste
+Check 'edad: tiene su propio boton' ($src.Contains("`$btnBAnEdad.Text = 'LEER CICLOS Y CAPACIDAD'")) $true
+Check 'edad: lee los cuatro registros de un tiron' ($src.Contains('FC03-Leer ([byte]$tcu) (Dir-Trama 30099) 4')) $true
+Check 'edad: avisa de que va por Zigbee una a una' ($src.Contains('van por Zigbee UNA A UNA')) $true
+
 # ---- la pantalla, y que el analisis se pueda volver a abrir ----
 Check 'bat anal: hay hoja propia' ($src.Contains("`$tabBA.Text = 'Analisis baterias'")) $true
 Check 'bat anal: y esta en el arbol junto a Baterias' (
@@ -4002,7 +4060,8 @@ Check 'bat anal: con la variable donde se carga' ($TRABAJO_TIPOS['analisis_bater
 Check 'bat anal: y se puede volver a abrir' ($src.Contains("'analisis_baterias' { BatAnal-Pintar")) $true
 # lo que se guarda tiene que existir como propiedad de las filas
 $colsBA = @($TRABAJO_TIPOS['analisis_baterias'].cols)
-$filaBA = [pscustomobject]@{NCU='3'; TCU=14; SoC='80'; SoH='89'; Causa='ok'; SoH_pts_mes=-3.0
+$filaBA = [pscustomobject]@{NCU='3'; TCU=14; SoC='80'; SoH='89'; SoH_medido=78.0; Ciclos=1240
+    Causa='ok'; SoH_pts_mes=-3.0
     Muestras=4; Dias=92.0; Quedan_meses=10; Confianza='con recorrido'; Por_que=''; Gravedad=0}
 Check 'bat anal: las columnas guardadas existen en la fila' (
     @($colsBA | Where-Object { -not $filaBA.PSObject.Properties[$_] }) -join ',') ''
