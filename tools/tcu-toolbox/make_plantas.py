@@ -397,6 +397,126 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
     return ficheros
 
 
+
+# ── modo tarjeta ─────────────────────────────────────────────────────────────
+# La tarjeta «IPs de plantas» (factiun-cartera) exporta la topologia de Supabase
+# en JSONs con esta misma forma. Trae una cosa que aqui no hay y no se puede
+# deducir: la IP del ConnectPort de cada gateway. Este modo la mete y NO TOCA
+# NADA MAS: los rangos de TCU los mandan plants.yml y el Excel, no la tarjeta.
+#
+#   python make_plantas.py --tarjeta IPs.zip
+#
+# Se le puede dar el .zip tal cual sale del navegador, una carpeta o ficheros
+# sueltos.
+
+def _entradas_de(ruta):
+    """Los JSON de la tarjeta que haya en `ruta`: .zip, carpeta o fichero."""
+    import zipfile
+    ruta = Path(ruta)
+    if ruta.is_dir():
+        return [(f.name, json.loads(f.read_text(encoding="utf-8")))
+                for f in sorted(ruta.glob("*.json"))]
+    if ruta.suffix.lower() == ".zip":
+        with zipfile.ZipFile(ruta) as z:
+            return [(n, json.loads(z.read(n).decode("utf-8")))
+                    for n in sorted(z.namelist()) if n.lower().endswith(".json")]
+    return [(ruta.name, json.loads(ruta.read_text(encoding="utf-8")))]
+
+
+def _ncu_de(nombre):
+    """El NUMERO de NCU del nombre de una entrada. Los prefijos NO casan entre
+    fuentes -el Excel dice «Burgo I» y plants.yml «El Burgo I»-, asi que emparejar
+    por nombre completo no vale: se empareja por (NCU, puerto)."""
+    m = re.search(r"NCU\s*(\d+)", str(nombre or ""))
+    return int(m.group(1)) if m else None
+
+
+def _cobertura(entradas):
+    """Que TCUs cubre cada (NCU, puerto), contando los huecos declarados."""
+    cob = {}
+    for e in entradas:
+        n, p = _ncu_de(e.get("nombre")), e.get("puerto")
+        if n is None or e.get("tcu_ini") is None:
+            continue
+        cob.setdefault((n, p), set()).update(
+            set(range(int(e["tcu_ini"]), int(e["tcu_fin"]) + 1)) - set(e.get("huecos") or []))
+    return cob
+
+
+def modo_tarjeta(rutas, dir_plantas):
+    avisos, escritos, puestas = [], [], 0
+    for ruta in rutas:
+        for fichero, doc in _entradas_de(ruta):
+            entradas = doc.get("plantas") or []
+            num = re.match(r"(\d+)", fichero)
+            num = num.group(1) if num else ""
+            # el mismo emparejamiento de nombres que el modo Excel: si no, El Burgo
+            # entra por segunda vez con otro nombre y el portatil de campo lo ve doble
+            destino = dir_plantas / MISMO_FICHERO.get(num, fichero)
+            if not destino.exists():
+                avisos.append(f"{fichero}: no hay {destino}; esta planta no esta en plantas/")
+                continue
+            doc_local = json.loads(destino.read_text(encoding="utf-8"))
+            locales = doc_local.get("plantas") or []
+            por_clave = {}
+            for e in locales:
+                n = _ncu_de(e.get("nombre"))
+                if n is not None:
+                    por_clave.setdefault((n, e.get("puerto")), []).append(e)
+
+            cambios = 0
+            for e in entradas:
+                gw = str(e.get("ip_gw") or "").strip()
+                if not gw:
+                    continue
+                if not re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", gw) or any(
+                        int(o) > 255 for o in gw.split(".")):
+                    avisos.append(f"{fichero}: «{gw}» no es una IP; {e.get('nombre')} se queda sin gateway")
+                    continue
+                # el error que costaria una jornada de campo: el gateway NUNCA es la
+                # IP del Modbus. Si coinciden, la celda esta mal puesta en la tabla.
+                if gw == str(e.get("ip") or "").strip():
+                    avisos.append(f"{fichero}: {e.get('nombre')} da el gateway igual que el Modbus ({gw}); "
+                                  "NO se escribe, revisa la celda de la tabla")
+                    continue
+                clave = (_ncu_de(e.get("nombre")), e.get("puerto"))
+                destinos = por_clave.get(clave)
+                if not destinos:
+                    avisos.append(f"{fichero}: {e.get('nombre')} (puerto {clave[1]}) no casa con ninguna entrada de {destino.name}")
+                    continue
+                # un gateway por (NCU, puerto): si ahi hay varios tramos, la IP es la
+                # misma para todos (El Burgo NCU2 GW2 y su TCU 109 suelto)
+                for d in destinos:
+                    if d.get("ip_gw") != gw:
+                        d["ip_gw"] = gw
+                        cambios += 1
+
+            # Los rangos NO se tocan: se comparan y se cantan. La tarjeta sale de
+            # Supabase y plantas/ de plants.yml y del Excel; cuando no coinciden,
+            # alguien esta poleando TCUs que no existen o dejandose otras sin medir,
+            # y eso lo decide una persona mirando la planta, no este script.
+            ct, cl = _cobertura(entradas), _cobertura(locales)
+            for k in sorted(set(ct) | set(cl), key=lambda x: (x[0], x[1] or 0)):
+                sobra, falta = sorted(cl.get(k, set()) - ct.get(k, set())), sorted(ct.get(k, set()) - cl.get(k, set()))
+                if sobra or falta:
+                    avisos.append(f"{destino.name}: NCU{k[0]} puerto {k[1]} no cuadra con la tabla"
+                                  + (f"; aqui de mas {sobra}" if sobra else "")
+                                  + (f"; en la tabla y aqui no {falta}" if falta else ""))
+            if cambios:
+                destino.write_text(json.dumps(doc_local, ensure_ascii=False, indent=2) + "\n",
+                                   encoding="utf-8")
+                escritos.append((destino, cambios))
+                puestas += cambios
+                print(f"{destino}: {cambios} IPs de gateway")
+
+    if not puestas:
+        print("Ninguna IP de gateway en el export: es anterior al cambio de la tarjeta, "
+              "o la tabla no las tiene puestas para estas plantas.")
+    for a in avisos:
+        print("  aviso: " + a)
+    return escritos, avisos
+
+
 try:
     import yaml
 except ImportError:
@@ -415,9 +535,21 @@ def main() -> None:
                     help="numeros de proyecto a saltar en modo Excel (p.ej. --excluir 23003)")
     ap.add_argument("--puertos", nargs="+", type=int, default=[503, 504],
                     help="puertos passthrough de la NCU, uno por gateway (defecto: 503 504)")
+    ap.add_argument("--tarjeta", nargs="+", default=None,
+                    help="mete en plantas/ la IP del ConnectPort de cada gateway desde el export "
+                         "de la tarjeta «IPs de plantas» (.zip, carpeta o JSONs). No toca nada mas")
+    ap.add_argument("--plantas", default=None,
+                    help="carpeta plantas/ a actualizar (defecto: la de al lado de este script)")
     ap.add_argument("--salida", default=None,
                     help="fichero de salida (defecto: plantas/<plant_id>.json, un JSON por planta)")
     args = ap.parse_args()
+
+    if args.tarjeta:
+        # por defecto la carpeta de al lado del script, no la del directorio actual:
+        # correr esto desde la raiz del repo escribia plantas/ donde no era
+        dirp = Path(args.plantas) if args.plantas else Path(__file__).resolve().parent / "plantas"
+        modo_tarjeta([Path(r) for r in args.tarjeta], dirp)
+        return
 
     if args.excel:
         modo_excel(Path(args.excel), args.hoja, args.puertos, set(args.excluir), "")
