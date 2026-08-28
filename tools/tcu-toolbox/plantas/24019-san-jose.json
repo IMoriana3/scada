@@ -47,7 +47,7 @@
       "nombre": "San Jose NCU3 GW2",
       "ip": "10.21.236.6",
       "puerto": 504,
-      "tcu_ini": 46,
+      "tcu_ini": 47,
       "tcu_fin": 120
     },
     {
@@ -199,7 +199,7 @@
       "nombre": "San Jose NCU9 GW2",
       "ip": "10.21.236.21",
       "puerto": 504,
-      "tcu_ini": 50,
+      "tcu_ini": 49,
       "tcu_fin": 120
     },
     {
@@ -508,11 +508,11 @@
       "tcu_fin": 95
     },
     {
-      "nombre": "San Jose NCU17 GW2 (TCU 110-112)",
+      "nombre": "San Jose NCU17 GW2 (TCU 110-122)",
       "ip": "10.21.236.81",
       "puerto": 504,
       "tcu_ini": 110,
-      "tcu_fin": 112
+      "tcu_fin": 122
     },
     {
       "nombre": "San Jose NCU18 GW1",
