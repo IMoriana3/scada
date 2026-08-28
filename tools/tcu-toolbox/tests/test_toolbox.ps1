@@ -2218,7 +2218,22 @@ Check 'leer: y manda a Auditoria' ($src.Contains("pestana Auditoria con 'Usar la
 # pero la propiedad sigue siendo Estado: el CSV y la auditoria van por ella
 Check 'leer: la propiedad no cambia' ($src.Contains("@('NCU','TCU','Estado') -contains `$pr.Name")) $true
 Check 'cabeceras: y los filtros viejos se tiran' ($src.Contains('if (@($e.cab).Count -ne $lv.Columns.Count) { $e.filtros = @{} }')) $true
-Check 'tabla: filtrable como las demas' ($src.Contains('$lvRA, $lvRF, $lvRB)) { Lv-Filtrable')) $true
+# TODA tabla nueva tiene que entrar en la lista de filtrables. Antes esto se
+# comprobaba fijando el FINAL de la lista ('...$lvRB)) { Lv-Filtrable'), asi que
+# se ponia roja al anadir una tabla al final -que es lo correcto- y no decia
+# nada si alguien anadia una en medio sin registrarla. Ahora se sacan del fuente
+# todas las ListView creadas y se exige que cada una este registrada.
+# 'lv[A-Z]...' y no 'lv...' a secas: hay un $lv local, la variable de trabajo de
+# las propias funciones de filtro, que no es ninguna tabla de la ventana.
+$lvsCreadas = @([regex]::Matches($src, '\$(lv[A-Z][A-Za-z0-9]*) = New-Object System\.Windows\.Forms\.ListView') |
+                ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+$iReg = $src.IndexOf('{ Lv-Filtrable $tabla }')
+$blqReg = $src.Substring([math]::Max(0, $iReg - 400), 400)
+# $lvX se registra por su cuenta: es la tabla de una ventana que se crea al vuelo
+$noReg = @($lvsCreadas | Where-Object { $_ -ne 'lvX' -and -not ($blqReg -match ('\$' + $_ + '[,)]')) })
+Check 'tabla: hay tablas que registrar' ($lvsCreadas.Count -ge 20) $true
+Check 'tabla: todas filtrables, ninguna suelta' ($noReg -join ',') ''
+Check 'tabla: y la que se crea al vuelo tambien' ($src.Contains('Lv-Filtrable $lvX')) $true
 Check 'tabla: sale del ultimo diagnostico' ($src.Contains('Bat-Tabla $script:UltimoDiag $script:UltimaBat')) $true
 # y el modo directo ya trae panel y corriente de panel, que estan en el mapa
 Check 'directo: lee desde el 30091' ($src.Contains('$r2 = FC03-Leer $tcu (Dir-Trama 30091) 8')) $true
@@ -3646,8 +3661,8 @@ foreach ($b in @('diagnostico', 'auditoria', 'inventario', 'pem')) {
     Check "ctx: el export de $b usa el sello" ($src.Contains("Ctx-Leer '$b'")) $true
 }
 Check 'ctx: y ya no hay export que lea el cuadro de IP' ($src -match "(?m)^\s+ip\s+= \`$txtIp\.Text\.Trim\(\)") $false
-Check 'ctx: el JSON lleva el alcance' ([regex]::Matches($src, [regex]::Escape('alcance = $ctx.alcance')).Count) 4
-Check 'ctx: y las NCUs del barrido' ([regex]::Matches($src, [regex]::Escape('ncus    = @($ctx.ncus)')).Count) 4
+Check 'ctx: el JSON lleva el alcance' ([regex]::Matches($src, [regex]::Escape('alcance = $ctx.alcance')).Count) 5
+Check 'ctx: y las NCUs del barrido' ([regex]::Matches($src, [regex]::Escape('ncus    = @($ctx.ncus)')).Count) 5
 
 # Las estaciones y repetidores declarados tienen que viajar CON el trabajo: la
 # columna HSUs de Comm NCU dice "leidas/declaradas", y sin esto las declaradas
@@ -3835,6 +3850,92 @@ Check 'hsu corto: y va como SIN LECTURA' ("$($compHsu[1].Salud)") 'SIN LECTURA'
 # la columna NCU tenia 45 px y el encabezado salia "NC...": con diez HSUs de
 # diez NCUs distintas, saber de cual es cada una es justo el dato
 Check 'hsu corto: la columna NCU se lee entera' ($src.Contains("[void]`$lvG.Columns.Add('NCU', 58)")) $true
+
+Write-Host ''
+Write-Host '== leer TODAS las variables, con el coste por delante =='
+# Llenar la tabla a mano son 168 filas tecleadas. Pero LEER cuesta UNA lectura
+# Modbus por (TCU x variable), asi que el boton facil tiene que traer el numero
+# con el, no dejar que se descubra a los veinte minutos.
+Check 'todas: hay boton' ($src.Contains("`$btnLTodas.Text = 'TODAS'")) $true
+Check 'todas: y su handler' ($src.Contains('$btnLTodas.Add_Click')) $true
+Check 'todas: respeta el filtro' ($src.Contains('$todas = @(Filtrar-Nombres @(Nombres-Legibles) $filtro)')) $true
+Check 'todas: y un filtro sin resultados se dice' ($src.Contains("no deja ninguna variable")) $true
+# la cuenta, que es lo que decide si se pregunta
+Check 'coste: una TCU y todas las variables' (Leer-Coste 168 1).lecturas 168
+Check 'coste: eso no se pregunta' (Leer-Coste 168 1).avisar $false
+Check 'coste: una NCU entera' (Leer-Coste 168 72).lecturas 12096
+Check 'coste: y eso si' (Leer-Coste 168 72).avisar $true
+Check 'coste: Ayora entera' (Leer-Coste 168 751).lecturas 126168
+# lo de siempre -unas pocas variables en un rango- no puede empezar a preguntar
+Check 'coste: cinco variables en 20 TCUs no molesta' (Leer-Coste 5 20).avisar $false
+Check 'coste: ni una planta completa de una sola variable' (Leer-Coste 1 751).avisar $false
+Check 'coste: el aviso salta en el umbral' (Leer-Coste 1 2001).avisar $true
+Check 'coste: y no un paso antes' (Leer-Coste 1 2000).avisar $false
+# y se pregunta ANTES de abrir la primera conexion
+Check 'coste: se pregunta antes de leer' (
+    $src.IndexOf('$coste = Leer-Coste') -lt $src.IndexOf('Prog-Iniciar ($nLeerTot * @($defs).Count)')) $true
+Check 'coste: y decir que no no lee nada' ($src.Contains('Lectura cancelada antes de empezar')) $true
+Check 'coste: se puede parar a medias' ($src.Contains('Se puede parar con CANCELAR en cualquier momento y lo leido se queda')) $true
+
+Write-Host ''
+Write-Host '== inventario global: una tabla con todos los equipos =='
+# Lo de cada tipo de equipo vivia en su pestana. Para una ficha de entrega hace
+# falta UNA tabla, y los huecos son REALES: no todos los equipos dan lo mismo.
+Check 'invg: hay hoja propia' ($src.Contains("`$tabIG.Text = 'Inventario global'")) $true
+Check 'invg: en GLOBAL y encima de Diagnostico' (
+    $src.IndexOf("@{txt='Inventario global';     tab=`$tabIG}") -lt
+    $src.IndexOf("@{txt='Diagnóstico de planta'; tab=`$tabG; vista='todo'}")) $true
+# todas las filas con las mismas columnas: Export-Csv se queda con las del
+# primer objeto y tiraria las demas sin decir nada
+$fN = Inv-Fila 'NCU' 3 '' '192.168.4.30' '' '' 'v1.2.3'
+$fT = Inv-Fila 'TCU' 3 1 '14' 'SN123' 'AABB' 'v1.6.0' 'v1.4.3' '6' '18/06/2025' 'OK'
+Check 'invg: la fila de la NCU tiene todas las columnas' (@($fN.PSObject.Properties).Count) 11
+Check 'invg: y la de la TCU las mismas' (
+    ((@($fN.PSObject.Properties.Name) -join ',') -eq (@($fT.PSObject.Properties.Name) -join ','))) $true
+Check 'invg: lo que no se sabe va vacio, no inventado' ("$($fN.Serie))$($fN.MAC)") ')'
+Check 'invg: y la version donde toca' $fN.FW 'v1.2.3'
+# el gateway se numera por el puerto del passthrough, que es la convencion de
+# toda la topologia
+Check 'invg: 503 es el GW1' (Gw-Numero 503) 1
+Check 'invg: 504 es el GW2' (Gw-Numero 504) 2
+Check 'invg: otro puerto no es un gateway' (Gw-Numero 502) 0
+# cada hueco lleva su motivo: 'vacio' y 'no se puede leer' no son lo mismo
+Check 'invg: la NCU dice por que no da serie' ($INV_MOTIVO['NCU'] -like '*NOT READY*') $true
+Check 'invg: la HSU tambien' ($INV_MOTIVO['HSU'] -like '*R23*') $true
+Check 'invg: y el gateway dice que no es Modbus' ($INV_MOTIVO['GW'] -like '*HTTP/RCI*') $true
+
+Write-Host ''
+Write-Host '== la identidad del gateway: otro aparato, otro protocolo =='
+# El gateway NO es la NCU: es un Digi con su propia IP. Los 503/504 son el
+# passthrough Modbus de la NCU, no el gateway. Se le habla HTTP/RCI en el 80.
+Check 'gw: la IP sale de la topologia' ($src.Contains("`$e.ip_gw = ")) $true
+Check 'gw: y llega hasta cada gateway' ([regex]::Matches($src, 'ip_gw=\$').Count -ge 2) $true
+Check 'gw: se pregunta por RCI, no por Modbus' ($src.Contains('/UE/rci')) $true
+Check 'gw: y NO por los puertos del passthrough' (
+    $src.Substring($src.IndexOf('function Gw-Identidad'), 900) -match 'PUERTO_GW|503|504') $false
+# los cuatro campos de la pagina del gateway, sacados del XML por patron: el
+# esquema exacto no se conoce y recorrerlo por nombre de nodo seria adivinarlo
+$xmlGw = '<rci_reply><device_info><mac>00:13:a2:00:42:6e:79:f1</mac>' +
+         '<firmware>0x4064</firmware><pan_id>0x3dba</pan_id><channel>0x0d</channel></device_info></rci_reply>'
+$ex = Rci-Extraer $xmlGw
+Check 'gw: saca la MAC' $ex.mac '00:13:a2:00:42:6e:79:f1'
+Check 'gw: el firmware' $ex.fw '0x4064'
+Check 'gw: la PAN' $ex.pan '0x3dba'
+Check 'gw: y el canal' $ex.canal '0x0d'
+Check 'gw: y dice que ha sacado' (Rci-Resumen $ex) 'mac, fw, pan, canal'
+# el '!' que traen las ext_addr de los descubrimientos no es parte de la MAC
+Check 'gw: la MAC sin el cierre de exclamacion' ((Rci-Extraer '<a ext_addr="00:13:a2:00:42:6e:79:f1!"/>').mac) '00:13:a2:00:42:6e:79:f1'
+# una respuesta que no reconocemos NO se inventa: se dice que no y se vuelca
+$vacio = Rci-Extraer '<rci_reply><error id="1" desc="no such target"/></rci_reply>'
+Check 'gw: lo que no se reconoce no se rellena' (Rci-Resumen $vacio) ''
+Check 'gw: ni la MAC' $vacio.mac ''
+Check 'gw: cuando no se reconoce, se vuelca el XML crudo' ($src.Contains('respuesta cruda, para saber que consulta hay que hacer de verdad')) $true
+Check 'gw: y se avisa de que no esta verificado' ($src.Contains('no esta verificada contra un Digi real')) $true
+# sin ip_gw no hay a quien preguntar, y se dice como conseguirla
+Check 'gw: sin ip_gw manda a regenerar desde el Excel' ($src.Contains('make_plantas.py --excel')) $true
+Check 'gw: la identificacion va aparte del barrido' ($src.Contains('$btnIGGw.Add_Click')) $true
+Check 'gw: el barrido de planta NO habla HTTP' (
+    $src.Substring($src.IndexOf('function InvG-Correr'), 5200) -match 'Invoke-RestMethod|rci') $false
 
 Write-Host ''
 Write-Host '== de que se alimenta una TCU =='
