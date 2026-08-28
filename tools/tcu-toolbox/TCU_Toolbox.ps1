@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.60'
+$VERSION_TOOLBOX = '11.61'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -114,6 +114,15 @@ function Cargar-FicheroPlantas([string]$ruta) {
         # cuantos trackers dice la topologia que tiene: sirve para cantar si el
         # rango de esclavos no cuadra con ellos
         if ($p.PSObject.Properties['trackers'] -and "$($p.trackers)" -match '^\d+$') { $e.trackers = [int]$p.trackers }
+        # LA IP DEL GATEWAY. El gateway NO es la NCU: es un Digi con su propia
+        # direccion, y sin ella no hay forma de preguntarle nada (no habla
+        # Modbus; los puertos 503/504 son el passthrough de la NCU). La hoja
+        # 'Direcciones IP' la trae en las columnas 'IP GW 1' e 'IP GW 2' y
+        # make_plantas la escribe como ip_gw, una por entrada -o sea, una por
+        # gateway-. Si el JSON no la trae, el inventario lo dice en vez de
+        # inventarse la regla "IP de la NCU + n", que solo esta comprobada en
+        # El Burgo.
+        if ($p.PSObject.Properties['ip_gw'] -and "$($p.ip_gw)".Trim() -ne '') { $e.ip_gw = "$($p.ip_gw)".Trim() }
         if ($p.PSObject.Properties['huecos']) {
             $lstH = @(@($p.huecos) | Where-Object { "$_" -match '^\d+$' } | ForEach-Object { [int]$_ })
             if ($lstH.Count -gt 0) { $e.huecos = $lstH }
@@ -156,7 +165,7 @@ function Construir-EntradasAuto {
         }
         $prefijo = ($prefijo -replace '(GW|TCU)\S*$', '').Trim()
         if (-not $prefijo) { $prefijo = "NCU $ip" }
-        $gws = @($grupo | ForEach-Object { @{puerto=$_.p.puerto; ini=$_.p.ini; fin=$_.p.fin; reps=@($_.p.reps); huecos=@($_.p.huecos)} } | Sort-Object { $_.ini })
+        $gws = @($grupo | ForEach-Object { @{puerto=$_.p.puerto; ini=$_.p.ini; fin=$_.p.fin; reps=@($_.p.reps); huecos=@($_.p.huecos); ip_gw=$_.p.ip_gw} } | Sort-Object { $_.ini })
         $ini = @($gws | ForEach-Object { $_.ini } | Measure-Object -Minimum).Minimum
         $fin = @($gws | ForEach-Object { $_.fin } | Measure-Object -Maximum).Maximum
         $auto = @{ip=$ip; puerto=$null; ini=[int]$ini; fin=[int]$fin; gws=$gws}
@@ -177,7 +186,7 @@ function Construir-EntradasAuto {
         if ($porPlanta[$planta][$ncu].ip -ne $p.ip) { continue }   # inconsistencia: ignorar
         # el repetidor cuelga de SU gateway: sin esto no se sabria por que puerto
         # se llega a el, porque su esclavo no cae en ningun rango de TCUs
-        $porPlanta[$planta][$ncu].gws += ,@{puerto=$p.puerto; ini=$p.ini; fin=$p.fin; reps=@($p.reps); huecos=@($p.huecos)}
+        $porPlanta[$planta][$ncu].gws += ,@{puerto=$p.puerto; ini=$p.ini; fin=$p.fin; reps=@($p.reps); huecos=@($p.huecos); ip_gw=$p.ip_gw}
         if ($p.hsu -and -not $porPlanta[$planta][$ncu].hsu) { $porPlanta[$planta][$ncu].hsu = $p.hsu }
         # el mismo numero viene repetido en las entradas de los dos gateways de
         # la NCU: se queda el mayor, no se suman
@@ -667,6 +676,26 @@ function Hsu-LeerFw([byte]$unit) {
         [pscustomobject]@{Campo='SoftwareId (30000, bits 15..8)'; Valor="$sw"; Nota=("registro completo 0x{0:X4}" -f $w[0])}
     )
     return @{filas=$filas; sw=$sw; raw=[int]$w[0]}
+}
+
+# La identidad de una HSU, para el inventario global. El mapa R23 da MENOS que
+# el de la TCU y conviene saber que falta y por que: hay ProductId (30000, con
+# el SoftwareId en los bits altos) y la MAC Zigbee de 64 bits partida en dos
+# U32 (30016 baja, 30018 alta), pero NO hay numero de serie ni fecha de
+# fabricacion. No es que no se lean: es que el mapa no los tiene.
+function Hsu-LeerIdent([byte]$unit) {
+    $w = FC03-Leer $unit (Dir-Trama 30000) 1
+    $wm = FC03-Leer $unit (Dir-Trama 30016) 4      # 30016 low (U32) + 30018 high (U32)
+    $lo = ([long]$wm[1] -shl 16) -bor [long]$wm[0]
+    $hi = ([long]$wm[3] -shl 16) -bor [long]$wm[2]
+    $mac = ''
+    if ($lo -ne 0 -or $hi -ne 0) { $mac = ("{0:X8}{1:X8}" -f $hi, $lo) }
+    return @{
+        sw  = ((($w[0]) -shr 8) -band 0xFF)
+        hw  = ($w[0] -band 0xFF)
+        mac = $mac
+        raw = [int]$w[0]
+    }
 }
 
 # Instalar en la HSU el firmware que ya tiene cargado. El mapa R23 lo dice tal
@@ -1421,6 +1450,121 @@ function Tcu-TipoAlim($nibble) {
 function Sello-De($cuando, [string]$fmt = 'yyyyMMdd_HHmm') {
     if ($cuando -is [datetime]) { return $cuando.ToString($fmt) }
     return (Get-Date -Format $fmt)
+}
+
+# ============================ INVENTARIO GLOBAL ============================
+# Hasta ahora el inventario era SOLO de TCUs, y lo de cada tipo de equipo vivia
+# en su pestana: la version de la NCU en Firmware NCU, el SoftwareId de la HSU
+# en Firmware HSU, los repetidores en la suya. Para una ficha de entrega hace
+# falta UNA tabla con todo.
+#
+# Y los equipos NO dan lo mismo, asi que la tabla tiene huecos A PROPOSITO:
+#
+#   TCU y repetidor  serie, MAC Xbee, FW, FW de fabrica, HW PCBA y fecha de
+#                    fabricacion. Bloque 30300, 30 registros, por Zigbee
+#   HSU              SoftwareId (30000 bits 15..8) y MAC Zigbee (30016/30018).
+#                    El mapa R23 NO tiene numero de serie ni fecha de fabricacion
+#   NCU              VERSION_STRING (reg 50). HardwareId (0) y SoftwareId (1)
+#                    estan marcados NOT READY en el propio mapa R7.1
+#   Gateway          NADA por Modbus. Es OTRO APARATO -un Digi ConnectPort con
+#                    su propia IP- y los puertos 503/504 son el passthrough de
+#                    la NCU, no el gateway. Ver Gw-Identidad
+#
+# Un hueco vacio y un "no se puede leer" no son lo mismo, y en una ficha de
+# entrega esa diferencia importa: por eso cada fila lleva su motivo en Nota.
+
+# Una fila del inventario, con todas las columnas siempre presentes: si cada
+# tipo de equipo devolviera su propio juego, el CSV se quedaria con las columnas
+# del primero (Export-Csv mira solo el primer objeto). Pura.
+function Inv-Fila([string]$tipo, $ncu, $gw, $id, [string]$serie = '', [string]$mac = '',
+                  [string]$fw = '', [string]$fwFab = '', [string]$hw = '', [string]$fecha = '', [string]$nota = '') {
+    return [pscustomobject]@{
+        Tipo = $tipo; NCU = "$ncu"; GW = "$gw"; Id = "$id"
+        Serie = $serie; MAC = $mac; FW = $fw; FW_fabrica = $fwFab
+        HW = $hw; Fecha_fab = $fecha; Nota = $nota
+    }
+}
+
+# 503 es el GW1 y 504 el GW2: es la convencion de toda la topologia y la que
+# escribe make_plantas. Pura.
+function Gw-Numero([int]$puerto) {
+    if ($puerto -eq $PUERTO_GW1) { return 1 }
+    if ($puerto -eq $PUERTO_GW2) { return 2 }
+    return 0
+}
+
+# El motivo por el que una columna se queda vacia, por tipo de equipo. Que se
+# lea en la tabla, no que haya que venir al codigo a averiguarlo. Pura.
+$INV_MOTIVO = @{
+    'NCU' = 'el mapa R7.1 no da serie, MAC ni fecha; HardwareId y SoftwareId estan NOT READY'
+    'HSU' = 'el mapa R23 no da numero de serie ni fecha de fabricacion'
+    'GW'  = 'no leible por Modbus: el gateway es un Digi con su propia IP y habla HTTP/RCI'
+}
+
+# ---------- la identidad del gateway ----------
+# El gateway NO es la NCU. Es un Digi ConnectPort con SU PROPIA IP, y no habla
+# Modbus: los puertos 503/504 son el passthrough Modbus de la NCU, uno por
+# gateway. Al Digi se le habla HTTP/RCI en el puerto 80, que es exactamente lo
+# que lleva haciendo el recolector de cobertura (zigbee_logger.ps1).
+#
+# ATENCION, y esto va aqui para que no se olvide: el TRANSPORTE esta probado
+# -POST XML a /UE/rci, el recolector lo usa a diario-, pero QUE CONSULTA
+# devuelve la identidad DEL COORDINADOR no se ha visto nunca. El recolector
+# solo descubre nodos y les pide estado; la identidad del propio gateway se
+# leia mirando su pagina web a ojo.
+#
+# Asi que esto no se cuela en el barrido de planta: va en su propio boton, y
+# cuando no reconoce la respuesta VUELCA EL XML CRUDO a la consola. La primera
+# pasada delante de un gateway de verdad nos da el esquema, en vez de adivinarlo
+# dos veces. Hasta entonces, las columnas del gateway salen vacias con su motivo.
+$RCI_URL = 'http://{0}/UE/rci'
+$RCI_CONSULTAS = @(
+    @{n = 'query_state device_info'; xml = '<rci_request version="1.1"><query_state><device_info/></query_state></rci_request>'}
+    @{n = 'query_setting zigbee';    xml = '<rci_request version="1.1"><query_setting><zigbee/></query_setting></rci_request>'}
+)
+
+# Saca del XML de respuesta los cuatro campos de la pagina del gateway, SIN
+# depender de como esten anidados: se buscan por patron sobre el texto. Un
+# esquema que no conocemos no se puede recorrer por nombre de nodo, pero una
+# MAC de Digi y un firmware en hexadecimal se reconocen igual. Pura.
+function Rci-Extraer([string]$xml) {
+    $t = "$xml"
+    $r = @{mac = ''; fw = ''; pan = ''; canal = ''}
+    # MAC de 64 bits en formato Digi: ocho bytes con dos puntos. El '!' final que
+    # trae ext_addr en los descubrimientos no forma parte de la direccion.
+    $m = [regex]::Match($t, '(?i)\b([0-9a-f]{2}(?::[0-9a-f]{2}){7})\b')
+    if ($m.Success) { $r.mac = $m.Groups[1].Value.ToLower() }
+    foreach ($par in @(@('fw','firmware'), @('pan','pan[_ ]?id'), @('canal','channel'))) {
+        $mm = [regex]::Match($t, ('(?is)' + $par[1] + '\s*[^>]*>\s*([^<\s]+)'))
+        if (-not $mm.Success) { $mm = [regex]::Match($t, ('(?is)' + $par[1] + '"?\s*[:=]\s*"?\s*([^<",\s]+)')) }
+        if ($mm.Success) { $r[$par[0]] = $mm.Groups[1].Value.Trim() }
+    }
+    return $r
+}
+
+# Que se ha sacado y que no, en una linea. Pura.
+function Rci-Resumen($ext) {
+    $hay = @()
+    foreach ($k in @('mac','fw','pan','canal')) { if ("$($ext[$k])" -ne '') { $hay += $k } }
+    if ($hay.Count -eq 0) { return '' }
+    return ($hay -join ', ')
+}
+
+# ---------- leer TODAS las variables ----------
+# La pestana Leer variable se llenaba a mano, una fila por variable. Para "a ver
+# que tiene esta TCU" eso son 168 filas tecleadas, asi que ahora hay un boton.
+#
+# Pero LEER cuesta UNA lectura Modbus por (TCU x variable), y eso hay que
+# decirlo antes y no despues: las 168 de una TCU son segundos; las 168 de una
+# NCU de 72 son doce mil lecturas por Zigbee, una a una; y las de Ayora entera
+# son ciento veintiseis mil. El boton no lo impide -a veces se quiere-, pero no
+# se lanza sin que se vea el numero.
+$LEER_AVISO = 2000     # a partir de aqui se pregunta antes de empezar
+
+# Cuanto cuesta la lectura que se va a lanzar. Pura.
+function Leer-Coste([int]$nVars, [int]$nTcus) {
+    $n = [int]$nVars * [int]$nTcus
+    return @{lecturas = $n; avisar = ($n -gt $LEER_AVISO)}
 }
 
 function Fila-Tipo($f) {
@@ -3666,15 +3810,15 @@ $tabL.Text = 'Leer variable'
 $tabs.TabPages.Add($tabL)
 
 [void](LG $tabL 'TCUs' 10 40)
-$txtLTcus = TG $tabL '1-44' 52 22 150
-[void](LG $tabL 'GW' 208 24 25)
-$txtLGw = TG $tabL '' 234 22 46
+$txtLTcus = TG $tabL '1-44' 52 22 110
+[void](LG $tabL 'GW' 168 24 25)
+$txtLGw = TG $tabL '' 194 22 46
 $txtLGw.Add_MouseHover({ $ttW.SetToolTip($txtLGw, $AYUDA_GW) })
 $txtLTcus.Add_MouseHover({ $ttW.SetToolTip($txtLTcus, $AYUDA_TCUS) })
 
-[void](LG $tabL 'Filtro' 286 42)
-$txtLFiltro = TG $tabL '' 330 22 100
-$lblLFiltro = LG $tabL '' 436 74
+[void](LG $tabL 'Filtro' 246 42)
+$txtLFiltro = TG $tabL '' 290 22 100
+$lblLFiltro = LG $tabL '' 396 74
 $lblLFiltro.ForeColor = [System.Drawing.Color]::Gray
 
 # El preset ya dice que variables importan: teclearlas otra vez aqui sobra. Con
@@ -3682,7 +3826,7 @@ $lblLFiltro.ForeColor = [System.Drawing.Color]::Gray
 # pestana Auditoria, que era el unico sitio desde donde se podia traer.
 $btnLPreset = New-Object System.Windows.Forms.Button
 $btnLPreset.Text = 'Cargar preset...'
-$btnLPreset.Location = New-Object System.Drawing.Point(514, 18)
+$btnLPreset.Location = New-Object System.Drawing.Point(540, 18)
 $btnLPreset.Size = New-Object System.Drawing.Size(112, 28)
 $tabL.Controls.Add($btnLPreset)
 
@@ -3690,21 +3834,30 @@ $tabL.Controls.Add($btnLPreset)
 # al pasar a tabla; sin cabeceras de fila no hay forma evidente de borrar una.
 $btnLQuitar = New-Object System.Windows.Forms.Button
 $btnLQuitar.Text = 'Quitar'
-$btnLQuitar.Location = New-Object System.Drawing.Point(632, 18)
+$btnLQuitar.Location = New-Object System.Drawing.Point(658, 18)
 $btnLQuitar.Size = New-Object System.Drawing.Size(66, 28)
 $tabL.Controls.Add($btnLQuitar)
 
+# TODAS: mete en la tabla las variables que el filtro deja a la vista, o las 168
+# si no hay filtro. Respeta el filtro a proposito, asi "todas las de viento"
+# tambien sale de aqui sin ser un boton aparte.
+$btnLTodas = New-Object System.Windows.Forms.Button
+$btnLTodas.Text = 'TODAS'
+$btnLTodas.Location = New-Object System.Drawing.Point(474, 18)
+$btnLTodas.Size = New-Object System.Drawing.Size(62, 28)
+$tabL.Controls.Add($btnLTodas)
+
 $btnLeer = New-Object System.Windows.Forms.Button
 $btnLeer.Text = 'LEER'
-$btnLeer.Location = New-Object System.Drawing.Point(704, 18)
-$btnLeer.Size = New-Object System.Drawing.Size(100, 28)
+$btnLeer.Location = New-Object System.Drawing.Point(730, 18)
+$btnLeer.Size = New-Object System.Drawing.Size(80, 28)
 $btnLeer.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
 $btnLeer.ForeColor = [System.Drawing.Color]::White
 $tabL.Controls.Add($btnLeer)
 
 $btnLCsv = New-Object System.Windows.Forms.Button
 $btnLCsv.Text = 'Exportar CSV'
-$btnLCsv.Location = New-Object System.Drawing.Point(810, 18)
+$btnLCsv.Location = New-Object System.Drawing.Point(814, 18)
 $btnLCsv.Size = New-Object System.Drawing.Size(96, 28)
 $btnLCsv.Enabled = $false
 $tabL.Controls.Add($btnLCsv)
@@ -3743,6 +3896,17 @@ function Quitar-Filas($grid) {
     foreach ($i in @($borrar | Sort-Object -Unique -Descending)) { $grid.Rows.RemoveAt($i) }
 }
 $btnLQuitar.Add_Click({ Quitar-Filas $dgvL; Refrescar-FiltroLeer })
+
+$btnLTodas.Add_Click({
+    $filtro = "$($txtLFiltro.Text)".Trim()
+    $todas = @(Filtrar-Nombres @(Nombres-Legibles) $filtro)
+    if ($todas.Count -eq 0) { Con "El filtro '$filtro' no deja ninguna variable." ([System.Drawing.Color]::Orange); return }
+    $dgvL.Rows.Clear()
+    foreach ($n in $todas) { [void]$dgvL.Rows.Add($n) }
+    Refrescar-FiltroLeer
+    $eti = $(if ($filtro) { "las $($todas.Count) que casan con '$filtro'" } else { "las $($todas.Count) variables" })
+    Con "Puestas $eti en la tabla. LEER hace UNA lectura por TCU y variable: mira el numero antes de lanzarlo." ([System.Drawing.Color]::SteelBlue)
+})
 
 $btnLPreset.Add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
@@ -5076,6 +5240,59 @@ foreach ($c in @(@('NCU',50), @('IP',120), @('Version (reg 50)',140), @('Hardwar
 $tabFN.Controls.Add($lvFN)
 $lblFNNota = LG $tabFN 'Solo lectura: el mapa R7.1 no expone ninguna via de actualizar la NCU. HardwareId y SoftwareId salen como - porque el propio mapa los marca NOT READY; la columna ya esta hecha para cuando dejen de estarlo.' 10 890 350
 $lblFNNota.ForeColor = [System.Drawing.Color]::Gray
+
+# ============================ TAB INVENTARIO GLOBAL ============================
+# UNA tabla con todos los equipos de la planta: NCU, gateways, TCUs, repetidores
+# y estaciones. Lo de cada tipo vivia en su pestana, y para una ficha de entrega
+# hace falta un solo fichero. Los huecos son reales y llevan su motivo escrito:
+# ver el bloque INVENTARIO GLOBAL de la seccion de logica.
+$tabIG = New-Object System.Windows.Forms.TabPage
+$tabIG.Text = 'Inventario global'
+$tabs.TabPages.Add($tabIG)
+
+$btnIG = New-Object System.Windows.Forms.Button
+$btnIG.Text = 'INVENTARIO GLOBAL'
+$btnIG.Location = New-Object System.Drawing.Point(10, 18)
+$btnIG.Size = New-Object System.Drawing.Size(170, 28)
+$btnIG.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnIG.ForeColor = [System.Drawing.Color]::White
+$tabIG.Controls.Add($btnIG)
+
+$btnIGGw = New-Object System.Windows.Forms.Button
+$btnIGGw.Text = 'IDENTIFICAR GATEWAYS'
+$btnIGGw.Location = New-Object System.Drawing.Point(190, 18)
+$btnIGGw.Size = New-Object System.Drawing.Size(170, 28)
+$tabIG.Controls.Add($btnIGGw)
+
+$btnIGCsv = New-Object System.Windows.Forms.Button
+$btnIGCsv.Text = 'CSV'
+$btnIGCsv.Location = New-Object System.Drawing.Point(768, 18)
+$btnIGCsv.Size = New-Object System.Drawing.Size(70, 28)
+$btnIGCsv.Enabled = $false
+$tabIG.Controls.Add($btnIGCsv)
+
+$btnIGJson = New-Object System.Windows.Forms.Button
+$btnIGJson.Text = 'JSON'
+$btnIGJson.Location = New-Object System.Drawing.Point(844, 18)
+$btnIGJson.Size = New-Object System.Drawing.Size(64, 28)
+$btnIGJson.Enabled = $false
+$tabIG.Controls.Add($btnIGJson)
+
+$lblIGRes = LG $tabIG '' 372 390 24
+$lblIGRes.ForeColor = [System.Drawing.Color]::DimGray
+
+$lvIG = New-Object System.Windows.Forms.ListView
+$lvIG.Location = New-Object System.Drawing.Point(10, 56)
+$lvIG.Size = New-Object System.Drawing.Size(898, 274)
+$lvIG.View = 'Details'; $lvIG.FullRowSelect = $true; $lvIG.GridLines = $true
+foreach ($c in @(@('Tipo',80), @('NCU',45), @('GW',40), @('Id',110), @('Num. serie',130),
+                 @('MAC',140), @('FW',110), @('FW fabrica',95), @('HW',55),
+                 @('Fecha fab.',85), @('Nota',330))) {
+    [void]$lvIG.Columns.Add($c[0], $c[1])
+}
+$tabIG.Controls.Add($lvIG)
+$lblIGNota = LG $tabIG 'Los huecos son reales: la NCU no da serie ni MAC (el mapa R7.1 no los tiene y sus ids estan NOT READY), la HSU no da serie ni fecha, y el gateway no habla Modbus. IDENTIFICAR GATEWAYS lo pregunta por HTTP/RCI al Digi: necesita ip_gw en el fichero de planta y NO esta verificado aun contra un gateway de verdad.' 10 890 336
+$lblIGNota.ForeColor = [System.Drawing.Color]::Gray
 
 # ============================ TAB AUDITORIA HSU ============================
 # Es el LEER CONFIG de siempre pero de toda la planta a la vez y puesto como
@@ -7093,6 +7310,16 @@ $btnLeer.Add_Click({ Lanzar {
         Con "Leyendo $($defs.Count) variable(s) en $(Eti-Rango @($trabajos).tcus)  ($($cx.ip):$($cx.etiqueta))" ([System.Drawing.Color]::SteelBlue)
     }
     $nLeerTot = 0; foreach ($tr in $trabajos) { $nLeerTot += @($tr.tcus).Count }
+    # UNA lectura por TCU y variable. Con TODAS puestas y una planta completa
+    # esto se va a cientos de miles, y el numero tiene que verse ANTES.
+    $coste = Leer-Coste @($defs).Count $nLeerTot
+    if ($coste.avisar) {
+        $r = [System.Windows.Forms.MessageBox]::Show(
+            ("$($defs.Count) variables x $nLeerTot TCUs = $($coste.lecturas) lecturas Modbus, una a una por Zigbee.`r`n`r`n" +
+             "Esto puede irse a horas. Se puede parar con CANCELAR en cualquier momento y lo leido se queda en la tabla.`r`n`r`nContinuar?"),
+            'Lectura larga', 'YesNo', 'Warning')
+        if ($r -ne 'Yes') { Con 'Lectura cancelada antes de empezar.' ([System.Drawing.Color]::Orange); return }
+    }
     Prog-Iniciar ($nLeerTot * @($defs).Count)
     $valores = @{}
     foreach ($d in $defs) { $valores[$d.nombre] = @{} }
@@ -10051,6 +10278,260 @@ $btnInvF.Add_Click({ Lanzar {
     Marcar-Bloque 'inv'
     [void](Trabajo-Guardar 'inventario' $script:UltimoInv "$ok leidas, $ko sin respuesta")
 } })
+
+# ------------------------- INVENTARIO GLOBAL -------------------------
+$script:UltimoInvG = @()
+
+function InvG-Pintar($filas) {
+    $lvIG.BeginUpdate()
+    $lvIG.Items.Clear()
+    foreach ($f in @($filas)) {
+        $item = New-Object System.Windows.Forms.ListViewItem("$($f.Tipo)")
+        foreach ($c in @($f.NCU, $f.GW, $f.Id, $f.Serie, $f.MAC, $f.FW, $f.FW_fabrica, $f.HW, $f.Fecha_fab, $f.Nota)) {
+            [void]$item.SubItems.Add("$c")
+        }
+        switch ("$($f.Tipo)") {
+            'NCU' { $item.ForeColor = [System.Drawing.Color]::FromArgb(0,90,160) }
+            'GW'  { $item.ForeColor = [System.Drawing.Color]::FromArgb(0,90,160) }
+        }
+        if ("$($f.Nota)" -match 'sin respuesta|sin conexion|no contesta') { $item.ForeColor = [System.Drawing.Color]::Firebrick }
+        $lvIG.Items.Add($item) | Out-Null
+    }
+    $lvIG.EndUpdate()
+    Lv-Reiniciar $lvIG
+}
+
+# Un barrido y una tabla. El orden es el de la planta -NCU, sus gateways, sus
+# estaciones, sus repetidores y sus TCUs- para que la ficha se lea de arriba
+# abajo como se recorre el campo.
+function InvG-Correr {
+    $cx = Params-Conexion
+    $trabajos = @(Trabajos-Planta $cx (Parse-Seleccion $txtGTcus.Text 'Inventario global') (Ncus-Filtro))
+    if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
+    $lvIG.Items.Clear(); $script:UltimoInvG = @(); $lblIGRes.Text = ''; Sellar 'invg'
+    Ctx-Guardar 'inventario_global' $cx $trabajos
+    $nTcus = 0; foreach ($tr in $trabajos) { $nTcus += @($tr.tcus).Count }
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Inventario global: $($trabajos.Count) NCU(s) y $nTcus TCUs. Las TCUs se leen una a una por Zigbee (bloque 30300): esto tarda." ([System.Drawing.Color]::SteelBlue)
+    Prog-Iniciar ($nTcus + $trabajos.Count)
+    $filas = @()
+    $reps = @(Reps-Nombrar (Reps-DeCx $cx ''))
+    foreach ($tr in $trabajos) {
+        if (Chequear-Cancelado) { break }
+        $script:NcuLog = "$($tr.ncu)"
+        $eti = "$($tr.ncu)"
+        $gwsN = @($(if ($cx.multi) { @(@($cx.multi | Where-Object { "$($_.ncu)" -eq $eti })[0].gws) } else { @($cx.gws) }))
+
+        # ---- la NCU: version por el 502, y de paso el estado de sus gateways
+        $ver = ''; $ids = $null; $ns = $null; $errN = ''
+        try {
+            Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
+            try { $ver = Ncu-Version } catch { }
+            try { $ids = Ncu-Ids } catch { }
+            try { $ns = Ncu-Salud $gwsN } catch { }
+        } catch { $errN = "$_" }
+        finally { Modbus-Cerrar }
+        $hwN = '-'
+        if ($null -ne $ids -and [int]$ids.hw -ne 0) { $hwN = "$($ids.hw)" }
+        $filas += Inv-Fila 'NCU' $eti '' $tr.ip '' '' "$ver" '' $hwN '' `
+            $(if ($errN) { "sin respuesta en ${PUERTO_NCU}: $errN" } else { $INV_MOTIVO['NCU'] })
+        Prog-Paso
+
+        # ---- sus gateways: lo que Modbus SI sabe de ellos
+        $principal = $(if ($ns) { [int]$ns.principal } else { 0 })
+        foreach ($g in $gwsN) {
+            $nGw = Gw-Numero ([int]$g.puerto)
+            $bit = $(if ($nGw -eq 1) { 4 } elseif ($nGw -eq 2) { 5 } else { -1 })
+            $estado = 'sin datos de la NCU'
+            if ($ns -and $bit -ge 0) { $estado = $(if ($principal -band (1 -shl $bit)) { 'DESCONECTADO' } else { 'conectado' }) }
+            $nEq = @(Lista $g.ini $g.fin).Count
+            $nRep = @($reps | Where-Object { "$($_.ncu)" -eq $eti -and [int]$_.puerto -eq [int]$g.puerto }).Count
+            $ipGw = "$($g.ip_gw)".Trim()
+            $nota = "$estado; esclavos $($g.ini)-$($g.fin) ($nEq) y $nRep repetidor(es)"
+            if ($ipGw -eq '') { $nota += ". Sin ip_gw en la topologia: regenera el fichero de planta desde el Excel para poder identificarlo. " + $INV_MOTIVO['GW'] }
+            else { $nota += ". $($INV_MOTIVO['GW']) - pulsa IDENTIFICAR GATEWAYS" }
+            $filas += Inv-Fila 'GW' $eti "$nGw" $(if ($ipGw) { $ipGw } else { "$($tr.ip):$($g.puerto)" }) '' '' '' '' '' '' $nota
+        }
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    $script:NcuLog = ''
+
+    # ---- las estaciones: SoftwareId y MAC Zigbee, por Zigbee
+    $objsH = @()
+    try { $objsH = @(Hsu-ObjetivosDeTopologia $cx) } catch { }
+    foreach ($o in $objsH) {
+        if (Chequear-Cancelado) { break }
+        $id = $null; $err = ''
+        foreach ($pt in @($(if ($o.puertos) { $o.puertos } else { @($o.puerto) }))) {
+            if ($null -ne $id) { break }
+            try { Modbus-Conectar $o.ip $pt $cx.to; $id = Hsu-LeerIdent ([byte]$o.unit) }
+            catch { $err = "$_" }
+            finally { Modbus-Cerrar }
+        }
+        $ncuH = ''; $m = [regex]::Match("$($o.etiqueta)", 'NCU(\d+)')
+        if ($m.Success) { $ncuH = $m.Groups[1].Value }
+        if ($null -ne $id) {
+            $filas += Inv-Fila 'HSU' $ncuH '' "$($o.etiqueta)" '' "$($id.mac)" "v$($id.sw)" '' "$($id.hw)" '' $INV_MOTIVO['HSU']
+        } else {
+            $filas += Inv-Fila 'HSU' $ncuH '' "$($o.etiqueta)" '' '' '' '' '' '' "sin respuesta (esclavo $($o.unit)): $err"
+        }
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+
+    # ---- repetidores y TCUs: misma placa, mismo bloque 30300
+    foreach ($rp in $reps) {
+        if (Chequear-Cancelado) { break }
+        $campos = $null; $err = ''
+        try {
+            Modbus-Conectar $(if ($cx.multi) { @($cx.multi | Where-Object { "$($_.ncu)" -eq "$($rp.ncu)" })[0].ip } else { $cx.ip }) $rp.puerto $cx.to
+            $campos = Ident-Leer ([byte]$rp.esclavo)
+        } catch { $err = "$_" }
+        finally { Modbus-Cerrar }
+        $filas += InvG-DeCampos 'REP' "$($rp.ncu)" (Gw-Numero ([int]$rp.puerto)) "$($rp.nombre) (esc $($rp.esclavo))" $campos $err
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+
+    foreach ($tr in $trabajos) {
+        if (Chequear-Cancelado) { break }
+        $script:NcuLog = "$($tr.ncu)"
+        foreach ($seg in @(Plan-Segmentos $tr.tcus $tr.cx)) {
+            if (Chequear-Cancelado) { break }
+            $segOk = $true
+            try { Modbus-Conectar $tr.ip $seg.puerto $tr.cx.to }
+            catch { $segOk = $false; Con "ERROR de conexion ($($tr.ip):$($seg.puerto)): $_" ([System.Drawing.Color]::Salmon) }
+            foreach ($tcu in $seg.tcus) {
+                if (Chequear-Cancelado) { break }
+                $campos = $null; $err = $(if ($segOk) { '' } else { "sin conexion ($($tr.ip):$($seg.puerto))" })
+                if ($segOk) {
+                    for ($i = 1; $i -le $tr.cx.reint -and $null -eq $campos; $i++) {
+                        try { $campos = Ident-Leer $tcu }
+                        catch {
+                            $err = "$_"
+                            if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+                            Start-Sleep -Milliseconds (300 * $i)
+                        }
+                    }
+                }
+                $filas += InvG-DeCampos 'TCU' "$($tr.ncu)" (Gw-Numero ([int]$seg.puerto)) "$tcu" $campos $err
+                Prog-Paso
+                [System.Windows.Forms.Application]::DoEvents()
+            }
+            Modbus-Cerrar
+        }
+    }
+    $script:NcuLog = ''
+    $script:UltimoInvG = @($filas)
+    InvG-Pintar $filas
+    $porTipo = @($filas | Group-Object Tipo | ForEach-Object { "$($_.Name) $($_.Count)" })
+    $sinLeer = @($filas | Where-Object { "$($_.Nota)" -match 'sin respuesta|sin conexion|no contesta' }).Count
+    $lblIGRes.Text = ($porTipo -join '  |  ') + $(if ($sinLeer -gt 0) { "   ($sinLeer sin respuesta)" } else { '' })
+    Con "Inventario global: $($filas.Count) equipos ($($porTipo -join ', ')); $sinLeer sin respuesta." ([System.Drawing.Color]::SteelBlue)
+    $btnIGCsv.Enabled = ($filas.Count -gt 0); $btnIGJson.Enabled = ($filas.Count -gt 0)
+    Marcar-Bloque 'invg'
+    [void](Trabajo-Guardar 'inventario_global' $script:UltimoInvG "$($filas.Count) equipos, $sinLeer sin respuesta")
+}
+
+# Una fila a partir de lo que devuelve Ident-Leer (TCU y repetidor comparten
+# placa y mapa). $campos = $null significa que no contesto.
+function InvG-DeCampos([string]$tipo, [string]$ncu, $gw, [string]$id, $campos, [string]$err) {
+    if ($null -eq $campos) { return Inv-Fila $tipo $ncu "$gw" $id '' '' '' '' '' '' "sin respuesta: $err" }
+    $h = @{}
+    foreach ($c in $campos) { $h[$c.Campo] = $c.Valor }
+    return Inv-Fila $tipo $ncu "$gw" $id "$($h['Numero de serie'])" "$($h['MAC Xbee'])" `
+        "$($h['FW principal'])" "$($h['FW de fabrica'])" "$($h['HW PCBA'])" "$($h['Fecha de fabricacion'])" 'OK'
+}
+
+$btnIG.Add_Click({ Lanzar { InvG-Correr } })
+
+# ---- IDENTIFICAR GATEWAYS: lo unico que NO es Modbus en toda la herramienta.
+# Va aparte del barrido a proposito: el transporte esta probado (el recolector
+# de cobertura lo usa a diario) pero la consulta que devuelve la identidad del
+# COORDINADOR no se ha visto nunca contra un Digi de verdad. Cuando no reconoce
+# la respuesta, vuelca el XML crudo: la primera pasada en planta nos da el
+# esquema en vez de adivinarlo dos veces.
+function Gw-Identidad([string]$ip, [int]$to) {
+    $ultimo = ''
+    foreach ($q in $RCI_CONSULTAS) {
+        $xml = ''
+        try {
+            $xml = Invoke-RestMethod -Uri ($RCI_URL -f $ip) -Method Post -ContentType 'text/xml' `
+                                     -Body $q.xml -TimeoutSec ([math]::Max(2, [int]($to / 1000)))
+        } catch { continue }
+        $txt = $(if ($xml -is [string]) { $xml } else { $xml.OuterXml })
+        if ("$txt" -eq '') { continue }
+        $ultimo = "$txt"
+        $ext = Rci-Extraer $ultimo
+        if ((Rci-Resumen $ext) -ne '') { return @{ok = $true; ext = $ext; consulta = $q.n; crudo = $ultimo} }
+    }
+    return @{ok = $false; ext = $null; consulta = ''; crudo = $ultimo}
+}
+
+$btnIGGw.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    $gws = @()
+    if ($cx.multi) {
+        foreach ($n in $cx.multi) { foreach ($g in @($n.gws)) { $gws += ,@{ncu="$($n.ncu)"; nGw=(Gw-Numero ([int]$g.puerto)); ip="$($g.ip_gw)".Trim()} } }
+    } else {
+        foreach ($g in @($cx.gws)) { $gws += ,@{ncu=(Ncu-DeNombre $cx.nombre); nGw=(Gw-Numero ([int]$g.puerto)); ip="$($g.ip_gw)".Trim()} }
+    }
+    $conIp = @($gws | Where-Object { $_.ip -ne '' })
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    if ($conIp.Count -eq 0) {
+        Con "Ninguno de los $($gws.Count) gateways declarados trae ip_gw. El gateway es un Digi con su propia IP y sin ella no hay a quien preguntar." ([System.Drawing.Color]::Orange)
+        Con "La hoja 'Direcciones IP' del Excel la trae en 'IP GW 1' e 'IP GW 2': regenera los ficheros de planta con  make_plantas.py --excel <fichero.xlsx>  y vuelve a intentarlo." ([System.Drawing.Color]::Orange)
+        return
+    }
+    Con "Preguntando por HTTP/RCI a $($conIp.Count) gateway(s). AVISO: esta consulta no esta verificada contra un Digi real; si no reconoce la respuesta la vuelca entera aqui." ([System.Drawing.Color]::Orange)
+    Prog-Iniciar $conIp.Count
+    $n = 0
+    foreach ($g in $conIp) {
+        if (Chequear-Cancelado) { break }
+        $r = Gw-Identidad $g.ip ([int]$cx.to)
+        $clave = "NCU$($g.ncu) GW$($g.nGw)"
+        if ($r.ok) {
+            $n++
+            Con ("{0}  {1}  ->  MAC {2}  FW {3}  PAN {4}  canal {5}   (por '{6}')" -f $clave, $g.ip,
+                 $r.ext.mac, $r.ext.fw, $r.ext.pan, $r.ext.canal, $r.consulta) ([System.Drawing.Color]::LightGreen)
+            foreach ($f in @($script:UltimoInvG)) {
+                if ("$($f.Tipo)" -eq 'GW' -and "$($f.NCU)" -eq "$($g.ncu)" -and "$($f.GW)" -eq "$($g.nGw)") {
+                    $f.MAC = "$($r.ext.mac)"; $f.FW = "$($r.ext.fw)"
+                    $f.Nota = ("PAN {0}, canal {1}  |  " -f $r.ext.pan, $r.ext.canal) + "$($f.Nota)"
+                }
+            }
+        } else {
+            Con "$clave  $($g.ip): no se ha reconocido la identidad en la respuesta." ([System.Drawing.Color]::Salmon)
+            if ("$($r.crudo)" -ne '') {
+                Con "  --- respuesta cruda, para saber que consulta hay que hacer de verdad ---" ([System.Drawing.Color]::Gainsboro)
+                Con ("  " + ("$($r.crudo)" -replace '\s+', ' ')) ([System.Drawing.Color]::Gainsboro)
+            } else {
+                Con "  el gateway no ha contestado en el puerto 80 (o pide usuario y contrasena)." ([System.Drawing.Color]::Gainsboro)
+            }
+        }
+        Prog-Paso
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    if (@($script:UltimoInvG).Count -gt 0) { InvG-Pintar $script:UltimoInvG }
+    Con "Gateways identificados: $n de $($conIp.Count)." ([System.Drawing.Color]::SteelBlue)
+} })
+
+$btnIGCsv.Add_Click({ [void](Exportar-Csv $script:UltimoInvG 'inventario_global' 'Inventario global' -bloque 'invg') })
+
+$btnIGJson.Add_Click({
+    $ctx = Ctx-Leer 'inventario_global'
+    $obj = [ordered]@{
+        tipo    = 'inventario_global'
+        mapa    = $VERSION_MAPA
+        toolbox = $VERSION_TOOLBOX
+        planta  = $ctx.planta
+        alcance = $ctx.alcance
+        ncus    = @($ctx.ncus)
+        ip      = $ctx.ip
+        fecha     = (Sello-De $script:SelloDe['invg'] 'yyyy-MM-dd HH:mm:ss')
+        exportado = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        equipos = @($script:UltimoInvG)
+    }
+    [void](Exportar-Json $obj ('inventario_global_' + (Planta-Fichero)) 'Inventario global' -bloque 'invg')
+})
 
 $btnInvFCsv.Add_Click({
     [void](Exportar-Csv $script:UltimoInv 'inventario' -bloque 'inv')
@@ -13245,6 +13726,7 @@ $NAV_ARBOL = @(
     # pantalla: aqui van bien escritas. El .ps1 esta en UTF-8 con BOM, asi que
     # PowerShell 5.1 las lee sin mezclarlas.
     @{bloque = 'GLOBAL'; hojas = @(
+        @{txt='Inventario global';     tab=$tabIG}
         @{txt='Diagnóstico de planta'; tab=$tabG; vista='todo'}
         @{txt='SAT';                   tab=$tabSAT})}
     # Una NCU tiene dos diagnosticos y antes iban mezclados: el suyo -sus
@@ -13348,7 +13830,7 @@ if ($nav.Nodes.Count -gt 0 -and $nav.Nodes[0].Nodes.Count -gt 0) { $nav.Selected
 
 # Todas las tablas de resultados filtran y ordenan al pulsar su cabecera.
 foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvFWd, $lvSat, $lvND, $lvH, $lvN, $lvE, $lvI, $lvC, $lvB, $lvT,
-                     $lvAN, $lvFN, $lvAH, $lvFH, $lvRA, $lvRF, $lvRB)) { Lv-Filtrable $tabla }
+                     $lvAN, $lvFN, $lvAH, $lvFH, $lvRA, $lvRF, $lvRB, $lvIG)) { Lv-Filtrable $tabla }
 
 # La cabecera de pestanas no se puede ocultar con una propiedad: no existe. Lo
 # que si se puede es sacarla fuera del panel, que recorta lo que se sale. La

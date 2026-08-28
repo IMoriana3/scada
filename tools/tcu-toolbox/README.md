@@ -75,6 +75,68 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**Inventario global: una tabla con todos los equipos (v11.61)** — hoja nueva en
+**GLOBAL**, encima de *Diagnóstico*. Lo de cada tipo de equipo vivía en su
+pestaña —la versión de la NCU en *Firmware NCU*, el `SoftwareId` de la HSU en
+*Firmware HSU*, los repetidores en la suya— y para una ficha de entrega hace
+falta **un solo fichero**. Una pasada: NCU, gateways, estaciones, repetidores y
+TCUs, con CSV y JSON.
+
+**Los huecos son reales, y llevan su motivo escrito.** No todos los equipos dan
+lo mismo, y «vacío» y «no se puede leer» no son lo mismo:
+
+| Equipo | Nº serie | MAC | FW | FW fábrica | HW | Fecha fab. |
+|---|---|---|---|---|---|---|
+| **TCU / repetidor** | ✅ | ✅ Xbee | ✅ | ✅ | ✅ PCBA | ✅ |
+| **HSU** | ❌ | ✅ `30016/30018` | ✅ `SoftwareId` | ❌ | ⚠️ | ❌ |
+| **NCU** | ❌ | ❌ | ✅ `VERSION_STRING` (reg 50) | ❌ | ⚠️ `NOT READY` | ❌ |
+| **Gateway** | ❌ | (HTTP) | (HTTP) | ❌ | ❌ | ❌ |
+
+El mapa R23 de la HSU **no tiene** número de serie ni fecha de fabricación; el
+R7.1 de la NCU tampoco, y sus `HardwareId`/`SoftwareId` están marcados
+**NOT READY**. Eso va en la columna *Nota* de cada fila, no en un comentario del
+código.
+
+**El gateway no habla Modbus, y esa es la parte nueva de verdad.** No es la NCU:
+es un **Digi ConnectPort con su propia IP**, y los puertos 503/504 son el
+*passthrough Modbus de la NCU*, no el gateway. Por Modbus solo se sabe de él lo
+que la NCU cuenta: si está **conectado o caído** (bits 4 y 5 de 30101), qué
+esclavos le cuelgan y cuántos repetidores lleva. Eso sale en el barrido.
+
+Su identidad —MAC, firmware, PAN ID y canal— se le pregunta por **HTTP/RCI** al
+puerto 80, con el botón **IDENTIFICAR GATEWAYS**, que va **aparte del barrido a
+propósito**:
+
+- necesita **`ip_gw`** en el fichero de planta. El generador ya lee las columnas
+  `IP GW 1` / `IP GW 2` de la hoja *Direcciones IP*, pero esa pasada no se ha
+  hecho aún con ellas: hasta entonces el inventario lo dice en la fila del
+  gateway en vez de suponer la regla «IP de la NCU + n», que solo está
+  comprobada en El Burgo;
+- y **no está verificado contra un Digi real**. El transporte sí lo está —el
+  recolector de cobertura hace `POST` a `/UE/rci` a diario—, pero *qué consulta
+  devuelve la identidad del coordinador* no se ha visto nunca. Por eso, cuando
+  no reconoce la respuesta, **vuelca el XML crudo a la consola**: la primera
+  pasada delante de un gateway de verdad nos da el esquema en vez de adivinarlo
+  dos veces. Y por eso el barrido de planta no depende de ello.
+
+**Leer TODAS las variables, con el coste por delante (v11.61)** — la pestaña
+*Leer variable* se llenaba a mano, una fila por variable. Para «a ver qué tiene
+esta TCU» eso son **168 filas tecleadas**. Botón **TODAS**, que respeta el
+filtro: sin filtro pone las 168; con `viento` puesto, solo esas.
+
+Pero LEER cuesta **una lectura Modbus por (TCU × variable)**, y eso hay que
+decirlo antes y no después:
+
+| | Lecturas |
+|---|---|
+| 168 variables × 1 TCU | 168 — segundos |
+| 168 × una NCU de 72 | **12.096** |
+| 168 × Ayora entera | **126.168** |
+
+Por encima de 2.000 lecturas se pregunta antes de abrir la primera conexión, con
+el número delante. No lo impide —a veces se quiere— pero no se lanza a ciegas, y
+se puede parar con CANCELAR quedándose lo leído.
+
 **Regenerar desde el Excel ya no borra lo que el Excel no trae** — la pasada del
 Excel de la #222 se llevó por delante, en silencio, los **cinco repetidores de
 Ayora**. Sin ellos no se diagnostican, no entran en el inventario ni en la
