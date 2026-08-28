@@ -243,7 +243,13 @@ try {
     $e2 = Pedir '/escribir-lote' 'POST' @{confirmar = $true; ncu = 1; tcus = '1-2'
         valores = @(@{variable = '41010'; valor = '-1.685'}, @{variable = '41111'; valor = '55'})}
     Check 'escribir-lote: varias variables' $e2.ok 'True'
-    Check 'escribir-lote: una fila por TCU' (@($e2.filas).Count) 2
+    # La planta de prueba declara huecos:[2] en la Sim NCU1, o sea que la TCU 2
+    # NO EXISTE ahi. Esta comprobacion esperaba 2 filas, o sea que el agente
+    # escribia en un equipo que la topologia dice que no esta instalado: el
+    # emparejamiento TCU->gateway miraba solo ini..fin e ignoraba los huecos.
+    # Ahora son 1: la 1. Que es lo que hay.
+    Check 'escribir-lote: no escribe en la TCU que no existe' (@($e2.filas).Count) 1
+    Check 'escribir-lote: y la que escribe es la 1' ("$(@($e2.filas)[0].TCU)") '1'
     # la identidad de red no se escribe en remoto
     try { $null = Pedir '/escribir-lote' 'POST' @{confirmar = $true; ncu = 1; tcus = '1'; valores = @(@{variable = '41004'; valor = '5'})}
           Check 'escribir-lote: bloquea la identidad de red' 'paso' 'no pasa' }

@@ -142,7 +142,9 @@ Check 'orden: ultimo 42006' ($ordenados[-1] -like '42006*') 'True'
 # ---------- plantas: entradas (auto), segmentos por gateway y CSV ----------
 Check 'auto NCU1 existe' ($PLANTAS.Contains('El Burgo I NCU1 (auto)')) 'True'
 Check 'auto NCU1 gws' (@($PLANTAS['El Burgo I NCU1 (auto)'].gws).Count) 2
-Check 'auto NCU2 gws (con TCU109)' (@($PLANTAS['El Burgo I NCU2 (auto)'].gws).Count) 3
+# los dos tramos del GW2 -46-107 y la 109 suelta- son UN gateway desde la
+# v11.64: la entrada (auto) de la NCU2 tiene dos gateways, no tres
+Check 'auto NCU2 gws (los dos tramos del GW2 son uno)' (@($PLANTAS['El Burgo I NCU2 (auto)'].gws).Count) 2
 Check 'auto NCU2 rango' "$($PLANTAS['El Burgo I NCU2 (auto)'].ini)-$($PLANTAS['El Burgo I NCU2 (auto)'].fin)" '1-109'
 $script:ConMsgs = @()
 function Con([string]$t, $color) { $script:ConMsgs += $t }
@@ -163,11 +165,14 @@ Check 'planta completa existe' ($PLANTAS.Contains('El Burgo I (Planta completa)'
 $pc = $PLANTAS['El Burgo I (Planta completa)']
 Check 'planta ncus = 2' (@($pc.ncus).Count) 2
 Check 'planta ncu1 gws' (@($pc.ncus[0].gws).Count) 2
-Check 'planta ncu2 gws' (@($pc.ncus[1].gws).Count) 3
+Check 'planta ncu2 gws' (@($pc.ncus[1].gws).Count) 2
 Check 'planta ncu2 ip' ($pc.ncus[1].ip) '10.100.1.56'
-$ltNcu2 = @(); foreach ($g in $pc.ncus[1].gws) { $ltNcu2 += @([int]$g.ini..[int]$g.fin) }
+# la cuenta se hace con Tcus-DeGw, que es quien respeta los huecos: sumar
+# ini..fin a pelo se traga la 108, que no es de esta NCU
+$ltNcu2 = @(); foreach ($g in $pc.ncus[1].gws) { $ltNcu2 += @(Tcus-DeGw $g) }
 $ltNcu2 = @($ltNcu2 | Sort-Object -Unique)
 Check 'planta ncu2 tcus (107+109, sin 108)' "$($ltNcu2.Count)/$($ltNcu2[-1])" '108/109'
+Check 'planta ncu2: la 108 no cuelga de la NCU2' ($ltNcu2 -contains 108) $false
 try { $null = Plan-Segmentos @(1..3) @{multi=$pc.ncus; ip='(planta)'; to=1000; reint=1}; Check 'multi en Plan-Segmentos lanza' 'no-lanzo' 'lanza' }
 catch { Check 'multi en Plan-Segmentos lanza' 'lanza' 'lanza' }
 # Las entradas de las plantas de verdad tienen que llevar el nombre completo:
@@ -3911,6 +3916,105 @@ Check 'hsu corto: y va como SIN LECTURA' ("$($compHsu[1].Salud)") 'SIN LECTURA'
 # la columna NCU tenia 45 px y el encabezado salia "NC...": con diez HSUs de
 # diez NCUs distintas, saber de cual es cada una es justo el dato
 Check 'hsu corto: la columna NCU se lee entera' ($src.Contains("[void]`$lvG.Columns.Add('NCU', 58)")) $true
+
+Write-Host ''
+Write-Host '== los tramos de un gateway son UN gateway =='
+# El Excel da los esclavos por tramos y el generador escribia una entrada por
+# tramo: 82 en San Jose y tres NCU7 en Ayora. Ninguna es algo que se quiera
+# elegir -nadie opera "el bloque 22-31 del GW1"- y peor: elegir
+# "Ayora NCU7 (TCU 1-13)" dejaba fuera media NCU sin decirlo.
+$tr1 = @{ip='10.0.0.1'; puerto=503; ini=1;  fin=13}
+$tr2 = @{ip='10.0.0.1'; puerto=503; ini=15; fin=23}
+$j = @(Tramos-Juntar @(@{nombre='Ayora NCU7 (TCU 1-13)'; e=$tr1}, @{nombre='Ayora NCU7 (TCU 15-23)'; e=$tr2}))
+Check 'tramos: dos tramos del mismo gateway, una entrada' $j.Count 1
+Check 'tramos: y con el nombre limpio' $j[0].nombre 'Ayora NCU7'
+Check 'tramos: el rango los cubre' ("$($j[0].e.ini)-$($j[0].e.fin)") '1-23'
+Check 'tramos: y el salto queda como hueco' (@($j[0].e.huecos) -join ',') '14'
+# LA INVARIANTE: el conjunto de TCUs no puede cambiar
+function CuentaTcus($e) {
+    $h = @(@($e.huecos) | Where-Object { $null -ne $_ -and [int]$_ -ge [int]$e.ini -and [int]$_ -le [int]$e.fin }).Count
+    return ([int]$e.fin - [int]$e.ini + 1) - $h
+}
+Check 'tramos: juntar no pierde ni gana TCUs' (CuentaTcus $j[0].e) 22
+# gateways DISTINTOS no se juntan: elegir GW1 o GW2 significa algo
+$g1 = @{ip='10.0.0.1'; puerto=503; ini=1; fin=45}
+$g2 = @{ip='10.0.0.1'; puerto=504; ini=46; fin=109}
+$jg = @(Tramos-Juntar @(@{nombre='NCU2 GW1'; e=$g1}, @{nombre='NCU2 GW2'; e=$g2}))
+Check 'tramos: dos gateways siguen siendo dos' $jg.Count 2
+# ni NCUs distintas, claro
+$n1 = @{ip='10.0.0.1'; puerto=503; ini=1; fin=10}
+$n2 = @{ip='10.0.0.2'; puerto=503; ini=1; fin=10}
+Check 'tramos: dos NCUs siguen siendo dos' (@(Tramos-Juntar @(@{nombre='a'; e=$n1}, @{nombre='b'; e=$n2}))).Count 2
+# los huecos que YA venian declarados dentro de un tramo se respetan
+$h1 = @{ip='10.0.0.3'; puerto=503; ini=1; fin=10; huecos=@(5)}
+$h2 = @{ip='10.0.0.3'; puerto=503; ini=13; fin=15}
+$jh = @(Tramos-Juntar @(@{nombre='x (TCU 1-10)'; e=$h1}, @{nombre='x (TCU 13-15)'; e=$h2}))
+Check 'tramos: el hueco declarado no se pierde' ((@($jh[0].e.huecos) | Sort-Object) -join ',') '5,11,12'
+Check 'tramos: y la cuenta cuadra' (CuentaTcus $jh[0].e) 12
+# lo que colgaba de cada tramo se conserva
+$r1 = @{ip='10.0.0.4'; puerto=503; ini=1; fin=10; reps=@(@{nombre='Rep 1'; esclavo=200})}
+$r2 = @{ip='10.0.0.4'; puerto=503; ini=11; fin=20; hsu=230; rsuLista=@(3)}
+$jr = @(Tramos-Juntar @(@{nombre='y (TCU 1-10)'; e=$r1}, @{nombre='y (TCU 11-20)'; e=$r2}))
+Check 'tramos: el repetidor del primer tramo sigue' (@($jr[0].e.reps).Count) 1
+Check 'tramos: y el esclavo de HSU del segundo tambien' ($jr[0].e.hsu) 230
+Check 'tramos: y su numero de estacion' (@($jr[0].e.rsuLista) -join ',') '3'
+# una sola entrada no se toca
+$sola = @(Tramos-Juntar @(@{nombre='Ayora NCU6'; e=@{ip='10.0.0.9'; puerto=503; ini=1; fin=26}}))
+Check 'tramos: una sola entrada sale igual' $sola[0].nombre 'Ayora NCU6'
+Check 'tramos: sin inventarle huecos' (@($sola[0].e.huecos).Count -eq 0 -or $null -eq $sola[0].e.huecos) $true
+# el nombre
+Check 'tramos: quita el sufijo de tramo' (Nombre-SinTramo 'Ayora NCU7 (TCU 1-13)') 'Ayora NCU7'
+Check 'tramos: y no toca el de gateway' (Nombre-SinTramo 'San Jose NCU7 GW1') 'San Jose NCU7 GW1'
+Check 'tramos: ni el de una entrada normal' (Nombre-SinTramo 'Ayora NCU6') 'Ayora NCU6'
+
+# ---- la invariante, sobre las plantas de verdad ----
+# Aqui es donde se vio el fallo: Measure-Object devuelve DOUBLE y las claves del
+# diccionario son int, asi que ContainsKey(46.0) no casaba y TODO el rango salia
+# hueco. El Burgo pasaba de 216 TCUs a 153 y San Jose de 2289 a 1686.
+foreach ($caso in @(@('elburgo.json', 153, 216), @('24025-ayora.json', 751, 751), @('24019-san-jose.json', 2289, 2289))) {
+    $PLANTAS = [ordered]@{}
+    [void](Cargar-FicheroPlantas (Join-Path $raizTb "plantas/$($caso[0])"))
+    $tot = 0
+    foreach ($k in @($PLANTAS.Keys)) { if ($PLANTAS[$k].ini) { $tot += (CuentaTcus $PLANTAS[$k]) } }
+    Check "tramos: $($caso[0]) sigue teniendo sus TCUs" $tot $caso[2]
+    Check "tramos: y ninguna entrada con sufijo de tramo" (@($PLANTAS.Keys | Where-Object { "$_" -like '*(TCU *' }).Count) 0
+}
+
+# ---- un salto NO siempre significa lo mismo ----
+# Se excluye del gateway igual, pero el motivo cambia, y decirlo mal manda a
+# alguien a buscar -o a no buscar- donde no toca.
+#   Ayora NCU7: la 14 no esta instalada en ningun sitio -> hueco de verdad
+#   El Burgo NCU2: la 108 es de la NCU1 -> existe, pero no cuelga de aqui
+$soloNcu = @(Tramos-Juntar @(
+    @{nombre='Ayora NCU7 (TCU 1-13)';  e=@{ip='10.0.0.7'; puerto=503; ini=1;  fin=13}}
+    @{nombre='Ayora NCU7 (TCU 15-23)'; e=@{ip='10.0.0.7'; puerto=503; ini=15; fin=23}}))
+Check 'salto: la que no esta en ninguna parte es hueco' (@($soloNcu[0].e.huecos) -join ',') '14'
+# ojo: @($null).Count vale 1 en PS 5.1, hay que filtrar
+Check 'salto: y no es de otro sitio' (@(@($soloNcu[0].e.ajenas) | Where-Object { $null -ne $_ }).Count) 0
+$conVecina = @(Tramos-Juntar @(
+    @{nombre='NCU1 GW2';               e=@{ip='10.0.0.1'; puerto=504; ini=57;  fin=108}}
+    @{nombre='NCU2 GW2';               e=@{ip='10.0.0.2'; puerto=504; ini=46;  fin=107}}
+    @{nombre='NCU2 GW2 (TCU 109-109)'; e=@{ip='10.0.0.2'; puerto=504; ini=109; fin=109}}))
+$ncu2 = @($conVecina | Where-Object { $_.e.ip -eq '10.0.0.2' })[0]
+Check 'salto: la 108 se excluye de la NCU2' (@($ncu2.e.huecos) -join ',') '108'
+Check 'salto: pero se marca como AJENA, no como inexistente' (@($ncu2.e.ajenas) -join ',') '108'
+Check 'salto: y la NCU1 no se toca' (@($conVecina | Where-Object { $_.e.ip -eq '10.0.0.1' }).Count) 1
+
+# ---- y Plan-Segmentos lo dice distinto ----
+# El emparejamiento TCU->gateway miraba SOLO ini..fin e ignoraba los huecos: no
+# mordia porque ninguna entrada de gateway los traia. Al juntar tramos si los hay.
+$script:ConMsgs = @()
+$cxHueco = @{gws=@(@{puerto=503; ini=1; fin=23; huecos=@(14); ajenas=@()}); multi=$null}
+$sg = @(Plan-Segmentos @(12,13,14,15) $cxHueco)
+Check 'salto: la inexistente no se enruta' ((@($sg | ForEach-Object { $_.tcus }) | ForEach-Object { $_ }) -join ',') '12,13,15'
+Check 'salto: y se dice que no existe' (($script:ConMsgs -join ';') -like '*no existen*') $true
+Check 'salto: no que este fuera de los gateways' (($script:ConMsgs -join ';') -like '*fuera de los gateways*') $false
+$script:ConMsgs = @()
+$cxAjena = @{gws=@(@{puerto=504; ini=46; fin=109; huecos=@(108); ajenas=@(108)}); multi=$null}
+$sa = @(Plan-Segmentos @(107,108,109) $cxAjena)
+Check 'salto: la ajena tampoco se enruta' ((@($sa | ForEach-Object { $_.tcus }) | ForEach-Object { $_ }) -join ',') '107,109'
+Check 'salto: pero NO se dice que no exista' (($script:ConMsgs -join ';') -like '*no existen*') $false
+Check 'salto: se dice que esta fuera de estos gateways' (($script:ConMsgs -join ';') -like '*fuera de los gateways*') $true
 
 Write-Host ''
 Write-Host '== el /leer del agente no alcanzaba el bloque de estado =='
