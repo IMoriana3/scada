@@ -47,15 +47,27 @@ jobs:
 
       # Las fichas son un extra: si fallan, la Release con el ZIP tiene que salir
       # igual. Antes un fallo aqui dejaba la version sin publicar.
+      #
+      # Y UN FICHERO MALO NO PUEDE LLEVARSE POR DELANTE A LOS DEMAS. Los `run:`
+      # de Actions corren con `bash -e`, asi que el primer fallo abortaba el
+      # bucle entero: al aparecer `ambitos_24019-san-jose.json` en plantas/ -que
+      # no es una topologia- la v11.64 salio SIN la ficha de El Burgo, que va
+      # detras por orden alfabetico. Y con continue-on-error encima, en silencio.
       - name: Generar fichas de Seguimiento PEM (una por planta)
         continue-on-error: true
         run: |
           pip install --quiet openpyxl
           mkdir -p fichas
           cd fichas
+          sin_ficha=0
           for f in ../tools/tcu-toolbox/plantas/*.json; do
-            python ../tools/tcu-toolbox/make_seguimiento.py "$f"
+            if ! python ../tools/tcu-toolbox/make_seguimiento.py "$f"; then
+              echo "AVISO: sin ficha para $(basename "$f")"
+              sin_ficha=$((sin_ficha + 1))
+            fi
           done
+          hechas=$(ls -1 Seguimiento_PEM_*.xlsx 2>/dev/null | wc -l)
+          echo "fichas generadas: $hechas   ficheros sin ficha: $sin_ficha"
           ls -l
 
       - name: Crear o actualizar la release
