@@ -374,17 +374,31 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
                 viejo = antes.pop(clave(e), None)
                 if not viejo:
                     continue
-                # Lo mismo para `rsu` y `hsus_gw`: los pone el Excel, y el modo plants.yml no
-                # sabe de ellos. Sin esto, la regeneracion automatica del workflow los borraria
-                # en cada push a plants.yml y habria que volver a pasar el Excel.
-                # `ip_gw` va en la misma lista: la hoja la trae, pero mientras no se
-                # rehaga la pasada puede estar puesta a mano —hay quien no tiene Python
-                # para correr esto y la escribe en el JSON—. Regenerar no puede
-                # borrarla; en cuanto la hoja la mande, manda la hoja.
-                for k in ("hsu_esclavos", "rsu", "hsus_gw", "ip_gw"):
-                    if k not in e and viejo.get(k) is not None:
-                        e[k] = viejo[k]
-                        conservados += 1
+                # REGENERAR SOLO PISA LO QUE LA HOJA DICE. Lo que no dice se queda,
+                # sea lo que sea: no hay lista de campos que mantener.
+                #
+                # La habia -`hsu_esclavos, rsu, hsus_gw, ip_gw`- y se dejaba fuera
+                # `repetidores` y `huecos`, que el Excel tampoco trae:
+                # la regeneracion de la #222 se llevo por delante los CINCO
+                # repetidores de Ayora y los TRES huecos de su NCU7, en silencio.
+                # Sin los repetidores no se diagnostican, no entran en el
+                # inventario ni en la campana de firmware, y uno con la bateria
+                # muerta se lleva por delante lo que cuelga de el. Sin los huecos,
+                # tres seguidores que no existen salen OFFLINE en cada barrido y
+                # la planta pasa de 751 a 754.
+                #
+                # La regla nueva no enumera nada: si la entrada recien construida
+                # YA trae el campo, manda la hoja; si no lo trae, es que la hoja no
+                # opina, y lo que hubiera en el JSON viene de otro sitio -a mano,
+                # de los .bat de Sunner, de una medida en campo- y no es suyo para
+                # borrarlo. Anadir manana un campo a mano ya no exige acordarse de
+                # esta linea, y quitar un dato sigue siendo posible: se quita del
+                # JSON, no de la hoja.
+                for k, v in viejo.items():
+                    if k in e or v is None:
+                        continue
+                    e[k] = v
+                    conservados += 1
             # Y LAS ENTRADAS QUE EL EXCEL NO TRAE TAMPOCO SE TIRAN. En El Burgo hay una fila
             # que no sale de ninguna hoja: el TCU 109 suelto en el GW2 de la NCU2, sacado de
             # los .bat de Sunner. Regenerar desde el Excel la borraba en silencio.
@@ -395,8 +409,8 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
                 print(f"  {destino}: conservadas {len(sobrantes)} entradas que el Excel no trae "
                       + ", ".join(str(e.get("nombre")) for e in sobrantes))
             if conservados:
-                print(f"  {destino}: conservados {conservados} campos de HSU del JSON anterior "
-                      "(esclavos, rsu o hsus_gw que la hoja no manda)")
+                print(f"  {destino}: conservados {conservados} campos que el Excel no trae "
+                      "(repetidores, huecos, esclavos de HSU, ip_gw... del JSON anterior)")
         destino.write_text(json.dumps({
             "_comentario": (f"Planta {num} ({proy}) generada desde el Excel maestro "
                             f"(hoja '{hoja}') por make_plantas.py --excel. Solo topologia: "

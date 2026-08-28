@@ -3384,15 +3384,29 @@ $repsAy = @($jAyora.plantas | Where-Object { $_.PSObject.Properties['repetidores
 Check 'rep: Ayora declara repetidores' ($repsAy.Count) 4
 Check 'rep: y son cinco en total' ((@($repsAy | ForEach-Object { @($_.repetidores).Count } | Measure-Object -Sum).Sum)) 5
 
-# Ayora: la NCU7 declara tres numeros que no estan instalados (14, 24 y 25).
-# Sin ellos la planta son 751 seguidores, no 754: los tres salian OFFLINE en
-# todos los barridos y engordaban el recuento.
-$ncu7 = @($jAyora.plantas | Where-Object { "$($_.nombre)" -eq 'Ayora NCU7' })[0]
-Check 'hueco Ayora: la NCU7 los declara' ((@($ncu7.huecos)) -join ',') '14,24,25'
+# Ayora: en la NCU7 hay tres numeros que NO estan instalados (14, 24 y 25).
+# Antes se declaraban como "huecos" dentro de un rango 1-25; ahora el Excel trae
+# los tramos y el generador parte la NCU en 1-13 y 15-23, que los dejan fuera
+# POR CONSTRUCCION. Son dos mecanismos para lo mismo y los dos valen, asi que
+# esta prueba mide el RESULTADO -cuantos seguidores quedan- y no la forma:
+# escrita sobre la forma, cambiar de mecanismo la ponia roja sin que nada
+# estuviera mal, que es justo lo que paso.
+$tramosN7 = @($jAyora.plantas | Where-Object { "$($_.nombre)" -like 'Ayora NCU7*' })
+Check 'hueco Ayora: la NCU7 no incluye el 14, el 24 ni el 25' (
+    @(@(14, 24, 25) | Where-Object { $n = $_
+        @($tramosN7 | Where-Object { [int]$_.tcu_ini -le $n -and $n -le [int]$_.tcu_fin -and
+                                     @($_.huecos | Where-Object { [int]$_ -eq $n }).Count -eq 0 }).Count -gt 0
+    }).Count) 0
+Check 'hueco Ayora: y deja 22 seguidores' (
+    (@($tramosN7 | ForEach-Object { [int]$_.tcu_fin - [int]$_.tcu_ini + 1 -
+        @($_.huecos | Where-Object { $null -ne $_ -and [int]$_ -ge [int]$_.tcu_ini }).Count } | Measure-Object -Sum).Sum)) 22
 $totAy = 0
 foreach ($e in $jAyora.plantas) {
-    # ojo: @($null) tiene UN elemento en PS 5.1, no cero
-    $totAy += ([int]$e.tcu_fin - [int]$e.tcu_ini + 1) - @($e.huecos | Where-Object { $null -ne $_ }).Count
+    # ojo: @($null) tiene UN elemento en PS 5.1, no cero. Y un hueco solo
+    # descuenta si cae DENTRO del tramo de su entrada.
+    $ini = [int]$e.tcu_ini; $fin = [int]$e.tcu_fin
+    $dentro = @($e.huecos | Where-Object { $null -ne $_ -and [int]$_ -ge $ini -and [int]$_ -le $fin }).Count
+    $totAy += ($fin - $ini + 1) - $dentro
 }
 Check 'hueco Ayora: la planta son 751 seguidores' $totAy 751
 
