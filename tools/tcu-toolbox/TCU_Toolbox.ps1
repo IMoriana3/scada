@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.62'
+$VERSION_TOOLBOX = '11.63'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1606,6 +1606,171 @@ function Json-Clase($obj) {
     $l = @($obj)
     if ($l.Count -gt 0 -and @($l | Where-Object { "$($_.variable)" -ne '' }).Count -gt 0) { return 'preset' }
     return 'otro'
+}
+
+# ============================ ANALIZADOR DE BATERIAS ============================
+# La pestana Baterias es una FOTO: el ultimo barrido, con sus umbrales y su
+# comparacion contra la mediana de la flota. Eso contesta "cual esta mal ahora".
+# Lo que no contesta -y es lo que se pregunta uno delante del camion- es:
+#
+#   COMO VA           una bateria que baja despacio no se distingue de una sana
+#                     en una sola foto. Hace falta la serie de barridos guardados
+#   POR QUE           "SoC 35%" es un sintoma. La causa es otra cosa: el panel no
+#                     da, el cargador esta en fallo, o la bateria ya no admite
+#   A CUAL VOY        una lista de hallazgos sin orden no dice por donde empezar
+#   CUANTO LE QUEDA   lo mas util de decir y lo mas facil de mentir
+#
+# Todo lo de aqui es PURO: recibe series y filas, devuelve veredictos. La
+# lectura de planta y la carga de trabajos se hacen fuera.
+
+$BAT_ANAL = @{
+    soh_fin      = 60     # SoH al que se considera agotada (mismo criterio que $BAT.soh_bajo)
+    dias_min     = 14     # menos recorrido que esto no da para hablar de tendencia
+    muestras_min = 3      # y menos de tres puntos, tampoco
+    soh_ruido    = 2.0    # puntos de SoH: por debajo, la pendiente es ruido de medida
+    meses_alarma = 6      # vida restante por debajo de esto: hay que planificar recambio
+}
+
+# La serie de una TCU a lo largo de los trabajos guardados, en orden. $trabajos
+# son objetos ya leidos de disco: @{fecha; filas}. Pura.
+function Bat-Serie($trabajos, [string]$ncu, $tcu) {
+    $r = @()
+    foreach ($t in @($trabajos)) {
+        $f = @(@($t.filas) | Where-Object { "$($_.NCU)" -eq "$ncu" -and "$($_.TCU)" -eq "$tcu" })
+        if ($f.Count -eq 0) { continue }
+        $d = [datetime]::MinValue
+        if (-not [datetime]::TryParse("$($t.fecha)", [ref]$d)) { continue }
+        $r += ,[pscustomobject]@{
+            fecha = $d
+            soc = (Num-O-Nulo $f[0].SoC); soh = (Num-O-Nulo $f[0].SoH)
+            vbat = (Num-O-Nulo $f[0].Vbat_mV); ibat = (Num-O-Nulo $f[0].Ibat_mA)
+        }
+    }
+    return @($r | Sort-Object fecha)
+}
+
+# Un numero, o $null si la celda viene vacia. Un 0 es un dato; '' no lo es, y
+# tratarlos igual mete ceros falsos en las pendientes. Pura.
+function Num-O-Nulo($v) {
+    $t = "$v".Trim()
+    if ($t -eq '') { return $null }
+    $d = 0.0
+    if ([double]::TryParse($t.Replace(',', '.'), [Globalization.NumberStyles]::Float, $INV, [ref]$d)) { return $d }
+    return $null
+}
+
+# Pendiente por minimos cuadrados de una serie de @{x; y}, en unidades de y por
+# unidad de x. $null si no hay dos puntos distintos. Pura.
+function Pendiente($puntos) {
+    $p = @(@($puntos) | Where-Object { $null -ne $_.y })
+    if ($p.Count -lt 2) { return $null }
+    $mx = ($p | Measure-Object -Property x -Average).Average
+    $my = ($p | Measure-Object -Property y -Average).Average
+    $num = 0.0; $den = 0.0
+    foreach ($q in $p) { $num += ($q.x - $mx) * ($q.y - $my); $den += ($q.x - $mx) * ($q.x - $mx) }
+    if ($den -eq 0) { return $null }
+    return $num / $den
+}
+
+# Como evoluciona una bateria. Devuelve @{muestras; dias; soh_mes; soc_mes;
+# soh_ultimo; hay} - hay=$false cuando la serie no da para opinar, y entonces se
+# dice, no se rellena con un cero. Pura.
+function Bat-Tendencia($serie, $cfg = $null) {
+    if ($null -eq $cfg) { $cfg = $BAT_ANAL }
+    $s = @($serie)
+    $r = @{muestras = $s.Count; dias = 0.0; soh_mes = $null; soc_mes = $null; soh_ultimo = $null; hay = $false}
+    if ($s.Count -eq 0) { return $r }
+    $r.soh_ultimo = $s[-1].soh
+    $r.dias = [math]::Round(($s[-1].fecha - $s[0].fecha).TotalDays, 1)
+    if ($s.Count -lt $cfg.muestras_min -or $r.dias -lt $cfg.dias_min) { return $r }
+    # x en meses: la pendiente sale directamente en puntos por mes, que es como
+    # se habla de esto
+    $ptos = @($s | ForEach-Object { @{x = ($_.fecha - $s[0].fecha).TotalDays / 30.44; y = $_.soh} })
+    $r.soh_mes = Pendiente $ptos
+    $ptosC = @($s | ForEach-Object { @{x = ($_.fecha - $s[0].fecha).TotalDays / 30.44; y = $_.soc} })
+    $r.soc_mes = Pendiente $ptosC
+    $r.hay = ($null -ne $r.soh_mes)
+    return $r
+}
+
+# POR QUE esta mal. Cruza lo que ya se lee -tension de bateria, corriente que
+# entra, tension de panel, de dia o de noche, y el estado del cargador si se ha
+# pulsado LEER CARGA- y devuelve una causa, no un sintoma. Pura.
+function Bat-Causa($fila, $cfg = $null) {
+    if ($null -eq $cfg) { $cfg = $BAT }
+    $soc = Num-O-Nulo $fila.SoC
+    $vbat = Num-O-Nulo $fila.Vbat_mV
+    $vpan = Num-O-Nulo $fila.Vpanel_mV
+    $ient = Num-O-Nulo $fila.Ientrada_mA
+    $dia = "$($fila.Dia)"
+    $carga = "$($fila.Carga)"
+    if ($null -eq $soc -and $null -eq $vbat) { return @{causa = 'sin datos'; nota = 'la TCU no ha contestado en este barrido'} }
+    if ($null -ne $vbat -and $vbat -lt $cfg.vbat_min) {
+        return @{causa = 'sin bateria'; nota = "Vbat $([int]$vbat) mV: por debajo de $($cfg.vbat_min), no hay bateria util conectada"}
+    }
+    # el cargador lo dice el, si se le ha preguntado: manda sobre lo deducido
+    if ($carga -match '(?i)fallo|error|fault') {
+        return @{causa = 'cargador en fallo'; nota = "el cargador reporta: $carga"}
+    }
+    if ($null -ne $soc -and $soc -ge $cfg.soc_sin_carga) { return @{causa = 'ok'; nota = ''} }
+    # de noche no entra corriente y eso no es un fallo: sin sol no se juzga
+    if ($dia -eq 'no') { return @{causa = 'de noche'; nota = 'sin sol no se puede juzgar la carga; repite de dia'} }
+    if ($dia -ne 'si') { return @{causa = 'sin juzgar'; nota = 'no se sabe si era de dia: sin eso, que no entre corriente no dice nada'} }
+    if ($null -ne $vpan -and $vpan -lt $cfg.vpanel_min) {
+        return @{causa = 'panel sin dar'; nota = "de dia y Vpanel $([int]$vpan) mV: panel tapado, sucio, sombreado o cable suelto"}
+    }
+    if ($null -ne $ient -and $ient -lt $cfg.ient_min) {
+        return @{causa = 'no entra corriente'; nota = "de dia, el panel da $([int]$vpan) mV pero entran $([int]$ient) mA: mira el cargador y el cableado"}
+    }
+    if ($null -ne $soc -and $soc -lt $cfg.soc_bajo) {
+        return @{causa = 'bateria no admite'; nota = "entra corriente ($([int]$ient) mA) y el SoC sigue en $([int]$soc) %: la bateria no la esta cogiendo"}
+    }
+    return @{causa = 'ok'; nota = ''}
+}
+
+# Cuanto le queda, en meses, hasta el SoH de fin de vida. $null cuando la serie
+# no da, cuando no baja, o cuando la pendiente es mas pequena que el ruido de
+# medida. La confianza va SIEMPRE al lado: un numero de estos sin su margen es
+# una invitacion a creerselo. Pura.
+function Bat-VidaRestante($tend, $cfg = $null) {
+    if ($null -eq $cfg) { $cfg = $BAT_ANAL }
+    if (-not $tend.hay -or $null -eq $tend.soh_ultimo) { return @{meses = $null; confianza = 'sin datos'} }
+    $caida = -1.0 * $tend.soh_mes                       # positiva si baja
+    $recorrido = [math]::Abs($tend.soh_mes) * ($tend.dias / 30.44)
+    if ($caida -le 0) { return @{meses = $null; confianza = 'no baja'} }
+    if ($recorrido -lt $cfg.soh_ruido) { return @{meses = $null; confianza = 'la caida no supera el ruido de medida'} }
+    if ($tend.soh_ultimo -le $cfg.soh_fin) { return @{meses = 0; confianza = 'ya por debajo del SoH de fin de vida'} }
+    $meses = ($tend.soh_ultimo - $cfg.soh_fin) / $caida
+    # la confianza sale de cuanto recorrido hay detras, no de la formula
+    $conf = 'orientativa'
+    if ($tend.muestras -ge 6 -and $tend.dias -ge 90) { $conf = 'con recorrido' }
+    elseif ($tend.dias -lt 30) { $conf = 'MUY provisional: menos de un mes de historia' }
+    return @{meses = [math]::Round($meses, 1); confianza = $conf}
+}
+
+# A CUAL VOY: una nota de gravedad para ordenar la flota, con el motivo. Cuanto
+# mas alta, antes hay que ir. Pura.
+function Bat-Gravedad($fila, $causa, $tend, $vida, $cfg = $null) {
+    if ($null -eq $cfg) { $cfg = $BAT }
+    $pts = 0; $por = @()
+    switch ("$($causa.causa)") {
+        'sin bateria'       { $pts += 100; $por += 'sin bateria util' }
+        'cargador en fallo' { $pts += 80;  $por += 'cargador en fallo' }
+        'bateria no admite' { $pts += 70;  $por += 'no admite carga' }
+        'panel sin dar'     { $pts += 60;  $por += 'panel sin dar' }
+        'no entra corriente'{ $pts += 55;  $por += 'no entra corriente' }
+    }
+    $soc = Num-O-Nulo $fila.SoC
+    $soh = Num-O-Nulo $fila.SoH
+    if ($null -ne $soc -and $soc -lt $cfg.soc_bajo) { $pts += (40 - $soc); $por += "SoC $([int]$soc)%" }
+    if ($null -ne $soh -and $soh -lt $cfg.soh_bajo) { $pts += (60 - $soh); $por += "SoH $([int]$soh)%" }
+    if ($null -ne $vida -and $null -ne $vida.meses -and $vida.meses -le $BAT_ANAL.meses_alarma) {
+        $pts += 30; $por += "quedan ~$($vida.meses) meses"
+    }
+    if ($tend.hay -and $null -ne $tend.soh_mes -and $tend.soh_mes -lt -1.0) {
+        $pts += 20; $por += ("SoH baja {0:0.0} pts/mes" -f $tend.soh_mes)
+    }
+    return @{puntos = [int]$pts; motivo = $(if ($por.Count) { $por -join '; ' } else { '' })}
 }
 
 function Fila-Tipo($f) {
@@ -5335,6 +5500,59 @@ $tabIG.Controls.Add($lvIG)
 $lblIGNota = LG $tabIG 'Los huecos son reales: la NCU no da serie ni MAC (el mapa R7.1 no los tiene y sus ids estan NOT READY), la HSU no da serie ni fecha, y el gateway no habla Modbus. IDENTIFICAR GATEWAYS lo pregunta por HTTP/RCI al Digi: necesita ip_gw en el fichero de planta y NO esta verificado aun contra un gateway de verdad.' 10 890 336
 $lblIGNota.ForeColor = [System.Drawing.Color]::Gray
 
+# ============================ TAB ANALIZADOR DE BATERIAS ============================
+# La pestana Baterias es una foto. Esta contesta lo que una foto no puede: como
+# va cada bateria, por que esta mal, a cual hay que ir primero y cuanto le
+# queda. Lee la planta y situa lo leido contra los barridos ya guardados.
+$tabBA = New-Object System.Windows.Forms.TabPage
+$tabBA.Text = 'Analisis baterias'
+$tabs.TabPages.Add($tabBA)
+
+$btnBAn = New-Object System.Windows.Forms.Button
+$btnBAn.Text = 'ANALIZAR'
+$btnBAn.Location = New-Object System.Drawing.Point(10, 18)
+$btnBAn.Size = New-Object System.Drawing.Size(130, 28)
+$btnBAn.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnBAn.ForeColor = [System.Drawing.Color]::White
+$tabBA.Controls.Add($btnBAn)
+
+$chkBAnLeer = New-Object System.Windows.Forms.CheckBox
+$chkBAnLeer.Text = 'Leer la planta ahora'
+$chkBAnLeer.Location = New-Object System.Drawing.Point(150, 22)
+$chkBAnLeer.Size = New-Object System.Drawing.Size(150, 22)
+$chkBAnLeer.Checked = $true
+$tabBA.Controls.Add($chkBAnLeer)
+
+$chkBAnSolo = New-Object System.Windows.Forms.CheckBox
+$chkBAnSolo.Text = 'Solo las que tienen algo'
+$chkBAnSolo.Location = New-Object System.Drawing.Point(306, 22)
+$chkBAnSolo.Size = New-Object System.Drawing.Size(166, 22)
+$chkBAnSolo.Checked = $true
+$tabBA.Controls.Add($chkBAnSolo)
+
+$btnBAnCsv = New-Object System.Windows.Forms.Button
+$btnBAnCsv.Text = 'CSV'
+$btnBAnCsv.Location = New-Object System.Drawing.Point(838, 18)
+$btnBAnCsv.Size = New-Object System.Drawing.Size(70, 28)
+$btnBAnCsv.Enabled = $false
+$tabBA.Controls.Add($btnBAnCsv)
+
+$lblBAnRes = LG $tabBA '' 480 350 24
+$lblBAnRes.ForeColor = [System.Drawing.Color]::DimGray
+
+$lvBA = New-Object System.Windows.Forms.ListView
+$lvBA.Location = New-Object System.Drawing.Point(10, 56)
+$lvBA.Size = New-Object System.Drawing.Size(898, 274)
+$lvBA.View = 'Details'; $lvBA.FullRowSelect = $true; $lvBA.GridLines = $true
+foreach ($c in @(@('NCU',45), @('TCU',45), @('SoC %',50), @('SoH %',50), @('Causa',130),
+                 @('SoH pts/mes',80), @('Muestras',65), @('Dias',48), @('Quedan',70),
+                 @('Confianza',150), @('Por que',330))) {
+    [void]$lvBA.Columns.Add($c[0], $c[1])
+}
+$tabBA.Controls.Add($lvBA)
+$lblBAnNota = LG $tabBA 'La tendencia sale de los barridos de baterias ya guardados en trabajos/ (los 20 ultimos por planta): sin al menos 3 barridos separados 14 dias no se opina, y se dice en vez de rellenar con un cero. "Quedan" es orientativo y lleva SIEMPRE su confianza al lado.' 10 890 336
+$lblBAnNota.ForeColor = [System.Drawing.Color]::Gray
+
 # ============================ TAB AUDITORIA HSU ============================
 # Es el LEER CONFIG de siempre pero de toda la planta a la vez y puesto como
 # auditoria: lo que importa de verdad no es el umbral de una estacion, es que
@@ -7580,6 +7798,8 @@ $TRABAJO_TIPOS = @{
   lectura    = @{titulo='Lectura';     var='UltimaLectura'; cols=@()}
   baterias   = @{titulo='Baterias';    var='UltimaBatTabla'
                  cols=@('NCU','TCU','SoC','SoH','Vbat_mV','Ibat_mA','Vpanel_mV','Ientrada_mA','Tbat_C','Tpcb_C','Dia','Carga','Estado')}
+  analisis_baterias = @{titulo='Analisis baterias'; var='UltimoBatAnal'
+                 cols=@('NCU','TCU','SoC','SoH','Causa','SoH_pts_mes','Muestras','Dias','Quedan_meses','Confianza','Por_que','Gravedad')}
 }
 $TRABAJOS_MAX = 20        # por tipo y planta: lo viejo se va solo
 
@@ -9109,6 +9329,7 @@ function Trabajo-Cargar {
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Cargado: $($def.titulo) de $($o.fecha) - $($o.planta) - $(@($filas).Count) filas$(if ("$($o.nota)" -ne '') { "  ($($o.nota))" })" ([System.Drawing.Color]::LightGreen)
     switch ("$($o.tipo)") {
+        'analisis_baterias' { BatAnal-Pintar; $tabs.SelectedTab = $tabBA }
         'diag' {
             $script:UltimoEsComm = $false
             Trabajos-ComboNcus
@@ -9228,6 +9449,123 @@ function Comparar-Trabajos {
 $btnTCmp.Add_Click({ Comparar-Trabajos })
 $btnTCargar.Add_Click({ Trabajo-Cargar })
 $lvT.Add_DoubleClick({ Trabajo-Cargar })
+
+# ------------------------- ANALIZADOR DE BATERIAS (interfaz) -------------------------
+$script:UltimoBatAnal = @()
+
+# Los barridos de baterias guardados de ESTA planta, ya leidos de disco y en
+# orden. Son los que dan la tendencia: sin ellos esto es otra foto mas.
+function BatAnal-Guardados([string]$planta) {
+    $r = @()
+    try {
+        $dir = Trabajos-Dir
+        $pref = ("baterias__" + ("$planta" -replace '[^\w\-]', '_') + "__")
+        foreach ($f in @(Get-ChildItem $dir -Filter "$pref*.json" -File -ErrorAction SilentlyContinue)) {
+            try {
+                $o = Get-Content $f.FullName -Raw | ConvertFrom-Json
+                if ("$($o.tipo)" -eq 'baterias') { $r += ,@{fecha = "$($o.fecha)"; filas = @($o.filas)} }
+            } catch { }
+        }
+    } catch { }
+    return @($r)
+}
+
+function BatAnal-Correr {
+    $planta = Nombre-Planta
+    # 1) la foto de ahora: o se lee la planta, o se usa el ultimo diagnostico
+    if ($chkBAnLeer.Checked) {
+        Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+        Con 'Analisis de baterias: primero el barrido de ahora.' ([System.Drawing.Color]::SteelBlue)
+        $btnGBat.PerformClick()
+    }
+    if (@($script:UltimaBatTabla).Count -eq 0) {
+        if (-not (Bat-Pintar)) {
+            Con 'No hay baterias que analizar: haz un diagnostico primero, o marca "Leer la planta ahora".' ([System.Drawing.Color]::Orange)
+            return
+        }
+    }
+    $ahora = @($script:UltimaBatTabla)
+    $lvBA.Items.Clear(); $script:UltimoBatAnal = @(); $lblBAnRes.Text = ''; Sellar 'batanal'
+
+    # 2) la historia
+    $guard = @(BatAnal-Guardados $planta)
+    if ($guard.Count -eq 0) {
+        Con "No hay barridos de baterias guardados de '$planta': esta pasada sale sin tendencia. Se guarda sola con cada AUDITAR, asi que a partir de hoy habra." ([System.Drawing.Color]::Orange)
+    } else {
+        Con "$($guard.Count) barrido(s) de baterias guardados de '$planta' para la tendencia." ([System.Drawing.Color]::Gainsboro)
+    }
+
+    # 3) el veredicto, TCU a TCU
+    $filas = @()
+    foreach ($f in $ahora) {
+        $serie = @(Bat-Serie $guard "$($f.NCU)" "$($f.TCU)")
+        $tend  = Bat-Tendencia $serie
+        $causa = Bat-Causa $f
+        $vida  = Bat-VidaRestante $tend
+        $grav  = Bat-Gravedad $f $causa $tend $vida
+        $porQue = @()
+        if ("$($causa.nota)" -ne '') { $porQue += "$($causa.nota)" }
+        if ("$($grav.motivo)" -ne '') { $porQue += "$($grav.motivo)" }
+        $filas += ,[pscustomobject]@{
+            NCU = "$($f.NCU)"; TCU = [int]$f.TCU
+            SoC = "$($f.SoC)"; SoH = "$($f.SoH)"
+            Causa = "$($causa.causa)"
+            SoH_pts_mes = $(if ($tend.hay -and $null -ne $tend.soh_mes) { [math]::Round($tend.soh_mes, 2) } else { $null })
+            Muestras = $tend.muestras; Dias = $tend.dias
+            Quedan_meses = $vida.meses
+            Confianza = "$($vida.confianza)"
+            Por_que = ($porQue -join ' | ')
+            Gravedad = $grav.puntos
+        }
+    }
+    # la peor arriba: es el orden en el que se sale a campo
+    $filas = @($filas | Sort-Object -Property @{Expression = 'Gravedad'; Descending = $true},
+                                              @{Expression = {[int]$_.NCU}}, 'TCU')
+    $script:UltimoBatAnal = @($filas)
+    BatAnal-Pintar
+    $nCausa = @($filas | Where-Object { @('ok','sin datos','de noche','sin juzgar') -notcontains "$($_.Causa)" }).Count
+    $nVida  = @($filas | Where-Object { $null -ne $_.Quedan_meses -and $_.Quedan_meses -le $BAT_ANAL.meses_alarma }).Count
+    $nTend  = @($filas | Where-Object { $null -ne $_.SoH_pts_mes }).Count
+    $lblBAnRes.Text = "$($filas.Count) baterias | $nCausa con causa | $nTend con tendencia | $nVida por debajo de $($BAT_ANAL.meses_alarma) meses"
+    Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Analisis: $($filas.Count) baterias, $nCausa con una causa que mirar, $nTend con historia suficiente para tendencia, $nVida con menos de $($BAT_ANAL.meses_alarma) meses estimados." ([System.Drawing.Color]::SteelBlue)
+    if ($nTend -eq 0 -and $guard.Count -gt 0) {
+        Con "Ninguna llega a $($BAT_ANAL.muestras_min) barridos separados $($BAT_ANAL.dias_min) dias: hay historia, pero es demasiado junta o demasiado corta para hablar de tendencia." ([System.Drawing.Color]::Orange)
+    }
+    foreach ($f in @($filas | Where-Object { $_.Gravedad -gt 0 } | Select-Object -First 10)) {
+        Con ("  NCU{0} TCU {1,3}  {2,-20} {3}" -f $f.NCU, $f.TCU, $f.Causa, $f.Por_que) ([System.Drawing.Color]::Orange)
+    }
+    $btnBAnCsv.Enabled = ($filas.Count -gt 0)
+    Marcar-Bloque 'batanal'
+    [void](Trabajo-Guardar 'analisis_baterias' $script:UltimoBatAnal "$($filas.Count) baterias, $nCausa con causa")
+}
+
+function BatAnal-Pintar {
+    $solo = $chkBAnSolo.Checked
+    $lvBA.BeginUpdate()
+    $lvBA.Items.Clear()
+    foreach ($f in @($script:UltimoBatAnal)) {
+        if ($solo -and $f.Gravedad -le 0) { continue }
+        $item = New-Object System.Windows.Forms.ListViewItem("$($f.NCU)")
+        foreach ($c in @($f.TCU, $f.SoC, $f.SoH, $f.Causa,
+                         $(if ($null -ne $f.SoH_pts_mes) { "{0:0.00}" -f $f.SoH_pts_mes } else { '-' }),
+                         $f.Muestras, $f.Dias,
+                         $(if ($null -ne $f.Quedan_meses) { "$($f.Quedan_meses) m" } else { '-' }),
+                         $f.Confianza, $f.Por_que)) {
+            [void]$item.SubItems.Add("$c")
+        }
+        if ($f.Gravedad -ge 70) { $item.ForeColor = [System.Drawing.Color]::Firebrick }
+        elseif ($f.Gravedad -gt 0) { $item.ForeColor = [System.Drawing.Color]::DarkOrange }
+        elseif ("$($f.Causa)" -eq 'sin datos') { $item.ForeColor = [System.Drawing.Color]::Gray }
+        $lvBA.Items.Add($item) | Out-Null
+    }
+    $lvBA.EndUpdate()
+    Lv-Reiniciar $lvBA
+}
+
+$btnBAn.Add_Click({ Lanzar { BatAnal-Correr } })
+$chkBAnSolo.Add_CheckedChanged({ if (@($script:UltimoBatAnal).Count -gt 0) { BatAnal-Pintar } })
+$btnBAnCsv.Add_Click({ [void](Exportar-Csv $script:UltimoBatAnal 'analisis_baterias' 'Analisis de baterias' -bloque 'batanal') })
 
 $btnBVer.Add_Click({ if (Bat-Pintar) { Con "Baterias: $($script:UltimaBatTabla.Count) TCUs del ultimo diagnostico." ([System.Drawing.Color]::SteelBlue) } })
 $btnBAud.Add_Click({ if (Bat-Pintar) { $btnGBat.PerformClick() } })
@@ -13799,6 +14137,7 @@ $NAV_ARBOL = @(
         @{txt='Diagnóstico';   tab=$tabG; vista='TCU'}
         @{txt='Auditoría';     tab=$tabF}
         @{txt='Baterías';      tab=$tabB}
+        @{txt='Análisis de baterías'; tab=$tabBA}
         @{txt='Firmware';      tab=$tabFW}
         @{txt='Leer variable'; tab=$tabL}
         @{txt='Volcar TCU';    tab=$tabD}
@@ -13876,7 +14215,7 @@ if ($nav.Nodes.Count -gt 0 -and $nav.Nodes[0].Nodes.Count -gt 0) { $nav.Selected
 
 # Todas las tablas de resultados filtran y ordenan al pulsar su cabecera.
 foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvFWd, $lvSat, $lvND, $lvH, $lvN, $lvE, $lvI, $lvC, $lvB, $lvT,
-                     $lvAN, $lvFN, $lvAH, $lvFH, $lvRA, $lvRF, $lvRB, $lvIG)) { Lv-Filtrable $tabla }
+                     $lvAN, $lvFN, $lvAH, $lvFH, $lvRA, $lvRF, $lvRB, $lvIG, $lvBA)) { Lv-Filtrable $tabla }
 
 # La cabecera de pestanas no se puede ocultar con una propiedad: no existe. Lo
 # que si se puede es sacarla fuera del panel, que recorta lo que se sale. La

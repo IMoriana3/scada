@@ -3895,6 +3895,119 @@ Check 'hsu corto: y va como SIN LECTURA' ("$($compHsu[1].Salud)") 'SIN LECTURA'
 Check 'hsu corto: la columna NCU se lee entera' ($src.Contains("[void]`$lvG.Columns.Add('NCU', 58)")) $true
 
 Write-Host ''
+Write-Host '== analizador de baterias: como va, por que, a cual voy, cuanto le queda =='
+# La pestana Baterias es una FOTO. Esto contesta lo que una foto no puede.
+
+# ---- la serie: lo que dicen los barridos guardados de UNA TCU ----
+function TrabBat($fecha, $ncu, $tcu, $soc, $soh) {
+    return @{fecha = $fecha; filas = @([pscustomobject]@{NCU = "$ncu"; TCU = "$tcu"; SoC = "$soc"; SoH = "$soh"; Vbat_mV = '26000'; Ibat_mA = '100'})}
+}
+$trabs = @(
+    (TrabBat '2026-05-01 09:00:00' 3 14 92 98)
+    (TrabBat '2026-06-01 09:00:00' 3 14 88 95)
+    (TrabBat '2026-07-01 09:00:00' 3 14 84 92)
+    (TrabBat '2026-08-01 09:00:00' 3 14 80 89)
+    (TrabBat '2026-06-01 09:00:00' 3 99 90 99)   # otra TCU, no debe colarse
+)
+$serie = @(Bat-Serie $trabs '3' '14')
+Check 'bat serie: solo la TCU pedida' $serie.Count 4
+Check 'bat serie: en orden' (($serie | ForEach-Object { $_.soh }) -join ',') '98,95,92,89'
+Check 'bat serie: una TCU sin barridos da serie vacia' (@(Bat-Serie $trabs '3' '77')).Count 0
+# una fecha ilegible no cuenta como muestra, en vez de colarse como MinValue
+$trabsMal = @($trabs) + @(@{fecha = 'ayer por la tarde'; filas = @([pscustomobject]@{NCU='3'; TCU='14'; SoC='1'; SoH='1'})})
+Check 'bat serie: una fecha ilegible se descarta' (@(Bat-Serie $trabsMal '3' '14')).Count 4
+
+# ---- la pendiente ----
+Check 'pendiente: bajada limpia de 3 pts/mes' ([math]::Round((Pendiente @(@{x=0;y=99}, @{x=1;y=96}, @{x=2;y=93})), 3)) -3
+Check 'pendiente: sin dos puntos no hay pendiente' ($null -eq (Pendiente @(@{x=0;y=99}))) $true
+Check 'pendiente: los huecos no cuentan como cero' ([math]::Round((Pendiente @(@{x=0;y=99}, @{x=1;y=$null}, @{x=2;y=93})), 1)) -3
+Check 'pendiente: todo en el mismo instante no da pendiente' ($null -eq (Pendiente @(@{x=0;y=99}, @{x=0;y=93}))) $true
+
+# ---- la tendencia ----
+$tend = Bat-Tendencia $serie
+Check 'tendencia: cuatro muestras' $tend.muestras 4
+Check 'tendencia: 92 dias de recorrido' $tend.dias 92
+Check 'tendencia: SoH baja unos 3 pts/mes' ([math]::Round($tend.soh_mes, 1)) -3
+Check 'tendencia: y hay con que opinar' $tend.hay $true
+# lo que NO se opina: dos barridos de la misma semana no son una tendencia
+$corta = @(Bat-Serie @((TrabBat '2026-08-01 09:00:00' 3 14 90 97), (TrabBat '2026-08-03 09:00:00' 3 14 89 96)) '3' '14')
+$tc = Bat-Tendencia $corta
+Check 'tendencia: dos muestras en dos dias no dan tendencia' $tc.hay $false
+Check 'tendencia: y no se inventa una pendiente' ($null -eq $tc.soh_mes) $true
+Check 'tendencia: pero si dice cuantas hay' $tc.muestras 2
+Check 'tendencia: sin barridos no revienta' ((Bat-Tendencia @()).hay) $false
+
+# ---- la causa: un sintoma no es un diagnostico ----
+$fSano = [pscustomobject]@{SoC='95'; SoH='98'; Vbat_mV='26000'; Vpanel_mV='18000'; Ientrada_mA='700'; Dia='si'; Carga=''}
+Check 'causa: una sana no tiene causa' (Bat-Causa $fSano).causa 'ok'
+$fPanel = [pscustomobject]@{SoC='35'; SoH='90'; Vbat_mV='23000'; Vpanel_mV='300'; Ientrada_mA='0'; Dia='si'; Carga=''}
+Check 'causa: de dia y sin tension de panel' (Bat-Causa $fPanel).causa 'panel sin dar'
+Check 'causa: y lo explica' ((Bat-Causa $fPanel).nota -like '*tapado*') $true
+$fCarg = [pscustomobject]@{SoC='35'; SoH='90'; Vbat_mV='23000'; Vpanel_mV='18000'; Ientrada_mA='0'; Dia='si'; Carga=''}
+Check 'causa: panel dando pero sin entrar corriente' (Bat-Causa $fCarg).causa 'no entra corriente'
+$fNoAdm = [pscustomobject]@{SoC='30'; SoH='55'; Vbat_mV='23000'; Vpanel_mV='18000'; Ientrada_mA='600'; Dia='si'; Carga=''}
+Check 'causa: entra corriente y el SoC no sube' (Bat-Causa $fNoAdm).causa 'bateria no admite'
+$fSin = [pscustomobject]@{SoC='0'; SoH='0'; Vbat_mV='800'; Vpanel_mV='0'; Ientrada_mA='0'; Dia='si'; Carga=''}
+Check 'causa: sin bateria conectada' (Bat-Causa $fSin).causa 'sin bateria'
+# EL FALSO POSITIVO GORDO: de noche no entra corriente y eso no es una averia
+$fNoche = [pscustomobject]@{SoC='35'; SoH='90'; Vbat_mV='23000'; Vpanel_mV='0'; Ientrada_mA='0'; Dia='no'; Carga=''}
+Check 'causa: de noche no se juzga la carga' (Bat-Causa $fNoche).causa 'de noche'
+# y si no se sabe si era de dia, tampoco se juzga
+$fSinDia = [pscustomobject]@{SoC='35'; SoH='90'; Vbat_mV='23000'; Vpanel_mV='0'; Ientrada_mA='0'; Dia=''; Carga=''}
+Check 'causa: sin saber si era de dia, no se opina' (Bat-Causa $fSinDia).causa 'sin juzgar'
+# lo que dice el cargador manda sobre lo deducido
+$fFallo = [pscustomobject]@{SoC='35'; SoH='90'; Vbat_mV='23000'; Vpanel_mV='18000'; Ientrada_mA='600'; Dia='si'; Carga='FALLO de cargador'}
+Check 'causa: si el cargador dice fallo, manda el' (Bat-Causa $fFallo).causa 'cargador en fallo'
+$fMuda = [pscustomobject]@{SoC=''; SoH=''; Vbat_mV=''; Vpanel_mV=''; Ientrada_mA=''; Dia=''; Carga=''}
+Check 'causa: una TCU muda se dice, no se diagnostica' (Bat-Causa $fMuda).causa 'sin datos'
+
+# ---- cuanto le queda: lo mas facil de mentir ----
+$vida = Bat-VidaRestante $tend
+Check 'vida: de 89 a 60 bajando 3 al mes' ([math]::Round($vida.meses)) 10
+Check 'vida: con su confianza al lado' ($vida.confianza -ne '') $true
+Check 'vida: sin tendencia no se inventa un numero' ($null -eq (Bat-VidaRestante $tc).meses) $true
+Check 'vida: y se dice por que' ((Bat-VidaRestante $tc).confianza) 'sin datos'
+# una que NO baja no tiene fecha de caducidad
+$sube = @(Bat-Serie @((TrabBat '2026-05-01 09:00' 3 14 90 90), (TrabBat '2026-06-01 09:00' 3 14 91 90), (TrabBat '2026-07-01 09:00' 3 14 92 91)) '3' '14')
+Check 'vida: la que no baja no caduca' ($null -eq (Bat-VidaRestante (Bat-Tendencia $sube)).meses) $true
+Check 'vida: y se dice' ((Bat-VidaRestante (Bat-Tendencia $sube)).confianza) 'no baja'
+# una caida mas pequena que el ruido de medida NO es una caida
+$ruido = @(Bat-Serie @((TrabBat '2026-05-01 09:00' 3 14 90 90), (TrabBat '2026-06-01 09:00' 3 14 90 90), (TrabBat '2026-06-20 09:00' 3 14 90 89)) '3' '14')
+Check 'vida: una caida por debajo del ruido no cuenta' ($null -eq (Bat-VidaRestante (Bat-Tendencia $ruido)).meses) $true
+# ya agotada: cero meses, no un negativo
+$fin = @(Bat-Serie @((TrabBat '2026-05-01 09:00' 3 14 40 70), (TrabBat '2026-06-01 09:00' 3 14 38 65), (TrabBat '2026-07-01 09:00' 3 14 35 58)) '3' '14')
+Check 'vida: la que ya paso el umbral da cero, no negativo' ((Bat-VidaRestante (Bat-Tendencia $fin)).meses) 0
+
+# ---- a cual voy: el orden ----
+$gSano = Bat-Gravedad $fSano (Bat-Causa $fSano) (Bat-Tendencia @()) $null
+Check 'orden: una sana no puntua' $gSano.puntos 0
+$gSin = Bat-Gravedad $fSin (Bat-Causa $fSin) (Bat-Tendencia @()) $null
+$gPanel = Bat-Gravedad $fPanel (Bat-Causa $fPanel) (Bat-Tendencia @()) $null
+Check 'orden: sin bateria es lo mas grave' ($gSin.puntos -gt $gPanel.puntos) $true
+Check 'orden: y una con causa va antes que una sana' ($gPanel.puntos -gt $gSano.puntos) $true
+Check 'orden: el motivo va con la nota' ($gPanel.motivo -like '*panel sin dar*') $true
+Check 'orden: y una sana no lleva motivo' $gSano.motivo ''
+
+# ---- la pantalla, y que el analisis se pueda volver a abrir ----
+Check 'bat anal: hay hoja propia' ($src.Contains("`$tabBA.Text = 'Analisis baterias'")) $true
+Check 'bat anal: y esta en el arbol junto a Baterias' (
+    $src.IndexOf("@{txt='Baterías';      tab=`$tabB}") -lt
+    $src.IndexOf("@{txt='Análisis de baterías'; tab=`$tabBA}")) $true
+Check 'bat anal: lee la planta y ademas mira lo guardado' (
+    $src.Contains('$btnGBat.PerformClick()') -and $src.Contains('BatAnal-Guardados')) $true
+Check 'bat anal: la peor arriba' ($src.Contains("@{Expression = 'Gravedad'; Descending = `$true}")) $true
+# el tipo de trabajo tiene que estar registrado o al recargarlo dice "desconocido"
+Check 'bat anal: el trabajo se registra' ($TRABAJO_TIPOS.Contains('analisis_baterias')) $true
+Check 'bat anal: con la variable donde se carga' ($TRABAJO_TIPOS['analisis_baterias'].var) 'UltimoBatAnal'
+Check 'bat anal: y se puede volver a abrir' ($src.Contains("'analisis_baterias' { BatAnal-Pintar")) $true
+# lo que se guarda tiene que existir como propiedad de las filas
+$colsBA = @($TRABAJO_TIPOS['analisis_baterias'].cols)
+$filaBA = [pscustomobject]@{NCU='3'; TCU=14; SoC='80'; SoH='89'; Causa='ok'; SoH_pts_mes=-3.0
+    Muestras=4; Dias=92.0; Quedan_meses=10; Confianza='con recorrido'; Por_que=''; Gravedad=0}
+Check 'bat anal: las columnas guardadas existen en la fila' (
+    @($colsBA | Where-Object { -not $filaBA.PSObject.Properties[$_] }) -join ',') ''
+
+Write-Host ''
 Write-Host '== leer TODAS las variables, con el coste por delante =='
 # Llenar la tabla a mano son 168 filas tecleadas. Pero LEER cuesta UNA lectura
 # Modbus por (TCU x variable), asi que el boton facil tiene que traer el numero
