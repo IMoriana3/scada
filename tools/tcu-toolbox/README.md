@@ -75,6 +75,30 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**«Cargar preset» se comía el backup del volcado (v11.62)** — el camino para
+clonar una TCU en otra es *Volcar TCU → Backup JSON → Escribir*. Pero en
+*Escribir* hay **dos** botones de carga, y el de arriba, `Cargar preset`, **no
+comprobaba el formato**: le dabas el backup del volcado, se lo tragaba, soltaba
+`AVISO: '' no existe en el mapa` por cada fila y **dejaba la tabla en blanco**
+sin decir por qué. El de abajo sí comprobaba. Ni el fichero ni el usuario tenían
+la culpa: había que adivinar cuál de los dos botones era.
+
+Ahora `Cargar preset` **acepta también un backup** y lo carga como tal, con sus
+exclusiones y diciéndolo en la consola. Los dos botones comparten la misma
+lógica, así que no pueden divergir. Y un fichero que no es ninguna de las dos
+cosas se dice claramente, en vez de vaciar la tabla.
+
+Lo que **nunca** se clona al pasar un backup a otra TCU, y ahora se prueba
+ejercitando la conversión en vez de buscando una línea en el fuente:
+
+| Se excluye | Por qué |
+|---|---|
+| Registros de **comando** | Son órdenes, no configuración: escribirlos dispara acciones |
+| **Fecha y hora** | Es la de cuando se volcó |
+| **Identidad de red** — `zigbee_slave_id`, `rs485_slave_id`, PAN ID, cifrado | Son de la TCU origen. Clonarlas deja **dos equipos con el mismo esclavo** en la misma Zigbee |
+
+De paso, el aviso de fila sin nombre se dice **una vez** y no una por fila.
+
 **Inventario global: una tabla con todos los equipos (v11.61)** — hoja nueva en
 **GLOBAL**, encima de *Diagnóstico*. Lo de cada tipo de equipo vivía en su
 pestaña —la versión de la NCU en *Firmware NCU*, el `SoftwareId` de la HSU en

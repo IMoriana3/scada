@@ -1414,7 +1414,50 @@ Check 'identidad: latitud se clona' ($ADDR_IDENTIDAD -contains $VARIABLES['41012
 Check 'identidad: timeout NCU se clona' ($ADDR_IDENTIDAD -contains $VARIABLES['40022 timeout_com_NCU [min]'].addr) $false
 # el codigo del boton no es invocable sin ventana: se comprueba en el texto
 Check 'identidad: fuera del preset guardado' ($src.Contains('$vars  = @($vars | Where-Object { $ADDR_IDENTIDAD -notcontains $_.addr })')) $true
-Check 'identidad: fuera del backup como preset' ($src.Contains('if ($ADDR_IDENTIDAD -contains $def.addr) { $nIdent++; continue }')) $true
+# esto ya no se comprueba en el texto: la conversion es pura y se ejercita
+$bkFake = @{ tipo='backup_tcu'; tcu=14; fecha='2026-08-28 11:30'; completo=$true; variables=@(
+    [pscustomobject]@{variable='41106 east_pitch [m]';           valor='6'}       # se clona
+    [pscustomobject]@{variable='41111 max_tilt_west_r1 [deg]';   valor='55'}      # se clona
+    [pscustomobject]@{variable='41004 zigbee_slave_id (byte bajo)'; valor='14'}   # IDENTIDAD: no
+    [pscustomobject]@{variable='41006 rs485_slave_id (byte bajo)';  valor='14'}   # IDENTIDAD: no
+    [pscustomobject]@{variable='40000 CMD main_change_request [hex]'; valor='0x0'} # comando: no
+    [pscustomobject]@{variable='40001 input_time_segundos';      valor='30'}      # hora: no
+    [pscustomobject]@{variable='41068 safe_pos_options [hex]';   valor=''}        # sin valor: no
+    [pscustomobject]@{variable='30001 main_status [hex]';        valor='0x0280'}  # de ESTADO: no esta en el mapa de escritura
+    [pscustomobject]@{variable='inventada 99999';                valor='1'}       # no existe
+)}
+$bk = Backup-APreset $bkFake $VARIABLES $ADDR_COMANDO $ADDR_TIEMPO $ADDR_IDENTIDAD
+Check 'backup->preset: solo lo que se puede clonar' (@($bk.pares | ForEach-Object { $_.variable }) -join ' | ') '41106 east_pitch [m] | 41111 max_tilt_west_r1 [deg]'
+Check 'backup->preset: la identidad de red se cuenta aparte' $bk.nIdent 2
+Check 'backup->preset: y las que venian sin valor' $bk.sinValor 1
+Check 'backup->preset: se ha mirado el backup entero' $bk.total 9
+# lo gordo: dos equipos con el mismo esclavo en la misma Zigbee
+Check 'backup->preset: el esclavo Zigbee NUNCA se clona' (@($bk.pares | Where-Object { "$($_.variable)" -like '*zigbee_slave*' }).Count) 0
+Check 'backup->preset: ni el de RS485' (@($bk.pares | Where-Object { "$($_.variable)" -like '*rs485_slave*' }).Count) 0
+# y el nombre tiene que existir DE VERDAD en el mapa: con un nombre inventado
+# esta prueba pasaba en vacio, sin llegar siquiera a mirar si era identidad
+Check 'backup->preset: los nombres de la prueba son reales' (
+    @(@('41004 zigbee_slave_id (byte bajo)','41006 rs485_slave_id (byte bajo)','41106 east_pitch [m]') |
+      Where-Object { -not $VARIABLES.Contains($_) }).Count) 0
+Check 'backup->preset: ni ningun comando' (@($bk.pares | Where-Object { $ADDR_COMANDO -contains $VARIABLES["$($_.variable)"].addr }).Count) 0
+# un backup vacio no revienta
+Check 'backup->preset: un backup sin variables da cero' (@((Backup-APreset @{variables=@()} $VARIABLES $ADDR_COMANDO $ADDR_TIEMPO $ADDR_IDENTIDAD).pares).Count) 0
+
+# ---------- Cargar preset se comia un backup y dejaba la tabla en blanco ----------
+# El boton de backup comprobaba el formato; el de preset NO comprobaba nada: le
+# dabas el backup del volcado, se lo tragaba, soltaba "AVISO: '' no existe en el
+# mapa" por cada fila y te dejaba la tabla vacia sin decir por que.
+Check 'clase: un backup se reconoce' (Json-Clase $bkFake) 'backup'
+Check 'clase: un preset tambien' (Json-Clase @([pscustomobject]@{variable='41106 east_pitch [m]'; valor='6'})) 'preset'
+Check 'clase: y lo que no es ninguno se dice' (Json-Clase @([pscustomobject]@{cualquier='cosa'})) 'otro'
+Check 'clase: un fichero vacio no revienta' (Json-Clase $null) 'nada'
+Check 'clase: un backup sin variables no es un backup' (Json-Clase @{tipo='backup_tcu'}) 'otro'
+# y dandole un backup a Cargar preset, se carga como backup en vez de vaciarse
+Check 'preset: acepta el backup en vez de vaciar la tabla' ($src.Contains("'backup' { Con 'Es un backup de Volcar TCU")) $true
+Check 'preset: y los dos botones usan la misma logica' ([regex]::Matches($src, [regex]::Escape('Preset-DeBackup $obj')).Count) 2
+Check 'preset: un fichero que no es ninguna de las dos cosas se dice' ($src.Contains('Ese fichero no es un preset ni un backup de TCU')) $true
+# el aviso de fila sin nombre se dice UNA vez, no una por fila
+Check 'preset: no se repite el aviso por cada fila vacia' ($src.Contains('entradas del fichero no traen nombre de variable')) $true
 Check 'identidad: fuera del preset de referencia' ($src.Contains('if ($ADDR_IDENTIDAD -contains $def.addr) { $nIdentRef++; continue }')) $true
 Check 'identidad: escritura en bloque bloqueada' ($src.Contains('No se puede escribir IDENTIDAD DE RED en $nTcus TCUs a la vez')) $true
 
