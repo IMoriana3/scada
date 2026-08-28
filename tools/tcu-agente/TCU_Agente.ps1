@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '3.9'
+$VERSION_AGENTE = '4.0'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -593,7 +593,10 @@ function Ncus-Todas {
     foreach ($k in @($PLANTAS.Keys)) {
         if ($k -notlike "$($cfg.planta)*" -or $k -eq '(manual)') { continue }
         $e = $PLANTAS[$k]
-        if ($e.ip) { return @(@{ncu = 1; ip = $e.ip; gws = @(@{puerto=$e.puerto; ini=$e.ini; fin=$e.fin}); hsu = $e.hsu}) }
+        # los huecos van CON el gateway: sin ellos, una TCU que la topologia
+        # declara inexistente se lee -y se escribe- igual. Es el mismo agujero
+        # que tenia Plan-Segmentos al emparejar TCU con gateway.
+        if ($e.ip) { return @(@{ncu = 1; ip = $e.ip; gws = @(@{puerto=$e.puerto; ini=$e.ini; fin=$e.fin; huecos=@($e.huecos)}); hsu = $e.hsu}) }
     }
     throw "planta '$($cfg.planta)' no encontrada en $dirToolbox\plantas"
 }

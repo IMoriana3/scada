@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.63'
+$VERSION_TOOLBOX = '11.64'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -76,6 +76,7 @@ function Cargar-FicheroPlantas([string]$ruta) {
     }
     $jp = Get-Content $ruta -Raw | ConvertFrom-Json
     if (-not $jp.plantas) { throw "sin lista 'plantas'" }
+    $nuevas = @()
     foreach ($p in $jp.plantas) {
         if (-not $p.nombre -or -not $p.ip) { continue }
         $e = @{
@@ -136,10 +137,107 @@ function Cargar-FicheroPlantas([string]$ruta) {
             }
             if ($lstR.Count -gt 0) { $e.reps = $lstR }
         }
-        $PLANTAS[[string]$p.nombre] = $e
+        $nuevas += ,@{nombre = [string]$p.nombre; e = $e}
         $n++
     }
+    # los tramos del mismo gateway, en una sola entrada (ver Tramos-Juntar)
+    foreach ($x in @(Tramos-Juntar $nuevas)) { $PLANTAS[$x.nombre] = $x.e }
     return $n
+}
+
+# ---------- los TRAMOS de un gateway son UN gateway ----------
+# El Excel da los esclavos de cada gateway por tramos -en San Jose los dos
+# gateways se alternan por bloques: GW1 lleva 1-19, 22-31, 38-47... y GW2 el
+# resto- y el generador escribe una entrada por tramo. En el desplegable eso son
+# 82 entradas en San Jose y tres NCU7 en Ayora, y NINGUNA de ellas es algo que
+# se quiera elegir: nadie opera "el bloque 22-31 del GW1", se opera la NCU o su
+# gateway. Peor: elegir "Ayora NCU7 (TCU 1-13)" deja fuera media NCU sin decirlo.
+#
+# Se juntan los tramos que comparten IP Y PUERTO -o sea, el mismo gateway-, y
+# los saltos entre ellos pasan a ser HUECOS, que ya se descuentan en todas
+# partes. El conjunto de TCUs sale identico; lo que cambia es que sea una linea.
+#
+# Los gateways DISTINTOS no se juntan: elegir GW1 o GW2 si significa algo -son
+# dos redes Zigbee- y en El Burgo cada NCU lleva una HSU en cada uno.
+#
+# Pura: se prueba sin ventana y sin ficheros.
+function Tramos-Juntar($entradas) {
+    $orden = @(); $grupos = @{}
+    foreach ($x in @($entradas)) {
+        # La clave lleva la NCU ademas de IP y puerto. Dos NCUs no comparten
+        # IP en una planta de verdad, pero el banco del agente simula dos contra
+        # el mismo 127.0.0.1:15020 y sin la NCU se fundian en una. Y la regla
+        # que se quiere expresar es "los tramos de UN gateway DE UNA NCU", no
+        # "todo lo que caiga en la misma direccion".
+        # Ncu-DeNombre se define mucho mas abajo y esto corre al cargar, asi que
+        # el patron va aqui: es el mismo.
+        $mn = [regex]::Match("$($x.nombre)", '(?i)\bNCU\s*(\d+)')
+        $k = "$(if ($mn.Success) { $mn.Groups[1].Value })|$($x.e.ip)|$($x.e.puerto)"
+        if (-not $grupos.ContainsKey($k)) { $grupos[$k] = @(); $orden += $k }
+        $grupos[$k] += ,$x
+    }
+    $r = @()
+    foreach ($k in $orden) {
+        $g = @($grupos[$k])
+        if ($g.Count -eq 1) { $r += ,$g[0]; continue }
+        $e = $g[0].e
+        $inis = @($g | ForEach-Object { [int]$_.e.ini })
+        $fins = @($g | ForEach-Object { [int]$_.e.fin })
+        # [int] a la fuerza: Measure-Object devuelve DOUBLE, y las claves de
+        # $dentro son int. ContainsKey(46.0) no casa con ContainsKey(46), asi
+        # que sin esto TODO el rango salia hueco y la planta perdia TCUs: El
+        # Burgo pasaba de 216 a 153 y San Jose de 2289 a 1686.
+        $ini = [int]($inis | Measure-Object -Minimum).Minimum
+        $fin = [int]($fins | Measure-Object -Maximum).Maximum
+        # lo que NO cae en ningun tramo es un hueco de verdad; y los huecos que
+        # ya venian declarados dentro de un tramo siguen siendolo
+        $dentro = @{}
+        foreach ($x in $g) {
+            for ($t = [int]$x.e.ini; $t -le [int]$x.e.fin; $t++) { $dentro[$t] = $true }
+            foreach ($h in @($x.e.huecos)) { if ("$h" -match '^\d+$') { $dentro.Remove([int]$h) } }
+        }
+        # Un salto entre tramos se excluye SIEMPRE de este gateway, pero no
+        # siempre por el mismo motivo, y decirlo mal manda a alguien a buscar
+        # -o a no buscar- donde no toca:
+        #   hueco   no existe en ninguna parte. Ayora NCU7: la 14 no esta instalada
+        #   ajena   existe, pero cuelga de otro sitio. El Burgo NCU2: la 108 es
+        #           de la NCU1, y decirle al tecnico "no existe" seria falso
+        $fuera = @{}
+        foreach ($otro in @($entradas)) {
+            $mo = [regex]::Match("$($otro.nombre)", '(?i)\bNCU\s*(\d+)')
+            if ("$(if ($mo.Success) { $mo.Groups[1].Value })|$($otro.e.ip)|$($otro.e.puerto)" -eq $k) { continue }
+            for ($t = [int]$otro.e.ini; $t -le [int]$otro.e.fin; $t++) { $fuera[$t] = $true }
+            foreach ($h in @($otro.e.huecos)) { if ("$h" -match '^\d+$') { $fuera.Remove([int]$h) } }
+        }
+        $huecos = @(); $ajenas = @()
+        for ($t = $ini; $t -le $fin; $t++) {
+            if ($dentro.ContainsKey($t)) { continue }
+            $huecos += $t
+            if ($fuera.ContainsKey($t)) { $ajenas += $t }
+        }
+        $j = @{}
+        foreach ($kk in @($e.Keys)) { $j[$kk] = $e[$kk] }
+        $j.ini = $ini; $j.fin = $fin
+        if ($huecos.Count -gt 0) { $j.huecos = $huecos } else { $j.Remove('huecos') }
+        # anotacion para el mensaje: excluir se excluye igual, pero el motivo cambia
+        if ($ajenas.Count -gt 0) { $j.ajenas = $ajenas } else { $j.Remove('ajenas') }
+        # los repetidores de todos los tramos cuelgan del mismo gateway
+        $reps = @(); foreach ($x in $g) { foreach ($rp in @($x.e.reps)) { if ($rp) { $reps += ,$rp } } }
+        if ($reps.Count -gt 0) { $j.reps = $reps }
+        # y lo que solo trae uno de los tramos no se pierde
+        foreach ($campo in @('hsu','hsus','hsuLista','rsuLista','ip_gw','trackers')) {
+            if ($null -ne $j[$campo]) { continue }
+            foreach ($x in $g) { if ($null -ne $x.e[$campo]) { $j[$campo] = $x.e[$campo]; break } }
+        }
+        $r += ,@{nombre = (Nombre-SinTramo $g[0].nombre); e = $j}
+    }
+    return $r
+}
+
+# "Ayora NCU7 (TCU 1-13)" -> "Ayora NCU7". El sufijo lo pone el generador para
+# distinguir tramos; juntados, sobra. Pura.
+function Nombre-SinTramo([string]$nombre) {
+    return ("$nombre" -replace '\s*\(TCU [^)]*\)\s*$', '').Trim()
 }
 
 # Entradas "(auto)": si varias entradas comparten IP (una por gateway de la
@@ -163,9 +261,14 @@ function Construir-EntradasAuto {
         foreach ($g in $grupo) {
             while ($prefijo -and -not $g.nombre.StartsWith($prefijo)) { $prefijo = $prefijo.Substring(0, $prefijo.Length - 1) }
         }
-        $prefijo = ($prefijo -replace '(GW|TCU)\S*$', '').Trim()
+        # OJO con el patron: era '(GW|TCU)\S*$', que exige que GW o TCU vayan
+        # PEGADOS al final. Con dos tramos, el prefijo comun de
+        # "Ayora NCU7 (TCU 1-13)" y "(TCU 15-23)" es "Ayora NCU7 (TCU 1" -las
+        # dos empiezan por 1- y ahi TCU no esta pegado al final: no limpiaba
+        # nada y salia la entrada "Ayora NCU7 (TCU 1 (auto)".
+        $prefijo = ($prefijo -replace '\s*\(?\s*(GW|TCU)\b.*$', '').Trim()
         if (-not $prefijo) { $prefijo = "NCU $ip" }
-        $gws = @($grupo | ForEach-Object { @{puerto=$_.p.puerto; ini=$_.p.ini; fin=$_.p.fin; reps=@($_.p.reps); huecos=@($_.p.huecos); ip_gw=$_.p.ip_gw} } | Sort-Object { $_.ini })
+        $gws = @($grupo | ForEach-Object { @{puerto=$_.p.puerto; ini=$_.p.ini; fin=$_.p.fin; reps=@($_.p.reps); huecos=@($_.p.huecos); ajenas=@($_.p.ajenas); ip_gw=$_.p.ip_gw} } | Sort-Object { $_.ini })
         $ini = @($gws | ForEach-Object { $_.ini } | Measure-Object -Minimum).Minimum
         $fin = @($gws | ForEach-Object { $_.fin } | Measure-Object -Maximum).Maximum
         $auto = @{ip=$ip; puerto=$null; ini=[int]$ini; fin=[int]$fin; gws=$gws}
@@ -6467,18 +6570,43 @@ function Plan-Segmentos([int[]]$tcus, [hashtable]$cx) {
         return @{puerto=$cx.puerto; tcus=$quedan}
     }
     $segs = New-Object System.Collections.ArrayList
-    $huerfanos = @()
+    $huerfanos = @(); $inexistentes = @()
     $actual = $null
     foreach ($tcu in $tcus) {
-        $gw = $null
-        foreach ($g in $cx.gws) { if ($tcu -ge $g.ini -and $tcu -le $g.fin) { $gw = $g; break } }
-        if (-not $gw) { $huerfanos += $tcu; continue }
+        $gw = $null; $enHueco = $false
+        # OJO: hasta ahora el emparejamiento miraba SOLO ini..fin e ignoraba los
+        # huecos del gateway. No mordia porque ninguna entrada de gateway los
+        # traia -vivian en las entradas de NCU suelta, que se resuelven arriba-.
+        # Al juntar los tramos de un gateway (ver Tramos-Juntar) si los hay, y
+        # sin esto una TCU declarada inexistente se enrutaba igual.
+        foreach ($g in $cx.gws) {
+            if ($tcu -lt $g.ini -or $tcu -gt $g.fin) { continue }
+            $h = @(@($g.huecos) | Where-Object { "$_" -match '^\d+$' } | ForEach-Object { [int]$_ })
+            if ($h -contains [int]$tcu) { $enHueco = $true; continue }
+            $gw = $g; break
+        }
+        # Y son DOS cosas distintas, que antes se decian igual:
+        #   huerfana     no cae en ningun gateway: la topologia no dice de cual
+        #                cuelga. En El Burgo, la TCU 108 de la NCU2 -que en
+        #                realidad es de la NCU1-. Hay que mirarlo.
+        #   inexistente  cae dentro, pero declarada como hueco: no esta
+        #                instalada. Ni se lee ni hay nada que mirar.
+        if (-not $gw) {
+            if ($enHueco) {
+                $aj = @($cx.gws | ForEach-Object { @($_.ajenas) } | Where-Object { "$_" -match '^\d+$' } | ForEach-Object { [int]$_ })
+                if ($aj -contains [int]$tcu) { $huerfanos += $tcu } else { $inexistentes += $tcu }
+            } else { $huerfanos += $tcu }
+            continue
+        }
         if ($actual -and $actual.puerto -eq $gw.puerto) { [void]$actual.tcus.Add($tcu) }
         else {
             $actual = @{puerto=$gw.puerto; tcus=(New-Object System.Collections.ArrayList)}
             [void]$actual.tcus.Add($tcu)
             [void]$segs.Add($actual)
         }
+    }
+    if ($inexistentes.Count -gt 0) {
+        Con ("AVISO: la topologia dice que estas TCUs no existen (saltadas): " + ($inexistentes -join ', ')) ([System.Drawing.Color]::Orange)
     }
     if ($huerfanos.Count -gt 0) {
         Con ("AVISO: TCUs fuera de los gateways de la NCU (saltados): " + ($huerfanos -join ', ')) ([System.Drawing.Color]::Orange)

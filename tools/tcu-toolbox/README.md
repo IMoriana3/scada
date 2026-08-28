@@ -75,6 +75,56 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**El desplegable: los tramos de un gateway son un gateway (v11.64)** — Ayora
+NCU7 salía **tres veces**:
+
+```
+Ayora NCU7 (TCU 1-13)
+Ayora NCU7 (TCU 15-23)
+Ayora NCU7 (TCU 1 (auto)      ← el nombre, roto
+```
+
+El Excel da los esclavos de cada gateway **por tramos** y el generador escribía
+una entrada por tramo. Ninguna de ellas es algo que se quiera elegir —nadie
+opera «el bloque 22-31 del GW1»— y peor: elegir `Ayora NCU7 (TCU 1-13)` dejaba
+fuera media NCU **sin decirlo**.
+
+| Planta | Antes | Ahora |
+|---|---|---|
+| El Burgo | 5 | **4** |
+| Ayora | 17 | **16** |
+| **San José** | **82** | **38** |
+
+Las TCUs son **exactamente las mismas**: 216, 751 y 2289 antes y después. Lo
+único que cambia es que cada gateway sea una línea, con los saltos entre tramos
+declarados como huecos.
+
+Los gateways **distintos no se juntan** —elegir GW1 o GW2 significa algo, son
+dos redes Zigbee— ni las NCUs distintas: la clave es **NCU + IP + puerto**.
+
+**Y un salto no siempre significa lo mismo.** Se excluye del gateway igual, pero
+decirlo mal manda a alguien a buscar donde no toca:
+
+| | Ejemplo | Qué se dice |
+|---|---|---|
+| **hueco** | Ayora NCU7, la 14: no está instalada en ninguna parte | «la topología dice que estas TCUs no existen» |
+| **ajena** | El Burgo NCU2, la 108: **es de la NCU1** | «TCUs fuera de los gateways de la NCU» |
+
+Decirle a un técnico que la 108 «no existe» sería **falso**.
+
+**Dos fallos que esto destapó:**
+
+`Plan-Segmentos` emparejaba TCU con gateway mirando **solo `ini`–`fin`, ignorando
+los huecos**. No mordía porque hasta ahora ninguna entrada de gateway los traía.
+Y el **agente** dejaba los huecos fuera al construir su lista de gateways, así
+que **escribía en TCUs que la topología declara inexistentes** — la prueba que lo
+cubría esperaba justo ese comportamiento. Corregidos los dos (agente v4.0).
+
+Y el nombre del `(auto)`: el patrón de limpieza era `(GW|TCU)\S*$`, que exige
+que `GW` o `TCU` vayan **pegados al final**. Con dos tramos el prefijo común de
+`(TCU 1-13)` y `(TCU 15-23)` es `Ayora NCU7 (TCU 1` —las dos empiezan por 1— y
+ahí `TCU` no está pegado: no limpiaba nada.
+
 **El `/leer` del agente no alcanzaba el bloque de estado (agente v3.9)** — el
 SCADA pide variables al agente por `GET /leer?vars=...`, y `Resolver-Variable`
 **solo buscaba en las 125 de configuración** (`4xxxx`). Las 43 de lectura
