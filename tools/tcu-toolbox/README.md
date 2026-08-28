@@ -75,6 +75,37 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**Regenerar desde el Excel ya no borra lo que el Excel no trae** — la pasada del
+Excel de la #222 se llevó por delante, en silencio, los **cinco repetidores de
+Ayora**. Sin ellos no se diagnostican, no entran en el inventario ni en la
+campaña de firmware, y uno con la batería muerta se lleva por delante todo lo
+que cuelga de él — que es exactamente el motivo por el que se declararon.
+
+El mecanismo de conservación existía y estaba pensado, pero era una **lista
+blanca de nombres**:
+
+```python
+for k in ("hsu_esclavos", "rsu", "hsus_gw", "ip_gw"):
+```
+
+y `repetidores` no estaba en ella. La regla ya no enumera nada: **regenerar solo
+pisa lo que la hoja dice**. Si la entrada recién construida trae el campo, manda
+la hoja; si no lo trae, es que la hoja no opina y lo que hubiera en el JSON se
+queda, venga de donde venga. Un campo puesto a mano mañana se conserva solo.
+
+Los cinco repetidores están repuestos en `plantas/24025-ayora.json`. `test_conservar.py`
+cubre la regla, y de paso el primer intento de arreglo —que invertía la lista en
+vez de quitarla— murió ahí: dejaba de conservar `hsu_esclavos`, que tampoco viene
+de la hoja en casi ninguna planta.
+
+**Los huecos de la NCU7 no hacían falta.** Lo parecían: también desaparecieron. Pero
+el generador nuevo parte esa NCU en tramos (`1-13` y `15-23`) que dejan fuera el
+14, el 24 y el 25 **por construcción**, y Ayora sigue siendo de 751 seguidores.
+Eran dos mecanismos para lo mismo. La prueba que los exigía estaba escrita sobre
+la *forma* y se puso roja sin que nada estuviera mal; ahora mide el **resultado**
+—que esos tres números no caen en ningún tramo, y que la NCU7 deja 22 seguidores—,
+que es lo que de verdad importa.
+
 **El fichero exportado lleva la hora del DATO, no la de guardarlo (v11.59)** —
 un barrido de Ayora son minutos. Si lo exportabas a media tarde, el fichero se
 llamaba `diagnostico_20260821_1640.csv` con la hora de la tarde: **dos
