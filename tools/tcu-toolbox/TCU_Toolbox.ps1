@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.61'
+$VERSION_TOOLBOX = '11.62'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1565,6 +1565,47 @@ $LEER_AVISO = 2000     # a partir de aqui se pregunta antes de empezar
 function Leer-Coste([int]$nVars, [int]$nTcus) {
     $n = [int]$nVars * [int]$nTcus
     return @{lecturas = $n; avisar = ($n -gt $LEER_AVISO)}
+}
+
+# ---------- un backup de TCU, convertido en preset ----------
+# Volcar una TCU y escribir ese volcado en otra es LA operacion de sustituir un
+# equipo, y hay tres grupos de registros que NO se clonan:
+#
+#   comandos      son ordenes, no configuracion: escribirlos dispara acciones
+#   fecha y hora  es la de cuando se volco; la hora se pone con Sincronizar reloj
+#   identidad     zigbee_slave_id, rs485_slave_id, PAN ID y cifrado son de la
+#                 TCU ORIGEN. Clonarlos deja dos equipos con el mismo esclavo en
+#                 la misma Zigbee, y ahi ya no se sabe con cual se esta hablando
+#
+# Pura: recibe el objeto del backup y los tres juegos de direcciones, y devuelve
+# @{pares; nIdent; sinValor; total}. Se prueba sin ventana y sin fichero.
+function Backup-APreset($obj, $mapa, $comandos, $tiempos, $identidad) {
+    $pares = @(); $nIdent = 0; $sinValor = 0; $total = 0
+    foreach ($v in @($obj.variables)) {
+        $total++
+        $nom = "$($v.variable)"
+        if (-not $mapa.Contains($nom)) { continue }
+        $def = $mapa[$nom]
+        if (@($comandos) -contains $def.addr) { continue }
+        if (@($tiempos) -contains $def.addr) { continue }
+        if (@($identidad) -contains $def.addr) { $nIdent++; continue }
+        if ("$($v.valor)" -eq '') { $sinValor++; continue }
+        $pares += [pscustomobject]@{variable = $nom; valor = $v.valor}
+    }
+    return @{pares = @($pares); nIdent = $nIdent; sinValor = $sinValor; total = $total}
+}
+
+# Que clase de fichero es el que se acaba de abrir. Los dos botones de carga
+# aceptaban cualquier JSON: el de preset no comprobaba NADA y, dandole un
+# backup, se comia el fichero, dejaba la tabla en blanco y soltaba
+# "AVISO: '' no existe en el mapa". Pura.
+function Json-Clase($obj) {
+    if ($null -eq $obj) { return 'nada' }
+    if ("$($obj.tipo)" -eq 'backup_tcu' -and $obj.variables) { return 'backup' }
+    # un preset es una lista de {variable, valor}
+    $l = @($obj)
+    if ($l.Count -gt 0 -and @($l | Where-Object { "$($_.variable)" -ne '' }).Count -gt 0) { return 'preset' }
+    return 'otro'
 }
 
 function Fila-Tipo($f) {
@@ -6937,28 +6978,57 @@ $btnPresetSave.Add_Click({
 function Cargar-FilasEnGrid($pares) {
     # $pares: lista de objetos con .variable y .valor
     $dgv.Rows.Clear()
-    $n = 0
+    $n = 0; $vacias = 0
     foreach ($e in $pares) {
         if ($VARIABLES.Contains([string]$e.variable)) {
             # con el filtro activo el nombre puede no estar en el combo: anadirlo
             if (-not $colVar.Items.Contains([string]$e.variable)) { [void]$colVar.Items.Add([string]$e.variable) }
             [void]$dgv.Rows.Add($e.variable, "$($e.valor)", (Info-Variable $e.variable))
             $n++
-        } else {
+        } elseif ("$($e.variable)" -ne '') {
             Con "AVISO: '$($e.variable)' no existe en el mapa - saltada" ([System.Drawing.Color]::Orange)
-        }
+        } else { $vacias++ }
     }
+    # una entrada SIN nombre no es una variable que falte del mapa: es que el
+    # fichero no tiene la forma que esperabamos. Se dice una vez, no una por fila.
+    if ($vacias -gt 0) { Con "AVISO: $vacias entradas del fichero no traen nombre de variable." ([System.Drawing.Color]::Orange) }
     return $n
+}
+
+# Carga un backup ya leido como preset, con sus exclusiones y sus avisos.
+# Compartido por los dos botones: dar un backup a "Cargar preset" es lo que
+# cualquiera hace, y mandarle a pulsar el otro boton teniendo el fichero
+# delante es pedir un paso que la herramienta ya puede dar sola.
+function Preset-DeBackup($obj) {
+    $r = Backup-APreset $obj $VARIABLES $ADDR_COMANDO $ADDR_TIEMPO $ADDR_IDENTIDAD
+    if (($obj.PSObject.Properties['completo'] -and -not $obj.completo) -or $r.sinValor -gt 0) {
+        $resp = [System.Windows.Forms.MessageBox]::Show(
+            "Este backup esta INCOMPLETO ($($r.sinValor) variables sin valor). Si lo escribes en una TCU, las variables que faltan quedaran sin configurar.`r`n`r`nCargarlo como preset de todos modos?",
+            'Backup incompleto', 'YesNo', 'Warning')
+        if ($resp -ne 'Yes') { return $false }
+    }
+    $n = Cargar-FilasEnGrid $r.pares
+    Con "Backup de TCU $($obj.tcu) ($($obj.fecha)) cargado como preset: $n variables de configuracion (comandos y fecha/hora excluidos)" ([System.Drawing.Color]::SteelBlue)
+    if ($r.nIdent -gt 0) { Con "  excluidos $($r.nIdent) registros de identidad de red (zigbee_slave_id, rs485_slave_id, PAN ID, cifrado): son de la TCU $($obj.tcu), no se clonan" ([System.Drawing.Color]::Orange) }
+    return $true
 }
 
 $btnPresetLoad.Add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
-    $dlg.Filter = 'Preset TCU (*.json)|*.json'
+    $dlg.Filter = 'Preset o backup de TCU (*.json)|*.json'
     if ($dlg.ShowDialog() -ne 'OK') { return }
     try { $obj = Get-Content $dlg.FileName -Raw | ConvertFrom-Json }
-    catch { [void][System.Windows.Forms.MessageBox]::Show("No se pudo leer el preset: $_",'Error'); return }
-    $n = Cargar-FilasEnGrid $obj
-    Con "Preset cargado: $n variables" ([System.Drawing.Color]::SteelBlue)
+    catch { [void][System.Windows.Forms.MessageBox]::Show("No se pudo leer el fichero: $_",'Error'); return }
+    switch (Json-Clase $obj) {
+        # un backup de Volcar TCU se carga como tal, sin mandar a otro boton
+        'backup' { Con 'Es un backup de Volcar TCU, no un preset: se carga con sus exclusiones.' ([System.Drawing.Color]::Gainsboro)
+                   [void](Preset-DeBackup $obj); return }
+        'preset' { $n = Cargar-FilasEnGrid $obj
+                   Con "Preset cargado: $n variables" ([System.Drawing.Color]::SteelBlue); return }
+    }
+    [void][System.Windows.Forms.MessageBox]::Show(
+        "Ese fichero no es un preset ni un backup de TCU.`r`n`r`nUn preset es una lista de {variable, valor} (boton Guardar preset). Un backup sale de la pestana Volcar TCU con Backup JSON.",
+        'Fichero no reconocido', 'OK', 'Warning')
 })
 
 $btnCargarBackup.Add_Click({
@@ -6967,34 +7037,10 @@ $btnCargarBackup.Add_Click({
     if ($dlg.ShowDialog() -ne 'OK') { return }
     try { $obj = Get-Content $dlg.FileName -Raw | ConvertFrom-Json }
     catch { [void][System.Windows.Forms.MessageBox]::Show("No se pudo leer el backup: $_",'Error'); return }
-    if ($obj.tipo -ne 'backup_tcu' -or -not $obj.variables) {
+    if ((Json-Clase $obj) -ne 'backup') {
         [void][System.Windows.Forms.MessageBox]::Show('El fichero no es un backup de TCU (usa "Backup JSON" en la pestana Volcar).','Error'); return
     }
-    # Un backup marcado incompleto (o con variables sin valor) dejaria la TCU
-    # a medio configurar: avisar antes de usarlo como preset.
-    $sinValor = @($obj.variables | Where-Object { "$($_.valor)" -eq '' }).Count
-    if (($obj.PSObject.Properties['completo'] -and -not $obj.completo) -or $sinValor -gt 0) {
-        $r = [System.Windows.Forms.MessageBox]::Show(
-            "Este backup esta INCOMPLETO ($sinValor variables sin valor). Si lo escribes en una TCU, las variables que faltan quedaran sin configurar.`r`n`r`nCargarlo como preset de todos modos?",
-            'Backup incompleto', 'YesNo', 'Warning')
-        if ($r -ne 'Yes') { return }
-    }
-    # Solo variables de configuracion: fuera comandos, fecha/hora e identidad de
-    # red. Un backup se carga aqui para CLONARLO en otra TCU, y el numero de
-    # esclavo y el PAN ID del equipo original no se pueden clonar.
-    $pares = @(); $nIdent = 0
-    foreach ($v in $obj.variables) {
-        if (-not $VARIABLES.Contains([string]$v.variable)) { continue }
-        $def = $VARIABLES[[string]$v.variable]
-        if ($ADDR_COMANDO -contains $def.addr) { continue }
-        if ($ADDR_TIEMPO -contains $def.addr) { continue }
-        if ($ADDR_IDENTIDAD -contains $def.addr) { $nIdent++; continue }
-        if ("$($v.valor)" -eq '') { continue }
-        $pares += [pscustomobject]@{variable=$v.variable; valor=$v.valor}
-    }
-    $n = Cargar-FilasEnGrid $pares
-    Con "Backup de TCU $($obj.tcu) ($($obj.fecha)) cargado como preset: $n variables de configuracion (comandos y fecha/hora excluidos)" ([System.Drawing.Color]::SteelBlue)
-    if ($nIdent -gt 0) { Con "  excluidos $nIdent registros de identidad de red (zigbee_slave_id, rs485_slave_id, PAN ID, cifrado): son de la TCU $($obj.tcu), no se clonan" ([System.Drawing.Color]::Orange) }
+    [void](Preset-DeBackup $obj)
 })
 
 # ------------------------- logica LEER VARIABLE -------------------------
