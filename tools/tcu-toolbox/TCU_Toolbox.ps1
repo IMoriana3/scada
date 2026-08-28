@@ -3125,10 +3125,28 @@ function Nombres-Ordenados([string[]]$nombres) {
 
 # Resuelve el nombre de una variable de forma tolerante: clave exacta, o una
 # unica coincidencia por subcadena ("41010" -> '41010 longitud [deg]').
-function Resolver-Variable([string]$texto) {
+# $conEstado abre la busqueda a las 43 variables de LECTURA (3xxxx), que salen
+# con el prefijo 'ESTADO ' porque asi las nombra Nombres-Legibles.
+#
+# Va apagado por defecto A PROPOSITO: esta funcion la usan tambien los caminos
+# de ESCRITURA -en la toolbox y en dos sitios del agente-, y resolver ahi el
+# nombre de un registro de solo lectura seria abrir la puerta a escribir contra
+# el. Solo lo enciende quien lee.
+#
+# Sin esto, el /leer del agente no alcanzaba NADA del bloque de estado: ni SoC,
+# ni SoH, ni alarmas, ni tilt, ni los ciclos. Y Leer-Planta ya estaba escrito
+# para admitirlos -mira el nombre por 'ESTADO *'-, asi que esa rama era codigo
+# muerto: el resolver nunca podia devolver uno.
+function Resolver-Variable([string]$texto, [switch]$conEstado) {
     $t = "$texto".Trim()
     if ($VARIABLES.Contains($t)) { return $t }
-    $m = @(Filtrar-Nombres @($VARIABLES.Keys) $t)
+    $candidatos = @($VARIABLES.Keys)
+    if ($conEstado) {
+        if ($ESTADO.Contains($t)) { return "ESTADO $t" }
+        if ($t -like 'ESTADO *' -and $ESTADO.Contains($t.Substring(7))) { return $t }
+        $candidatos += @(@($ESTADO.Keys) | ForEach-Object { "ESTADO $_" })
+    }
+    $m = @(Filtrar-Nombres $candidatos $t)
     if ($m.Count -eq 1) { return $m[0] }
     if ($m.Count -eq 0) { throw "'$t' no coincide con ninguna variable del mapa" }
     throw "'$t' es ambiguo ($($m.Count) coincidencias: $($m[0]), $($m[1])...)"

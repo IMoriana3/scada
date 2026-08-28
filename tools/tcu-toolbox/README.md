@@ -75,6 +75,40 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**El `/leer` del agente no alcanzaba el bloque de estado (agente v3.9)** — el
+SCADA pide variables al agente por `GET /leer?vars=...`, y `Resolver-Variable`
+**solo buscaba en las 125 de configuración** (`4xxxx`). Las 43 de lectura
+(`3xxxx`) no las encontraba, así que por ahí no se podía leer **ni SoC, ni SoH,
+ni alarmas, ni tilt, ni el tiempo de motor** — ni, ahora, capacidad y ciclos.
+
+Y `Leer-Planta` ya estaba escrito para admitirlas:
+
+```powershell
+$d.vdef = $(if ($d.nombre -like 'ESTADO *') { $ESTADO[...] } else { $VARIABLES[...] })
+```
+
+Esa rama era **código muerto**: el resolver nunca podía devolver un nombre
+`ESTADO ...`.
+
+`Resolver-Variable` gana un interruptor `-conEstado`, **apagado por defecto a
+propósito**: la misma función la usan los caminos de **escritura** —uno en la
+toolbox y dos en el agente—, y resolver ahí el nombre de un registro de solo
+lectura sería abrir la puerta a escribir contra él. Solo lo enciende quien lee.
+El banco lo fija: de los tres sitios que resuelven en el agente, exactamente
+**uno** lleva el interruptor.
+
+Desde el SCADA, y para lo que se lee de vez en cuando:
+
+```
+GET /leer?vars=30099,30100,30101,30102&ncu=13&tcus=1-72
+```
+
+Un registro con dos campos —`30096` es SoC y SoH— **no se resuelve a ciegas**:
+dice que es ambiguo y se acota con `30096 SoC`.
+
+⚠️ El `/leer` va **por Zigbee, una lectura por (TCU × variable)**: cuatro
+variables en 72 TCUs son 288 lecturas. No es un endpoint de refresco.
+
 **Analizador de baterías (v11.63)** — hoja nueva bajo **TCUs**, junto a
 *Baterías*. La pestaña *Baterías* es una **foto**: el último barrido contra unos
 umbrales y contra la mediana de la flota. Eso contesta *«cuál está mal ahora»*.

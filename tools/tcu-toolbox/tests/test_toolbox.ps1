@@ -3913,6 +3913,31 @@ Check 'hsu corto: y va como SIN LECTURA' ("$($compHsu[1].Salud)") 'SIN LECTURA'
 Check 'hsu corto: la columna NCU se lee entera' ($src.Contains("[void]`$lvG.Columns.Add('NCU', 58)")) $true
 
 Write-Host ''
+Write-Host '== el /leer del agente no alcanzaba el bloque de estado =='
+# Resolver-Variable solo buscaba en $VARIABLES (las 125 de configuracion), asi
+# que por el agente el SCADA no podia leer NADA de las 43 de lectura: ni SoC, ni
+# SoH, ni alarmas, ni tilt, ni los ciclos. Y Leer-Planta ya estaba escrito para
+# admitirlas -mira el nombre por 'ESTADO *'-, o sea que esa rama era codigo
+# muerto: el resolver nunca podia devolver uno.
+Check 'resolver: la configuracion, como siempre' (Resolver-Variable '41010') '41010 longitud [deg]'
+# try/catch no es una expresion en PowerShell: hace falta una funcion
+function ResuelveOk([string]$v, [switch]$conEstado) {
+    try { [void](Resolver-Variable $v -conEstado:$conEstado); return $true } catch { return $false }
+}
+Check 'resolver: el estado NO se alcanza sin pedirlo' (ResuelveOk '30101') $false
+Check 'resolver: y con -conEstado si' (Resolver-Variable '30101' -conEstado) 'ESTADO 30101 ciclos_carga'
+Check 'resolver: la capacidad tambien' (Resolver-Variable '30099' -conEstado) 'ESTADO 30099 capacidad_actual [mAh]'
+Check 'resolver: por nombre completo tambien vale' (Resolver-Variable '30101 ciclos_carga' -conEstado) 'ESTADO 30101 ciclos_carga'
+Check 'resolver: y con el prefijo ya puesto' (Resolver-Variable 'ESTADO 30101 ciclos_carga' -conEstado) 'ESTADO 30101 ciclos_carga'
+# un registro con dos campos NO se resuelve a ciegas: se dice que es ambiguo
+Check 'resolver: 30096 es SoC y SoH, no se resuelve a ciegas' (ResuelveOk '30096' -conEstado) $false
+Check 'resolver: pero acotando sale' (Resolver-Variable '30096 SoC' -conEstado) 'ESTADO 30096 SoC [%] (b.bajo)'
+# LO QUE NO PUEDE PASAR: que un camino de ESCRITURA resuelva un registro de
+# solo lectura. El interruptor va apagado por defecto justo por esto.
+Check 'resolver: sin el interruptor, ninguna de estado' (
+    @(@('30099','30101','30096','30002') | Where-Object { ResuelveOk $_ }).Count) 0
+
+Write-Host ''
 Write-Host '== analizador de baterias: como va, por que, a cual voy, cuanto le queda =='
 # La pestana Baterias es una FOTO. Esto contesta lo que una foto no puede.
 

@@ -200,6 +200,25 @@ try {
     Check 'leer: el filtro de gateway deja pasar el suyo' (@($l3.tcus).Count -gt 0) 'True'
     $l4 = Pedir '/leer?vars=41010&gw=9999'
     Check 'leer: y con un gateway que no existe, nada' (@($l4.tcus).Count) 0
+
+    # ---- el bloque de ESTADO (3xxxx), que el /leer no alcanzaba ----
+    # Resolver-Variable solo miraba en las 125 de configuracion, asi que por el
+    # agente el SCADA no podia leer ni SoC, ni SoH, ni alarmas, ni tilt, ni los
+    # ciclos. Y Leer-Planta ya estaba escrito para admitirlas: era codigo muerto.
+    $lc = Pedir '/leer?vars=30101&tcus=1-1'
+    Check 'estado: los ciclos se pueden pedir por su registro' (@($lc.variables) -join ',') 'ESTADO 30101 ciclos_carga'
+    Check 'estado: y llega un valor' (@($lc.tcus).Count -ge 1) $true
+    $lcap = Pedir '/leer?vars=30099,30100,30101,30102&tcus=1-1'
+    Check 'estado: capacidad, ciclos y conservacion de un tiron' (@($lcap.variables).Count) 4
+    # y se puede mezclar con configuracion en la misma peticion
+    $lmix = Pedir '/leer?vars=41010,30101&tcus=1-1'
+    Check 'estado: mezclado con configuracion' (@($lmix.variables).Count) 2
+    # un registro con dos campos no se resuelve a ciegas
+    $amb = $null
+    try { $amb = Pedir '/leer?vars=30096&tcus=1-1' } catch { $amb = 'error' }
+    Check 'estado: 30096 es SoC y SoH, y no se elige por nosotros' ($amb -eq 'error') $true
+    $lsoc = Pedir '/leer?vars=30096 SoC&tcus=1-1'
+    Check 'estado: acotando, sale' ((@($lsoc.variables) -join ',') -like '*SoC*') $true
     Check 'baterias: tambien lleva GW' ($null -ne @($b.tcus)[0].PSObject.Properties['GW']) 'True'
     Check 'inventario: tambien lleva GW' ($null -ne @($inv.tcus)[0].PSObject.Properties['GW']) 'True'
 
@@ -310,5 +329,18 @@ Check 'arrancar: y en el portapapeles' ($srcArr.Contains('Set-Clipboard')) $true
 Check 'arrancar: ultima_url.txt esta ignorado' ((Get-Content (Join-Path (Split-Path $PSScriptRoot -Parent) '../tcu-agente/.gitignore') -Raw).Contains('ultima_url.txt')) $true
 
 Write-Host ''
+
+
+Write-Host ''
+Write-Host '== y solo el /leer abre el bloque de estado =='
+# Resolver-Variable la usan tambien los caminos de ESCRITURA. Resolver ahi el
+# nombre de un registro de solo lectura seria abrir la puerta a escribir en el,
+# asi que el interruptor va apagado por defecto y solo lo enciende quien lee.
+$srcAg2 = Get-Content (Join-Path $raizAg 'TCU_Agente.ps1') -Raw
+$resuelven = @([regex]::Matches($srcAg2, 'Resolver-Variable [^\r\n]*') | ForEach-Object { $_.Value })
+Check 'estado: hay tres sitios que resuelven' $resuelven.Count 3
+Check 'estado: y solo UNO abre el estado' (@($resuelven | Where-Object { $_ -like '*-conEstado*' }).Count) 1
+Check 'estado: los otros dos escriben, y van sin el' (@($resuelven | Where-Object { $_ -notlike '*-conEstado*' }).Count) 2
+
 if ($fallos -eq 0) { Write-Host 'AGENTE: TODAS LAS PRUEBAS OK'; exit 0 }
 Write-Host "AGENTE: $fallos PRUEBAS FALLIDAS"; exit 1
