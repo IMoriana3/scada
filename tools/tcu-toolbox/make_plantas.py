@@ -102,6 +102,53 @@ def slug(texto):
     return re.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-") or "planta"
 
 
+
+def revisa_gateways(entradas, quien):
+    """Dos cosas que la hoja no puede decir por si sola y se ven juntando sus rangos.
+
+    EL SOLAPE NUNCA ES LEGITIMO. Un TCU cuelga de UN gateway. Si sale en los dos,
+    la toolbox lo sondea por los dos puertos y lo da por caido cuando no contesta
+    por el que no es el suyo. Paso en San Jose NCU3 con el TCU 46 y no se veia
+    mirando la hoja: hay que juntar los dos rangos para que salte.
+
+    EL HUECO, EN CAMBIO, PUEDE SER BUENO. Un TCU retirado deja su numero vacio y
+    los demas no se renumeran -Ayora NCU7 tiene el 14 asi, y El Burgo el 108-. Por
+    eso esto solo lo CUENTA: es para mirarlo, no para corregirlo a ciegas. Pero
+    tambien fue el sintoma de San Jose NCU9, donde el 49 no colgaba de ninguno
+    porque el GW1 acababa en 48 y el GW2 empezaba en 50.
+    """
+    porgw = {}
+    for e in entradas:
+        m = re.search(r"NCU\s*(\d+)", e.get("nombre") or "")
+        g = re.search(r"GW\s*(\d+)", e.get("nombre") or "")
+        if not m or e.get("tcu_ini") is None:
+            continue
+        porgw.setdefault((int(m.group(1)), int(g.group(1)) if g else 1), set()).update(
+            range(int(e["tcu_ini"]), int(e["tcu_fin"]) + 1))
+    ncus = {}
+    for (n, g), s in porgw.items():
+        ncus.setdefault(n, {})[g] = s
+    solapes, huecos = [], []
+    for n, gs in sorted(ncus.items()):
+        for a in sorted(gs):
+            for b in sorted(gs):
+                if a < b and (gs[a] & gs[b]):
+                    solapes.append((n, a, b, sorted(gs[a] & gs[b])))
+        todos = set().union(*gs.values())
+        falta = sorted(set(range(min(todos), max(todos) + 1)) - todos)
+        if falta:
+            huecos.append((n, falta))
+    for n, a, b, tcus in solapes:
+        print("  !! %s NCU%d: el TCU %s cuelga del GW%d Y del GW%d. Un TCU es de UN gateway: "
+              "asi se sondea por los dos puertos y sale caido por el que no es el suyo."
+              % (quien, n, tcus if len(tcus) > 1 else tcus[0], a, b))
+    for n, falta in huecos:
+        print("  %s NCU%d: los TCU %s no cuelgan de ningun gateway. Puede ser bueno (TCU "
+              "retirada, que no renumera a las demas) o ser un rango mal puesto."
+              % (quien, n, falta if len(falta) <= 12 else falta[:12] + ["..."]))
+    return solapes, huecos
+
+
 def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
     """Lee la hoja 'Direcciones IP' del Excel maestro y devuelve
     {(num, proyecto): [entradas plantas.json]}. Solo usa IP NCU y los rangos
@@ -411,6 +458,7 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
             if conservados:
                 print(f"  {destino}: conservados {conservados} campos que el Excel no trae "
                       "(repetidores, huecos, esclavos de HSU, ip_gw... del JSON anterior)")
+        revisa_gateways(entradas, destino.name)
         destino.write_text(json.dumps({
             "_comentario": (f"Planta {num} ({proy}) generada desde el Excel maestro "
                             f"(hoja '{hoja}') por make_plantas.py --excel. Solo topologia: "
