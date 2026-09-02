@@ -105,6 +105,15 @@ compat(6, 0x0100, 0, 0, 0x8000, -0.9599, -0.9599, 90, 100, epoch - 30)   # MANUA
 # HSU 1 cacheada por la NCU (30200+): alarma de viento activa, nivel 2
 preset(1, 30200, [0x040F, 2, 1 << 9] + f32w(12.5) + f32w(270.0) + f32w(0.05) + [0])
 preset(1, 29440, [(epoch - 20) & 0xFFFF, (epoch - 20) >> 16])
+# HSU 2 cacheada (30210+): la averia de campo real -fallo sensor viento- fresca
+preset(1, 30210, [0x040F, 0, 1 << 0] + f32w(3.0) + f32w(90.0) + f32w(0.0) + [0])
+preset(1, 29442, [(epoch - 25) & 0xFFFF, (epoch - 25) >> 16])
+# HSU EXTERNA en el bloque 28000 (100 regs/hueco): averia (piranometro caido y
+# modulo de computo) CON alarma de viento a la vez -> ALARMA y meteo separada
+preset(1, 28000, [0x1234, 0x0001, 1, (1 << 4) | (1 << 9)] + f32w(8.0) + f32w(180.0) + f32w(0.0))
+preset(1, 28010, [1 << 1])
+preset(1, 28015, [3600, 12500])              # bateria aux y principal [mV]
+preset(1, 28021, [500, 0, 700, 0, 120, 0])   # irradiancias H/T/D
 # TCU 7 no existe -> GatewayTargetNoResponse (0x0B)
 
 # TCU 77: reproduce el fallo de campo. La NCU deja de contestar una vez (0x0B)

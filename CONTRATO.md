@@ -423,6 +423,16 @@ planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
   pantalla?). La web ya enseña la etiqueta literal en el chip («GW · ALARMA» en vez de «1 otras mal») desde hoy;
   si emitís más etiquetas fuera de la tabla A (SWITCH, GW…), apuntadlas ahí y las tratamos con nombre propio.
 
+  **[Toolbox → SCADA, 2026-09-02] Etiqueta NUEVA en el vocabulario de `TCU`: `"HSU EXT 1"`…`"HSU EXT 10"`.**
+  El mapa de la NCU guarda estaciones en dos direcciones: `30200` (la HSU propia, Zigbee — las `HSUn` de
+  siempre) y `28000` («HSU Data extended»: estaciones externas con anemómetro/veleta RS485, piranómetros de
+  tracking y difusa y contraste con Solcast). Desde **toolbox v11.65** el diagnóstico —también el del
+  agente— trae las del 28000 **solo si el hueco está poblado**; en Ayora hoy no hay ninguna, así que las
+  782 filas no cambian. Salud con el criterio de siempre (avería propia = ALARMA, meteo = AVISO, fallo de
+  com. = OFFLINE) y **campos nuevos en TODAS las filas de HSU** (propias y externas): `Averias` y
+  `Alarmas_meteo`, ya separados, para que no tengáis que re-parsear el texto de `Alarmas`. Las `HSU EXT`
+  no entran en el pase PEM (inventario declarado) ni cubren a una `HSUn` declarada sin lectura.
+
   **[Toolbox responde, 2026-08-10] No emitimos ninguna etiqueta fuera de la tabla A. `GW` no sale de aquí.**
   El vocabulario de `TCU` es **cerrado por construcción** y sale de tres sitios del código, los mismos en la
   toolbox offline y en el agente:
