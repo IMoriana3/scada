@@ -327,6 +327,17 @@ Check 'hsu irradiancia' $h['Irradiancia [W/m2]'] '850'
 Check 'hsu humedad' $h['Humedad rel [%]'] '45'
 Check 'hsu temp rango' ([math]::Abs([double]::Parse($h['Temperatura ext [C]'], $INV) - 26.85) -lt 0.11) 'True'
 Check 'hsu alarma viento' (($met.alarmas -join ';') -like '*ALARMA VIENTO*') 'True'
+# la averia de la estacion y la alarma meteo van en FILAS SEPARADAS: una pide
+# visita y la otra pide que la planta este abanderando
+$hn = @{}; foreach ($f in $met.filas) { $hn[$f.Campo] = $f.Nota }
+Check 'hsu meteo: fila de averias aparte' ($h.ContainsKey('Averias de la estacion (30002)')) $true
+Check 'hsu meteo: sin averia lo dice' ($hn['Averias de la estacion (30002)']) 'ninguna: la estacion esta bien'
+Check 'hsu meteo: la meteo en su fila' ($hn['Alarmas meteo (30002)'] -like '*ALARMA VIENTO*') $true
+Check 'hsu meteo: sin averias mezcladas' ($hn['Alarmas meteo (30002)'] -notlike '*com.*') $true
+# y el separador puro, con los dos tipos a la vez en el mismo registro
+$sepT = Hsu-AlarmasSeparadas ((1 -shl 0) -bor (1 -shl 9)) $HSU_AL1 $HSU_AL1_PROPIAS $HSU_AL1_METEO
+Check 'separador: la averia a su lado' (@($sepT.propias) -join ';') 'com. anemometro'
+Check 'separador: la meteo al suyo' (@($sepT.meteo) -join ';') 'ALARMA VIENTO'
 $cfg = Hsu-LeerConfig 185
 Check 'hsu umbral ON' ($cfg.mid.ToString('0.##', $INV)) '18'
 Check 'hsu umbral OFF' ($cfg.low.ToString('0.##', $INV)) '15'
@@ -398,10 +409,32 @@ Check 'modo directo: y dice por que' ($d10.Alarmas -like '*no sigue*') $true
 Check 'modo: la nota no habla de desviacion' ($dmModo[4].Alarmas -like '*dif *') $false
 
 $hsus = @(Ncu-HsuCompat)
-Check 'via NCU 1 HSU detectada' ($hsus.Count) 1
+Check 'via NCU: 2 propias y 1 externa' ($hsus.Count) 3
 Check 'via NCU HSU aviso viento' (($hsus[0].Salud -eq 'AVISO') -and ($hsus[0].Alarmas -like '*ALARMA VIENTO*')) 'True'
 Check 'via NCU HSU viento en texto' ($hsus[0].Alarmas -like '*12.5 m/s (nivel 2)*') 'True'
 Check 'via NCU HSU etiqueta' ($hsus[0].TCU) 'HSU1'
+# la meteo sale etiquetada y como campo aparte, sin averias mezcladas
+Check 'via NCU HSU1: meteo etiquetada' ($hsus[0].Alarmas -like 'meteo: ALARMA VIENTO*') $true
+Check 'via NCU HSU1: campos separados' (("$($hsus[0].Averias)" -eq '') -and ("$($hsus[0].Alarmas_meteo)" -eq 'ALARMA VIENTO')) $true
+# la HSU2 tiene una AVERIA (anemometro caido): eso es ALARMA -planta ciega-,
+# no un AVISO como el viento
+Check 'via NCU HSU2: averia = ALARMA' (($hsus[1].TCU -eq 'HSU2') -and ($hsus[1].Salud -eq 'ALARMA')) 'True'
+Check 'via NCU HSU2: etiquetada AVERIA' ($hsus[1].Alarmas -like 'AVERIA: fallo sensor viento*') $true
+Check 'via NCU HSU2: sin meteo inventada' ("$($hsus[1].Alarmas_meteo)") ''
+# y la EXTERNA del bloque 28000, decodificada con SU mapa (bit 4 = piranometro,
+# no "bateria desconectada" como diria el mapa del 30002 directo)
+Check 'hsu ext: etiqueta y salud' (($hsus[2].TCU -eq 'HSU EXT 1') -and ($hsus[2].Salud -eq 'ALARMA')) 'True'
+Check 'hsu ext: averias de su mapa' (($hsus[2].Averias -like '*com. piranometro*') -and ($hsus[2].Averias -like '*modulo de computo caido*')) 'True'
+Check 'hsu ext: la meteo separada' ($hsus[2].Alarmas_meteo) 'ALARMA VIENTO'
+Check 'hsu ext: alarms2 en hex' ($hsus[2].alarmas_2) '0x0002'
+Check 'hsu ext: viento como numero' ($hsus[2].Viento_ms) 8
+Check 'hsu ext: irradiancias en texto' ($hsus[2].Alarmas -like '*irr H/T/D 500/700/120 W/m2*') $true
+Check 'hsu ext: bateria en su campo' ($hsus[2].Vbat_mV) 12500
+# una "HSU EXT n" leida NO cubre a una HSU propia declarada en la topologia
+$compExt = @(Diag-Completar @([pscustomobject]@{NCU='14'; TCU='HSU EXT 1'; Salud='OK'; Alarmas=''}) @(@{NCU='14'; TCU='HSU1'}))
+Check 'completar: una EXT no tapa a la declarada' (@($compExt | Where-Object { "$($_.Salud)" -eq 'SIN LECTURA' }).Count) 1
+# y el pase PEM cuenta el inventario declarado: las EXT no entran
+Check 'sat equipos: las HSU EXT fuera del pase' ($src.Contains("if (`"`$(`$h.TCU)`" -like 'HSU EXT*') { continue }")) $true
 
 # ---------- v3.0: rangos del mapa, desglose de alarmas, guardia de viento ----------
 try { $null = Valor-A-Escritura $VARIABLES['40008 jeita_T1 [K]'] '100'; Check 'rango mapa jeita bajo lanza' 'no-lanzo' 'lanza' }
@@ -620,9 +653,10 @@ Check 'comm t1 edad 30s' $cm.tcus[1].edad 30
 Check 'comm t2 nunca leido' $cm.tcus[2].comunica 'False'
 Check 'comm t2 lastcomm 0' $cm.tcus[2].lastcomm 0
 Check 'comm t3 comunica' $cm.tcus[3].comunica 'True'
-Check 'comm hsus n' (@($cm.hsus).Count) 1
+Check 'comm hsus n' (@($cm.hsus).Count) 2
 Check 'comm hsu1 comunica' $cm.hsus[0].comunica 'True'
 Check 'comm hsu1 etiqueta' $cm.hsus[0].hsu 'HSU1'
+Check 'comm hsu2 etiqueta' $cm.hsus[1].hsu 'HSU2'
 Check 'comm reloj ncu' $cm.reloj 1785916800
 # el test comm debe pedir muchas menos lecturas que el diagnostico completo
 $script:NLect = 0
@@ -793,19 +827,22 @@ Check 'hsu unica sin cabecera' (@($rH1.filas | Where-Object { "$($_.Campo)" -lik
 $tH = Hsu-Tabla $rH.oks $objsH
 Check 'hsu tabla: una fila por estacion' (@($tH.filas).Count) 3
 Check 'hsu tabla: en el orden en que se pidieron' (@($tH.filas | ForEach-Object { $_.eti }) -join ' | ') 'NCU1 - HSU1 | NCU2 - HSU1 | NCU9 - HSU9'
-Check 'hsu tabla: las columnas son los campos leidos' (@($tH.cols).Count) 13
+Check 'hsu tabla: las columnas son los campos leidos' (@($tH.cols).Count) 14
 Check 'hsu tabla: con nombre corto' (@($tH.cols) -contains 'Viento m/s') $true
 Check 'hsu tabla: y el largo no se usa de cabecera' (@($tH.cols) -contains 'Viento [m/s]') $false
 Check 'hsu tabla: la muda tiene su fila igual' ("$(@($tH.filas)[2].vals[0])") 'sin respuesta'
 Check 'hsu tabla: y sale en rojo' (@($tH.filas)[2].alarma) $true
 Check 'hsu tabla: todas las filas con el mismo ancho' (@(@($tH.filas) | Where-Object { @($_.vals).Count -ne @($tH.cols).Count }).Count) 0
 # en alarmas el dato util es el texto, no el hexadecimal
-$iAl = [array]::IndexOf(@($tH.cols), 'Alarmas')
+$iAv = [array]::IndexOf(@($tH.cols), 'Averias')
+$iAl = [array]::IndexOf(@($tH.cols), 'Alarmas meteo')
+Check 'hsu tabla: la columna de averias existe' ($iAv -ge 0) $true
 Check 'hsu tabla: la columna de alarmas existe' ($iAl -ge 0) $true
 Check 'hsu tabla: y lleva el texto, no 0x0000' ("$(@($tH.filas)[0].vals[$iAl])".StartsWith('0x')) $false
-# la de texto es la ancha: en medio parte en dos la fila de numeros
-Check 'hsu tabla: las de texto van al final' $iAl (@($tH.cols).Count - 1)
-Check 'hsu tabla: y los numeros no se parten' (@($tH.cols)[0..($iAl - 1)] -contains 'Alarmas') $false
+# las de texto son las anchas: en medio parten en dos la fila de numeros
+Check 'hsu tabla: las de texto van al final' ($iAl) (@($tH.cols).Count - 1)
+Check 'hsu tabla: averias justo antes' ($iAv) (@($tH.cols).Count - 2)
+Check 'hsu tabla: y los numeros no se parten' ((@($tH.cols)[0..($iAv - 1)] -contains 'Averias') -or (@($tH.cols)[0..($iAv - 1)] -contains 'Alarmas meteo')) $false
 # un campo que no sale en el diccionario se queda con su nombre largo
 Check 'hsu tabla: campo desconocido, nombre tal cual' (Hsu-CampoCorto 'Loquesea [xyz]') 'Loquesea [xyz]'
 # CONFIG pasa por la misma funcion sin tocar nada
@@ -814,7 +851,8 @@ $tC = Hsu-Tabla $rC.oks @($objsH[0])
 Check 'hsu tabla: config sale igual de tabla' (@($tC.cols) -contains 'ON m/s') $true
 Check 'hsu tabla: config no tiene alarmas, no pinta rojo' (@($tC.filas)[0].alarma) $false
 # anchos: las de texto largo se llevan mas sitio
-Check 'hsu tabla: la de alarmas es ancha' (Hsu-AnchoCol 'Alarmas') 160
+Check 'hsu tabla: la de alarmas es ancha' (Hsu-AnchoCol 'Alarmas meteo') 150
+Check 'hsu tabla: la de averias tambien' (Hsu-AnchoCol 'Averias') 150
 Check 'hsu tabla: una corta no baja de 58' ((Hsu-AnchoCol 'HR %') -ge 58) $true
 # con UNA estacion se sigue pintando la lista vertical: ahi es la forma correcta
 Check 'hsu tabla: una sola sigue en vertical' ($src.Contains('if (@($objs).Count -gt 1) { Hsu-MostrarTabla (Hsu-Tabla $r.oks $objs) }')) $true

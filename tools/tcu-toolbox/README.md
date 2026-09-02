@@ -75,6 +75,33 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**Averías de la estación aparte de las alarmas meteo, y las HSU EXTERNAS (v11.65)** —
+dos cambios que salen de la misma pregunta («¿qué leemos de las HSUs?»):
+
+- **Averías ≠ meteo.** En el registro de alarmas de una estación conviven dos
+  cosas que no piden lo mismo: la **AVERÍA** (un sensor sin comunicar, la
+  batería desconectada — la estación está rota y la planta **ciega al viento**:
+  visita) y la **ALARMA METEO** (viento, racha, nieve — la estación funcionando
+  y midiendo lo que pasa: la planta debe estar abanderando). Hasta ahora salían
+  revueltas en la misma cadena. Ahora LEER METEO las trae en **dos filas**
+  («Averías de la estación» y «Alarmas meteo»), el diagnóstico las etiqueta
+  (`AVERIA: … | meteo: …`) y todas las filas de HSU llevan además los campos
+  `Averias` y `Alarmas_meteo` para no re-parsear texto. La salud ya iba en esa
+  dirección (avería = ALARMA, meteo = AVISO); ahora las máscaras tienen nombre.
+- **Las HSU externas.** El mapa de la NCU guarda estaciones en **dos
+  direcciones distintas**: `30200` («HSU Data», la HSU propia por Zigbee — las
+  `HSUn` de siempre) y `28000` («HSU Data extended», las **externas**: anemómetro
+  y veleta RS485, piranómetros de tracking y difusa, contraste con Solcast,
+  módulo de cómputo). La toolbox solo leía el primero: el segundo era
+  **invisible**. Ahora todo lo que lee HSUs vía NCU (diagnóstico, pestaña HSU,
+  agente, SAT) trae también las del 28000 como filas **`HSU EXT n`** — solo si
+  el hueco está poblado, así que en plantas sin externas no cambia nada — con
+  su **propio decodificador** (los dos `Alarms1` no comparten bits) y su
+  `Alarms2` (28010). Una `HSU EXT` leída **no cubre** a una HSU declarada sin
+  lectura, y **no entra** en el pase PEM (que cuenta el inventario declarado).
+  Si una NCU con firmware viejo no implementa el bloque, la lectura falla en
+  silencio y solo salen las propias.
+
 **El desplegable: los tramos de un gateway son un gateway (v11.64)** — Ayora
 NCU7 salía **tres veces**:
 
