@@ -108,12 +108,18 @@ preset(1, 29440, [(epoch - 20) & 0xFFFF, (epoch - 20) >> 16])
 # HSU 2 cacheada (30210+): la averia de campo real -fallo sensor viento- fresca
 preset(1, 30210, [0x040F, 0, 1 << 0] + f32w(3.0) + f32w(90.0) + f32w(0.0) + [0])
 preset(1, 29442, [(epoch - 25) & 0xFFFF, (epoch - 25) >> 16])
-# HSU EXTERNA en el bloque 28000 (100 regs/hueco): averia (piranometro caido y
-# modulo de computo) CON alarma de viento a la vez -> ALARMA y meteo separada
-preset(1, 28000, [0x1234, 0x0001, 1, (1 << 4) | (1 << 9)] + f32w(8.0) + f32w(180.0) + f32w(0.0))
-preset(1, 28010, [1 << 1])
-preset(1, 28015, [3600, 12500])              # bateria aux y principal [mV]
-preset(1, 28021, [500, 0, 700, 0, 120, 0])   # irradiancias H/T/D
+# HSU 3: bloque basico SANO + bloque ampliado (28000, mapa de la MISMA
+# estacion) con averia (piranometro y modulo de computo) y alarma de viento.
+# La fusion debe dejar UNA fila HSU3 en ALARMA con todo dentro.
+preset(1, 30220, [0x040F, 0, 0] + f32w(5.0) + f32w(200.0) + f32w(0.0) + [0])
+preset(1, 29444, [(epoch - 15) & 0xFFFF, (epoch - 15) >> 16])
+preset(1, 28200, [0x1234, 0x0001, 1, (1 << 4) | (1 << 9)] + f32w(8.0) + f32w(180.0) + f32w(0.0))
+preset(1, 28210, [1 << 1])
+preset(1, 28215, [3600, 12500])              # bateria aux y principal [mV]
+preset(1, 28221, [500, 0, 700, 0, 120, 0])   # irradiancias H/T/D
+# HSU 4: SOLO el bloque ampliado contesta (basico a cero, sin lastComm):
+# tiene que salir igualmente, con su aviso de viento y la nota de origen
+preset(1, 28300, [0x1234, 0x0001, 2, 1 << 9] + f32w(15.0) + f32w(300.0) + f32w(0.0))
 # TCU 7 no existe -> GatewayTargetNoResponse (0x0B)
 
 # TCU 77: reproduce el fallo de campo. La NCU deja de contestar una vez (0x0B)

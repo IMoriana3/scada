@@ -75,6 +75,18 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**El «EXT» no es otra estación: es la misma (v11.66)** — corrección de rumbo a las
+horas de la v11.65. Cobertura-zigbee zanjó (su #590) que el bloque `28000` es el
+**mapa ampliado de la MISMA estación** (ligado a `hsu_extended`), no una clase de
+«HSU externa»: sacarlo como equipo aparte (`HSU EXT n`) la habría duplicado en la
+primera planta con el bloque poblado. Ahora se **funde en la fila de su `HSUn`**:
+averías y meteo del ampliado (con su propio decodificador), `alarmas_2`, batería
+e irradiancias H/T/D. Si solo contesta el bloque ampliado, la fila sale igual con
+la nota «solo contesta el bloque ampliado (28000)». En CONTRATO.md queda retirada
+la etiqueta anunciada (nadie llegó a emitirla), la respuesta a las dos dudas del
+R23 (bit 15 pluviómetro-vs-com y bit 7 lluvia-vs-inundación) y un aviso al
+colector sobre el reparto de bits del 28003.
+
 **Averías de la estación aparte de las alarmas meteo, y las HSU EXTERNAS (v11.65)** —
 dos cambios que salen de la misma pregunta («¿qué leemos de las HSUs?»):
 

@@ -423,15 +423,36 @@ planta sin tocar nada. Botón **🧊 3D en vivo** en la cabecera del SCADA.
   pantalla?). La web ya enseña la etiqueta literal en el chip («GW · ALARMA» en vez de «1 otras mal») desde hoy;
   si emitís más etiquetas fuera de la tabla A (SWITCH, GW…), apuntadlas ahí y las tratamos con nombre propio.
 
-  **[Toolbox → SCADA, 2026-09-02] Etiqueta NUEVA en el vocabulario de `TCU`: `"HSU EXT 1"`…`"HSU EXT 10"`.**
-  El mapa de la NCU guarda estaciones en dos direcciones: `30200` (la HSU propia, Zigbee — las `HSUn` de
-  siempre) y `28000` («HSU Data extended»: estaciones externas con anemómetro/veleta RS485, piranómetros de
-  tracking y difusa y contraste con Solcast). Desde **toolbox v11.65** el diagnóstico —también el del
-  agente— trae las del 28000 **solo si el hueco está poblado**; en Ayora hoy no hay ninguna, así que las
-  782 filas no cambian. Salud con el criterio de siempre (avería propia = ALARMA, meteo = AVISO, fallo de
-  com. = OFFLINE) y **campos nuevos en TODAS las filas de HSU** (propias y externas): `Averias` y
-  `Alarmas_meteo`, ya separados, para que no tengáis que re-parsear el texto de `Alarmas`. Las `HSU EXT`
-  no entran en el pase PEM (inventario declarado) ni cubren a una `HSUn` declarada sin lectura.
+  **[Toolbox → SCADA, 2026-09-02] El bloque 28000 ya se lee — y NO trae etiqueta nueva: se funde en la fila `HSUn`.**
+  (Corrige la versión de esta nota publicada unas horas con v11.65, que anunciaba filas `"HSU EXT n"`:
+  cobertura-zigbee #590 zanjó que «HSU EXT» es el **mapa AMPLIADO de la MISMA estación**, no otra clase de
+  HSU, así que sacarlo como equipo aparte la duplicaba. Ninguna planta llegó a emitir esas filas — en Ayora
+  el bloque está vacío.) Desde **toolbox v11.66** el diagnóstico funde el 28000 en la fila de su `HSUn`:
+  averías y meteo del bloque ampliado (28003 **con su propio reparto de bits** y el Alarms2 de 28010),
+  `alarmas_2` en hex, batería en `Vbat_mV` y las irradiancias H/T/D en el texto. Si solo contesta el bloque
+  ampliado, la fila `HSUn` sale igualmente con la nota «solo contesta el bloque ampliado (28000)» — el aviso
+  de campo del 21/8 («nivel de viento 1 sin que nadie leyera de dónde») queda atribuido a su estación.
+  El vocabulario de `TCU` sigue **cerrado como estaba**. Campos `Averias` y `Alarmas_meteo` (ya separados)
+  en TODAS las filas de HSU, para no re-parsear el texto de `Alarmas`.
+
+  **Las dos dudas del R23 declaradas en vuestro `config/modbus_map.yml`, resueltas hasta donde dan los documentos:**
+  - **bit 15**: los dos nombres son verdad, cada uno en SU registro. En el `30002` de la estación (R23) es
+    `AlarmComPluvioSensor` — la estación no puede declarar «no me oís»; eso solo lo sabe la NCU. En el
+    `30202` de la NCU (R7) es `AlarmCom`, calculado por la NCU. Conservad `alarm_com` en el bloque de la
+    NCU; en lecturas DIRECTAS a la estación es el pluviómetro (así lo decodifica la toolbox desde v11.65).
+    Prueba de campo que lo zanja del todo: desconectar un pluviómetro y mirar si el bit 15 del 30202 se
+    enciende con `lastComm` fresco (copia literal) o no (calculado). En Ayora las HSU no declaran
+    pluviómetro en 41008, así que allí este bit no muerde.
+  - **bit 7**: todo apunta a que es el MISMO bit con dos nombres según generación del documento —
+    `AlarmRain` en el R23, `AlarmFlood` en el R7 (el sensor de nieve dobla como inundación vía
+    `HasFloodSensor` y el umbral 41054 vale «snow level or water level»). Operativamente es la misma
+    clase: alarma meteo de agua → la planta trabajando, no avería. El día que llueva de verdad, comparar
+    30002 (directo) contra 30202 (caché) de la misma estación cierra si la copia es literal.
+  - **Y un aviso para vuestro `hsu_ext.alarms1`**: el YML decodifica el `28003` con el reparto del R23,
+    pero la hoja «HSU EXT» del R7 declara OTRO reparto para ese registro (bit 1 = revisar sensor nieve,
+    bit 3 = com. sensor nieve, bit 4 = com. piranómetro, bits 13/14 = anemómetro/veleta RS485, bit 10 =
+    racha). La toolbox sigue la hoja del R7 para el 28003. El supuesto «la NCU copia el 30002 literal» no
+    se sostiene para el bloque ampliado con esa hoja delante: revisadlo antes de fiaros de esos bits.
 
   **[Toolbox responde, 2026-08-10] No emitimos ninguna etiqueta fuera de la tabla A. `GW` no sale de aquí.**
   El vocabulario de `TCU` es **cerrado por construcción** y sale de tres sitios del código, los mismos en la

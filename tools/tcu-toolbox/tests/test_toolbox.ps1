@@ -409,7 +409,8 @@ Check 'modo directo: y dice por que' ($d10.Alarmas -like '*no sigue*') $true
 Check 'modo: la nota no habla de desviacion' ($dmModo[4].Alarmas -like '*dif *') $false
 
 $hsus = @(Ncu-HsuCompat)
-Check 'via NCU: 2 propias y 1 externa' ($hsus.Count) 3
+Check 'via NCU: cuatro estaciones' ($hsus.Count) 4
+Check 'via NCU: y ninguna fila "EXT" aparte' (@($hsus | Where-Object { "$($_.TCU)" -like '*EXT*' }).Count) 0
 Check 'via NCU HSU aviso viento' (($hsus[0].Salud -eq 'AVISO') -and ($hsus[0].Alarmas -like '*ALARMA VIENTO*')) 'True'
 Check 'via NCU HSU viento en texto' ($hsus[0].Alarmas -like '*12.5 m/s (nivel 2)*') 'True'
 Check 'via NCU HSU etiqueta' ($hsus[0].TCU) 'HSU1'
@@ -421,15 +422,23 @@ Check 'via NCU HSU1: campos separados' (("$($hsus[0].Averias)" -eq '') -and ("$(
 Check 'via NCU HSU2: averia = ALARMA' (($hsus[1].TCU -eq 'HSU2') -and ($hsus[1].Salud -eq 'ALARMA')) 'True'
 Check 'via NCU HSU2: etiquetada AVERIA' ($hsus[1].Alarmas -like 'AVERIA: fallo sensor viento*') $true
 Check 'via NCU HSU2: sin meteo inventada' ("$($hsus[1].Alarmas_meteo)") ''
-# y la EXTERNA del bloque 28000, decodificada con SU mapa (bit 4 = piranometro,
+# el bloque 28000 es el mapa AMPLIADO de la MISMA estacion (cobertura #590):
+# se FUNDE en la fila de su HSUn, decodificado con SU mapa (bit 4 = piranometro,
 # no "bateria desconectada" como diria el mapa del 30002 directo)
-Check 'hsu ext: etiqueta y salud' (($hsus[2].TCU -eq 'HSU EXT 1') -and ($hsus[2].Salud -eq 'ALARMA')) 'True'
-Check 'hsu ext: averias de su mapa' (($hsus[2].Averias -like '*com. piranometro*') -and ($hsus[2].Averias -like '*modulo de computo caido*')) 'True'
-Check 'hsu ext: la meteo separada' ($hsus[2].Alarmas_meteo) 'ALARMA VIENTO'
-Check 'hsu ext: alarms2 en hex' ($hsus[2].alarmas_2) '0x0002'
-Check 'hsu ext: viento como numero' ($hsus[2].Viento_ms) 8
-Check 'hsu ext: irradiancias en texto' ($hsus[2].Alarmas -like '*irr H/T/D 500/700/120 W/m2*') $true
-Check 'hsu ext: bateria en su campo' ($hsus[2].Vbat_mV) 12500
+$h3 = @($hsus | Where-Object { "$($_.TCU)" -eq 'HSU3' })[0]
+Check 'fusion: la averia del ampliado manda en la salud' ($h3.Salud) 'ALARMA'
+Check 'fusion: averias con el mapa del ampliado' (($h3.Averias -like '*com. piranometro*') -and ($h3.Averias -like '*modulo de computo caido*')) 'True'
+Check 'fusion: la meteo del ampliado tambien' ($h3.Alarmas_meteo) 'ALARMA VIENTO'
+Check 'fusion: nivel de viento, el peor de los dos' ($h3.Nivel) 1
+Check 'fusion: irradiancias en el texto' ($h3.Alarmas -like '*irr H/T/D 500/700/120 W/m2*') $true
+Check 'fusion: alarms2 en hex' ($h3.alarmas_2) '0x0002'
+Check 'fusion: bateria del ampliado' ($h3.Vbat_mV) 12500
+Check 'fusion: el viento numerico sigue siendo el del basico' ($h3.Viento_ms) 5
+# y el hueco que SOLO tiene bloque ampliado sale igualmente, como su HSUn
+$h4 = @($hsus | Where-Object { "$($_.TCU)" -eq 'HSU4' })[0]
+Check 'solo ampliado: emite fila con su aviso' (($h4.Salud -eq 'AVISO') -and ($h4.Alarmas_meteo -eq 'ALARMA VIENTO')) 'True'
+Check 'solo ampliado: dice de donde sale' ($h4.Alarmas -like '*solo contesta el bloque ampliado (28000)*') $true
+Check 'solo ampliado: nivel del ampliado' ($h4.Nivel) 2
 # una "HSU EXT n" leida NO cubre a una HSU propia declarada en la topologia
 $compExt = @(Diag-Completar @([pscustomobject]@{NCU='14'; TCU='HSU EXT 1'; Salud='OK'; Alarmas=''}) @(@{NCU='14'; TCU='HSU1'}))
 Check 'completar: una EXT no tapa a la declarada' (@($compExt | Where-Object { "$($_.Salud)" -eq 'SIN LECTURA' }).Count) 1
@@ -653,7 +662,7 @@ Check 'comm t1 edad 30s' $cm.tcus[1].edad 30
 Check 'comm t2 nunca leido' $cm.tcus[2].comunica 'False'
 Check 'comm t2 lastcomm 0' $cm.tcus[2].lastcomm 0
 Check 'comm t3 comunica' $cm.tcus[3].comunica 'True'
-Check 'comm hsus n' (@($cm.hsus).Count) 2
+Check 'comm hsus n' (@($cm.hsus).Count) 3
 Check 'comm hsu1 comunica' $cm.hsus[0].comunica 'True'
 Check 'comm hsu1 etiqueta' $cm.hsus[0].hsu 'HSU1'
 Check 'comm hsu2 etiqueta' $cm.hsus[1].hsu 'HSU2'
