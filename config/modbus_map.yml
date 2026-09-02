@@ -76,7 +76,19 @@ hsu:
   lastcomm_base: 29440      # U32 por HSU, stride 2
   fields:
     1: {name: msr,            type: u16, bits: {wind_level: [0,2], wind_dir_east: [3,3]}}
-    2: {name: alarms1,        type: u16, bits: {wind_sensor_fail: [0,0], snow_sensor_fail: [1,1], alarm_snow: [6,6], alarm_flood: [7,7], alarm_wind: [9,9], alarm_com: [15,15]}}
+    # Alarms1 COMPLETO segun el R23 (14 bits; antes solo se nombraban 6, y una
+    # HSU con el piranometro caido o la bateria desconectada era invisible).
+    # bit 15: el R23 lo llama AlarmComPluvioSensor (com. del pluviometro), no
+    # "com. de la HSU" — se conserva el nombre historico `alarm_com` para no
+    # romper consumidores, con la duda DECLARADA aqui hasta que el mantenedor
+    # la resuelva (la caida de la HSU entera se detecta por lastcomm 29440).
+    # bit 7: R23 = AlarmRain; el sensor de nieve dobla como inundacion segun
+    # config, se conserva `alarm_flood`.
+    2: {name: alarms1,        type: u16, bits: {wind_sensor_fail: [0,0], snow_sensor_fail: [1,1],
+      pira_sensor_fail: [2,2], temp_sensor_fail: [3,3], batt_disconnected: [4,4],
+      hail_sensor_fail: [5,5], alarm_snow: [6,6], alarm_flood: [7,7], alarm_wind: [9,9],
+      alarm_gusty_wind: [10,10], alarm_wind_2: [12,12], alarm_wind_3: [13,13],
+      dual_irra_sensor_fail: [14,14], alarm_com: [15,15]}}
     3: {name: wind_speed,     type: f32, unit: mps}
     5: {name: wind_direction, type: f32, unit: deg}
     7: {name: snow_level,     type: f32, unit: m}
@@ -86,10 +98,24 @@ hsu_ext:
   base: 28000
   stride: 100
   fields:
+    # El estado de la HSU extendida NO se decodificaba: solo meteo e
+    # irradiancias. Su MSR (28002), sus alarmas (28003 y 28010) y su codigo de
+    # error (28027) estaban en la MISMA lectura de 30 registros que ya se hace
+    # -- decodificarlos no cuesta ni un byte de LAN. Sin ellos, un aviso
+    # provocado por esta estacion salia atribuido a la fila de la HSU basica
+    # (paso en campo el 21/8: nivel de viento 1 sin que nadie leyera de donde).
+    2:  {name: msr,              type: u16, bits: {wind_level: [0,2], wind_dir_east: [3,3]}}
+    3:  {name: alarms1,          type: u16, bits: {wind_sensor_fail: [0,0], snow_sensor_fail: [1,1],
+      pira_sensor_fail: [2,2], temp_sensor_fail: [3,3], batt_disconnected: [4,4],
+      hail_sensor_fail: [5,5], alarm_snow: [6,6], alarm_flood: [7,7], alarm_wind: [9,9],
+      alarm_gusty_wind: [10,10], alarm_wind_2: [12,12], alarm_wind_3: [13,13],
+      dual_irra_sensor_fail: [14,14], alarm_com: [15,15]}}
     4:  {name: wind_speed,       type: f32, unit: mps}
     6:  {name: wind_direction,   type: f32, unit: deg}
     8:  {name: snow_level,       type: f32, unit: m}
+    10: {name: alarms2,          type: u16}
     16: {name: battery_voltage,  type: u16, unit: mV}
     21: {name: ghi,              type: s32, unit: Wm2x100, scale: 0.01}
     23: {name: poa_tracking,     type: s32, unit: Wm2x100, scale: 0.01}
     25: {name: poa_diffuse,      type: s32, unit: Wm2x100, scale: 0.01}
+    27: {name: error_code,       type: u16}

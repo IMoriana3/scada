@@ -120,6 +120,19 @@ ev = r.flancos([], {}, m1, T0 + timedelta(seconds=30))
 chk("solo la estación que cambió", len(ev), 1)
 et, _ = campos(ev[0])
 chk("ámbito HSU", et["scope"], "hsu")
+
+# El caso de campo del 21/8: el NIVEL de viento subio a 1 y nadie tenia el
+# flanco con su hora. Y una bateria desconectada (bit 4, que antes ni se
+# decodificaba) tambien deja rastro.
+r2 = reg()
+r2.flancos([], {}, [{"hsu": 1, "fields": {"wind_level": 0, "batt_disconnected": 0}}], T0)
+ev2 = r2.flancos([], {}, [{"hsu": 1, "fields": {"wind_level": 1, "batt_disconnected": 1}}],
+                 T0 + timedelta(seconds=30))
+chk("nivel de viento y bateria: dos flancos", len(ev2), 2)
+tipos2 = sorted(campos(e)[0]["kind"] for e in ev2)
+chk("con sus nombres", ",".join(tipos2), "batt_disconnected,wind_level")
+nivel_ev = [e for e in ev2 if campos(e)[0]["kind"] == "wind_level"][0]
+chk("y el nivel dice de donde a donde", campos(nivel_ev)[1]["from"] + "->" + campos(nivel_ev)[1]["to"], "0->1")
 chk("y dice cuál", et["hsu"], "1")
 
 print("\n=== el reloj de la NCU no es un evento ===")

@@ -40,7 +40,19 @@ NCU_SUCESOS = ("alarm_any_wind", "alarm_any_snow", "gw1_alarm", "gw2_alarm",
                "battery_low", "ups_power_fault", "alarm_battery_low", "stop_button")
 #: Lo mismo para una estación meteo.
 HSU_SUCESOS = ("alarm_wind", "alarm_snow", "alarm_com", "alarm_flood",
-               "wind_sensor_fail", "snow_sensor_fail")
+               "wind_sensor_fail", "snow_sensor_fail",
+               # El resto del Alarms1 del R23, que el mapa ya decodifica: sin
+               # ellos, una bateria desconectada o un piranometro caido no
+               # dejaban flanco en el historico.
+               "pira_sensor_fail", "temp_sensor_fail", "batt_disconnected",
+               "hail_sensor_fail", "alarm_gusty_wind", "alarm_wind_2",
+               "alarm_wind_3", "dual_irra_sensor_fail",
+               # Y el NIVEL de proteccion por viento. Es un valor 0..7, no un
+               # bit, pero su cambio es exactamente el suceso que en campo se
+               # pregunto "¿por que este AVISO?" (21/8): un flanco 0->1 con su
+               # hora lo habria contado solo. Cambia poco -- por umbral con
+               # histeresis -- asi que no inunda el historico.
+               "wind_level")
 
 
 class RegistroEventos:
