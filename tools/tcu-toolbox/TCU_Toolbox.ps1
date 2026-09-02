@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.65'
+$VERSION_TOOLBOX = '11.66'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -2867,6 +2867,7 @@ function Ncu-HsuCompat {
     $reloj = ([long]$wclk[1] -shl 16) -bor [long]$wclk[0]
     $wlc = FC03-Leer $UNIT_NCU (Dir-Trama 29440) 20
     $wd  = FC03-Leer $UNIT_NCU (Dir-Trama 30200) 100
+    $ext = Ncu-HsuExt
     $lista = @()
     for ($h = 0; $h -lt 10; $h++) {
         $b = $h * 10
@@ -2880,22 +2881,38 @@ function Ncu-HsuCompat {
         $edad = -1
         if ($reloj -gt 1000000000 -and $lastc -gt 1000000000) { $edad = $reloj - $lastc }
         $sep = Hsu-AlarmasSeparadas $al1 $NCU_HSU_AL1 $NCU_HSU_AL1_PROPIAS $NCU_HSU_AL1_METEO
+        # el bloque 28000 es el mapa AMPLIADO de ESTA MISMA estacion, no otra
+        # HSU (lo zanjo cobertura-zigbee #590): si esta poblado, sus alarmas y
+        # medidas se FUNDEN en esta fila. Sacarlo como equipo aparte duplicaba
+        # la estacion, y no leerlo dejaba avisos "sin origen" cargados a la
+        # fila basica (paso en campo el 21/8: nivel de viento 1 de la nada).
+        $e = $ext[$h]
+        $averias = @($sep.propias); $meteo = @($sep.meteo)
+        if ($e) {
+            $averias = @(@($averias + @($e.averias)) | Select-Object -Unique)
+            $meteo   = @(@($meteo + @($e.meteo)) | Select-Object -Unique)
+            if ([int]$e.nivel -gt $nivel) { $nivel = [int]$e.nivel }   # el peor manda
+        }
         $salud = 'OK'
         if ($lastc -eq 0 -or ($edad -ge 0 -and $edad -gt 300)) { $salud = 'OFFLINE' }
-        elseif ($al1 -band $NCU_HSU_AL1_PROPIAS) { $salud = 'ALARMA' }              # la estacion esta rota: visita
-        elseif (($al1 -band $NCU_HSU_AL1_METEO) -or $nivel -gt 0) { $salud = 'AVISO' }  # el entorno: la estacion trabaja
+        elseif ($averias.Count) { $salud = 'ALARMA' }                 # la estacion esta rota: visita
+        elseif ($meteo.Count -or $nivel -gt 0) { $salud = 'AVISO' }   # el entorno: la estacion trabaja
         $texto = ("viento {0:0.#} m/s (nivel {1}), dir {2:0} deg; nieve {3:0.###} m" -f $viento, $nivel, $dir, $nieve)
+        if ($e) { $texto += "$($e.irr)" }
         # la averia y la meteo, ETIQUETADAS: "fallo sensor viento" al lado de
         # "ALARMA VIENTO" sin marco se leia como dos alarmas de lo mismo
         $partes = @()
-        if ($sep.propias.Count) { $partes += ('AVERIA: ' + ($sep.propias -join '; ')) }
-        if ($sep.meteo.Count)   { $partes += ('meteo: ' + ($sep.meteo -join '; ')) }
+        if ($averias.Count) { $partes += ('AVERIA: ' + ($averias -join '; ')) }
+        if ($meteo.Count)   { $partes += ('meteo: ' + ($meteo -join '; ')) }
+        if ($e -and ($e.al2 -band 0x1)) { $partes += 'modo difusa activo' }
         if ($partes.Count) { $texto = ($partes -join ' | ') + ' | ' + $texto }
         if ($edad -gt 90) { $texto += " | datos de hace $edad s" }
         if ($salud -eq 'OFFLINE') { $texto = $(if ($lastc -eq 0) { 'la NCU no tiene lectura de esta HSU (si acaba de reiniciarse, su cache esta a cero)' } else { "sin datos en la NCU desde hace $edad s" }) }
         $lista += [pscustomobject]@{
             NCU=''; TCU=("HSU{0}" -f ($h + 1)); Salud=$salud; Modo='-'
-            Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''; Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''
+            Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
+            Vbat_mV=$(if ($e -and $e.vbat) { $e.vbat } else { '' }); Ibat_mA=''
+            Vpanel_mV=$(if ($e -and $e.vpanel) { $e.vpanel } else { '' }); Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''
             Alarmas=$texto
             # La meteo tambien como CAMPOS, no solo dentro del texto. El texto es
             # para leerlo; esto es para graficarlo. Quien consuma el export no
@@ -2907,32 +2924,56 @@ function Ncu-HsuCompat {
             Dir_deg=$(if ($salud -eq 'OFFLINE') { $null } else { [math]::Round($dir, 1) })
             Nieve_m=$(if ($salud -eq 'OFFLINE') { $null } else { [math]::Round($nieve, 3) })
             Nivel=$(if ($salud -eq 'OFFLINE') { $null } else { [int]$nivel })
-            Averias=($sep.propias -join '; '); Alarmas_meteo=($sep.meteo -join '; ')
-            main_status=("0x{0:X4}" -f $msr); alarmas_1=("0x{0:X4}" -f $al1); alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
+            Averias=($averias -join '; '); Alarmas_meteo=($meteo -join '; ')
+            main_status=("0x{0:X4}" -f $msr); alarmas_1=("0x{0:X4}" -f $al1)
+            alarmas_2=$(if ($e) { "0x{0:X4}" -f [int]$e.al2 } else { '' }); alarmas_3=''; alarmas_4=''; system_status=''
         }
     }
-    # y detras de las propias, las EXTERNAS del bloque 28000. Si la NCU no
-    # implementa ese bloque, Ncu-HsuExt devuelve vacio y aqui no cambia nada.
-    $lista += @(Ncu-HsuExt)
+    # un hueco con el bloque ampliado poblado y el basico a cero se emite
+    # igualmente como su HSUn: que el aviso no se quede sin fila
+    foreach ($h in @($ext.Keys | Sort-Object)) {
+        $e = $ext[$h]
+        if (@($lista | Where-Object { "$($_.TCU)" -eq ("HSU{0}" -f ($h + 1)) }).Count) { continue }
+        $averias = @($e.averias); $meteo = @($e.meteo)
+        $salud = $(if ($averias.Count) { 'ALARMA' } elseif ($meteo.Count -or [int]$e.nivel -gt 0) { 'AVISO' } else { 'OK' })
+        $texto = ("solo contesta el bloque ampliado (28000) | viento {0:0.#} m/s (nivel {1}), dir {2:0} deg; nieve {3:0.###} m" -f $e.viento, $e.nivel, $e.dir, $e.nieve) + "$($e.irr)"
+        $partes = @()
+        if ($averias.Count) { $partes += ('AVERIA: ' + ($averias -join '; ')) }
+        if ($meteo.Count)   { $partes += ('meteo: ' + ($meteo -join '; ')) }
+        if ($partes.Count) { $texto = ($partes -join ' | ') + ' | ' + $texto }
+        $lista += [pscustomobject]@{
+            NCU=''; TCU=("HSU{0}" -f ($h + 1)); Salud=$salud; Modo='-'
+            Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
+            Vbat_mV=$(if ($e.vbat) { $e.vbat } else { '' }); Ibat_mA=''
+            Vpanel_mV=$(if ($e.vpanel) { $e.vpanel } else { '' }); Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''
+            Alarmas=$texto
+            Viento_ms=[math]::Round($e.viento, 2); Dir_deg=[math]::Round($e.dir, 1); Nieve_m=[math]::Round($e.nieve, 3); Nivel=[int]$e.nivel
+            Averias=($averias -join '; '); Alarmas_meteo=($meteo -join '; ')
+            main_status=("0x{0:X4}" -f [int]$e.msr); alarmas_1=("0x{0:X4}" -f [int]$e.al1)
+            alarmas_2=("0x{0:X4}" -f [int]$e.al2); alarmas_3=''; alarmas_4=''; system_status=''
+        }
+    }
     return $lista
 }
 
-# ── HSU EXTERNAS: el OTRO bloque del mapa de la NCU ──────────────────────────
-# La NCU guarda estaciones en DOS direcciones distintas del mapa:
-#   30200 "HSU Data"           la HSU propia (Zigbee): 10 regs por hueco
-#   28000 "HSU Data extended"  las HSU externas: 100 regs por hueco, con
-#                              anemometro y veleta RS485, piranometros de
-#                              tracking y difusa, contraste con Solcast y
-#                              modulo de computo
+# ── El bloque AMPLIADO de la HSU: base 28000 del mapa de la NCU ──────────────
+# La NCU re-publica cada estacion en DOS bases del mapa. No son dos equipos:
+#   30200 "HSU Data"           el bloque basico: 10 regs por hueco
+#   28000 "HSU Data extended"  el mapa AMPLIADO de la MISMA estacion (100 regs
+#                              por hueco, ligado a hsu_extended): anemometro y
+#                              veleta RS485, piranometros de tracking y difusa,
+#                              contraste con Solcast y modulo de computo.
+# (Zanjado en cobertura-zigbee #590: si "EXT" fuera "exteriores" no repetiria
+# los campos de _hsu1 con otros indices.)
 # Y sus dos Alarms1 NO comparten bits: en el 30202 el bit 1 es "com. sensor
 # nieve" y en el 28003 es "revisar sensor nieve" (la com. esta en el 3).
-# Cada bloque lleva su decodificador: reutilizar el otro pinta alarmas falsas.
+# Cada registro lleva su decodificador: reutilizar el otro pinta alarmas falsas.
 $NCU_HSUEXT_AL1 = @{
   0='com. anemometro'; 1='revisar sensor nieve'; 2='com. sensor temperatura'
   3='com. sensor nieve'; 4='com. piranometro'; 6='ALARMA NIEVE'; 9='ALARMA VIENTO'
   10='ALARMA RACHA'; 13='com. anemometro RS485'; 14='com. veleta RS485'; 15='fallo com. HSU'
 }
-$NCU_HSUEXT_AL1_PROPIAS = 0x601F   # bits 0..4, 13, 14: sensores (el 15 va aparte: OFFLINE)
+$NCU_HSUEXT_AL1_PROPIAS = 0xE01F   # bits 0..4, 13, 14, 15: sensores y com
 $NCU_HSUEXT_AL1_METEO   = 0x0640   # bits 6, 9, 10: nieve, viento, racha
 $NCU_HSUEXT_AL2 = @{
   0='modo difusa activo'; 1='modulo de computo caido'; 2='com. piranometro tracking'
@@ -2940,51 +2981,32 @@ $NCU_HSUEXT_AL2 = @{
 }
 $NCU_HSUEXT_AL2_AVERIAS = 0x003E   # todos menos el bit 0, que es un estado y no un fallo
 
+# Lee el bloque ampliado entero y devuelve un diccionario hueco -> datos, para
+# que Ncu-HsuCompat lo funda en la fila de su HSUn. NO emite filas propias.
 function Ncu-HsuExt {
-    $lista = @()
+    $r = @{}
     for ($h = 0; $h -lt 10; $h++) {
         # una NCU con FW sin este bloque contesta con excepcion Modbus: se
-        # devuelve lo que haya sin arrastrar a las HSU propias ya leidas
+        # devuelve lo que haya, sin arrastrar a los bloques basicos
         try { $w = FC03-Leer $UNIT_NCU (Dir-Trama (28000 + 100 * $h)) 30 }
         catch { break }
         if ($w[0] -eq 0 -and $w[1] -eq 0 -and $w[2] -eq 0 -and $w[3] -eq 0) { continue }   # hueco vacio
-        $msr = $w[2]; $al1 = $w[3]; $al2 = $w[10]
-        $nivel = $msr -band 0x7
-        $viento = Palabras-A-F32 @($w[4], $w[5])
-        $dir    = Palabras-A-F32 @($w[6], $w[7])
-        $nieve  = Palabras-A-F32 @($w[8], $w[9])
+        $al1 = $w[3]; $al2 = $w[10]
         $sep = Hsu-AlarmasSeparadas $al1 $NCU_HSUEXT_AL1 $NCU_HSUEXT_AL1_PROPIAS $NCU_HSUEXT_AL1_METEO
-        $averias = @(@(@($sep.propias) + @(Bits-Texto ($al2 -band $NCU_HSUEXT_AL2_AVERIAS) $NCU_HSUEXT_AL2)) | Where-Object { "$_" -ne '' })
-        $salud = 'OK'
-        if ($al1 -band 0x8000) { $salud = 'OFFLINE' }                                       # fallo com.: la NCU no la oye
-        elseif ($averias.Count) { $salud = 'ALARMA' }                                       # la estacion esta rota: visita
-        elseif (($al1 -band $NCU_HSUEXT_AL1_METEO) -or $nivel -gt 0) { $salud = 'AVISO' }   # el entorno: esta trabajando
-        $texto = ("viento {0:0.#} m/s (nivel {1}), dir {2:0} deg; nieve {3:0.###} m" -f $viento, $nivel, $dir, $nieve)
         $irrH = ([int]$w[22] -shl 16) -bor [int]$w[21]
         $irrT = ([int]$w[24] -shl 16) -bor [int]$w[23]
         $irrD = ([int]$w[26] -shl 16) -bor [int]$w[25]
-        if ($irrH -or $irrT -or $irrD) { $texto += ("; irr H/T/D {0}/{1}/{2} W/m2" -f $irrH, $irrT, $irrD) }
-        $partes = @()
-        if ($averias.Count)   { $partes += ('AVERIA: ' + ($averias -join '; ')) }
-        if ($sep.meteo.Count) { $partes += ('meteo: ' + ($sep.meteo -join '; ')) }
-        if ($al2 -band 0x1)   { $partes += 'modo difusa activo' }
-        if ($partes.Count) { $texto = ($partes -join ' | ') + ' | ' + $texto }
-        if ($salud -eq 'OFFLINE') { $texto = 'la NCU no consigue comunicar con esta HSU externa (fallo com., bit 15)' }
-        $lista += [pscustomobject]@{
-            NCU=''; TCU=("HSU EXT {0}" -f ($h + 1)); Salud=$salud; Modo='-'
-            Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''
-            Vbat_mV=$(if ($w[16]) { $w[16] } else { '' }); Ibat_mA=''
-            Vpanel_mV=$(if ($w[20]) { $w[20] } else { '' }); Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''
-            Alarmas=$texto
-            Viento_ms=$(if ($salud -eq 'OFFLINE') { $null } else { [math]::Round($viento, 2) })
-            Dir_deg=$(if ($salud -eq 'OFFLINE') { $null } else { [math]::Round($dir, 1) })
-            Nieve_m=$(if ($salud -eq 'OFFLINE') { $null } else { [math]::Round($nieve, 3) })
-            Nivel=$(if ($salud -eq 'OFFLINE') { $null } else { [int]$nivel })
-            Averias=($averias -join '; '); Alarmas_meteo=($sep.meteo -join '; ')
-            main_status=("0x{0:X4}" -f $msr); alarmas_1=("0x{0:X4}" -f $al1); alarmas_2=("0x{0:X4}" -f $al2); alarmas_3=''; alarmas_4=''; system_status=''
+        $irr = ''
+        if ($irrH -or $irrT -or $irrD) { $irr = ("; irr H/T/D {0}/{1}/{2} W/m2" -f $irrH, $irrT, $irrD) }
+        $r[$h] = @{
+            msr=$w[2]; al1=$al1; al2=$al2; nivel=($w[2] -band 0x7)
+            viento=(Palabras-A-F32 @($w[4], $w[5])); dir=(Palabras-A-F32 @($w[6], $w[7])); nieve=(Palabras-A-F32 @($w[8], $w[9]))
+            averias=@(@(@($sep.propias) + @(Bits-Texto ($al2 -band $NCU_HSUEXT_AL2_AVERIAS) $NCU_HSUEXT_AL2)) | Where-Object { "$_" -ne '' })
+            meteo=@($sep.meteo)
+            irr=$irr; vbat=[int]$w[16]; vpanel=[int]$w[20]
         }
     }
-    return $lista
+    return $r
 }
 
 # Salud de la propia NCU (30100-30105, unit 1 en el puerto 502). Requiere
