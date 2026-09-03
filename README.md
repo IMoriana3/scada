@@ -143,7 +143,7 @@ respuesta      = MBAP(7) + FC(1) + byte count(1) + 2·nº registros  = 9 + 2n B
 nube           = line protocol comprimido (gzip) + cabeceras HTTP/TLS (500 B por escritura)
 ```
 
-Los tamaños de bloque no van a mano: salen de **`config/modbus_map.yml`**, el mismo mapa que lee el driver — 22 registros por TCU en el bloque compat (base 30500), 2 por `lastComm` (29500) y 10 por HSU (30200; 30 si la HSU es la extendida del bloque 28000) —, y el troceo, de `max_regs_per_read` en `plants.yml`. Si cambia el mapa, la estimación se mueve con él y el banco lo comprueba. Lo único que sigue viniendo del código son las dos lecturas de estado de la NCU (30002 y 30100..30105), porque el driver las tiene fijas.
+Los tamaños de bloque no van a mano: salen de **`config/modbus_map.yml`**, el mismo mapa que lee el driver — 22 registros por TCU en el bloque compat (base 30500), 2 por `lastComm` (29500) y 10 por HSU (30200; 30 si la HSU es la extendida del bloque 28000) — y con `hsu_ext_count` una NCU puede leer LAS DOS familias a la vez: básicas más externas (ids `ext1`…), que es el caso real de Ayora —, y el troceo, de `max_regs_per_read` en `plants.yml`. Si cambia el mapa, la estimación se mueve con él y el banco lo comprueba. Lo único que sigue viniendo del código son las dos lecturas de estado de la NCU (30002 y 30100..30105), porque el driver las tiene fijas.
 
 **Qué equipos entran.** El ciclo lleva un punto por TCU, uno de estado de la NCU y uno por HSU. El reparto de la subida no está repartido: en la NCU1 de El Burgo son **98,7 % TCU**, 0,8 % HSU y 0,5 % NCU. Cualquier ahorro sale de los seguidores; recortar meteo o estado de NCU no mueve la aguja.
 
