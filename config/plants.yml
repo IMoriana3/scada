@@ -34,6 +34,10 @@ ncus:
     tcu_count: 108           # TCUs reales configurados en esta NCU (1..200)
     hsu_count: 2             # una por gateway
     hsu_extended: false      # true si la HSU expone el bloque 28000 (piranómetros)
+    # hsu_ext_count: 1        # estaciones EXTRA de la hoja 28000 ADEMAS de las
+    #                         # basicas (la "HSU externa" de la NCU). Sus ids
+    #                         # salen como ext1, ext2... Incompatible con
+    #                         # hsu_extended:true (seria leer la hoja dos veces).
     # Passthrough Modbus de la NCU hacia los TCU (unit id = nº de TCU), un
     # puerto por gateway Zigbee. Lo usa tools/tcu-toolbox/make_plantas.py
     # para generar plantas.json; el collector lo ignora. `hsu_esclavo` es el

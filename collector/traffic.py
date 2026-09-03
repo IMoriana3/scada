@@ -152,6 +152,9 @@ def map_params(mmap: dict, polling: dict | None = None, hsu_extended: bool = Fal
         "lastcomm_regs": int(lc.get("stride", 2)),
         # el driver recorta la lectura de HSU a 30 registros (read_meteo)
         "hsu_regs": min(int(h.get("stride", 10)), 30),
+        # y el de las estaciones EXTRA de la hoja 28000 (`hsu_ext_count`),
+        # que conviven con las basicas -- ver NCUDriver._hsu_jobs
+        "hsu_ext_regs": min(int(mmap.get("hsu_ext", {}).get("stride", 100)), 30),
     }
     if polling:
         out["max_regs"] = int(polling.get("max_regs_per_read", out.get("max_regs", 110)))
@@ -159,7 +162,8 @@ def map_params(mmap: dict, polling: dict | None = None, hsu_extended: bool = Fal
 
 
 def modbus_cycle(n_tcu: int, n_hsu: int = 0, *, stride: int = 22, lastcomm_regs: int = 2,
-                 hsu_regs: int = 10, ncu_reads: tuple[int, ...] = (1, 6),
+                 hsu_regs: int = 10, n_hsu_ext: int = 0, hsu_ext_regs: int = 30,
+                 ncu_reads: tuple[int, ...] = (1, 6),
                  max_regs: int = 110, overhead_b: int = L3L4_B,
                  reconnect: bool = True) -> dict:
     """Bytes de UN ciclo de polling de una NCU, con el mismo troceo del driver."""
@@ -168,6 +172,7 @@ def modbus_cycle(n_tcu: int, n_hsu: int = 0, *, stride: int = 22, lastcomm_regs:
     reads += split_reads(n_tcu * lastcomm_regs, max_regs)  # lastComm (U32/TCU)
     reads += list(ncu_reads)                               # estado de la NCU
     reads += [min(hsu_regs, max_regs)] * n_hsu             # una lectura por HSU (bloque básico: 10 regs)
+    reads += [min(hsu_ext_regs, max_regs)] * n_hsu_ext     # y una por HSU externa (hoja 28000, cap 30)
 
     m = TrafficMeter(overhead_b=overhead_b)
     if reconnect:
@@ -236,7 +241,8 @@ def _agrega(campos: dict) -> dict:
 
 
 def sample_lines(plant: str, ncu: str, n_tcu: int, n_hsu: int = 0,
-                 campos: list[str] | None = None, agregado: bool = False) -> list[str]:
+                 campos: list[str] | None = None, agregado: bool = False,
+                 n_hsu_ext: int = 0) -> list[str]:
     """Line protocol representativo de una subida, tal como lo escribe el colector.
 
     Reproduce a mano lo que genera `Point.to_line_protocol()` para no arrastrar
@@ -268,12 +274,22 @@ def sample_lines(plant: str, ncu: str, n_tcu: int, n_hsu: int = 0,
             'alarm_com=0,alarm_snow=0,alarm_wind=0,snow_level=0,'
             'wind_direction=212,wind_level=0,wind_speed=4.7'
         )
+    # las estaciones EXTRA de la hoja 28000 llevan el id prefijado ("ext1"...)
+    # para no fundirse con las basicas en la misma serie -- mismo criterio que
+    # NCUDriver._hsu_jobs, que es quien manda
+    for h in range(1, n_hsu_ext + 1):
+        lines.append(
+            f'meteo,hsu=ext{h},ncu={ncu},plant={plant} '
+            'alarm_com=0,alarm_snow=0,alarm_wind=0,snow_level=0,'
+            'wind_direction=212,wind_level=0,wind_speed=4.7'
+        )
     return lines
 
 
 def cloud_cycle(n_tcu: int, n_hsu: int = 0, *, plant: str = "planta", ncu: str = "NCU1",
                 http_overhead_b: int = HTTP_OVERHEAD_B, writes: int = 2,
-                campos: list[str] | None = None, agregado: bool = False) -> dict:
+                campos: list[str] | None = None, agregado: bool = False,
+                n_hsu_ext: int = 0) -> dict:
     """Bytes que subiría a la nube UN ciclo de una NCU (crudo y comprimido).
 
     `writes`: escrituras HTTP por ciclo (el colector hace una del bloque de
@@ -281,8 +297,8 @@ def cloud_cycle(n_tcu: int, n_hsu: int = 0, *, plant: str = "planta", ncu: str =
     una.
     """
     m = TrafficMeter(http_overhead_b=http_overhead_b)
-    lines = sample_lines(plant, ncu, n_tcu, n_hsu, campos, agregado)
-    corte = max(1, len(lines) - 1 - n_hsu) if writes > 1 else len(lines)
+    lines = sample_lines(plant, ncu, n_tcu, n_hsu, campos, agregado, n_hsu_ext)
+    corte = max(1, len(lines) - 1 - n_hsu - n_hsu_ext) if writes > 1 else len(lines)
     m.cloud_write(lines[:corte])
     if writes > 1:
         m.cloud_write(lines[corte:])
@@ -345,7 +361,7 @@ def field_weights(n_tcu: int = 108, n_hsu: int = 2, *, agregado: bool = False) -
 
 def ncu_estimate(n_tcu: int, n_hsu: int = 0, *, interval_s: float = 30,
                  mmap: dict | None = None, polling: dict | None = None,
-                 hsu_extended: bool = False, **kw) -> dict:
+                 hsu_extended: bool = False, n_hsu_ext: int = 0, **kw) -> dict:
     """Tráfico diario de una NCU: LAN de planta y subida a la nube.
 
     Con `mmap` (el `config/modbus_map.yml` ya cargado) los tamaños de bloque
@@ -354,15 +370,16 @@ def ncu_estimate(n_tcu: int, n_hsu: int = 0, *, interval_s: float = 30,
     del_mapa = map_params(mmap, polling, hsu_extended) if mmap else {}
     kw = {**del_mapa, **kw}
     mb_kw = {k: v for k, v in kw.items() if k in
-             ("stride", "lastcomm_regs", "hsu_regs", "ncu_reads", "max_regs",
+             ("stride", "lastcomm_regs", "hsu_regs", "hsu_ext_regs", "ncu_reads", "max_regs",
               "overhead_b", "reconnect")}
     cl_kw = {k: v for k, v in kw.items() if k in ("plant", "ncu", "http_overhead_b", "writes")}
-    lan = modbus_cycle(n_tcu, n_hsu, **mb_kw)
-    cloud = cloud_cycle(n_tcu, n_hsu, **cl_kw)
+    lan = modbus_cycle(n_tcu, n_hsu, n_hsu_ext=n_hsu_ext, **mb_kw)
+    cloud = cloud_cycle(n_tcu, n_hsu, n_hsu_ext=n_hsu_ext, **cl_kw)
     cycles = 86400.0 / interval_s
     return {
         "tcus": n_tcu,
         "hsus": n_hsu,
+        "hsus_ext": n_hsu_ext,
         "interval_s": interval_s,
         "cycles_day": round(cycles, 1),
         "modbus_tx_cycle": lan["modbus_tx"],
