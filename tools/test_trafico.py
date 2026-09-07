@@ -104,6 +104,64 @@ def test_estimacion_vs_driver():
           est["lan_b"] == real["lan_b"], f"({est['lan_b']} vs {real['lan_b']})")
 
 
+def test_hsu_externa_estimacion_vs_driver():
+    """Las dos familias de HSU A LA VEZ: estimado = contado, y sin colision de ids.
+
+    Una NCU puede tener HSUs basicas (30200) Y una externa (28000) -- el caso
+    del 21/8 en Ayora. `hsu_ext_count` añade las externas SIN tocar la familia
+    basica, y este test es la garantia de que el medidor sigue midiendo lo que
+    el driver hace por ese camino nuevo.
+    """
+    import asyncio
+    import yaml
+    with open(os.path.join(RAIZ, "config", "modbus_map.yml"), encoding="utf-8") as f:
+        mmap = yaml.safe_load(f)
+    from drivers.simulated import SimulatedNCUDriver
+
+    ncu = {"id": "NCU2", "tcu_count": 45, "hsu_count": 2, "hsu_ext_count": 1}
+    m = T.TrafficMeter()
+    drv = SimulatedNCUDriver(ncu, mmap, "big", meter=m, max_regs=110)
+
+    async def un_ciclo():
+        await drv.connect()
+        await drv.read_trackers()
+        await drv.read_ncu()
+        return await drv.read_meteo()
+
+    filas = asyncio.run(un_ciclo())
+    real = m.snapshot(30)
+    est = T.modbus_cycle(45, 2, n_hsu_ext=1,
+                         **T.map_params(mmap, {"max_regs_per_read": 110}))
+    check("con HSU externa: transacciones estimadas = contadas",
+          est["modbus_tx"] == real["modbus_tx"], f"({est['modbus_tx']} vs {real['modbus_tx']})")
+    check("con HSU externa: bytes estimados = contados",
+          est["lan_b"] == real["lan_b"], f"({est['lan_b']} vs {real['lan_b']})")
+    # y el mutante del propio test: sin declararla, la estimacion se queda corta
+    sin = T.modbus_cycle(45, 2, **T.map_params(mmap, {"max_regs_per_read": 110}))
+    check("y sin declararla la estimacion se queda CORTA: el parametro mide",
+          sin["lan_b"] < real["lan_b"], f"({sin['lan_b']} vs {real['lan_b']})")
+
+    ids = [str(f["hsu"]) for f in filas]
+    check("los ids no colisionan: basicas 1..N y externas ext1..extM",
+          ids == ["1", "2", "ext1"], f"({ids})")
+
+    # la config contradictoria se dice ALTO, no se resuelve en silencio
+    malo = SimulatedNCUDriver({"id": "X", "tcu_count": 1, "hsu_count": 2,
+                               "hsu_extended": True, "hsu_ext_count": 1}, mmap, "big")
+    try:
+        asyncio.run(malo.read_meteo())
+        check("hsu_extended + hsu_ext_count a la vez revienta con mensaje", False)
+    except ValueError as e:
+        check("hsu_extended + hsu_ext_count a la vez revienta con mensaje",
+              "dos" in str(e) or "hsu_ext_count" in str(e))
+
+    # la nube tambien: una linea mas por estacion externa, en el POST de estado
+    con = T.cloud_cycle(45, 2, n_hsu_ext=1)
+    sin_n = T.cloud_cycle(45, 2)
+    check("la subida cuenta la linea de la externa",
+          con["cloud_raw_b"] > sin_n["cloud_raw_b"])
+
+
 def test_line_protocol_real():
     try:
         from influxdb_client import Point
@@ -368,7 +426,8 @@ def test_zigbee():
 
 if __name__ == "__main__":
     for fn in (test_troceo, test_bytes_adu, test_medidor, test_nube,
-               test_estimacion_vs_driver, test_line_protocol_real, test_visor_html,
+               test_estimacion_vs_driver, test_hsu_externa_estimacion_vs_driver,
+               test_line_protocol_real, test_visor_html,
                test_visor_al_dia, test_mapa_modbus, test_inventario_vs_botones,
                test_escala, test_planes_de_subida, test_calibracion_zigbee,
                test_peso_por_campo, test_zigbee):

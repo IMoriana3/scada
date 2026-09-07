@@ -136,12 +136,17 @@ class SimulatedNCUDriver(NCUDriver):
         return out
 
     async def read_meteo(self) -> list[dict]:
-        h = self.mmap["hsu_ext"] if self.cfg.get("hsu_extended") else self.mmap["hsu"]
-        for _ in range(self.cfg.get("hsu_count", 0)):
-            self._count_read(min(h["stride"], 30))
-        return [{"hsu": i + 1, "fields": {
-            "wind_speed": round(random.uniform(1, 8), 1),
-            "wind_direction": round(random.uniform(0, 360)),
-            "snow_level": 0.0, "wind_level": 0,
-            "alarm_wind": 0, "alarm_snow": 0, "alarm_com": 0,
-        }} for i in range(self.cfg.get("hsu_count", 0))]
+        # El reparto de hojas sale de `_hsu_jobs()`, el MISMO de la clase base
+        # que usa el driver real: si divergieran, el medidor de tráfico dejaría
+        # de medir lo que el hierro hace.
+        out = []
+        for h, n, pref in self._hsu_jobs():
+            for i in range(n):
+                self._count_read(min(h["stride"], 30))
+                out.append({"hsu": f"{pref}{i + 1}" if pref else i + 1, "fields": {
+                    "wind_speed": round(random.uniform(1, 8), 1),
+                    "wind_direction": round(random.uniform(0, 360)),
+                    "snow_level": 0.0, "wind_level": 0,
+                    "alarm_wind": 0, "alarm_snow": 0, "alarm_com": 0,
+                }})
+        return out

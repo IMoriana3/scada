@@ -50,6 +50,45 @@ class NCUDriver(ABC):
         # Callarlo sería volver al bug con mejor letra.
         return round(ahora_host - last_comm, 1), None, "host"
 
+    def _hsu_jobs(self) -> list[tuple[dict, int, str]]:
+        """Qué hojas de HSU leer y cuántas estaciones de cada una.
+
+        Una NCU puede tener las dos familias A LA VEZ: las básicas (30200) y
+        una o más externas/extendidas (28000, la de los piranómetros). Hasta
+        ahora el colector leía UNA hoja o la otra (`hsu_extended`), y en una
+        NCU con ambas la otra familia quedaba invisible — exactamente el caso
+        del 21/8 en Ayora: el aviso lo provocó la HSU externa y nadie leía su
+        estado.
+
+        · `hsu_count` + `hsu_extended` conservan su significado de siempre,
+          bit a bit: la familia principal, por la hoja que diga la bandera.
+        · `hsu_ext_count` (nuevo, default 0) añade N estaciones de la hoja
+          28000 ADEMÁS de las básicas. Sus ids van como "ext1", "ext2"…: las
+          dos familias empiezan en 1 y sin prefijo colisionarían en la misma
+          serie de InfluxDB — dos estaciones distintas fundidas en una.
+
+        Vive en la clase BASE a propósito: el driver real y el simulado tienen
+        que repartir las hojas con el MISMO criterio o el medidor de tráfico
+        dejaría de medir lo que el hierro hace.
+
+        Con `hsu_extended: true` y `hsu_ext_count` a la vez se leería la misma
+        hoja dos veces: error de configuración, y se dice ALTO en vez de
+        resolverse en silencio por un lado u otro.
+        """
+        n_b = int(self.cfg.get("hsu_count", 0) or 0)
+        n_e = int(self.cfg.get("hsu_ext_count", 0) or 0)
+        if self.cfg.get("hsu_extended"):
+            if n_e:
+                raise ValueError(
+                    f"[{self.cfg.get('id')}] hsu_extended:true ya lee la hoja 28000 "
+                    "para sus hsu_count; con hsu_ext_count a la vez se leería dos "
+                    "veces. Usa hsu_count+hsu_extended O hsu_count+hsu_ext_count.")
+            return [(self.mmap["hsu_ext"], n_b, "")]
+        jobs: list[tuple[dict, int, str]] = [(self.mmap["hsu"], n_b, "")]
+        if n_e:
+            jobs.append((self.mmap["hsu_ext"], n_e, "ext"))
+        return jobs
+
     # --- contabilidad de tráfico (no cuesta nada si no hay medidor) ---
     def _count_read(self, n_regs: int):
         if self.meter:
@@ -180,14 +219,14 @@ class ModbusNCUDriver(NCUDriver):
         return out
 
     async def read_meteo(self) -> list[dict]:
-        h = self.mmap["hsu_ext"] if self.cfg.get("hsu_extended") else self.mmap["hsu"]
-        n = self.cfg.get("hsu_count", 0)
-        if n == 0:
-            return []
         out = []
-        for i in range(n):
-            base = h["base"] + i * h["stride"]
-            regs = await self._read(base, min(h["stride"], 30))
-            fields = decode_tcu_block(regs, h["fields"], self.word_order)
-            out.append({"hsu": i + 1, "fields": fields})
+        for h, n, pref in self._hsu_jobs():
+            for i in range(n):
+                base = h["base"] + i * h["stride"]
+                regs = await self._read(base, min(h["stride"], 30))
+                fields = decode_tcu_block(regs, h["fields"], self.word_order)
+                # sin prefijo el id queda como siempre (entero): las series
+                # existentes de InfluxDB no se parten en dos
+                out.append({"hsu": f"{pref}{i + 1}" if pref else i + 1,
+                            "fields": fields})
         return out
