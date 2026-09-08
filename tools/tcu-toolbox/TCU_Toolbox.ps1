@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.69'
+$VERSION_TOOLBOX = '11.70'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -6245,6 +6245,21 @@ function Lv-Clave([string]$t) {
     return [double]::NaN
 }
 
+# Una columna es NUMERICA si hay al menos un numero y ninguna celda con texto que
+# no lo sea. Las celdas VACIAS no cuentan: una columna de numeros con huecos -SoC,
+# Ciclos, Quedan... en blanco cuando falta el dato- seguia siendo numerica en la
+# cabeza pero se clasificaba como texto, y el menu ofrecia "A-Z" y ordenaba como
+# cadenas ("100" antes que "20"). Se mira el texto ya normalizado. Pura.
+function Lv-ColNumerica($textos) {
+    $hayNum = $false
+    foreach ($t in @($textos)) {
+        if ("$t".Trim() -eq '') { continue }            # hueco: ni suma ni resta
+        if ([double]::IsNaN((Lv-Clave "$t"))) { return $false }
+        $hayNum = $true
+    }
+    return $hayNum
+}
+
 function Lv-Estado($lv) {
     if ($null -eq $lv.Tag -or -not ($lv.Tag -is [hashtable])) {
         $lv.Tag = @{orig=@(); filtros=@{}; dejadas=-1; cab=@()}
@@ -6340,11 +6355,13 @@ function Lv-Columnas($lv, $defs) {
 
 function Lv-Ordenar($lv, [int]$col, [bool]$asc) {
     $e = Lv-Estado $lv
-    $vals = @(@($e.orig) | ForEach-Object { if ($col -lt $_.SubItems.Count) { Lv-Clave $_.SubItems[$col].Text } else { [double]::NaN } })
-    $numerica = (@($vals | Where-Object { [double]::IsNaN($_) }).Count -eq 0) -and @($vals).Count -gt 0
+    $numerica = Lv-ColNumerica @(@($e.orig) | ForEach-Object { if ($col -lt $_.SubItems.Count) { $_.SubItems[$col].Text } else { '' } })
+    # una celda vacia en una columna de numeros no es un 0: va SIEMPRE al final,
+    # se ordene de menor a mayor o al reves, para no colar huecos entre datos.
+    $fin = $(if ($asc) { [double]::PositiveInfinity } else { [double]::NegativeInfinity })
     $e.orig = @(@($e.orig) | Sort-Object -Descending:(-not $asc) -Property @{Expression={
         $t = $(if ($col -lt $_.SubItems.Count) { $_.SubItems[$col].Text } else { '' })
-        if ($numerica) { Lv-Clave $t } else { $t } }})
+        if ($numerica) { $k = Lv-Clave $t; if ([double]::IsNaN($k)) { $fin } else { $k } } else { $t } }})
     Lv-Aplicar $lv
 }
 
@@ -6354,9 +6371,9 @@ function Lv-Menu($lv, [int]$col) {
     $e = Lv-Estado $lv
     $m = New-Object System.Windows.Forms.ContextMenuStrip
     $nombre = $(if ($col -lt @($e.cab).Count) { $e.cab[$col] } else { "columna $col" })
-    # "A-Z" en una columna de numeros no dice nada: se mira lo que hay dentro
-    $vals = @(@($e.orig) | ForEach-Object { if ($col -lt $_.SubItems.Count) { Lv-Clave $_.SubItems[$col].Text } else { [double]::NaN } })
-    $esNum = (@($vals).Count -gt 0) -and (@($vals | Where-Object { [double]::IsNaN($_) }).Count -eq 0)
+    # "A-Z" en una columna de numeros no dice nada: se mira lo que hay dentro,
+    # ignorando los huecos (una columna de numeros con celdas vacias es numerica)
+    $esNum = Lv-ColNumerica @(@($e.orig) | ForEach-Object { if ($col -lt $_.SubItems.Count) { $_.SubItems[$col].Text } else { '' } })
     $rotAsc = $(if ($esNum) { "Ordenar por '$nombre' de menor a mayor" } else { "Ordenar por '$nombre' A-Z" })
     $rotDes = $(if ($esNum) { "Ordenar por '$nombre' de mayor a menor" } else { "Ordenar por '$nombre' Z-A" })
     # Un menu de Windows se cierra al primer clic, asi que con las casillas de

@@ -1669,6 +1669,15 @@ Check 'orden: numero se ordena como numero' (Lv-Clave '10') 10
 # el rotulo del menu tiene que decir "de menor a mayor" en columnas numericas
 Check 'orden: rotulo numerico' ($src.Contains('de menor a mayor')) $true
 Check 'orden: y alfabetico si no lo es' ($src.Contains("A-Z")) $true
+# UNA COLUMNA DE NUMEROS CON HUECOS SIGUE SIENDO NUMERICA. Antes una celda vacia
+# -SoC, Ciclos, Quedan... sin dato- la volvia "texto" y el menu ofrecia A-Z y
+# ordenaba "100" antes que "20".
+Check 'colnum: numeros puros' (Lv-ColNumerica @('12', '3', '100')) $true
+Check 'colnum: numeros con huecos siguen siendo numeros' (Lv-ColNumerica @('12', '', '100', '')) $true
+Check 'colnum: coma decimal cuenta' (Lv-ColNumerica @('1,5', '2,0')) $true
+Check 'colnum: una palabra la hace texto' (Lv-ColNumerica @('12', 'orientativa', '3')) $false
+Check 'colnum: toda vacia no es numerica' (Lv-ColNumerica @('', '', '')) $false
+Check 'colnum: columna de texto' (Lv-ColNumerica @('AUTO', 'OFF', '')) $false
 Check 'orden: coma decimal' (Lv-Clave '-0,7854') -0.7854
 Check 'orden: texto no es numero' ([double]::IsNaN((Lv-Clave 'ALARMA'))) $true
 # El menu se cerraba al primer clic, asi que solo se podia tocar UNA casilla
