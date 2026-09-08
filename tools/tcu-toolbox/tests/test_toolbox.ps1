@@ -4219,6 +4219,12 @@ Check 'edad: los ciclos NO se convierten en vida restante' (
 Check 'edad: y se dice por que' ($src.Contains('NO se convierten en vida restante')) $true
 # el pase va aparte y con su aviso de coste
 Check 'edad: tiene su propio boton' ($src.Contains("`$btnBAnEdad.Text = 'LEER CICLOS Y CAPACIDAD'")) $true
+# REGRESION (v11.69): Parse-Seleccion SIEMPRE devuelve un hashtable, asi que va
+# en el 4o argumento ($sel) de Trabajos-Planta, nunca en el 2o ([int[]]$tcus).
+# BatAnal-Edad lo ponia en el 2o y petaba con "Hashtable -> Int32[]" en cuanto
+# la seleccion era por-NCU (planta completa). Ningun llamador debe hacerlo.
+Check 'edad: la seleccion NO va en el hueco tipado de tcus' (
+    [regex]::Matches($src, 'Trabajos-Planta \$cx \(Parse-Seleccion').Count) 0
 Check 'edad: lee los cuatro registros de un tiron' ($src.Contains('FC03-Leer ([byte]$tcu) (Dir-Trama 30099) 4')) $true
 Check 'edad: avisa de que va por Zigbee una a una' ($src.Contains('van por Zigbee UNA A UNA')) $true
 

@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.68'
+$VERSION_TOOLBOX = '11.69'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -9835,7 +9835,7 @@ function BatAnal-Guardados([string]$planta) {
 # no hace falta a diario.
 function BatAnal-Edad {
     $cx = Params-Conexion
-    $trabajos = @(Trabajos-Planta $cx (Parse-Seleccion $txtGTcus.Text 'Edad de baterias') (Ncus-Filtro))
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtGTcus.Text 'Edad de baterias') $txtGGw.Text)
     if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
     $n = 0; foreach ($tr in $trabajos) { $n += @($tr.tcus).Count }
     $r = [System.Windows.Forms.MessageBox]::Show(
@@ -11158,7 +11158,7 @@ function InvG-Pintar($filas) {
 # abajo como se recorre el campo.
 function InvG-Correr {
     $cx = Params-Conexion
-    $trabajos = @(Trabajos-Planta $cx (Parse-Seleccion $txtGTcus.Text 'Inventario global') (Ncus-Filtro))
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtGTcus.Text 'Inventario global') $txtGGw.Text)
     if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
     $lvIG.Items.Clear(); $script:UltimoInvG = @(); $lblIGRes.Text = ''; Sellar 'invg'
     Ctx-Guardar 'inventario_global' $cx $trabajos
