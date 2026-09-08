@@ -75,6 +75,15 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**Auditoría de baterías guiada, en un botón (v11.68)** — en la pestaña **Análisis
+baterías**, un botón verde **AUDITORÍA GUIADA (paso a paso)** que lleva de la mano
+la secuencia entera sin tener que acordarse del orden: **1)** DIAGNOSTICAR la planta,
+**2)** LEER CICLOS Y CAPACIDAD por Zigbee —el paso lento, **opcional**: pregunta
+Sí/No/Cancelar antes—, **3)** ANALIZAR (cruza con lo guardado y ordena de peor a
+mejor). No reimplementa nada: encadena las tres piezas que ya existían y explica
+cada paso en el registro. Los botones sueltos (ANALIZAR, LEER CICLOS) siguen ahí
+para cuando ya tienes datos y quieres solo una parte.
+
 **«señal», con su ñ (v11.67)** — todas las apariciones de «senal/senales/senalar»
 pasan a escribirse con ñ, tanto en textos de la interfaz (la nota de AUDITAR HSUs,
 la leyenda de Estabilidad y su aviso) como en comentarios. Solo ortografía: ni un

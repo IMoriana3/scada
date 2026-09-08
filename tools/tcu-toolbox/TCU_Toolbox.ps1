@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.67'
+$VERSION_TOOLBOX = '11.68'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -5812,6 +5812,17 @@ $tabBA = New-Object System.Windows.Forms.TabPage
 $tabBA.Text = 'Analisis baterias'
 $tabs.TabPages.Add($tabBA)
 
+$btnBAnGuia = New-Object System.Windows.Forms.Button
+$btnBAnGuia.Text = 'AUDITORIA GUIADA (paso a paso)'
+$btnBAnGuia.Location = New-Object System.Drawing.Point(10, 50)
+$btnBAnGuia.Size = New-Object System.Drawing.Size(240, 28)
+$btnBAnGuia.BackColor = [System.Drawing.Color]::FromArgb(0,120,90)
+$btnBAnGuia.ForeColor = [System.Drawing.Color]::White
+$tabBA.Controls.Add($btnBAnGuia)
+
+$lblBAnGuia = LG $tabBA 'DIAGNOSTICAR + ciclos + ANALIZAR, en orden y sin acordarte de nada. Los botones sueltos de arriba siguen ahi para pasos concretos.' 258 650 56
+$lblBAnGuia.ForeColor = [System.Drawing.Color]::Gray
+
 $btnBAn = New-Object System.Windows.Forms.Button
 $btnBAn.Text = 'ANALIZAR'
 $btnBAn.Location = New-Object System.Drawing.Point(10, 18)
@@ -5853,8 +5864,8 @@ $lblBAnRes = LG $tabBA '' 664 168 24
 $lblBAnRes.ForeColor = [System.Drawing.Color]::DimGray
 
 $lvBA = New-Object System.Windows.Forms.ListView
-$lvBA.Location = New-Object System.Drawing.Point(10, 56)
-$lvBA.Size = New-Object System.Drawing.Size(898, 274)
+$lvBA.Location = New-Object System.Drawing.Point(10, 88)
+$lvBA.Size = New-Object System.Drawing.Size(898, 242)
 $lvBA.View = 'Details'; $lvBA.FullRowSelect = $true; $lvBA.GridLines = $true
 foreach ($c in @(@('NCU',45), @('TCU',45), @('SoC %',50), @('SoH %',50), @('SoH med',60),
                  @('Ciclos',55), @('Causa',130), @('SoH pts/mes',80), @('Muestras',65),
@@ -9863,6 +9874,54 @@ function BatAnal-Edad {
     Con "Edad: $leidas leidas, $mudas sin respuesta. Vuelve a pulsar ANALIZAR para que entren en el veredicto." ([System.Drawing.Color]::SteelBlue)
 }
 
+# EL PASO 1 QUE PIDIO IGNACIO: la toolbox lleva la auditoria de la mano, en el
+# orden correcto, en vez de tener que acordarse de DIAGNOSTICAR -> LEER CICLOS
+# -> ANALIZAR. No duplica nada: encadena las tres piezas que ya existen y
+# explica cada paso. El unico paso lento -los ciclos por Zigbee- es opcional.
+function BatAnal-Guiado {
+    $plan = ("Auditoria de baterias, guiada en tres pasos:`r`n`r`n" +
+             "  1. DIAGNOSTICAR la planta (el estado de ahora).`r`n" +
+             "  2. LEER CICLOS Y CAPACIDAD por Zigbee, TCU a TCU: da el SoH MEDIDO`r`n" +
+             "     (la capacidad real) y los ciclos. Es el paso LENTO.`r`n" +
+             "  3. ANALIZAR: cruza lo de ahora con los barridos guardados, dice la`r`n" +
+             "     causa de cada problema y ordena la flota de peor a mejor.`r`n`r`n" +
+             "El paso 2 es el que tarda. Incluirlo?`r`n`r`n" +
+             "  Si        auditoria COMPLETA (con SoH medido y ciclos)`r`n" +
+             "  No        mas rapida, sin ciclos ni SoH medido esta vez`r`n" +
+             "  Cancelar  no hacer nada")
+    $q = [System.Windows.Forms.MessageBox]::Show($plan, 'Auditoria de baterias guiada', 'YesNoCancel', 'Information')
+    if ($q -eq 'Cancel') { Con 'Auditoria guiada cancelada.' ([System.Drawing.Color]::Orange); return }
+
+    # PASO 1: leer la planta de verdad. Diag-Correr directamente, no el boton:
+    # asi barre TCUs aunque la vista este puesta en HSU.
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con 'Auditoria guiada  -  paso 1/3: DIAGNOSTICAR la planta.' ([System.Drawing.Color]::SteelBlue)
+    Diag-Correr
+    if ($script:Cancelar) { return }
+    if (@($script:UltimoDiag).Count -eq 0) {
+        Con 'El diagnostico no ha traido ninguna fila: no sigo con la auditoria.' ([System.Drawing.Color]::Orange); return
+    }
+
+    # PASO 2: ciclos y capacidad, solo si se pidio. BatAnal-Edad trae su propio
+    # aviso de coste y su Si/No; cancelar ESE pase no aborta la auditoria, solo
+    # deja esta pasada sin SoH medido.
+    if ($q -eq 'Yes') {
+        Con 'Auditoria guiada  -  paso 2/3: LEER CICLOS Y CAPACIDAD (Zigbee, TCU a TCU).' ([System.Drawing.Color]::SteelBlue)
+        BatAnal-Edad
+        if ($script:Cancelar) { $script:Cancelar = $false }
+    } else {
+        Con 'Auditoria guiada  -  paso 2/3 OMITIDO: sin ciclos ni SoH medido esta vez.' ([System.Drawing.Color]::Gainsboro)
+    }
+
+    # PASO 3: el veredicto. Forzamos que re-audite el diagnostico recien leido
+    # (chkBAnLeer -> btnGBat) en vez de reusar una tabla de baterias vieja.
+    Con 'Auditoria guiada  -  paso 3/3: ANALIZAR (cruza con lo guardado y ordena).' ([System.Drawing.Color]::SteelBlue)
+    $prev = $chkBAnLeer.Checked
+    $chkBAnLeer.Checked = $true
+    try { BatAnal-Correr } finally { $chkBAnLeer.Checked = $prev }
+    Con 'Auditoria guiada terminada: la peor bateria esta arriba del todo.' ([System.Drawing.Color]::SteelBlue)
+}
+
 function BatAnal-Correr {
     $planta = Nombre-Planta
     # 1) la foto de ahora: o se lee la planta, o se usa el ultimo diagnostico
@@ -9970,6 +10029,7 @@ function BatAnal-Pintar {
     Lv-Reiniciar $lvBA
 }
 
+$btnBAnGuia.Add_Click({ Lanzar { BatAnal-Guiado } })
 $btnBAn.Add_Click({ Lanzar { BatAnal-Correr } })
 $btnBAnEdad.Add_Click({ Lanzar { BatAnal-Edad } })
 $chkBAnSolo.Add_CheckedChanged({ if (@($script:UltimoBatAnal).Count -gt 0) { BatAnal-Pintar } })

@@ -4222,6 +4222,23 @@ Check 'edad: tiene su propio boton' ($src.Contains("`$btnBAnEdad.Text = 'LEER CI
 Check 'edad: lee los cuatro registros de un tiron' ($src.Contains('FC03-Leer ([byte]$tcu) (Dir-Trama 30099) 4')) $true
 Check 'edad: avisa de que va por Zigbee una a una' ($src.Contains('van por Zigbee UNA A UNA')) $true
 
+# ---- la auditoria GUIADA: un boton que encadena los tres pasos ----
+# el toolbox hace el "paso 1" (llevar de la mano) en vez de tener que acordarse
+# del orden DIAGNOSTICAR -> LEER CICLOS -> ANALIZAR
+Check 'guiada: tiene su boton verde' ($src.Contains("`$btnBAnGuia.Text = 'AUDITORIA GUIADA (paso a paso)'")) $true
+Check 'guiada: el boton lanza la guia' ($src.Contains('$btnBAnGuia.Add_Click({ Lanzar { BatAnal-Guiado } })')) $true
+$fnGuia = $src.Substring($src.IndexOf('function BatAnal-Guiado'), 2800)
+# encadena las TRES piezas que ya existen, sin reimplementar ninguna
+Check 'guiada: paso 1 es DIAGNOSTICAR de verdad' ($fnGuia.Contains('Diag-Correr')) $true
+Check 'guiada: paso 2 es el pase de edad' ($fnGuia.Contains('BatAnal-Edad')) $true
+Check 'guiada: paso 3 es ANALIZAR' ($fnGuia.Contains('BatAnal-Correr')) $true
+# el paso lento -los ciclos- es opcional: Si/No/Cancelar
+Check 'guiada: el pase lento es opcional' ($fnGuia.Contains("'YesNoCancel'")) $true
+# fuerza re-auditar el diagnostico recien leido, no una tabla vieja
+Check 'guiada: fuerza releer antes de analizar' ($fnGuia.Contains('$chkBAnLeer.Checked = $true')) $true
+# cancelar el pase de edad no aborta la auditoria
+Check 'guiada: cancelar los ciclos no tira la auditoria' ($fnGuia.Contains('$script:Cancelar = $false')) $true
+
 # ---- la pantalla, y que el analisis se pueda volver a abrir ----
 Check 'bat anal: hay hoja propia' ($src.Contains("`$tabBA.Text = 'Analisis baterias'")) $true
 Check 'bat anal: y esta en el arbol junto a Baterias' (
