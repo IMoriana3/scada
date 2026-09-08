@@ -75,6 +75,14 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**Las columnas de números con huecos ya se ordenan como números (v11.70)** — en
+el menú ▾ de una columna, una sola celda vacía (SoC, Ciclos, «Quedan»… en blanco
+cuando falta el dato) la hacía pasar por texto: ofrecía «A-Z» y ordenaba `"100"`
+antes que `"20"`. Ahora los huecos **no cuentan** para decidir si la columna es
+numérica —lo es si todo lo que NO está vacío son números—, el rótulo dice «de
+menor a mayor / de mayor a menor», y las celdas vacías van **siempre al final**,
+se ordene en el sentido que se ordene.
+
 **Auditoría de baterías guiada, en un botón (v11.68)** — en la pestaña **Análisis
 baterías**, un botón verde **AUDITORÍA GUIADA (paso a paso)** que lleva de la mano
 la secuencia entera sin tener que acordarse del orden: **1)** DIAGNOSTICAR la planta,
