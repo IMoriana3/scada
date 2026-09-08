@@ -632,7 +632,7 @@ function Tcus-DeNcu($n) {
 }
 
 # Los repetidores de una NCU. Son TCUs -mismo mapa, misma bateria, mismo
-# firmware- colocadas para repetir la senal. Su esclavo cae fuera del rango, asi
+# firmware- colocadas para repetir la señal. Su esclavo cae fuera del rango, asi
 # que hay que ir a por ellos aparte.
 # Si la topologia no le puso nombre hay que numerarlo, y el numero es DE PLANTA,
 # como estan rotulados en el plano y como los numera la toolbox. Numerar dentro
@@ -1295,7 +1295,7 @@ catch {
         Write-Host ''
         # OJO: 'netstat' aqui NO sirve. El agente escucha por HTTP.SYS, el
         # servicio HTTP de Windows: el socket lo abre el kernel, asi que netstat
-        # siempre dice PID 4 (System) y nunca senala al culpable. Y matar el 4
+        # siempre dice PID 4 (System) y nunca señala al culpable. Y matar el 4
         # reinicia el PC.
         Write-Host '  Para cerrarlo (solo mata lo que lleve TCU_Agente en la linea de comandos):'
         # el '-notlike *CimInstance*' es para que el propio comando no se mate a

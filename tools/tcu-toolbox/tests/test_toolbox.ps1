@@ -4462,11 +4462,11 @@ $rA = @(Aud-Comparar $audA @('40080 custom_position_timeout', 'otro'))
 Check 'aud-cmp: una fila por parametro' $rA.Count 2
 Check 'aud-cmp: manda la mayoria' $rA[0].Comun '30'
 Check 'aud-cmp: y se cuenta' $rA[0].Cuantos 2
-Check 'aud-cmp: se senala al que se sale' $rA[0].Distintos 'NCU3=55'
+Check 'aud-cmp: se señala al que se sale' $rA[0].Distintos 'NCU3=55'
 Check 'aud-cmp: con su veredicto' $rA[0].Veredicto '1 distinto(s)'
 Check 'aud-cmp: lo igual se dice igual' $rA[1].Veredicto 'igual en todos'
 Check 'aud-cmp: respeta el orden pedido' ($rA[0].Parametro) '40080 custom_position_timeout'
-# con dos equipos no hay mayoria: senalar a uno seria echarlo a suertes
+# con dos equipos no hay mayoria: señalar a uno seria echarlo a suertes
 $rDos = @(Aud-Comparar @(@{equipo='A'; valores=@{'x'='1'}}, @{equipo='B'; valores=@{'x'='2'}}) @('x'))
 Check 'aud-cmp: con dos no hay mayoria' ($rDos[0].Veredicto -like 'discrepan*') $true
 # un registro que no contesta se deja vacio, y un vacio no vota

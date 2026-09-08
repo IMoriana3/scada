@@ -75,6 +75,11 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**«señal», con su ñ (v11.67)** — todas las apariciones de «senal/senales/senalar»
+pasan a escribirse con ñ, tanto en textos de la interfaz (la nota de AUDITAR HSUs,
+la leyenda de Estabilidad y su aviso) como en comentarios. Solo ortografía: ni un
+registro, ni un campo, ni una condición cambian.
+
 **El «EXT» no es otra estación: es la misma (v11.66)** — corrección de rumbo a las
 horas de la v11.65. Cobertura-zigbee zanjó (su #590) que el bloque `28000` es el
 **mapa ampliado de la MISMA estación** (ligado a `hsu_extended`), no una clase de
