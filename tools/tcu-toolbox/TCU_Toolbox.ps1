@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.66'
+$VERSION_TOOLBOX = '11.67'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -104,7 +104,7 @@ function Cargar-FicheroPlantas([string]$ruta) {
             if ($lstE.Count -gt 0) { $e.hsuLista = $lstE; if (-not $e.hsu) { $e.hsu = $lstE[0] } }
         }
         # Repetidores: son TCUs de verdad -mismo mapa, misma bateria, mismo FW-
-        # colocadas para repetir la senal, no para mover un seguidor. Su esclavo
+        # colocadas para repetir la señal, no para mover un seguidor. Su esclavo
         # cae FUERA del rango 1..N, asi que hasta ahora no se leian: ni entraban
         # en el inventario ni en la campana de firmware ni en la auditoria de
         # baterias, y un repetidor con la bateria muerta se lleva por delante a
@@ -1283,7 +1283,7 @@ function Ncu-Config {
 }
 
 # ---------- estabilidad de la Zigbee ----------
-# El mapa Modbus de Sunner NO expone RSSI ni LQI: no hay potencia de senal que
+# El mapa Modbus de Sunner NO expone RSSI ni LQI: no hay potencia de señal que
 # leer. Lo que si hay es el lastComm de cada TCU, y muestreandolo se ve lo
 # mismo por su efecto: una TCU al limite de cobertura no da un RSSI bajo, da
 # caidas frecuentes y edades altas. Esto es calidad INFERIDA, no medida.
@@ -2031,7 +2031,7 @@ function Diag-LineaNcu([string]$ncu, $filas, [int]$tcusDecl) {
 # comparar, asi que no hay contra que auditar... salvo contra los demas. En una
 # planta bien puesta las 16 NCUs llevan la misma configuracion y las 10 HSUs los
 # mismos umbrales: manda la MAYORIA y lo que se marca es la minoria. Con dos
-# equipos no hay mayoria posible y se dice, en vez de senalar a uno al azar.
+# equipos no hay mayoria posible y se dice, en vez de señalar a uno al azar.
 #
 # Recibe @(@{equipo='NCU1'; valores=@{'parametro'='valor'}}) y devuelve una fila
 # por parametro. $orden fija en que orden salen; sin el, alfabetico. Pura.
@@ -5524,7 +5524,7 @@ $tabN.Controls.Add($lvN)
 
 # ============================ TAB ESTABILIDAD ============================
 # El mapa Modbus de Sunner no expone RSSI ni LQI, asi que no hay potencia de
-# senal que leer. Pero la calidad de un enlace se ve igual por su efecto:
+# señal que leer. Pero la calidad de un enlace se ve igual por su efecto:
 # muestreando el lastComm de cada TCU sale que porcentaje del tiempo esta
 # fresca, cuantas veces se cae y cuanto tarda en volver. Es calidad INFERIDA,
 # y en el informe se dice asi.
@@ -5564,7 +5564,7 @@ foreach ($c in @(@('NCU',50), @('TCU',55), @('Muestras',75), @('% fresca',75),
     [void]$lvE.Columns.Add($c[0], $c[1])
 }
 $tabE.Controls.Add($lvE)
-[void](LG $tabE 'Calidad INFERIDA del enlace: el mapa de Sunner no da RSSI. Se mira cuanto tiempo esta fresca cada TCU, no la potencia de senal. Peores primero. Se para con CANCELAR.' 10 890 366)
+[void](LG $tabE 'Calidad INFERIDA del enlace: el mapa de Sunner no da RSSI. Se mira cuanto tiempo esta fresca cada TCU, no la potencia de señal. Peores primero. Se para con CANCELAR.' 10 890 366)
 
 # ============================ TAB HSU (METEO) ============================
 $tabH = New-Object System.Windows.Forms.TabPage
@@ -5900,7 +5900,7 @@ foreach ($c in @(@('Parametro',260), @('Valor comun',120), @('Cuantas',70), @('H
     [void]$lvAH.Columns.Add($c[0], $c[1])
 }
 $tabAH.Controls.Add($lvAH)
-$lblAHNota = LG $tabAH 'Lee la configuracion de todas las HSUs de la planta y las compara entre si. Pasa antes por BUSCAR HSUs (bloque HSU / Lectura de senales) si la entrada es Planta completa o (auto).' 10 890 350
+$lblAHNota = LG $tabAH 'Lee la configuracion de todas las HSUs de la planta y las compara entre si. Pasa antes por BUSCAR HSUs (bloque HSU / Lectura de señales) si la entrada es Planta completa o (auto).' 10 890 350
 $lblAHNota.ForeColor = [System.Drawing.Color]::Gray
 
 # ============================ TAB FIRMWARE HSU ============================
@@ -12672,7 +12672,7 @@ $btnEIni.Add_Click({ Lanzar {
     $nT = Cuantas-Tcus $trabajos
     $pases = [Math]::Max(1, [int]($mins * 60 / $cada))
     $r = [System.Windows.Forms.MessageBox]::Show(
-        "Medir estabilidad de $nT TCUs en $($trabajos.Count) NCU(s) durante $mins min, una muestra cada $cada s ($pases pases)?`r`n`r`nSolo LEE el lastComm por el puerto ${PUERTO_NCU}: no toca la Zigbee ni mueve nada.`r`n`r`nOJO: no es potencia de senal (el mapa no la da), es cuanto tiempo esta fresca cada TCU.",
+        "Medir estabilidad de $nT TCUs en $($trabajos.Count) NCU(s) durante $mins min, una muestra cada $cada s ($pases pases)?`r`n`r`nSolo LEE el lastComm por el puerto ${PUERTO_NCU}: no toca la Zigbee ni mueve nada.`r`n`r`nOJO: no es potencia de señal (el mapa no la da), es cuanto tiempo esta fresca cada TCU.",
         'Medir estabilidad', 'YesNo', 'Question')
     if ($r -ne 'Yes') { return }
     $lvE.Items.Clear(); $script:UltimaEstab = @(); $lblERes.Text = ''; Sellar 'estab'
