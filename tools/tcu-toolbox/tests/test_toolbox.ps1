@@ -3560,11 +3560,15 @@ Check 'modo: sin dato no se opina' (Modo-NoSigue '-') $false
 Check 'modo nota: lleva el modo dentro' (Modo-Nota 'OFF') 'en OFF: no sigue'
 Check 'modo nota: en AUTO no hay nota' (Modo-Nota 'AUTO') ''
 # y el diagnostico lo filtra ANTES de pintarlo, no solo para el veredicto
-Check 'rep: la columna Alarmas sale filtrada' ($src.Contains('$alR = $(if ($d) { Rep-Alarmas "$($d.Alarmas)" }')) $true
+# (v11.71: el filtrado vive ahora en Rep-Fila, no inline en el bucle)
+Check 'rep: la columna Alarmas sale filtrada' ($src.Contains('$alR = Rep-Alarmas "$($d.Alarmas)"')) $true
 
 # el diagnostico los lee y los cuenta APARTE, como las HSU
 Check 'rep: el diagnostico los recorre' ($src.Contains('$reps = @(Reps-Nombrar (Reps-DeCx $cx $txtGGw.Text))')) $true
-Check 'rep: por Zigbee directo, no por la cache de la NCU' ($src.Contains('$d = Diag-LeerTcu ([byte]$rp.esclavo)')) $true
+# v11.71: se leen del bloque compacto de la NCU (con Edad_s); el Zigbee directo
+# pasa a ser SOLO el respaldo -esclavo fuera de la cache (>200) o NCU que no lo
+# cachea-. Lo contrario de lo que fijaba este test antes.
+Check 'rep: la lectura directa es solo el respaldo' ($src.Contains('$dd = Diag-LeerTcu ([byte]$rp.esclavo)')) $true
 Check 'rep: no suman al total de la flota' ($src.Contains('$nROk = 0; $nRMal = 0')) $true
 Check 'rep: y se dicen aparte en el resumen' ($src.Contains('Repetidores: $($reps.Count) ($nROk OK)')) $true
 # la topologia de Ayora ya los declara
