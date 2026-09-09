@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.72'
+$VERSION_TOOLBOX = '11.73'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -247,6 +247,7 @@ function Nombre-SinTramo([string]$nombre) {
 # "<Planta> NCU<n> ...", se anade ademas una entrada por planta con la lista
 # de sus NCUs, para operaciones de planta entera (Diagnostico).
 function Construir-EntradasAuto {
+    $aQuitar = @()
     $porIp = @{}
     foreach ($k in @($PLANTAS.Keys)) {
         $p = $PLANTAS[$k]
@@ -273,7 +274,13 @@ function Construir-EntradasAuto {
         $fin = @($gws | ForEach-Object { $_.fin } | Measure-Object -Maximum).Maximum
         $auto = @{ip=$ip; puerto=$null; ini=[int]$ini; fin=[int]$fin; gws=$gws}
         foreach ($g in $grupo) { if ($g.p.hsu) { $auto.hsu = $g.p.hsu; break } }
-        $PLANTAS["$prefijo (auto)"] = $auto
+        # cada NCU sale UNA vez en el desplegable, con su nombre a secas: la
+        # entrada agregada se llama como la NCU (antes "<NCU> (auto)") y las de
+        # gateway ("<NCU> GW1"/"GW2") se retiran al final. El gateway se elige
+        # aparte, con las casillas GW1/GW2 de la barra. Internamente la agregada
+        # resuelve el puerto sola (gws), asi que no cambia como se conecta.
+        $PLANTAS[$prefijo] = $auto
+        $aQuitar += @($grupo | ForEach-Object { $_.nombre })
     }
     # agrupar por planta a partir del patron de nombre "<Planta> NCU<n>"
     $porPlanta = [ordered]@{}
@@ -306,6 +313,9 @@ function Construir-EntradasAuto {
         }
         $PLANTAS["$planta (Planta completa)"] = @{ip=$null; puerto=$null; ini=$null; fin=$null; ncus=$lista}
     }
+    # ya construidas las agregadas y las "(Planta completa)": fuera del
+    # desplegable las entradas por gateway que se fundieron en una agregada
+    foreach ($k in @($aQuitar)) { [void]$PLANTAS.Remove($k) }
 }
 
 # El desplegable de plantas se llenaba recorriendo PLANTAS.Keys -una hashtable,
