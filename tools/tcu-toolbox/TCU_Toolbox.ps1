@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.71'
+$VERSION_TOOLBOX = '11.72'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -307,6 +307,29 @@ function Construir-EntradasAuto {
         $PLANTAS["$planta (Planta completa)"] = @{ip=$null; puerto=$null; ini=$null; fin=$null; ncus=$lista}
     }
 }
+
+# El desplegable de plantas se llenaba recorriendo PLANTAS.Keys -una hashtable,
+# orden de INSERCION-, asi que las entradas "(auto)" y "(Planta completa)", que
+# se anaden al final, salian mezcladas y la NCU se ordenaba como texto (NCU14
+# antes que NCU2). Estas dos ponen orden: por planta, luego NCU por NUMERO, y
+# dentro de cada NCU el base, GW1, GW2 y por ultimo (auto); la (Planta completa)
+# cierra su planta y (manual) va siempre el primero. Puras.
+function Plantas-Clave([string]$nombre) {
+    if ($nombre -eq '(manual)') { return '' }              # el primero de todos
+    $m = [regex]::Match($nombre, '^(.*?)\s+NCU(\d+)(.*)$')
+    if ($m.Success) {
+        $resto = $m.Groups[3].Value.Trim()
+        $sub = 0
+        if ($resto -match '^GW1') { $sub = 1 }
+        elseif ($resto -match '^GW2') { $sub = 2 }
+        elseif ($resto -match '\(auto\)') { $sub = 3 }
+        return ('1|{0}|{1:0000}|{2}' -f $m.Groups[1].Value.Trim(), [int]$m.Groups[2].Value, $sub)
+    }
+    $mp = [regex]::Match($nombre, '^(.*?)\s+\(Planta completa\)')
+    if ($mp.Success) { return ('1|{0}|9999|0' -f $mp.Groups[1].Value.Trim()) }   # cierra su planta
+    return ('1|{0}|9998|0' -f $nombre)                     # cualquier otra, por su nombre
+}
+function Plantas-Ordenadas($claves) { return @(@($claves) | Sort-Object { Plantas-Clave "$_" }) }
 
 # '1,3-5' -> @(1,3,4,5); vacio -> $null (= todas)
 function Parse-ListaNums([string]$texto) {
@@ -4074,7 +4097,7 @@ $cbPlanta = New-Object System.Windows.Forms.ComboBox
 $cbPlanta.Location = New-Object System.Drawing.Point(10, 21)
 $cbPlanta.Size = New-Object System.Drawing.Size(175, 22)
 $cbPlanta.DropDownStyle = 'DropDownList'
-foreach ($k in $PLANTAS.Keys) { [void]$cbPlanta.Items.Add($k) }
+foreach ($k in @(Plantas-Ordenadas $PLANTAS.Keys)) { [void]$cbPlanta.Items.Add($k) }
 $cbPlanta.SelectedIndex = 0
 $gbCon.Controls.Add($cbPlanta)
 
@@ -7173,7 +7196,7 @@ function Cuantas-Tcus($trabajos) {
 function Refrescar-ComboPlantas {
     $sel = $cbPlanta.SelectedItem
     $cbPlanta.Items.Clear()
-    foreach ($k in $PLANTAS.Keys) { [void]$cbPlanta.Items.Add($k) }
+    foreach ($k in @(Plantas-Ordenadas $PLANTAS.Keys)) { [void]$cbPlanta.Items.Add($k) }
     if ($sel -and $cbPlanta.Items.Contains($sel)) { $cbPlanta.SelectedItem = $sel } else { $cbPlanta.SelectedIndex = 0 }
 }
 
