@@ -3480,6 +3480,44 @@ Check 'rep salud: ni la desviacion de posicion'  (Rep-Salud ([pscustomobject]@{S
 # repetidores de Ayora, que es cambiar un punto ciego por ruido.
 Check 'rep salud: ni que no este en AUTO' (Rep-Salud ([pscustomobject]@{SoC=90}) (Rep-Alarmas 'en OFF: no sigue')) 'OK'
 Check 'rep salud: la nota de modo se filtra entera' (Rep-Alarmas 'en MANUAL: no sigue') ''
+
+# ---- Rep-Fila: la fila del repetidor, ahora leida del bloque compacto de la NCU ----
+# El dato viene de Ncu-DiagCompat (mismo objeto que una TCU) y trae Edad_s: eso
+# es lo que pedia Ignacio, que los repetidores tuvieran tiempo de refresco.
+$dCompact = [pscustomobject]@{
+    TCU=200; Salud='AVISO'; Modo='OFF'; SoC=78; SoH=100; Vbat_mV=26000; Ibat_mA=50
+    Vpanel_mV=18000; Ientrada_mA=200; Dia=1; Tbat_C=21.5; Tpcb_C=31.2; Edad_s=7
+    Alarmas='dif 63,7 deg; en OFF: no sigue'; main_status='0x0080'; alarmas_1='0x0000'
+    alarmas_2='0x0000'; alarmas_3=''; alarmas_4=''; system_status='0x8000'
+}
+$rpX = @{ncu='4'; puerto=503; esclavo=200; nombre='Repetidor 1'}
+$fR = Rep-Fila $rpX $dCompact
+Check 'repfila: AHORA trae la edad de la NCU' ("$($fR.Edad_s)") '7'
+Check 'repfila: y el SoC del compacto' ("$($fR.SoC)") '78'
+Check 'repfila: posicion y modo fuera, queda OK' ($fR.Salud) 'OK'
+Check 'repfila: sin alarmas de posicion en la columna' ($fR.Alarmas) ''
+Check 'repfila: la etiqueta es la del repetidor' ($fR.TCU) 'Repetidor 1'
+Check 'repfila: no lleva tilt (esta fijo)' ("$($fR.Tilt)") ''
+# una alarma de bateria SI cuenta
+$dBat = [pscustomobject]@{TCU=200; Salud='ALARMA'; SoC=5; SoH=100; Vbat_mV=20000; Edad_s=3; Alarmas='SoC critico (<10%)'; main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
+Check 'repfila: la bateria critica es ALARMA' ((Rep-Fila $rpX $dBat).Salud) 'ALARMA'
+# la NCU no lo tiene fresco: OFFLINE, con su mensaje
+$dOff = [pscustomobject]@{TCU=200; Salud='OFFLINE'; SoC=''; Edad_s=''; Alarmas='sin datos en la NCU desde hace 800 s'; main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
+Check 'repfila: OFFLINE via NCU se respeta' ((Rep-Fila $rpX $dOff).Salud) 'OFFLINE'
+Check 'repfila: y arrastra el porque' ((Rep-Fila $rpX $dOff).Alarmas -like '*sin datos en la NCU*') $true
+# no contesta de ninguna forma: OFFLINE "no contesta", sin datos
+$fNull = Rep-Fila $rpX $null
+Check 'repfila: sin objeto, OFFLINE no contesta' (($fNull.Salud -eq 'OFFLINE') -and ($fNull.Alarmas -like '*no contesta*')) 'True'
+Check 'repfila: y sin SoC inventado' ("$($fNull.SoC)") ''
+# el esclavo 201 se lee directo (Diag-LeerTcu): ese objeto no tiene Edad_s, y la
+# columna se queda vacia, que es honesto -no hay caché de la que sacar la edad-
+$dDirecto = [pscustomobject]@{TCU=201; Salud='OK'; SoC=80; SoH=100; Vbat_mV=26000; Alarmas=''; main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''}
+$rp201 = @{ncu='12'; puerto=503; esclavo=201; nombre='Repetidor 3'}
+Check 'repfila: el directo (esclavo 201) no inventa edad' ("$((Rep-Fila $rp201 $dDirecto).Edad_s)") ''
+Check 'repfila: pero si trae su SoC' ("$((Rep-Fila $rp201 $dDirecto).SoC)") '80'
+# el barrido de repetidores ya no lee por Zigbee directo por defecto
+Check 'rep: se leen del bloque compacto de la NCU' ($src.Contains('$dm = Ncu-DiagCompat @($enCache | ForEach-Object { [int]$_.esclavo })')) $true
+Check 'rep: y la cache llega al esclavo 200' ($src.Contains('$REP_ESCLAVO_MAX = 200')) $true
 # pero lo suyo sigue llegando aunque venga en la misma linea
 Check 'rep salud: y lo suyo no se pierde' (Rep-Alarmas 'en OFF: no sigue; fallo com con Xbee') 'fallo com con Xbee'
 
