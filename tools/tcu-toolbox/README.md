@@ -75,6 +75,15 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**El gateway se elige con casillas, no en el desplegable (v11.73)** — cada NCU
+sale UNA vez en el desplegable, con su nombre a secas: se acabaron las entradas
+"NCU16 GW1"/"GW2"/"(auto)" mezcladas. Una vez elegida la NCU, si tiene dos
+gateways se marcan las casillas **GW1**/**GW2** de la barra de conexion para
+acotar a uno (ninguna o las dos = todos). El gateway es de la CONEXION, no de
+cada operacion, asi que ese unico par gobierna todas las pestanas y se retiran
+los 8 campos "GW" de texto que habia repartidos. Por dentro la NCU sigue
+resolviendo el puerto sola; las casillas solo acotan.
+
 **El desplegable de plantas, ordenado (v11.72)** — se llenaba recorriendo la
 hashtable en orden de inserción, así que las entradas «(auto)» y «(Planta
 completa)» quedaban mezcladas al final y las NCU se ordenaban como texto (NCU14

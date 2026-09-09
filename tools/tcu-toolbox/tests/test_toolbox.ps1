@@ -166,6 +166,19 @@ Check 'orden combo: GW1 antes que GW2' ($ordSal.IndexOf('San Jose NCU16 GW1') -l
 Check 'orden combo: (Planta completa) cierra su planta' ($ordSal.IndexOf('San Jose (Planta completa)') -gt $ordSal.IndexOf('San Jose NCU16 GW2')) $true
 # y el combo se llena con la lista ordenada, no con PLANTAS.Keys a pelo
 Check 'orden combo: el desplegable usa el orden' (@([regex]::Matches($src, 'foreach \(\$k in @\(Plantas-Ordenadas \$PLANTAS.Keys\)\)')).Count) 2
+
+# ---- el gateway se elige con casillas GW1/GW2 en la barra, no en el desplegable (v11.73) ----
+Check 'gw casilla: solo GW1 -> su puerto' (Gw-SelDe $true $false 503 504) '503'
+Check 'gw casilla: solo GW2 -> su puerto' (Gw-SelDe $false $true 503 504) '504'
+Check 'gw casilla: las dos marcadas = todos' (Gw-SelDe $true $true 503 504) ''
+Check 'gw casilla: ninguna marcada = todos' (Gw-SelDe $false $false 503 504) ''
+Check 'gw casilla: existen GW1 y GW2 en la barra' ($src.Contains("`$chkGw1.Text = 'GW1'") -and $src.Contains("`$chkGw2.Text = 'GW2'")) $true
+Check 'gw casilla: un helper Gw-Sel las lee' ($src.Contains('function Gw-Sel { return (Gw-SelDe $chkGw1.Checked $chkGw2.Checked')) $true
+# ya no hay campos "GW" de texto por pestana: todas leen Gw-Sel
+Check 'gw casilla: fuera los 8 campos GW de texto' (@([regex]::Matches($src, '\$txt\w+Gw = TG ')).Count) 0
+Check 'gw casilla: y las pestanas usan Gw-Sel' (@([regex]::Matches($src, '\(Gw-Sel\)')).Count -ge 8) $true
+# solo se habilitan cuando la NCU tiene dos gateways
+Check 'gw casilla: se habilitan solo con dos gateways' ($src.Contains('$hay2 = ($p.gws -and @($p.gws).Count -ge 2)')) $true
 $script:ConMsgs = @()
 function Con([string]$t, $color) { $script:ConMsgs += $t }
 $cxAuto = @{ip='10.100.1.56'; puerto=$null; gws=$PLANTAS['El Burgo I NCU2'].gws; etiqueta='auto'; to=1000; reint=1}
