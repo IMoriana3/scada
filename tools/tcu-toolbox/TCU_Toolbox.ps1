@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.70'
+$VERSION_TOOLBOX = '11.71'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -6956,6 +6956,46 @@ function Rep-Salud($d, [string]$alarmas) {
     return 'OK'
 }
 
+# Hasta que esclavo llega la cache de la NCU. El mapa R7 dimensiona "TCU Data"
+# (30500) y "TCUs Last Comunication" (29500) a 200 unidades: el esclavo 200 es
+# el ultimo hueco. Un segundo repetidor en el mismo gateway (esclavo 201) se
+# sale y no se puede leer por ahi.
+$REP_ESCLAVO_MAX = 200
+
+# La fila de diagnostico de un repetidor a partir de un objeto estilo TCU, venga
+# del bloque compacto de la NCU (trae Edad_s) o de la lectura directa por Zigbee
+# ($d sin Edad_s, o $null si no contesto). Un repetidor esta FIJO: se le quitan
+# las alarmas de posicion y motor (Rep-Alarmas) y su salud es la suya
+# (Rep-Salud), no la de un seguidor. Pura: se prueba sin planta.
+function Rep-Fila($rp, $d) {
+    if ($null -eq $d) {
+        $alR = "no contesta (esclavo $($rp.esclavo))"; $sal = 'OFFLINE'
+    } elseif ("$($d.Salud)" -eq 'OFFLINE') {
+        # la NCU no lo tiene fresco: su mensaje ya explica si es cache a cero o
+        # dato demasiado viejo
+        $alR = "$($d.Alarmas)"; $sal = 'OFFLINE'
+    } else {
+        $alR = Rep-Alarmas "$($d.Alarmas)"; $sal = Rep-Salud $d $alR
+    }
+    return [pscustomobject]@{
+        NCU="$($rp.ncu)"; GW="$($rp.puerto)"; TCU="$($rp.nombre)"; Salud=$sal
+        Modo='-'; Tilt=''; Objetivo=''; Dif=''
+        SoC=$(if ($d) { "$($d.SoC)" } else { '' }); SoH=$(if ($d) { "$($d.SoH)" } else { '' })
+        Vbat_mV=$(if ($d) { "$($d.Vbat_mV)" } else { '' }); Ibat_mA=$(if ($d) { "$($d.Ibat_mA)" } else { '' })
+        Vpanel_mV=$(if ($d) { "$($d.Vpanel_mV)" } else { '' }); Ientrada_mA=$(if ($d) { "$($d.Ientrada_mA)" } else { '' })
+        Imotor_mA=''; ImotorPico_mA=''; Dia=$(if ($d) { "$($d.Dia)" } else { '' })
+        Tbat_C=$(if ($d) { "$($d.Tbat_C)" } else { '' }); Tpcb_C=$(if ($d) { "$($d.Tpcb_C)" } else { '' })
+        # AHORA con edad: del bloque compacto viene el lastComm de la NCU; de la
+        # lectura directa (esclavo fuera de la cache) sigue vacia, que es honesto.
+        Edad_s=$(if ($d -and $d.PSObject.Properties['Edad_s']) { "$($d.Edad_s)" } else { '' })
+        Alarmas=$alR
+        main_status=$(if ($d) { "$($d.main_status)" } else { '' })
+        alarmas_1=$(if ($d) { "$($d.alarmas_1)" } else { '' }); alarmas_2=$(if ($d) { "$($d.alarmas_2)" } else { '' })
+        alarmas_3=$(if ($d) { "$($d.alarmas_3)" } else { '' }); alarmas_4=$(if ($d) { "$($d.alarmas_4)" } else { '' })
+        system_status=$(if ($d) { "$($d.system_status)" } else { '' })
+    }
+}
+
 function Gws-Filtrados($gws, [string]$gw) {
     $g = "$gw".Trim()
     if ($g -eq '' -or $g -match '^(?i)todos$') { return @($gws) }
@@ -9256,52 +9296,59 @@ function Diag-Correr {
     }
     }
     # --- repetidores ---------------------------------------------------------
-    # Son TCUs, pero su esclavo cae fuera del rango 1..N, asi que ni el bloque
-    # compacto de la NCU ni las operaciones por rango los alcanzaban: hasta ahora
-    # no se leian NUNCA. Se leen por Zigbee directo (unit = su esclavo) porque el
-    # bloque compacto esta dimensionado al numero de TCUs y no consta que llegue
-    # al esclavo 200. Son cinco en toda Ayora: el coste es irrelevante.
+    # Se leen del BLOQUE COMPACTO de la NCU (30500+, puerto 502), igual que las
+    # TCUs: asi traen su Edad_s -de cuando la NCU les oyo- y va por TCP local sin
+    # una ronda Zigbee por cada uno. La cache llega hasta el esclavo 200
+    # (REP_ESCLAVO_MAX); un segundo repetidor en el mismo gateway (esclavo 201)
+    # se sale y ese se lee por Zigbee directo (sin edad). Y si la NCU no cachea
+    # un repetidor -sale OFFLINE via NCU- se confirma por Zigbee directo: mas
+    # vale leerlo que cantarlo caido en falso.
     $nROk = 0; $nRMal = 0
     $reps = @(Reps-Nombrar (Reps-DeCx $cx $txtGGw.Text))
-    foreach ($rp in $reps) {
+    $porNcuRep = @{}
+    foreach ($rp in $reps) { $k = "$($rp.ncu)"; if (-not $porNcuRep.ContainsKey($k)) { $porNcuRep[$k] = @() }; $porNcuRep[$k] += $rp }
+    $repFilas = @()
+    foreach ($k in @($porNcuRep.Keys)) {
         if (Chequear-Cancelado) { break }
-        $d = $null
-        try {
-            Modbus-Conectar $(if ($cx.multi) { @($cx.multi | Where-Object { "$($_.ncu)" -eq "$($rp.ncu)" })[0].ip } else { $cx.ip }) $rp.puerto $cx.to
-            $d = Diag-LeerTcu ([byte]$rp.esclavo)
-        } catch { $d = $null }
-        # fuera lo de posicion y motor: esta fijo, no mueve nada
-        $alR = $(if ($d) { Rep-Alarmas "$($d.Alarmas)" } else { "no contesta (esclavo $($rp.esclavo))" })
-        $sal = Rep-Salud $d $alR
-        $fila = [pscustomobject]@{
-            NCU="$($rp.ncu)"; GW="$($rp.puerto)"; TCU="$($rp.nombre)"; Salud=$sal
-            Modo='-'; Tilt=''; Objetivo=''; Dif=''
-            SoC=$(if ($d) { "$($d.SoC)" } else { '' }); SoH=$(if ($d) { "$($d.SoH)" } else { '' })
-            Vbat_mV=$(if ($d) { "$($d.Vbat_mV)" } else { '' }); Ibat_mA=$(if ($d) { "$($d.Ibat_mA)" } else { '' })
-            Vpanel_mV=$(if ($d) { "$($d.Vpanel_mV)" } else { '' }); Ientrada_mA=$(if ($d) { "$($d.Ientrada_mA)" } else { '' })
-            Imotor_mA=''; ImotorPico_mA=''; Dia=$(if ($d) { "$($d.Dia)" } else { '' })
-            Tbat_C=$(if ($d) { "$($d.Tbat_C)" } else { '' }); Tpcb_C=$(if ($d) { "$($d.Tpcb_C)" } else { '' })
-            Edad_s=''
-            Alarmas=$alR
-            main_status=$(if ($d) { "$($d.main_status)" } else { '' })
-            alarmas_1=$(if ($d) { "$($d.alarmas_1)" } else { '' }); alarmas_2=$(if ($d) { "$($d.alarmas_2)" } else { '' })
-            alarmas_3=$(if ($d) { "$($d.alarmas_3)" } else { '' }); alarmas_4=$(if ($d) { "$($d.alarmas_4)" } else { '' })
-            system_status=$(if ($d) { "$($d.system_status)" } else { '' })
+        $grupo = @($porNcuRep[$k])
+        $ip = $(if ($cx.multi) { @($cx.multi | Where-Object { "$($_.ncu)" -eq "$k" })[0].ip } else { $cx.ip })
+        # 1) bloque compacto de la NCU, de una tacada, para los que caben
+        $enCache = @($grupo | Where-Object { [int]$_.esclavo -le $REP_ESCLAVO_MAX })
+        $dm = @{}
+        if ($enCache.Count -gt 0) {
+            try { Modbus-Conectar $ip $PUERTO_NCU $cx.to; $dm = Ncu-DiagCompat @($enCache | ForEach-Object { [int]$_.esclavo }) }
+            catch { Con "AVISO repetidores NCU${k} via NCU (${ip}:${PUERTO_NCU}): $_" ([System.Drawing.Color]::Orange) }
+            Modbus-Cerrar
         }
-        $it = New-Object System.Windows.Forms.ListViewItem("$($rp.ncu)")
+        foreach ($rp in $grupo) {
+            if (Chequear-Cancelado) { break }
+            $d = $dm[[int]$rp.esclavo]
+            # el esclavo se sale de la cache, o la NCU no lo cachea (OFFLINE):
+            # se confirma por Zigbee directo (ese dato no lleva Edad_s)
+            if ([int]$rp.esclavo -gt $REP_ESCLAVO_MAX -or $null -eq $d -or "$($d.Salud)" -eq 'OFFLINE') {
+                $dd = $null
+                try { Modbus-Conectar $ip $rp.puerto $cx.to; $dd = Diag-LeerTcu ([byte]$rp.esclavo) } catch { $dd = $null }
+                Modbus-Cerrar
+                if ($dd) { $d = $dd }
+            }
+            $repFilas += ,(Rep-Fila $rp $d)
+        }
+    }
+    foreach ($fila in $repFilas) {
+        $it = New-Object System.Windows.Forms.ListViewItem("$($fila.NCU)")
         foreach ($c in @($fila.GW, $fila.TCU, $fila.Salud, $fila.Modo, $fila.Tilt, $fila.Objetivo, $fila.Dif, $fila.SoC, $fila.Edad_s, $fila.Alarmas)) { [void]$it.SubItems.Add("$c") }
-        if ($sal -eq 'OK') { $it.ForeColor = [System.Drawing.Color]::DarkGreen; $nROk++ }
-        elseif ($sal -eq 'ALARMA') { $it.ForeColor = [System.Drawing.Color]::Firebrick; $nRMal++ }
-        elseif ($sal -eq 'OFFLINE') { $it.ForeColor = [System.Drawing.Color]::Gray; $nRMal++ }
+        if ($fila.Salud -eq 'OK') { $it.ForeColor = [System.Drawing.Color]::DarkGreen; $nROk++ }
+        elseif ($fila.Salud -eq 'ALARMA') { $it.ForeColor = [System.Drawing.Color]::Firebrick; $nRMal++ }
+        elseif ($fila.Salud -eq 'OFFLINE') { $it.ForeColor = [System.Drawing.Color]::Gray; $nRMal++ }
         else { $it.ForeColor = [System.Drawing.Color]::DarkOrange; $nRMal++ }
         $lvG.Items.Add($it) | Out-Null
         $script:UltimoDiag += $fila
-        if ($sal -ne 'OK') {
-            Con "NCU$($rp.ncu) $($rp.nombre) (esclavo $($rp.esclavo)): $sal  $($fila.Alarmas)" ([System.Drawing.Color]::Orange)
+        if ($fila.Salud -ne 'OK') {
+            Con "NCU$($fila.NCU) $($fila.TCU): $($fila.Salud)  $($fila.Alarmas)" ([System.Drawing.Color]::Orange)
         }
     }
     if ($reps.Count -gt 0) {
-        Con "Repetidores: $($reps.Count) leidos ($nROk OK). No cuentan en el total de la flota: no mueven ningun seguidor, pero de ellos cuelga lo que repiten." ([System.Drawing.Color]::SteelBlue)
+        Con "Repetidores: $($reps.Count) leidos ($nROk OK), del bloque compacto de la NCU (con Edad_s); el que se sale de la cache va por Zigbee directo. No cuentan en el total de la flota." ([System.Drawing.Color]::SteelBlue)
     }
     Modbus-Cerrar
     # Lo declarado y no leido, a la tabla como SIN LECTURA. Hasta ahora esto

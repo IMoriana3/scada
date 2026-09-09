@@ -75,6 +75,18 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**Los repetidores se leen de la NCU, y ya traen «Edad s» (v11.71)** — antes se
+leían por Zigbee directo (esclavo 200), lo que daba el dato en vivo pero **sin
+tiempo de refresco**: la columna «Edad s» salía en blanco. Ahora se leen del
+**bloque compacto de la NCU** (30500+, puerto 502), igual que las TCUs, así que
+traen su antigüedad —de cuándo la NCU les oyó— y encima va por TCP local sin una
+ronda Zigbee por cada uno. La caché de la NCU llega hasta el esclavo 200; un
+**segundo** repetidor en el mismo gateway (esclavo 201) se sale del bloque y ese
+se sigue leyendo directo (sin edad, que es lo honesto). Y si la NCU no tuviera
+cacheado un repetidor —saldría OFFLINE vía NCU—, se **confirma por Zigbee
+directo** antes de darlo por caído. Un repetidor sigue estando FIJO: sus alarmas
+de posición y motor no cuentan para su salud.
+
 **Las columnas de números con huecos ya se ordenan como números (v11.70)** — en
 el menú ▾ de una columna, una sola celda vacía (SoC, Ciclos, «Quedan»… en blanco
 cuando falta el dato) la hacía pasar por texto: ofrecía «A-Z» y ordenaba `"100"`
