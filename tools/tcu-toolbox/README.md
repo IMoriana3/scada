@@ -75,6 +75,13 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**El desplegable de plantas, ordenado (v11.72)** — se llenaba recorriendo la
+hashtable en orden de inserción, así que las entradas «(auto)» y «(Planta
+completa)» quedaban mezcladas al final y las NCU se ordenaban como texto (NCU14
+antes que NCU2). Ahora va **por planta, NCU por número**, y dentro de cada NCU el
+base, GW1, GW2 y por último «(auto)»; la «(Planta completa)» cierra su planta y
+«(manual)» es siempre el primero.
+
 **Los repetidores se leen de la NCU, y ya traen «Edad s» (v11.71)** — antes se
 leían por Zigbee directo (esclavo 200), lo que daba el dato en vivo pero **sin
 tiempo de refresco**: la columna «Edad s» salía en blanco. Ahora se leen del

@@ -146,6 +146,20 @@ Check 'auto NCU1 gws' (@($PLANTAS['El Burgo I NCU1 (auto)'].gws).Count) 2
 # v11.64: la entrada (auto) de la NCU2 tiene dos gateways, no tres
 Check 'auto NCU2 gws (los dos tramos del GW2 son uno)' (@($PLANTAS['El Burgo I NCU2 (auto)'].gws).Count) 2
 Check 'auto NCU2 rango' "$($PLANTAS['El Burgo I NCU2 (auto)'].ini)-$($PLANTAS['El Burgo I NCU2 (auto)'].fin)" '1-109'
+
+# el desplegable va ORDENADO: por planta, NCU por numero (NCU2 antes que NCU14),
+# y dentro de cada NCU el base, GW1, GW2 y por ultimo (auto). Antes salia en
+# orden de insercion de la hashtable y las (auto)/(Planta completa) se mezclaban.
+$ordEntrada = @('San Jose (Planta completa)','San Jose NCU14','San Jose NCU2 (auto)','San Jose NCU2 GW1','San Jose NCU2 GW2','(manual)','San Jose NCU10','San Jose NCU2','Ayora NCU3','San Jose NCU16 GW2','San Jose NCU16 GW1')
+$ordSal = @(Plantas-Ordenadas $ordEntrada) -join ' | '
+Check 'orden combo: (manual) el primero' ($ordSal.StartsWith('(manual)')) $true
+Check 'orden combo: por planta' ($ordSal.IndexOf('Ayora NCU3') -lt $ordSal.IndexOf('San Jose')) $true
+Check 'orden combo: la NCU por numero, no por texto' (($ordSal.IndexOf('San Jose NCU2 ') -lt $ordSal.IndexOf('San Jose NCU10')) -and ($ordSal.IndexOf('San Jose NCU10') -lt $ordSal.IndexOf('San Jose NCU14'))) $true
+Check 'orden combo: base, GW1, GW2, auto dentro de la NCU' ([regex]::Match($ordSal, 'San Jose NCU2 \| San Jose NCU2 GW1 \| San Jose NCU2 GW2 \| San Jose NCU2 \(auto\)').Success) $true
+Check 'orden combo: GW1 antes que GW2' ($ordSal.IndexOf('San Jose NCU16 GW1') -lt $ordSal.IndexOf('San Jose NCU16 GW2')) $true
+Check 'orden combo: (Planta completa) cierra su planta' ($ordSal.IndexOf('San Jose (Planta completa)') -gt $ordSal.IndexOf('San Jose NCU16 GW2')) $true
+# y el combo se llena con la lista ordenada, no con PLANTAS.Keys a pelo
+Check 'orden combo: el desplegable usa el orden' (@([regex]::Matches($src, 'foreach \(\$k in @\(Plantas-Ordenadas \$PLANTAS.Keys\)\)')).Count) 2
 $script:ConMsgs = @()
 function Con([string]$t, $color) { $script:ConMsgs += $t }
 $cxAuto = @{ip='10.100.1.56'; puerto=$null; gws=$PLANTAS['El Burgo I NCU2 (auto)'].gws; etiqueta='auto'; to=1000; reint=1}
