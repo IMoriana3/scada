@@ -23,3 +23,51 @@ jobs:
             node "$f" || rc=1
           done
           exit $rc
+
+  # La suite de la TOOLBOX (2.100+ checks) y la del AGENTE corren contra el
+  # simulador Modbus (tests/mb_server.py). Hasta ahora no las corría nadie en
+  # CI -solo la de JS-, asi que cada version salia validada a mano y se probaba
+  # en planta: justo el betatesting que queremos quitar de encima. Van en
+  # WINDOWS porque la logica carga System.Windows.Forms (Add-Type), que el
+  # PowerShell de Linux no trae; en Windows estan pwsh, WinForms y Python.
+  toolbox:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Suite de la toolbox y del agente
+        working-directory: tools/tcu-toolbox/tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # el simulador Modbus, en segundo plano
+          $srv = Start-Process -FilePath python -ArgumentList 'mb_server.py' -PassThru `
+                   -RedirectStandardOutput mb.out -RedirectStandardError mb.err
+          # esperar a que escuche en 127.0.0.1:15020 (no parsear su salida)
+          $arriba = $false
+          for ($i = 0; $i -lt 50 -and -not $arriba; $i++) {
+            Start-Sleep -Milliseconds 300
+            try {
+              $c = New-Object System.Net.Sockets.TcpClient
+              $c.Connect('127.0.0.1', 15020); $c.Close(); $arriba = $true
+            } catch {}
+          }
+          if (-not $arriba) {
+            Write-Host 'mb_server.py no llego a escuchar en 15020'
+            if (Test-Path mb.out) { Get-Content mb.out }
+            if (Test-Path mb.err) { Get-Content mb.err }
+            exit 1
+          }
+
+          $rc = 0
+          Write-Host '── test_toolbox.ps1 ──'
+          pwsh -NoProfile -File test_toolbox.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_agente.ps1 ──'
+          pwsh -NoProfile -File test_agente.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+
+          Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
+          exit $rc
