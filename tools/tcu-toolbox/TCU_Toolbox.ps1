@@ -4147,12 +4147,16 @@ $txtNcus.Add_MouseHover({ $ttW.SetToolTip($txtNcus, $AYUDA_NCUS) })
 # pestanas. Ninguna o las dos marcadas = todos los gateways de la NCU. Solo se
 # habilitan cuando la NCU seleccionada tiene dos gateways.
 $chkGw1 = New-Object System.Windows.Forms.CheckBox
-$chkGw1.Text = 'GW1'; $chkGw1.Location = New-Object System.Drawing.Point(806, 22)
-$chkGw1.Size = New-Object System.Drawing.Size(50, 20); $chkGw1.Enabled = $false
+$chkGw1.Text = 'GW1'
+$chkGw1.Location = New-Object System.Drawing.Point(806, 22)
+$chkGw1.Size = New-Object System.Drawing.Size(50, 20)
+$chkGw1.Enabled = $false
 $gbCon.Controls.Add($chkGw1)
 $chkGw2 = New-Object System.Windows.Forms.CheckBox
-$chkGw2.Text = 'GW2'; $chkGw2.Location = New-Object System.Drawing.Point(858, 22)
-$chkGw2.Size = New-Object System.Drawing.Size(50, 20); $chkGw2.Enabled = $false
+$chkGw2.Text = 'GW2'
+$chkGw2.Location = New-Object System.Drawing.Point(858, 22)
+$chkGw2.Size = New-Object System.Drawing.Size(50, 20)
+$chkGw2.Enabled = $false
 $gbCon.Controls.Add($chkGw2)
 
 # El filtro de gateway que leen todas las pestanas (antes cada $txtXGw.Text).
