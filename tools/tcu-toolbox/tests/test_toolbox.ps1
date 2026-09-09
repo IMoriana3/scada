@@ -139,13 +139,19 @@ Check 'orden: 41039 antes que 41111' ($iMotor -lt $iTilt -and $iMotor -ge 0) 'Tr
 Check 'orden: primero 40000' ($ordenados[0] -like '40000*') 'True'
 Check 'orden: ultimo 42006' ($ordenados[-1] -like '42006*') 'True'
 
-# ---------- plantas: entradas (auto), segmentos por gateway y CSV ----------
-Check 'auto NCU1 existe' ($PLANTAS.Contains('El Burgo I NCU1 (auto)')) 'True'
-Check 'auto NCU1 gws' (@($PLANTAS['El Burgo I NCU1 (auto)'].gws).Count) 2
+# ---------- plantas: cada NCU sale UNA vez (v11.73), segmentos por gateway ----------
+# la NCU con dos gateways ya no se llama "(auto)": sale con su nombre a secas
+# (las entradas "GW1"/"GW2" se retiran del desplegable) y la agregada sigue
+# resolviendo el puerto sola (gws)
+$sufAuto = ' (auto)'   # se arma aparte para que no lo pise ningun replace del test
+Check 'la NCU con 2 gws sale una vez, con su nombre' ($PLANTAS.Contains('El Burgo I NCU1')) 'True'
+Check 'y no queda su entrada (auto)' ($PLANTAS.Contains("El Burgo I NCU1$sufAuto")) 'False'
+Check 'ni las de gateway sueltas' ($PLANTAS.Contains('El Burgo I NCU1 GW1')) 'False'
+Check 'auto NCU1 gws' (@($PLANTAS['El Burgo I NCU1'].gws).Count) 2
 # los dos tramos del GW2 -46-107 y la 109 suelta- son UN gateway desde la
 # v11.64: la entrada (auto) de la NCU2 tiene dos gateways, no tres
-Check 'auto NCU2 gws (los dos tramos del GW2 son uno)' (@($PLANTAS['El Burgo I NCU2 (auto)'].gws).Count) 2
-Check 'auto NCU2 rango' "$($PLANTAS['El Burgo I NCU2 (auto)'].ini)-$($PLANTAS['El Burgo I NCU2 (auto)'].fin)" '1-109'
+Check 'auto NCU2 gws (los dos tramos del GW2 son uno)' (@($PLANTAS['El Burgo I NCU2'].gws).Count) 2
+Check 'auto NCU2 rango' "$($PLANTAS['El Burgo I NCU2'].ini)-$($PLANTAS['El Burgo I NCU2'].fin)" '1-109'
 
 # el desplegable va ORDENADO: por planta, NCU por numero (NCU2 antes que NCU14),
 # y dentro de cada NCU el base, GW1, GW2 y por ultimo (auto). Antes salia en
@@ -162,7 +168,7 @@ Check 'orden combo: (Planta completa) cierra su planta' ($ordSal.IndexOf('San Jo
 Check 'orden combo: el desplegable usa el orden' (@([regex]::Matches($src, 'foreach \(\$k in @\(Plantas-Ordenadas \$PLANTAS.Keys\)\)')).Count) 2
 $script:ConMsgs = @()
 function Con([string]$t, $color) { $script:ConMsgs += $t }
-$cxAuto = @{ip='10.100.1.56'; puerto=$null; gws=$PLANTAS['El Burgo I NCU2 (auto)'].gws; etiqueta='auto'; to=1000; reint=1}
+$cxAuto = @{ip='10.100.1.56'; puerto=$null; gws=$PLANTAS['El Burgo I NCU2'].gws; etiqueta='auto'; to=1000; reint=1}
 $segs = @(Plan-Segmentos @(40..47) $cxAuto)
 Check 'auto 40-47: 2 segmentos' ($segs.Count) 2
 Check 'auto seg1 = 503' ($segs[0].puerto) 503
