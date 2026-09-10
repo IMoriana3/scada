@@ -75,6 +75,16 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**La descarga de logs de NCU viaja en el zip de campo (v11.75)** — la herramienta
+`Descarga-Logs-NCU.ps1` (antes solo en el repo, en `tools/descarga-logs/`) va ahora
+**dentro de `tcu-toolbox/descarga-logs/`**, para que se copie al portatil con la
+misma carpeta que ya se lleva el tecnico, y con su propia copia de las topologias
+en `descarga-logs/plantas/` (sin los `ambitos_*`), asi que los ejemplos de su
+README (`-Topologia .\plantas\<planta>.json`) funcionan tal cual desde esa
+carpeta. Baja de cada NCU los CSV diarios (un fichero por equipo y dia) y deja
+la carpeta del dia con su `manifiesto.json` (SHA-256 por fichero) lista para
+arrastrar a `importar-logs.html`. Sin cambio en la logica de la toolbox.
+
 **Los ficheros acompanantes de `plantas/` se ignoran en silencio (v11.74)** — el
 generador deja junto a cada topologia algun fichero de apoyo (los `ambitos_*` de
 San Jose: la asignacion gateway/TCU seguidor a seguidor sacada del Excel de
