@@ -75,6 +75,13 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**El menú de descarga de logs, con sus tildes (v11.78)** — el `descarga_logs_ncu.ps1`
+de la v11.77 se guardó en UTF‑8 **sin BOM**, el único `.ps1` del repo así, y
+PowerShell 5.1 lo lee como ANSI: el título del menú salía como `â•â•â• Â·` y el
+mensaje de credenciales decía «contraseÃ±a». Solo afectaba a textos de pantalla
+(ni rutas, ni regex, ni comparaciones). Se le pone el BOM, como al resto: el
+cambio son 3 bytes, la lógica es byte a byte la misma.
+
 **La descarga de logs de NCU es la de verdad: la de Ayora (v11.77)** — el script
 que había en el repo adivinaba rutas (`/logs/<fichero>`…) y ninguna era la del
 webserver Sunner; la v11.76 le puso un login por formulario que **tampoco habría
