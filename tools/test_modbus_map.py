@@ -161,6 +161,42 @@ def main():
             print(f"  --  {reg}: el documento declara además los bits {sobran} "
                   f"({', '.join(doc_bits[reg][b] for b in sobran)}), que el colector no decodifica")
 
+    print("\nbits de las hojas de HSU (el 28003 NO comparte tabla con el 30202):")
+    # Esta es la comprobacion que faltaba cuando el 28003 se decodifico con la
+    # tabla del basico COPIADA (scada#238): el doc no declara los bits 5, 7 y
+    # 12 en el 28003, y con la tabla copiada este banco se pone rojo. Se
+    # valida POSICION a posicion: que cada bit que el colector decodifica
+    # exista en el documento para ESE registro de ESA hoja.
+    for clave, hoja, base in (("hsu", "HSU", 30200), ("hsu_ext", "HSU EXT", 28000)):
+        bits_doc = {}
+        off_actual = None
+        for r in src["ncu_r7"][hoja]:
+            if r.get("addr") is not None:
+                off_actual = (r["addr"] - base) if r["addr"] >= base else None
+            elif off_actual is not None and str(r.get("bits", "")).startswith("("):
+                lsb = int(str(r["bits"]).strip("()").split("..")[-1])
+                bits_doc.setdefault(off_actual, {})[lsb] = r["nombre"]
+        if clave == "hsu":
+            # El basico es la REPLICA del mapa propio de la HSU (30002 en el
+            # equipo = 30202+10i en la cache: dos direcciones, el mismo
+            # registro). La hoja de la NCU solo nombra 6 de sus bits; el mapa
+            # propio (hsu_r23) declara la tabla completa. La fuente es la UNION.
+            for r in src["hsu_r23"]["Sheet1"]:
+                try:
+                    a = int(r.get("addr"))
+                except (TypeError, ValueError):
+                    continue
+                if not (30000 <= a <= 30009):
+                    continue
+                if str(r.get("bits", "")).startswith("(") and ".." in str(r["bits"]):
+                    lsb = int(str(r["bits"]).strip("()").split("..")[-1])
+                    bits_doc.setdefault(a - 30000, {}).setdefault(lsb, r["nombre"])
+        for off, spec in sorted(y[clave]["fields"].items(), key=lambda kv: int(kv[0])):
+            for nombre, (lsb, _msb) in (spec.get("bits") or {}).items():
+                db = bits_doc.get(int(off), {})
+                check(f"{clave}+{off} bit {lsb} ({nombre}) existe en el documento",
+                      int(lsb) in db, f"el doc declara {sorted(db)}")
+
     print()
     if ko:
         print(f"{ko} FALLOS, {ok} OK")

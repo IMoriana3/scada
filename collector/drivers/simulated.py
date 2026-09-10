@@ -136,17 +136,28 @@ class SimulatedNCUDriver(NCUDriver):
         return out
 
     async def read_meteo(self) -> list[dict]:
-        # El reparto de hojas sale de `_hsu_jobs()`, el MISMO de la clase base
-        # que usa el driver real: si divergieran, el medidor de tráfico dejaría
-        # de medir lo que el hierro hace.
-        out = []
-        for h, n, pref in self._hsu_jobs():
+        # El reparto de hojas sale de `_hsu_jobs()` y la fusión de `_funde_ext`,
+        # los MISMOS de la clase base que usa el driver real: si divergieran,
+        # el medidor de tráfico dejaría de medir lo que el hierro hace.
+        por_id, orden = {}, []
+        for h, n, modo in self._hsu_jobs():
             for i in range(n):
                 self._count_read(min(h["stride"], 30))
-                out.append({"hsu": f"{pref}{i + 1}" if pref else i + 1, "fields": {
+                fields = {
                     "wind_speed": round(random.uniform(1, 8), 1),
                     "wind_direction": round(random.uniform(0, 360)),
                     "snow_level": 0.0, "wind_level": 0,
                     "alarm_wind": 0, "alarm_snow": 0, "alarm_com": 0,
-                }})
-        return out
+                }
+                if modo == "ext":
+                    # lo que solo trae el mapa ampliado, como en el hierro
+                    fields.update({"alarms1": 0, "ghi": round(random.uniform(0, 900), 1),
+                                   "poa_tracking": round(random.uniform(0, 950), 1)})
+                    fields = self._campos_ext(fields)
+                sid = i + 1
+                if sid in por_id:
+                    por_id[sid]["fields"] = self._funde_ext(por_id[sid]["fields"], fields)
+                else:
+                    por_id[sid] = {"hsu": sid, "fields": fields}
+                    orden.append(sid)
+        return [por_id[s] for s in orden]

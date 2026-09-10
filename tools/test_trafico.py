@@ -105,12 +105,12 @@ def test_estimacion_vs_driver():
 
 
 def test_hsu_externa_estimacion_vs_driver():
-    """Las dos familias de HSU A LA VEZ: estimado = contado, y sin colision de ids.
+    """El mapa ampliado 28000, FUNDIDO en su estacion: estimado = contado.
 
-    Una NCU puede tener HSUs basicas (30200) Y una externa (28000) -- el caso
-    del 21/8 en Ayora. `hsu_ext_count` añade las externas SIN tocar la familia
-    basica, y este test es la garantia de que el medidor sigue midiendo lo que
-    el driver hace por ese camino nuevo.
+    El 28000 no es otra HSU: es el mapa ampliado de la MISMA estacion
+    (cobertura-zigbee#590) -- el caso del 21/8 en Ayora. `hsu_ext_count` lo lee
+    ademas del basico y lo funde por indice, y este test es la garantia de que
+    el medidor sigue midiendo lo que el driver hace por ese camino.
     """
     import asyncio
     import yaml
@@ -141,9 +141,32 @@ def test_hsu_externa_estimacion_vs_driver():
     check("y sin declararla la estimacion se queda CORTA: el parametro mide",
           sin["lan_b"] < real["lan_b"], f"({sin['lan_b']} vs {real['lan_b']})")
 
+    # NADA de estaciones fantasma: el hueco 1 del 28000 ES la HSU 1. Dos
+    # estaciones en la salida, la primera con los campos del mapa ampliado
+    # fundidos (y sus crudos sufijados: el 28003 no comparte bits con el 30202).
     ids = [str(f["hsu"]) for f in filas]
-    check("los ids no colisionan: basicas 1..N y externas ext1..extM",
-          ids == ["1", "2", "ext1"], f"({ids})")
+    check("el mapa ampliado NO crea estacion: ids 1..N y punto",
+          ids == ["1", "2"], f"({ids})")
+    check("la HSU 1 lleva fundidos los campos del ampliado (ghi)",
+          "ghi" in filas[0]["fields"], f"({sorted(filas[0]['fields'])})")
+    check("y sus crudos van sufijados (alarms1_ext), sin pisar los del basico",
+          "alarms1_ext" in filas[0]["fields"],
+          f"({sorted(k for k in filas[0]['fields'] if 'alarm' in k)})")
+    check("la HSU 2, sin ampliado, va limpia",
+          "ghi" not in filas[1]["fields"])
+
+    # La politica de fusion, ejecutada y no copiada: en los bits y el nivel el
+    # PEOR manda (el aviso del 21/8 venia del mapa ampliado con el basico a 0:
+    # con "gana el basico" volveria a ser invisible), y la medida la refresca
+    # la hoja ampliada.
+    from drivers.modbus_ncu import NCUDriver
+    f = NCUDriver._funde_ext({"alarm_wind": 0, "wind_level": 0, "wind_speed": 3.1},
+                             {"alarm_wind": 1, "wind_level": 1, "wind_speed": 4.7,
+                              "alarms1_ext": 0x0200})
+    check("fusion: el peor manda en bits y nivel (el caso del 21/8)",
+          f["alarm_wind"] == 1 and f["wind_level"] == 1, f"({f})")
+    check("fusion: la medida la refresca el ampliado", f["wind_speed"] == 4.7)
+    check("fusion: el crudo sufijado entra sin pisar nada", f["alarms1_ext"] == 0x0200)
 
     # la config contradictoria se dice ALTO, no se resuelve en silencio
     malo = SimulatedNCUDriver({"id": "X", "tcu_count": 1, "hsu_count": 2,
@@ -155,11 +178,17 @@ def test_hsu_externa_estimacion_vs_driver():
         check("hsu_extended + hsu_ext_count a la vez revienta con mensaje",
               "dos" in str(e) or "hsu_ext_count" in str(e))
 
-    # la nube tambien: una linea mas por estacion externa, en el POST de estado
+    # la nube tambien: la linea de la HSU fundida es MAS LARGA (mas campos),
+    # no una linea mas -- fantasma que costaba una serie y unos bytes de id
     con = T.cloud_cycle(45, 2, n_hsu_ext=1)
     sin_n = T.cloud_cycle(45, 2)
-    check("la subida cuenta la linea de la externa",
+    check("la subida cuenta los campos fundidos del ampliado",
           con["cloud_raw_b"] > sin_n["cloud_raw_b"])
+    lineas = T.sample_lines("p", "NCU2", 0, 2, n_hsu_ext=1)
+    check("y sin linea fantasma: mismas lineas, la fundida mas larga",
+          len(lineas) == len(T.sample_lines("p", "NCU2", 0, 2))
+          and "hsu=ext" not in " ".join(lineas) and "ghi" in lineas[1],
+          f"({[ln.split(' ')[0] for ln in lineas]})")
 
 
 def test_line_protocol_real():

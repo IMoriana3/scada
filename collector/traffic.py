@@ -152,8 +152,8 @@ def map_params(mmap: dict, polling: dict | None = None, hsu_extended: bool = Fal
         "lastcomm_regs": int(lc.get("stride", 2)),
         # el driver recorta la lectura de HSU a 30 registros (read_meteo)
         "hsu_regs": min(int(h.get("stride", 10)), 30),
-        # y el de las estaciones EXTRA de la hoja 28000 (`hsu_ext_count`),
-        # que conviven con las basicas -- ver NCUDriver._hsu_jobs
+        # y el del mapa AMPLIADO 28000 (`hsu_ext_count`): la MISMA estacion,
+        # leida ademas por su otra base y fundida -- ver NCUDriver._hsu_jobs
         "hsu_ext_regs": min(int(mmap.get("hsu_ext", {}).get("stride", 100)), 30),
     }
     if polling:
@@ -172,7 +172,7 @@ def modbus_cycle(n_tcu: int, n_hsu: int = 0, *, stride: int = 22, lastcomm_regs:
     reads += split_reads(n_tcu * lastcomm_regs, max_regs)  # lastComm (U32/TCU)
     reads += list(ncu_reads)                               # estado de la NCU
     reads += [min(hsu_regs, max_regs)] * n_hsu             # una lectura por HSU (bloque básico: 10 regs)
-    reads += [min(hsu_ext_regs, max_regs)] * n_hsu_ext     # y una por HSU externa (hoja 28000, cap 30)
+    reads += [min(hsu_ext_regs, max_regs)] * n_hsu_ext     # y una mas por HSU con mapa ampliado (28000, cap 30)
 
     m = TrafficMeter(overhead_b=overhead_b)
     if reconnect:
@@ -269,20 +269,14 @@ def sample_lines(plant: str, ncu: str, n_tcu: int, n_hsu: int = 0,
         'gw1_alarm=0,gw2_alarm=0,ups_power_fault=0,wind_highest_level=0'
     )
     for h in range(1, n_hsu + 1):
-        lines.append(
-            f'meteo,hsu={h},ncu={ncu},plant={plant} '
-            'alarm_com=0,alarm_snow=0,alarm_wind=0,snow_level=0,'
-            'wind_direction=212,wind_level=0,wind_speed=4.7'
-        )
-    # las estaciones EXTRA de la hoja 28000 llevan el id prefijado ("ext1"...)
-    # para no fundirse con las basicas en la misma serie -- mismo criterio que
-    # NCUDriver._hsu_jobs, que es quien manda
-    for h in range(1, n_hsu_ext + 1):
-        lines.append(
-            f'meteo,hsu=ext{h},ncu={ncu},plant={plant} '
-            'alarm_com=0,alarm_snow=0,alarm_wind=0,snow_level=0,'
-            'wind_direction=212,wind_level=0,wind_speed=4.7'
-        )
+        base = ('alarm_com=0,alarm_snow=0,alarm_wind=0,snow_level=0,'
+                'wind_direction=212,wind_level=0,wind_speed=4.7')
+        # el mapa ampliado 28000 NO es otra estacion (cobertura-zigbee#590):
+        # sus campos se FUNDEN en la linea de su HSU, que sale mas larga --
+        # mismo criterio que NCUDriver._funde_ext, que es quien manda
+        if h <= n_hsu_ext:
+            base += ',alarms1_ext=0,ghi=612.4,poa_tracking=655.1'
+        lines.append(f'meteo,hsu={h},ncu={ncu},plant={plant} ' + base)
     return lines
 
 
@@ -298,7 +292,7 @@ def cloud_cycle(n_tcu: int, n_hsu: int = 0, *, plant: str = "planta", ncu: str =
     """
     m = TrafficMeter(http_overhead_b=http_overhead_b)
     lines = sample_lines(plant, ncu, n_tcu, n_hsu, campos, agregado, n_hsu_ext)
-    corte = max(1, len(lines) - 1 - n_hsu - n_hsu_ext) if writes > 1 else len(lines)
+    corte = max(1, len(lines) - 1 - n_hsu) if writes > 1 else len(lines)
     m.cloud_write(lines[:corte])
     if writes > 1:
         m.cloud_write(lines[corte:])
