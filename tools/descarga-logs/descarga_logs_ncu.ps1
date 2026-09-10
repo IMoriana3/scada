@@ -1,4 +1,4 @@
-# Descarga de los logs diarios de las NCU (webserver Sunner) — SIN Python:
+﻿# Descarga de los logs diarios de las NCU (webserver Sunner) — SIN Python:
 # PowerShell puro, el que trae Windows de serie (5.1) o superior.
 #
 # API (capturada con DevTools, 13/14-08-2026):
