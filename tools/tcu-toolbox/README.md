@@ -75,6 +75,21 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**La descarga de logs de NCU es la de verdad: la de Ayora (v11.77)** — el script
+que había en el repo adivinaba rutas (`/logs/<fichero>`…) y ninguna era la del
+webserver Sunner; la v11.76 le puso un login por formulario que **tampoco habría
+entrado**, porque el login real es un POST a la API con cookie `sunner_auth`.
+Todo eso fuera. Entra **el script con el que ya está automatizada Ayora**, sacado
+del webserver real con DevTools: `/private_api/csv/<día>/download` devuelve el
+**ZIP con todos los CSV del día** por NCU, con menú de doble clic, backfill,
+tarea nocturna a las 00:30 y lo medido en planta (los días que la NCU ya no
+guarda responden 500, no 404). Su núcleo HTTP va **byte a byte** como el de
+Ayora; solo se le añaden dos cosas: la opción **8** (y `-Topologia`) genera
+`ncus.json` desde la topología de la toolbox —las 21 NCU de San José sin
+teclear—, y si una planta no sigue el esquema `admin/NCU<nn>` las credenciales
+se piden una vez y se guardan **cifradas (DPAPI)** por subred, nunca en claro
+ni en el repo. Los ZIP van tal cual a `importar-logs.html`.
+
 **La descarga de logs de NCU entra en el webserver (v11.76)** — el webserver de
 la NCU tiene **login por formulario** (no el cuadro nativo del navegador) con
 usuario y contraseña **distintos por planta**, y el script no pedía ninguno: no

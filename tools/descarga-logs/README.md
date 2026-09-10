@@ -1,78 +1,61 @@
 # Descarga de logs de NCU
 
-> Baja cada noche los CSV diarios que graban las NCUs y los deja listos para importar al SCADA.
+> Baja de cada NCU el **ZIP con todos los CSV del día** que graba en su disco (la TCU cada ~10 s, las estaciones cada ~5 s, la propia NCU cada segundo) y lo deja listo para arrastrar a `importar-logs.html`. Sin Python: PowerShell puro, el de Windows.
 
-## Por qué
+Es el script con el que **ya está automatizada Ayora**, sacado del webserver Sunner **real** (capturado con DevTools, 13/14‑08‑2026) — no de suposiciones:
 
-Las NCUs graban en su disco un CSV por equipo y día (la TCU cada ~10 s, las estaciones cada ~5 s, la propia NCU **cada segundo**). Hoy se descargan **a mano** desde el webserver de cada NCU, y eso tiene dos consecuencias que solo se ven el día malo:
+```
+GET  http://<ip>/private_api/csv/<AAAA-MM-DD>            -> índice del día (JSON)
+GET  http://<ip>/private_api/csv/<AAAA-MM-DD>/download   -> ZIP con TODOS los CSV del día
+```
+El login es un POST a la API (se prueban las rutas candidatas) y la señal de éxito es la cookie `sunner_auth`, que se usa como sesión por NCU.
 
-- **La prueba de un siniestro depende de que alguien se acordara de bajarla.** No sabemos cuántos días guarda la NCU antes de reciclar; si el temporal fue el día 3 y se descarga el día 20, puede que ya no exista.
-- **No escala**: una planta de 750 seguidores son 750 ficheros al día.
+## Uso: doble clic y menú
 
-Este script lo resuelve sin esperar a nadie: se programa una vez y deja una carpeta por día que se arrastra entera a `importar-logs.html`.
+`Descarga-Logs.bat` abre el menú:
 
-## Uso
-
-```powershell
-# 1) Una sola vez por planta: descubrir cómo sirve los logs el webserver
-.\Descarga-Logs-NCU.ps1 -Topologia .\plantas\23003-el-burgo.json -Descubrir -Ncu 2
-
-# 2) Descarga normal (ayer y hoy)
-.\Descarga-Logs-NCU.ps1 -Topologia .\plantas\23003-el-burgo.json -Dias 2
-
-# 3) El día concreto de un siniestro
-.\Descarga-Logs-NCU.ps1 -Topologia .\plantas\23003-el-burgo.json -Fecha 2026-08-12
-
-# 4) Dejarlo programado todas las noches a las 02:00
-.\Descarga-Logs-NCU.ps1 -Topologia C:\factiun\23003-el-burgo.json -Programar
+```
+1) Descargar AYER - todas las NCU de la planta
+2) Backfill: un rango de fechas
+3) Un día concreto
+4) Una sola NCU, a mano (IP + número)
+5) Programar la descarga de cada noche (00:30, automática)
+6) Quitar la programación nocturna
+7) Editar la lista de NCUs (ncus.json)
+8) Generar ncus.json desde una topología de la toolbox (carpeta plantas\)
 ```
 
-La **topología** es el mismo JSON (o CSV) que exporta la página de IPs para la TCU Toolbox: de ahí salen la IP de cada NCU y el rango de esclavos, que es lo que dice qué ficheros pedir.
+**La primera vez en una planta: opción 8.** Elige su `plantas\<planta>.json` (el zip de la toolbox lo deja ahí) y sale el `ncus.json` con **una línea por NCU** — número e IP — sin teclear nada: las 21 de San José, las 16 de Ayora. Los dos gateways de una NCU comparten IP, así que sale una NCU, no dos.
 
-## Credenciales y login
+Con argumentos (para la tarea programada o scripts):
+```powershell
+.\descarga_logs_ncu.ps1 -Ncus ncus.json                              # ayer, todas las NCU
+.\descarga_logs_ncu.ps1 -Ncus ncus.json -Fecha 2026-09-08
+.\descarga_logs_ncu.ps1 -Topologia .\plantas\24019-san-jose.json     # sin ncus.json: la lista sale de la topología
+.\descarga_logs_ncu.ps1 -Ip 10.21.236.1 -Ncu 01 -Desde 2026-09-01 -Hasta 2026-09-08
+```
 
-El webserver de la NCU tiene **login por formulario** (dos cajas y «Entrar», no el
-cuadro nativo del navegador), con **usuario y contraseña distintos por planta**.
-El script entra como lo harías tú: pide la página, **lee el formulario** (el campo
-de contraseña, el de usuario y los ocultos tipo token — no da por supuesto ningún
-nombre), lo rellena y se queda con la **cookie de sesión**. Como cada NCU es un
-webserver aparte, **entra en cada NCU**, una vez, y reutiliza su sesión.
+## Credenciales
 
-- La primera vez para una planta te pide usuario y contraseña con entrada
-  enmascarada y los guarda en `<Destino>\credenciales.<planta>.xml`, **cifrados con
-  DPAPI para tu usuario de Windows**: copiados a otro PC o abiertos por otro
-  usuario no valen nada. Nunca van al repo ni en claro.
-- Las siguientes veces —y la tarea nocturna de `-Programar`, que corre con tu
-  mismo usuario— los leen solos. Para cambiarlos: **`-Credencial`**.
-- Si tras entrar la NCU devuelve **otra vez la página de login** en vez del CSV,
-  el script **se para al primer fichero** y te lo dice (credenciales malas), en
-  vez de guardar dos mil páginas HTML como si fueran logs.
-- Si la página de login no está en `/`, dísela: `-LoginRuta /login.html`.
-- Si un firmware no tuviera formulario, cae a HTTP Basic con las mismas
-  credenciales, por si acaso.
-- Va por HTTP, como el propio webserver: en claro dentro de la red de planta,
-  igual que al teclearlos en el navegador.
+Por defecto vale el **esquema de Sunner**: usuario `admin`, contraseña `NCU<nn>` (el número de la NCU). Ayora lo sigue: no pregunta nada.
 
-## El descubrimiento de la URL
+Si una planta **no** lo sigue, la primera descarga te pide usuario y contraseña con entrada enmascarada y los guarda en `credenciales.<subred>.xml` junto al script, **cifrados con DPAPI para tu usuario de Windows**: copiados a otro PC o abiertos por otro usuario no valen nada. La planta se reconoce por la subred de sus NCU (`10.21.236` = San José), así que no hay nada que configurar; la tarea nocturna, que corre con tu mismo usuario, los lee sola. Para cambiarlos, borra ese `.xml` y vuelve a lanzar.
 
-No sabemos el patrón exacto con el que el webserver de la NCU sirve un fichero, así que `-Descubrir` prueba once candidatos contra una NCU real y se queda con el que devuelve algo que **empieza por `datetime;`** — la cabecera de estos logs. Lo encontrado se guarda en `descarga.config.json` y no se vuelve a probar.
-
-Si ninguno funciona, el script lo dice y pide lo único que hace falta: abrir el webserver en el navegador, clic derecho sobre el enlace de un CSV → *Copiar dirección*, y añadir ese patrón a la lista `$Patrones`. Un minuto, y queda resuelto para todas las plantas.
+Si prefieres, `ncus.json` admite `"usuario"` y `"pass"` por NCU, y hay `-Usuario`/`-Password`/`-Cookie`; **pero eso va en claro**: mejor el `.xml` cifrado. Nada de esto va nunca al repo (`.gitignore`).
 
 ## Lo que deja
 
 ```
-logs-ncu\El_Burgo_I\20260812\NCU2_TCU_001_20260812.csv
-                              NCU2_HSU_230_20260812.csv
-                              ...
-                              manifiesto.json
+logs-ncu\NCU01\NCU01_2026-09-08.zip          <- el ZIP tal cual lo sirve la NCU
+              NCU01_2026-09-08.indice.json   <- el índice del día
+logs-ncu\descargas.log                       <- qué se bajó, qué no y por qué
 ```
+Organizado por NCU; el nombre conserva el prefijo `NCU<nn>`, que es de donde el importador saca la etiqueta. **Los ZIP se arrastran tal cual a `importar-logs.html`.**
 
-El **manifiesto** lleva, por fichero: NCU de origen, IP, tamaño, hora de descarga, URL exacta y **SHA-256**. Ese hash es el mismo que calcula el importador y el que enseña el SCADA en la ficha de cada equipo: si coinciden, el análisis se hizo sobre el fichero que grabó el equipo y nadie lo tocó por el camino. Es lo que sostiene un expediente ante un perito.
+## Notas de campo (medidas, no supuestas)
 
-## Notas
-
-- Un fichero que ya está descargado **no se vuelve a pedir**: el script se puede lanzar tantas veces como se quiera.
-- Que falten TCUs es normal — el rango de la topología incluye posiciones que no existen.
-- Reintentos con espera creciente (2 s, 4 s, 8 s) por si la NCU está ocupada.
-- No necesita credenciales de Supabase: solo baja y sella. La subida la hace una persona desde `importar-logs.html`, que es donde se decide el paso de submuestreo.
+- Los días que la NCU **ya no guarda** responden **500** (no 404): se anotan como «NO ESTA» y no se reintentan. Lo que no se baja a tiempo, se pierde: por eso la tarea nocturna.
+- Un ZIP ya bajado (y no vacío) **no se vuelve a pedir**; se puede relanzar las veces que haga falta. Lo bajado antes «en plano» se recoloca solo en su carpeta de NCU.
+- Un 401/403 relanza el login una vez; si aun así rechaza, lo dice.
+- La descarga va con `$ProgressPreference = SilentlyContinue`: en PowerShell 5.1 la barra de progreso hacía las descargas ×10 más lentas.
+- La tarea nocturna (00:30) corre con tu usuario: el PC tiene que estar encendido y con sesión iniciada (bloqueado vale). Si la programaste desde otra carpeta, vuelve a programarla desde esta para que use este script.
