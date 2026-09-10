@@ -75,6 +75,17 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**La descarga de logs de NCU entra en el webserver (v11.76)** — el webserver de
+la NCU tiene **login por formulario** (no el cuadro nativo del navegador) con
+usuario y contraseña **distintos por planta**, y el script no pedía ninguno: no
+podía bajar nada. Ahora entra como lo harías tú: **lee el formulario** de la
+página (no da por supuesto ningún nombre de campo), lo rellena y se queda con la
+cookie — **una sesión por NCU**, porque cada una es un webserver aparte. Las
+credenciales se piden una vez por planta (entrada enmascarada) y se guardan
+**cifradas con DPAPI para tu usuario de Windows** junto a los logs, nunca en el
+repo; `-Credencial` las cambia. Si la NCU devuelve la página de login en vez del
+CSV, **se para al primer fichero** con mensaje claro. Sin cambio en la toolbox.
+
 **La descarga de logs de NCU viaja en el zip de campo (v11.75)** — la herramienta
 `Descarga-Logs-NCU.ps1` (antes solo en el repo, en `tools/descarga-logs/`) va ahora
 **dentro de `tcu-toolbox/descarga-logs/`**, para que se copie al portatil con la
