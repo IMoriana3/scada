@@ -253,6 +253,10 @@ Check 'el arranque filtra por Es-Topologia' ($src.Contains('if (-not (Es-Topolog
 $wfRel = Get-Content (Join-Path $raizTb '../../.github/workflows/toolbox-release.yml') -Raw
 Check 'la release excluye ambitos_ del zip' ($wfRel.Contains('tcu-toolbox/plantas/ambitos_*')) 'True'
 Check 'la release excluye test_ del zip' ($wfRel.Contains('tcu-toolbox/plantas/test_*')) 'True'
+# y la herramienta de descarga de logs de NCU va dentro del zip, con sus
+# topologias pero sin los ambitos_ (v11.75)
+Check 'la release empaqueta descarga-logs dentro de tcu-toolbox' ($wfRel.Contains('cp -r descarga-logs tcu-toolbox/descarga-logs')) 'True'
+Check 'y le copia las topologias sin los ambitos_' ($wfRel.Contains('rm -f tcu-toolbox/descarga-logs/plantas/ambitos_*')) 'True'
 
 # ---------- filtro de variables ----------
 $todos = @($VARIABLES.Keys) + @($ESTADO.Keys | ForEach-Object { 'ESTADO ' + $_ })

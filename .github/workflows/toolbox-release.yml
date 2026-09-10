@@ -41,6 +41,15 @@ jobs:
           # la suite (tests/) y los ACOMPANANTES de plantas/ -los ambitos_* y los
           # test_*.py, que no son topologias y solo sirven a la QA-. Asi el
           # portatil no se los encuentra ni suelta avisos por ellos.
+          # La herramienta de descarga de logs de NCU (tools/descarga-logs) viaja
+          # DENTRO de tcu-toolbox, para que se copie al portatil con la misma
+          # carpeta que ya se lleva el tecnico; y con su propia copia de las
+          # topologias (sin acompanantes), para que el ".\plantas\<planta>.json"
+          # de su README funcione tal cual desde esa carpeta.
+          cp -r descarga-logs tcu-toolbox/descarga-logs
+          mkdir -p tcu-toolbox/descarga-logs/plantas
+          cp tcu-toolbox/plantas/*.json tcu-toolbox/descarga-logs/plantas/
+          rm -f tcu-toolbox/descarga-logs/plantas/ambitos_*
           zip -r "../TCU_Toolbox_v${VER}.zip" tcu-toolbox -x "tcu-toolbox/logs/*" "tcu-toolbox/backups/*" "tcu-toolbox/informes/*" "tcu-toolbox/config_local.json" "tcu-toolbox/tests/*" "tcu-toolbox/plantas/ambitos_*" "tcu-toolbox/plantas/test_*"
           VAG=$(grep -oP "VERSION_AGENTE = '\K[0-9.]+" tcu-agente/TCU_Agente.ps1)
           test -n "$VAG"
