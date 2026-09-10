@@ -94,27 +94,36 @@ hsu:
     7: {name: snow_level,     type: f32, unit: m}
 
 hsu_ext:
-  # Bloque extendido (piranómetros) — solo si hsu_extended: true
+  # Mapa AMPLIADO de la MISMA estacion (zanjado en cobertura-zigbee#590): la
+  # NCU re-publica cada HSU en dos bases -- 30200 (basico, 10 regs por hueco) y
+  # 28000 (ampliado, 100 regs por hueco, mismo indice). "EXT" es extended, no
+  # "exteriores": NO hay otra estacion detras.
   base: 28000
   stride: 100
   fields:
-    # El estado de la HSU extendida NO se decodificaba: solo meteo e
-    # irradiancias. Su MSR (28002), sus alarmas (28003 y 28010) y su codigo de
-    # error (28027) estaban en la MISMA lectura de 30 registros que ya se hace
-    # -- decodificarlos no cuesta ni un byte de LAN. Sin ellos, un aviso
-    # provocado por esta estacion salia atribuido a la fila de la HSU basica
-    # (paso en campo el 21/8: nivel de viento 1 sin que nadie leyera de donde).
     2:  {name: msr,              type: u16, bits: {wind_level: [0,2], wind_dir_east: [3,3]}}
-    3:  {name: alarms1,          type: u16, bits: {wind_sensor_fail: [0,0], snow_sensor_fail: [1,1],
-      pira_sensor_fail: [2,2], temp_sensor_fail: [3,3], batt_disconnected: [4,4],
-      hail_sensor_fail: [5,5], alarm_snow: [6,6], alarm_flood: [7,7], alarm_wind: [9,9],
-      alarm_gusty_wind: [10,10], alarm_wind_2: [12,12], alarm_wind_3: [13,13],
-      dual_irra_sensor_fail: [14,14], alarm_com: [15,15]}}
+    # Alarms1 del 28003: NO comparte bits con el 30202 (hoja "HSU EXT" del R23;
+    # tambien toolbox v11.66). Aqui estuvo COPIADA la tabla del basico, y eso
+    # pintaba alarmas falsas: el bit 2 real es com. de TEMPERATURA (no pira),
+    # el 4 es com. del PIRANOMETRO (no bateria) y el 13 es com. del anemometro
+    # RS485 (no "alarma viento 3"). Un bit con el MISMO significado que en el
+    # basico conserva su nombre (asi la fusion de hojas hace OR sin trucos);
+    # los significados nuevos llevan nombre nuevo.
+    3:  {name: alarms1,          type: u16, bits: {wind_sensor_fail: [0,0], check_snow_sensor: [1,1],
+      temp_sensor_fail: [2,2], snow_sensor_fail: [3,3], pira_sensor_fail: [4,4],
+      alarm_snow: [6,6], alarm_wind: [9,9], alarm_gusty_wind: [10,10],
+      rs485_anemo_com_fail: [13,13], rs485_vane_com_fail: [14,14], alarm_com: [15,15]}}
     4:  {name: wind_speed,       type: f32, unit: mps}
     6:  {name: wind_direction,   type: f32, unit: deg}
     8:  {name: snow_level,       type: f32, unit: m}
-    10: {name: alarms2,          type: u16}
+    # Alarms2 (28010) tambien tiene nombres en el R23: el modulo de computo y
+    # los piranometros de tracking/difusa. go_to_diffuse es un ESTADO, no fallo.
+    10: {name: alarms2,          type: u16, bits: {go_to_diffuse: [0,0], cm_not_working: [1,1],
+      pira_tracking_com_fail: [2,2], pira_diffuse_com_fail: [3,3],
+      irradiance_mismatch: [4,4], diffuse_algorithm_error: [5,5]}}
+    15: {name: aux_battery_voltage, type: u16, unit: mV}
     16: {name: battery_voltage,  type: u16, unit: mV}
+    20: {name: panel_voltage,    type: u16, unit: mV}
     21: {name: ghi,              type: s32, unit: Wm2x100, scale: 0.01}
     23: {name: poa_tracking,     type: s32, unit: Wm2x100, scale: 0.01}
     25: {name: poa_diffuse,      type: s32, unit: Wm2x100, scale: 0.01}

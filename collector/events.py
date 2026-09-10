@@ -47,6 +47,14 @@ HSU_SUCESOS = ("alarm_wind", "alarm_snow", "alarm_com", "alarm_flood",
                "pira_sensor_fail", "temp_sensor_fail", "batt_disconnected",
                "hail_sensor_fail", "alarm_gusty_wind", "alarm_wind_2",
                "alarm_wind_3", "dual_irra_sensor_fail",
+               # Los bits PROPIOS del mapa ampliado 28000 (Alarms1/Alarms2 del
+               # 28003/28010, que NO comparten tabla con el basico): fundidos
+               # en la misma estacion por _funde_ext. `go_to_diffuse` queda
+               # fuera a proposito: es un estado que bascula con las nubes,
+               # no un suceso -- inundaria el historico sin contar nada.
+               "check_snow_sensor", "rs485_anemo_com_fail", "rs485_vane_com_fail",
+               "cm_not_working", "pira_tracking_com_fail", "pira_diffuse_com_fail",
+               "irradiance_mismatch", "diffuse_algorithm_error",
                # Y el NIVEL de proteccion por viento. Es un valor 0..7, no un
                # bit, pero su cambio es exactamente el suceso que en campo se
                # pregunto "¿por que este AVISO?" (21/8): un flanco 0->1 con su

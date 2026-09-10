@@ -53,19 +53,20 @@ class NCUDriver(ABC):
     def _hsu_jobs(self) -> list[tuple[dict, int, str]]:
         """Qué hojas de HSU leer y cuántas estaciones de cada una.
 
-        Una NCU puede tener las dos familias A LA VEZ: las básicas (30200) y
-        una o más externas/extendidas (28000, la de los piranómetros). Hasta
-        ahora el colector leía UNA hoja o la otra (`hsu_extended`), y en una
-        NCU con ambas la otra familia quedaba invisible — exactamente el caso
-        del 21/8 en Ayora: el aviso lo provocó la HSU externa y nadie leía su
-        estado.
+        El 28000 NO es otra estación: es el mapa AMPLIADO de la MISMA HSU
+        (zanjado en cobertura-zigbee#590 — la NCU re-publica cada hueco h en
+        30200+10h y en 28000+100h). La primera versión de esto (scada#241)
+        sacaba la hoja 28000 como estaciones aparte, con ids "ext1"…: una
+        estación fantasma en InfluxDB, la misma HSU partida en dos series.
+        Ahora las dos hojas se FUNDEN por índice en la misma estación — el
+        mismo criterio que la toolbox (v11.66).
 
         · `hsu_count` + `hsu_extended` conservan su significado de siempre,
-          bit a bit: la familia principal, por la hoja que diga la bandera.
-        · `hsu_ext_count` (nuevo, default 0) añade N estaciones de la hoja
-          28000 ADEMÁS de las básicas. Sus ids van como "ext1", "ext2"…: las
-          dos familias empiezan en 1 y sin prefijo colisionarían en la misma
-          serie de InfluxDB — dos estaciones distintas fundidas en una.
+          bit a bit: la hoja principal, por la que diga la bandera.
+        · `hsu_ext_count: N` (default 0): las N primeras estaciones exponen
+          ADEMÁS su mapa ampliado 28000 — se lee y se funde en su HSU
+          (`_funde_ext`). Es el caso real de Ayora (21/8): el aviso venía del
+          mapa ampliado y nadie lo leía.
 
         Vive en la clase BASE a propósito: el driver real y el simulado tienen
         que repartir las hojas con el MISMO criterio o el medidor de tráfico
@@ -88,6 +89,34 @@ class NCUDriver(ABC):
         if n_e:
             jobs.append((self.mmap["hsu_ext"], n_e, "ext"))
         return jobs
+
+    #: Registros crudos del mapa ampliado que también existen en el básico con
+    #: OTRO contenido (sus Alarms1 no comparten bits): en la fusión van con
+    #: sufijo para que ninguno pise al otro ni se decodifique con tabla ajena.
+    CRUDOS_EXT = ("msr", "alarms1", "alarms2", "error_code")
+
+    def _campos_ext(self, fields: dict) -> dict:
+        """Los campos de la hoja 28000, listos para fundirse: los crudos con
+        sufijo `_ext`; los bits y medidas conservan su nombre (un bit con el
+        mismo significado se llama igual en las dos hojas, a propósito)."""
+        return {(k + "_ext" if k in self.CRUDOS_EXT else k): v
+                for k, v in fields.items()}
+
+    @staticmethod
+    def _funde_ext(basicos: dict, ext: dict) -> dict:
+        """Funde el mapa ampliado en los campos de SU estación.
+
+        Bits de alarma y `wind_level` son enteros en las dos hojas: OR/peor
+        manda (`max`), como hace la toolbox. Las medidas (f32) las refresca la
+        hoja ampliada. Los crudos vienen ya sufijados por `_campos_ext` y no
+        colisionan."""
+        out = dict(basicos)
+        for k, v in ext.items():
+            if k in out and isinstance(v, int) and isinstance(out[k], int):
+                out[k] = max(out[k], v)
+            else:
+                out[k] = v
+        return out
 
     # --- contabilidad de tráfico (no cuesta nada si no hay medidor) ---
     def _count_read(self, n_regs: int):
@@ -219,14 +248,22 @@ class ModbusNCUDriver(NCUDriver):
         return out
 
     async def read_meteo(self) -> list[dict]:
-        out = []
-        for h, n, pref in self._hsu_jobs():
+        # Las hojas se funden POR ÍNDICE: el hueco h del 28000 es la misma
+        # estación que el hueco h del 30200 (cobertura-zigbee#590). El id
+        # queda entero como siempre: ni series nuevas ni fantasmas "ext1".
+        por_id: dict[int, dict] = {}
+        orden: list[int] = []
+        for h, n, modo in self._hsu_jobs():
             for i in range(n):
                 base = h["base"] + i * h["stride"]
                 regs = await self._read(base, min(h["stride"], 30))
                 fields = decode_tcu_block(regs, h["fields"], self.word_order)
-                # sin prefijo el id queda como siempre (entero): las series
-                # existentes de InfluxDB no se parten en dos
-                out.append({"hsu": f"{pref}{i + 1}" if pref else i + 1,
-                            "fields": fields})
-        return out
+                if modo == "ext":
+                    fields = self._campos_ext(fields)
+                sid = i + 1
+                if sid in por_id:
+                    por_id[sid]["fields"] = self._funde_ext(por_id[sid]["fields"], fields)
+                else:
+                    por_id[sid] = {"hsu": sid, "fields": fields}
+                    orden.append(sid)
+        return [por_id[s] for s in orden]
