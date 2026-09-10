@@ -139,13 +139,19 @@ Check 'orden: 41039 antes que 41111' ($iMotor -lt $iTilt -and $iMotor -ge 0) 'Tr
 Check 'orden: primero 40000' ($ordenados[0] -like '40000*') 'True'
 Check 'orden: ultimo 42006' ($ordenados[-1] -like '42006*') 'True'
 
-# ---------- plantas: entradas (auto), segmentos por gateway y CSV ----------
-Check 'auto NCU1 existe' ($PLANTAS.Contains('El Burgo I NCU1 (auto)')) 'True'
-Check 'auto NCU1 gws' (@($PLANTAS['El Burgo I NCU1 (auto)'].gws).Count) 2
+# ---------- plantas: cada NCU sale UNA vez (v11.73), segmentos por gateway ----------
+# la NCU con dos gateways ya no se llama "(auto)": sale con su nombre a secas
+# (las entradas "GW1"/"GW2" se retiran del desplegable) y la agregada sigue
+# resolviendo el puerto sola (gws)
+$sufAuto = ' (auto)'   # se arma aparte para que no lo pise ningun replace del test
+Check 'la NCU con 2 gws sale una vez, con su nombre' ($PLANTAS.Contains('El Burgo I NCU1')) 'True'
+Check 'y no queda su entrada (auto)' ($PLANTAS.Contains("El Burgo I NCU1$sufAuto")) 'False'
+Check 'ni las de gateway sueltas' ($PLANTAS.Contains('El Burgo I NCU1 GW1')) 'False'
+Check 'auto NCU1 gws' (@($PLANTAS['El Burgo I NCU1'].gws).Count) 2
 # los dos tramos del GW2 -46-107 y la 109 suelta- son UN gateway desde la
 # v11.64: la entrada (auto) de la NCU2 tiene dos gateways, no tres
-Check 'auto NCU2 gws (los dos tramos del GW2 son uno)' (@($PLANTAS['El Burgo I NCU2 (auto)'].gws).Count) 2
-Check 'auto NCU2 rango' "$($PLANTAS['El Burgo I NCU2 (auto)'].ini)-$($PLANTAS['El Burgo I NCU2 (auto)'].fin)" '1-109'
+Check 'auto NCU2 gws (los dos tramos del GW2 son uno)' (@($PLANTAS['El Burgo I NCU2'].gws).Count) 2
+Check 'auto NCU2 rango' "$($PLANTAS['El Burgo I NCU2'].ini)-$($PLANTAS['El Burgo I NCU2'].fin)" '1-109'
 
 # el desplegable va ORDENADO: por planta, NCU por numero (NCU2 antes que NCU14),
 # y dentro de cada NCU el base, GW1, GW2 y por ultimo (auto). Antes salia en
@@ -160,9 +166,22 @@ Check 'orden combo: GW1 antes que GW2' ($ordSal.IndexOf('San Jose NCU16 GW1') -l
 Check 'orden combo: (Planta completa) cierra su planta' ($ordSal.IndexOf('San Jose (Planta completa)') -gt $ordSal.IndexOf('San Jose NCU16 GW2')) $true
 # y el combo se llena con la lista ordenada, no con PLANTAS.Keys a pelo
 Check 'orden combo: el desplegable usa el orden' (@([regex]::Matches($src, 'foreach \(\$k in @\(Plantas-Ordenadas \$PLANTAS.Keys\)\)')).Count) 2
+
+# ---- el gateway se elige con casillas GW1/GW2 en la barra, no en el desplegable (v11.73) ----
+Check 'gw casilla: solo GW1 -> su puerto' (Gw-SelDe $true $false 503 504) '503'
+Check 'gw casilla: solo GW2 -> su puerto' (Gw-SelDe $false $true 503 504) '504'
+Check 'gw casilla: las dos marcadas = todos' (Gw-SelDe $true $true 503 504) ''
+Check 'gw casilla: ninguna marcada = todos' (Gw-SelDe $false $false 503 504) ''
+Check 'gw casilla: existen GW1 y GW2 en la barra' ($src.Contains("`$chkGw1.Text = 'GW1'") -and $src.Contains("`$chkGw2.Text = 'GW2'")) $true
+Check 'gw casilla: un helper Gw-Sel las lee' ($src.Contains('function Gw-Sel { return (Gw-SelDe $chkGw1.Checked $chkGw2.Checked')) $true
+# ya no hay campos "GW" de texto por pestana: todas leen Gw-Sel
+Check 'gw casilla: fuera los 8 campos GW de texto' (@([regex]::Matches($src, '\$txt\w+Gw = TG ')).Count) 0
+Check 'gw casilla: y las pestanas usan Gw-Sel' (@([regex]::Matches($src, '\(Gw-Sel\)')).Count -ge 8) $true
+# solo se habilitan cuando la NCU tiene dos gateways
+Check 'gw casilla: se habilitan solo con dos gateways' ($src.Contains('$hay2 = ($p.gws -and @($p.gws).Count -ge 2)')) $true
 $script:ConMsgs = @()
 function Con([string]$t, $color) { $script:ConMsgs += $t }
-$cxAuto = @{ip='10.100.1.56'; puerto=$null; gws=$PLANTAS['El Burgo I NCU2 (auto)'].gws; etiqueta='auto'; to=1000; reint=1}
+$cxAuto = @{ip='10.100.1.56'; puerto=$null; gws=$PLANTAS['El Burgo I NCU2'].gws; etiqueta='auto'; to=1000; reint=1}
 $segs = @(Plan-Segmentos @(40..47) $cxAuto)
 Check 'auto 40-47: 2 segmentos' ($segs.Count) 2
 Check 'auto seg1 = 503' ($segs[0].puerto) 503
@@ -2932,7 +2951,7 @@ Check 'falta: el diagnostico lo dice' ($src.Contains('foreach ($linea in @(Hsu-Q
 Check 'falta: el barrido lleva rango' ($src.Contains('$txtHEscIni = TG $tabH')) $true
 Check 'falta: y ya no barre siempre 1-247' ($src.Contains('Esclavos-Barrido ([int]$txtHSlave.Text) 1 247')) $false
 # el comisionado de planta completa ignoraba el cuadro de TCUs
-Check 'falta: el comisionado respeta el cuadro de TCUs' ($src.Contains("(Parse-Seleccion `$txtPTcus.Text 'Comisionado') `$txtPGw.Text")) $true
+Check 'falta: el comisionado respeta el cuadro de TCUs' ($src.Contains("(Parse-Seleccion `$txtPTcus.Text 'Comisionado') (Gw-Sel)")) $true
 
 Write-Host ''
 Write-Host '== las HSUs salen de la topologia, sin escanear =='
@@ -3564,7 +3583,7 @@ Check 'modo nota: en AUTO no hay nota' (Modo-Nota 'AUTO') ''
 Check 'rep: la columna Alarmas sale filtrada' ($src.Contains('$alR = Rep-Alarmas "$($d.Alarmas)"')) $true
 
 # el diagnostico los lee y los cuenta APARTE, como las HSU
-Check 'rep: el diagnostico los recorre' ($src.Contains('$reps = @(Reps-Nombrar (Reps-DeCx $cx $txtGGw.Text))')) $true
+Check 'rep: el diagnostico los recorre' ($src.Contains('$reps = @(Reps-Nombrar (Reps-DeCx $cx (Gw-Sel)))')) $true
 # v11.71: se leen del bloque compacto de la NCU (con Edad_s); el Zigbee directo
 # pasa a ser SOLO el respaldo -esclavo fuera de la cache (>200) o NCU que no lo
 # cachea-. Lo contrario de lo que fijaba este test antes.
@@ -3726,18 +3745,18 @@ foreach ($f in @('Bat-Tabla', 'Bat-Auditar', 'Cierre-Estado', 'Cierre-Cargar', '
 # Ident-Leer devuelve una lista Campo/Valor: indexarla por nombre da null en todo
 Check 'agente web: el inventario la convierte a diccionario' ($srcAg.Contains('foreach ($c in @($campos)) { $h[$c.Campo] = $c.Valor }')) $true
 Check 'sel: con su ayuda al pasar el raton' ($src.Contains('$ttW.SetToolTip($txtWTcus, $AYUDA_TCUS)')) $true
-# el GW ya no vive en Conexion: cada pestana tiene el suyo, al lado de sus TCUs
-Check 'gw: fuera de Conexion' ($src.Contains("`$txtGw = TG `$gbCon")) $false
+# v11.73: el GW se elige en Conexion, con casillas GW1/GW2, no con un cuadro de
+# texto por pestana. Las casillas viven en gbCon y las operaciones leen Gw-Sel.
+Check 'gw: las casillas viven en Conexion' ($src.Contains('$gbCon.Controls.Add($chkGw1)') -and $src.Contains('$gbCon.Controls.Add($chkGw2)')) $true
 foreach ($t in @('W','L','G','A','V','S','P','B')) {
-    Check "gw: la pestana $t tiene su cuadro" ($src -match "\`$txt${t}Gw = TG ") $true
-    Check "gw: la pestana $t lo explica" ($src.Contains("`$ttW.SetToolTip(`$txt${t}Gw, `$AYUDA_GW)")) $true
+    Check "gw: la pestana $t ya no tiene cuadro de texto" ([bool]($src -match "\`$txt${t}Gw = TG ")) $false
 }
-# y las cuatro operaciones la usan, con el filtro de gateway de SU pestana
+# y las operaciones usan el filtro comun (Gw-Sel), con la seleccion de su pestana
 foreach ($e in @(@{n='Escribir'; t='W'}, @{n='Leer'; t='L'}, @{n='Diagnostico'; t='G'}, @{n='Auditoria'; t='A'})) {
-    Check "sel: $($e.n) la usa" ($src.Contains("(Parse-Seleccion `$txt$($e.t)Tcus.Text '$($e.n)') `$txt$($e.t)Gw.Text")) $true
+    Check "sel: $($e.n) usa Gw-Sel" ($src.Contains("(Parse-Seleccion `$txt$($e.t)Tcus.Text '$($e.n)') (Gw-Sel)")) $true
 }
-Check 'sel: y el test comm tambien' ($src.Contains("(Parse-Seleccion `$txtGTcus.Text 'Test comm') `$txtGGw.Text")) $true
-Check 'sel: el NVM tambien, que escribe' ($src.Contains("(Parse-Seleccion `$txtWTcus.Text 'NVM') `$txtWGw.Text")) $true
+Check 'sel: y el test comm tambien' ($src.Contains("(Parse-Seleccion `$txtGTcus.Text 'Test comm') (Gw-Sel)")) $true
+Check 'sel: el NVM tambien, que escribe' ($src.Contains("(Parse-Seleccion `$txtWTcus.Text 'NVM') (Gw-Sel)")) $true
 # el cuadro de NCUs: uno solo, en Conexion, y lo miran TODAS las operaciones
 Check 'ncus: el cuadro vive en Conexion' ($src.Contains("`$txtNcus = TG `$gbCon")) $true
 Check 'ncus: con su ayuda al pasar el raton' ($src.Contains('$ttW.SetToolTip($txtNcus, $AYUDA_NCUS)')) $true

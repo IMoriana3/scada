@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.72'
+$VERSION_TOOLBOX = '11.73'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -247,6 +247,7 @@ function Nombre-SinTramo([string]$nombre) {
 # "<Planta> NCU<n> ...", se anade ademas una entrada por planta con la lista
 # de sus NCUs, para operaciones de planta entera (Diagnostico).
 function Construir-EntradasAuto {
+    $aQuitar = @()
     $porIp = @{}
     foreach ($k in @($PLANTAS.Keys)) {
         $p = $PLANTAS[$k]
@@ -273,7 +274,13 @@ function Construir-EntradasAuto {
         $fin = @($gws | ForEach-Object { $_.fin } | Measure-Object -Maximum).Maximum
         $auto = @{ip=$ip; puerto=$null; ini=[int]$ini; fin=[int]$fin; gws=$gws}
         foreach ($g in $grupo) { if ($g.p.hsu) { $auto.hsu = $g.p.hsu; break } }
-        $PLANTAS["$prefijo (auto)"] = $auto
+        # cada NCU sale UNA vez en el desplegable, con su nombre a secas: la
+        # entrada agregada se llama como la NCU (antes "<NCU> (auto)") y las de
+        # gateway ("<NCU> GW1"/"GW2") se retiran al final. El gateway se elige
+        # aparte, con las casillas GW1/GW2 de la barra. Internamente la agregada
+        # resuelve el puerto sola (gws), asi que no cambia como se conecta.
+        $PLANTAS[$prefijo] = $auto
+        $aQuitar += @($grupo | ForEach-Object { $_.nombre })
     }
     # agrupar por planta a partir del patron de nombre "<Planta> NCU<n>"
     $porPlanta = [ordered]@{}
@@ -306,6 +313,9 @@ function Construir-EntradasAuto {
         }
         $PLANTAS["$planta (Planta completa)"] = @{ip=$null; puerto=$null; ini=$null; fin=$null; ncus=$lista}
     }
+    # ya construidas las agregadas y las "(Planta completa)": fuera del
+    # desplegable las entradas por gateway que se fundieron en una agregada
+    foreach ($k in @($aQuitar)) { [void]$PLANTAS.Remove($k) }
 }
 
 # El desplegable de plantas se llenaba recorriendo PLANTAS.Keys -una hashtable,
@@ -330,6 +340,15 @@ function Plantas-Clave([string]$nombre) {
     return ('1|{0}|9998|0' -f $nombre)                     # cualquier otra, por su nombre
 }
 function Plantas-Ordenadas($claves) { return @(@($claves) | Sort-Object { Plantas-Clave "$_" }) }
+
+# El filtro de gateway a partir del estado de las casillas GW1/GW2 de la barra
+# de conexion. Es lo que ya entiende Gws-Filtrados: solo una marcada -> su
+# puerto; las dos, o ninguna -> '' (todos los gateways de la NCU). Pura.
+function Gw-SelDe([bool]$g1, [bool]$g2, $p1, $p2) {
+    if ($g1 -and -not $g2) { return "$p1" }
+    if ($g2 -and -not $g1) { return "$p2" }
+    return ''
+}
 
 # '1,3-5' -> @(1,3,4,5); vacio -> $null (= todas)
 function Parse-ListaNums([string]$texto) {
@@ -4122,6 +4141,27 @@ $txtRet = TG $gbCon '3' 650 22 28
 $txtNcus = TG $gbCon '' 726 22 68
 $txtNcus.Add_MouseHover({ $ttW.SetToolTip($txtNcus, $AYUDA_NCUS) })
 
+# El gateway se elige AQUI, una vez elegida la NCU: se marca GW1 y/o GW2. Antes
+# cada pestana tenia su cajita "GW" de texto; ahora es una sola, en la conexion,
+# porque el gateway es de la CONEXION, no de la operacion, y vale para todas las
+# pestanas. Ninguna o las dos marcadas = todos los gateways de la NCU. Solo se
+# habilitan cuando la NCU seleccionada tiene dos gateways.
+$chkGw1 = New-Object System.Windows.Forms.CheckBox
+$chkGw1.Text = 'GW1'
+$chkGw1.Location = New-Object System.Drawing.Point(806, 22)
+$chkGw1.Size = New-Object System.Drawing.Size(50, 20)
+$chkGw1.Enabled = $false
+$gbCon.Controls.Add($chkGw1)
+$chkGw2 = New-Object System.Windows.Forms.CheckBox
+$chkGw2.Text = 'GW2'
+$chkGw2.Location = New-Object System.Drawing.Point(858, 22)
+$chkGw2.Size = New-Object System.Drawing.Size(50, 20)
+$chkGw2.Enabled = $false
+$gbCon.Controls.Add($chkGw2)
+
+# El filtro de gateway que leen todas las pestanas (antes cada $txtXGw.Text).
+function Gw-Sel { return (Gw-SelDe $chkGw1.Checked $chkGw2.Checked $PUERTO_GW1 $PUERTO_GW2) }
+
 # Lo que hay escrito en NCUs. Aparte para que todas las pestanas lean el mismo
 # cuadro y para no meter un control de la ventana dentro de Trabajos-Planta,
 # que es una de las funciones que el agente de planta reutiliza tal cual.
@@ -4186,9 +4226,6 @@ $tabs.TabPages.Add($tabW)
 # ir tres veces o pasar por un CSV.
 [void](LG $tabW 'TCUs' 10 40)
 $txtWTcus = TG $tabW '1-44' 52 22 150
-[void](LG $tabW 'GW' 208 24 25)
-$txtWGw = TG $tabW '' 234 22 46
-$txtWGw.Add_MouseHover({ $ttW.SetToolTip($txtWGw, $AYUDA_GW) })
 $txtWTcus.Add_MouseHover({ $ttW.SetToolTip($txtWTcus, $AYUDA_TCUS) })
 
 [void](LG $tabW 'Filtro' 290 42)
@@ -4344,9 +4381,6 @@ $tabs.TabPages.Add($tabL)
 
 [void](LG $tabL 'TCUs' 10 40)
 $txtLTcus = TG $tabL '1-44' 52 22 110
-[void](LG $tabL 'GW' 168 24 25)
-$txtLGw = TG $tabL '' 194 22 46
-$txtLGw.Add_MouseHover({ $ttW.SetToolTip($txtLGw, $AYUDA_GW) })
 $txtLTcus.Add_MouseHover({ $ttW.SetToolTip($txtLTcus, $AYUDA_TCUS) })
 
 [void](LG $tabL 'Filtro' 246 42)
@@ -4596,9 +4630,6 @@ $tabD.Controls.Add($btnComparar)
 
 [void](LG $tabD 'Backup NCU, TCUs' 250 110 340)
 $txtBTcus = TG $tabD '1-44' 362 337 70
-[void](LG $tabD 'GW' 436 24 340)
-$txtBGw = TG $tabD '' 462 337 40
-$txtBGw.Add_MouseHover({ $ttW.SetToolTip($txtBGw, $AYUDA_GW) })
 $txtBTcus.Add_MouseHover({ $ttW.SetToolTip($txtBTcus, $AYUDA_TCUS) })
 
 $btnBackupNcu = New-Object System.Windows.Forms.Button
@@ -4614,9 +4645,6 @@ $tabs.TabPages.Add($tabG)
 
 [void](LG $tabG 'TCUs' 10 40)
 $txtGTcus = TG $tabG '1-44' 52 22 106
-[void](LG $tabG 'GW' 162 24 25)
-$txtGGw = TG $tabG '' 188 22 42
-$txtGGw.Add_MouseHover({ $ttW.SetToolTip($txtGGw, $AYUDA_GW) })
 $txtGTcus.Add_MouseHover({ $ttW.SetToolTip($txtGTcus, $AYUDA_TCUS) })
 
 $btnDiag = New-Object System.Windows.Forms.Button
@@ -4838,9 +4866,6 @@ $tabF.Controls.Add($gbAud)
 
 [void](LG $gbAud 'TCUs' 10 40)
 $txtATcus = TG $gbAud '1-44' 52 22 86
-[void](LG $gbAud 'GW' 142 24 25)
-$txtAGw = TG $gbAud '' 168 22 40
-$txtAGw.Add_MouseHover({ $ttW.SetToolTip($txtAGw, $AYUDA_GW) })
 $txtATcus.Add_MouseHover({ $ttW.SetToolTip($txtATcus, $AYUDA_TCUS) })
 
 $btnPresetRef = New-Object System.Windows.Forms.Button
@@ -4925,9 +4950,6 @@ $tabF.Controls.Add($gbInvF)
 
 [void](LG $gbInvF 'TCUs' 10 40)
 $txtVTcus = TG $gbInvF '1-44' 52 22 86
-[void](LG $gbInvF 'GW' 142 24 25)
-$txtVGw = TG $gbInvF '' 168 22 40
-$txtVGw.Add_MouseHover({ $ttW.SetToolTip($txtVGw, $AYUDA_GW) })
 $txtVTcus.Add_MouseHover({ $ttW.SetToolTip($txtVTcus, $AYUDA_TCUS) })
 
 $btnInvF = New-Object System.Windows.Forms.Button
@@ -4977,9 +4999,6 @@ $tabs.TabPages.Add($tabP)
 
 [void](LG $tabP 'TCUs' 10 38 18)
 $txtPTcus = TG $tabP '1-5' 50 14 100
-[void](LG $tabP 'GW' 154 24 17)
-$txtPGw = TG $tabP '' 180 14 40
-$txtPGw.Add_MouseHover({ $ttW.SetToolTip($txtPGw, $AYUDA_GW) })
 $txtPTcus.Add_MouseHover({ $ttW.SetToolTip($txtPTcus, $AYUDA_TCUS) })
 [void](LG $tabP 'Pulso s' 226 46 18)
 $txtPPulso = TG $tabP '5' 274 14 34
@@ -6114,9 +6133,6 @@ $tabU.Controls.Add($gbSync)
 
 [void](LG $gbSync 'TCUs' 10 40)
 $txtSTcus = TG $gbSync '1-44' 52 22 100
-[void](LG $gbSync 'GW' 156 24 25)
-$txtSGw = TG $gbSync '' 182 22 40
-$txtSGw.Add_MouseHover({ $ttW.SetToolTip($txtSGw, $AYUDA_GW) })
 $txtSTcus.Add_MouseHover({ $ttW.SetToolTip($txtSTcus, $AYUDA_TCUS) })
 
 $chkSVerif = New-Object System.Windows.Forms.CheckBox
@@ -7248,14 +7264,19 @@ $cbPlanta.Add_SelectedIndexChanged({
         $txtGTcus.Text = 'NA'; $txtATcus.Text = 'NA'; $txtLTcus.Text = 'NA'; $txtWTcus.Text = 'NA'
         $txtVTcus.Text = 'NA'
         $txtNcus.Enabled = $true
+        $chkGw1.Checked = $false; $chkGw2.Checked = $false; $chkGw1.Enabled = $false; $chkGw2.Enabled = $false
         Con "Planta completa seleccionada ($(@($p.ncus).Count) NCUs): rangos automaticos por NCU. Arriba, el cuadro NCUs acota sobre cuales se trabaja ('1,3-5', vacio = todas) y vale para todas las pestanas. El cuadro TCUs admite '10,22,30-40' y '12/10, 15/5-12' (vacio o NA = todas), y el GW de cada pestana deja trabajar solo sobre un gateway." ([System.Drawing.Color]::SteelBlue)
         return
     }
     # una sola NCU: el cuadro NCUs no pinta nada, se apaga para que se vea
     $txtNcus.Enabled = $false
+    $chkGw1.Checked = $false; $chkGw2.Checked = $false; $chkGw1.Enabled = $false; $chkGw2.Enabled = $false
     if ($p) {
         $txtIp.Text = $p.ip
         if ($p.gws) { $txtPort.Text = 'auto' } else { $txtPort.Text = "$($p.puerto)" }
+        # dos gateways: se puede acotar a uno con las casillas GW1/GW2
+        $hay2 = ($p.gws -and @($p.gws).Count -ge 2)
+        $chkGw1.Enabled = $hay2; $chkGw2.Enabled = $hay2
         # con los huecos fuera: "1-13 15-23" en vez de "1-25"
         $rango = (Runs-Consecutivos (Tcus-DeGw @{ini=$p.ini; fin=$p.fin; huecos=@($p.huecos)}) |
                   ForEach-Object { $(if ($_.ini -eq $_.fin) { "$($_.ini)" } else { "$($_.ini)-$($_.fin)" }) }) -join ','
@@ -7321,7 +7342,7 @@ function Escribir-EnTcus($tcus) {
         }
         $trabajos = @($lista)
     } else {
-        $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtWTcus.Text 'Escribir') $txtWGw.Text)
+        $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtWTcus.Text 'Escribir') (Gw-Sel))
     }
     if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna TCU (mira los cuadros TCUs y GW).' ([System.Drawing.Color]::Orange); return }
     $nTcus = Cuantas-Tcus $trabajos
@@ -7525,7 +7546,7 @@ $btnNvm.Add_Click({ Lanzar {
     # llamaba a Plan-Segmentos con la conexion de planta, que la rechaza: se
     # podia escribir en media planta y luego NO se podia guardar en NVM, asi
     # que al reiniciar la TCU se perdia todo lo escrito.
-    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtWTcus.Text 'NVM') $txtWGw.Text)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtWTcus.Text 'NVM') (Gw-Sel))
     $nTcus = Cuantas-Tcus $trabajos
     if ($nTcus -eq 0) { throw 'la seleccion no deja ninguna TCU' }
     $donde = $(if ($cx.multi) { "$($trabajos.Count) NCUs de la PLANTA COMPLETA" } else { "$($cx.ip):$($cx.etiqueta)" })
@@ -7982,7 +8003,7 @@ $btnLeer.Add_Click({ Lanzar {
     if ($nombres.Count -eq 0) { [void][System.Windows.Forms.MessageBox]::Show('Elige al menos una variable en la tabla.','Aviso'); return }
     $defs = @($nombres | ForEach-Object { @{nombre=[string]$_; vdef=(Def-DeLectura $_)} })
     $cx = Params-Conexion
-    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtLTcus.Text 'Leer') $txtLGw.Text)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtLTcus.Text 'Leer') (Gw-Sel))
     if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
     Ctx-Guardar 'lectura' $cx $trabajos
     $lvL.Items.Clear(); $lvL.Columns.Clear(); $script:UltimaLectura = @(); Sellar 'lectura'
@@ -9087,7 +9108,7 @@ function Diag-Correr {
     $script:UltimaCarga = @{}   # lo leido de carga era de la lectura anterior
     # trabajos: una entrada por NCU (planta completa) o una sola (modo normal)
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtGTcus.Text 'Diagnostico') $txtGGw.Text)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtGTcus.Text 'Diagnostico') (Gw-Sel))
     if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna TCU (mira los cuadros NCUs, TCUs y GW).' ([System.Drawing.Color]::Orange); return }
     Ctx-Guardar 'diagnostico' $cx $trabajos
     if ($cx.multi) {
@@ -9327,7 +9348,7 @@ function Diag-Correr {
     # un repetidor -sale OFFLINE via NCU- se confirma por Zigbee directo: mas
     # vale leerlo que cantarlo caido en falso.
     $nROk = 0; $nRMal = 0
-    $reps = @(Reps-Nombrar (Reps-DeCx $cx $txtGGw.Text))
+    $reps = @(Reps-Nombrar (Reps-DeCx $cx (Gw-Sel)))
     $porNcuRep = @{}
     foreach ($rp in $reps) { $k = "$($rp.ncu)"; if (-not $porNcuRep.ContainsKey($k)) { $porNcuRep[$k] = @() }; $porNcuRep[$k] += $rp }
     $repFilas = @()
@@ -9580,7 +9601,7 @@ $btnDiag.Add_Click({ Lanzar {
 # (2 regs por TCU) + la salud de cada NCU: ni bloque compacto ni Zigbee.
 $btnGComm.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtGTcus.Text 'Test comm') $txtGGw.Text)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtGTcus.Text 'Test comm') (Gw-Sel))
     if ($trabajos.Count -eq 0) { Con 'El filtro de NCUs no coincide con ninguna NCU de la planta.' ([System.Drawing.Color]::Orange); return }
     Ctx-Guardar 'diagnostico' $cx $trabajos
     $lvG.Items.Clear(); $script:UltimoDiag = @(); $lblGResumen.Text = ''; Sellar 'diag'
@@ -9922,7 +9943,7 @@ function BatAnal-Guardados([string]$planta) {
 # no hace falta a diario.
 function BatAnal-Edad {
     $cx = Params-Conexion
-    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtGTcus.Text 'Edad de baterias') $txtGGw.Text)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtGTcus.Text 'Edad de baterias') (Gw-Sel))
     if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
     $n = 0; foreach ($tr in $trabajos) { $n += @($tr.tcus).Count }
     $r = [System.Windows.Forms.MessageBox]::Show(
@@ -10327,7 +10348,7 @@ $btnSync.Add_Click({ Lanzar {
     $cx = Params-Conexion
     # NCU a NCU, como ESCRIBIR: poner en hora una planta entera es justo el caso
     # de uso, y antes la conexion (Planta completa) lo rechazaba.
-    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtSTcus.Text 'Sincronizar') $txtSGw.Text)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtSTcus.Text 'Sincronizar') (Gw-Sel))
     $nTcus = Cuantas-Tcus $trabajos
     if ($nTcus -eq 0) { throw 'la seleccion no deja ninguna TCU' }
     $donde = $(if ($cx.multi) { "$($trabajos.Count) NCUs de la PLANTA COMPLETA" } else { "$($cx.ip):$($cx.etiqueta)" })
@@ -10517,7 +10538,7 @@ $btnCsvTcu.Add_Click({ Lanzar {
 # ------------------------- BACKUP MASIVO DE NCU -------------------------
 $btnBackupNcu.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtBTcus.Text 'Backup NCU') $txtBGw.Text)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtBTcus.Text 'Backup NCU') (Gw-Sel))
     $nTcus = Cuantas-Tcus $trabajos
     if ($nTcus -eq 0) { throw 'la seleccion no deja ninguna TCU' }
     $donde = $(if ($cx.multi) { "$($trabajos.Count) NCUs de la PLANTA COMPLETA" } else { "$($cx.ip):$($cx.etiqueta)" })
@@ -10962,7 +10983,7 @@ $btnAudEscr.Add_Click({
 $btnAud.Add_Click({ Lanzar {
     if (-not $script:PresetRef) { [void][System.Windows.Forms.MessageBox]::Show('Carga primero un preset de referencia (o un backup completo).','Aviso'); return }
     $cx = Params-Conexion
-    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtATcus.Text 'Auditoria') $txtAGw.Text)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtATcus.Text 'Auditoria') (Gw-Sel))
     if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
     Ctx-Guardar 'auditoria' $cx $trabajos
     $lvA.Items.Clear(); $script:UltimaAud = @(); Sellar 'aud'
@@ -11140,7 +11161,7 @@ $btnAudJson.Add_Click({
 $btnInvF.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $tcus = $null
-    if (-not $cx.multi) { $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtVTcus.Text 'Inventario') $txtVGw.Text).tcus }
+    if (-not $cx.multi) { $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtVTcus.Text 'Inventario') (Gw-Sel)).tcus }
     $trabajos = @(Trabajos-Planta $cx $tcus (Ncus-Filtro))
     if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
     Ctx-Guardar 'inventario' $cx $trabajos
@@ -11245,7 +11266,7 @@ function InvG-Pintar($filas) {
 # abajo como se recorre el campo.
 function InvG-Correr {
     $cx = Params-Conexion
-    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtGTcus.Text 'Inventario global') $txtGGw.Text)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtGTcus.Text 'Inventario global') (Gw-Sel))
     if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
     $lvIG.Items.Clear(); $script:UltimoInvG = @(); $lblIGRes.Text = ''; Sellar 'invg'
     Ctx-Guardar 'inventario_global' $cx $trabajos
@@ -11609,7 +11630,7 @@ function Guardia-Viento([hashtable]$cx) {
 
 $btnPMotor.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Test motor') $txtPGw.Text)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Test motor') (Gw-Sel))
     Ctx-Guardar 'pem' $cx $trabajos
     $nTcus = Cuantas-Tcus $trabajos
     $pulso = Val-Int $txtPPulso.Text 'Pulso' 1 30
@@ -11690,7 +11711,7 @@ $btnPMotor.Add_Click({ Lanzar {
 
 $btnPModo.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Modo') $txtPGw.Text)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Modo') (Gw-Sel))
     $nTcus = Cuantas-Tcus $trabajos
     $modo = @{'OFF'=0; 'MANUAL'=1; 'AUTO'=2}[[string]$cbPModo.SelectedItem]
     if (-not (Pem-Confirmar $cx $trabajos $nTcus "Pasar $nTcus TCUs a modo $($cbPModo.SelectedItem)?" 'Cambio de modo')) { return }
@@ -11721,7 +11742,7 @@ $btnPModo.Add_Click({ Lanzar {
 
 $btnPClear.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Clear') $txtPGw.Text)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Clear') (Gw-Sel))
     $nTcus = Cuantas-Tcus $trabajos
     if (-not (Pem-Confirmar $cx $trabajos $nTcus "Desenclavar alarmas de motor (40007 bit 13) en $nTcus TCUs?" 'Clear alarmas')) { return }
     $lvP.Items.Clear(); $script:UltimoPem = @(); Sellar 'pem'
@@ -11741,7 +11762,7 @@ $btnPClear.Add_Click({ Lanzar {
 
 function Stow-Aplicar([int]$n) {
     $cx = Params-Conexion
-    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Stow') $txtPGw.Text)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Stow') (Gw-Sel))
     $nTcus = Cuantas-Tcus $trabajos
     $txtAccion = $(if ($n -gt 0) { "ACTIVAR safe position $n" } else { 'QUITAR el stow' })
     if (-not (Pem-Confirmar $cx $trabajos $nTcus "$txtAccion en $nTcus TCUs? Los seguidores se moveran." 'Stow')) { return }
@@ -11780,7 +11801,7 @@ $btnPComis.Add_Click({ Lanzar {
         # El cuadro de TCUs y el de GW valen aqui igual que en las demas
         # acciones de esta pestana. Se ignoraban: escribias "1-72", pulsabas, y
         # recorria el rango entero de cada NCU sin decir nada.
-        $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Comisionado') $txtPGw.Text)
+        $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Comisionado') (Gw-Sel))
         Ctx-Guardar 'pem' $cx $trabajos
         Con "Comisionado de Planta completa via NCU: $($trabajos.Count) NCUs (bloque compacto, sin Zigbee)" ([System.Drawing.Color]::SteelBlue)
         foreach ($tr in $trabajos) {
@@ -11808,7 +11829,7 @@ $btnPComis.Add_Click({ Lanzar {
             }
         }
     } else {
-        $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Comisionado') $txtPGw.Text).tcus
+        $tcus = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Comisionado') (Gw-Sel)).tcus
         Con "Estado de comisionado (30001 bits 4:3) y modo (bits 9:8) en $(Eti-Rango $tcus)" ([System.Drawing.Color]::SteelBlue)
         $segs = @(Plan-Segmentos $tcus $cx)
         foreach ($seg in $segs) {
@@ -11842,7 +11863,7 @@ $btnPComis.Add_Click({ Lanzar {
 
 $btnPComisSet.Add_Click({ Lanzar {
     $cx = Params-Conexion
-    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Comisionado') $txtPGw.Text)
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtPTcus.Text 'Comisionado') (Gw-Sel))
     Ctx-Guardar 'pem' $cx $trabajos
     $nTcus = Cuantas-Tcus $trabajos
     $obj = [int]([string]$cbPComis.SelectedItem).Split(' ')[0]
