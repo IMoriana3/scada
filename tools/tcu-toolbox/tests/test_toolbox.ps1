@@ -239,6 +239,21 @@ $nCsv = Cargar-FicheroPlantas $csvCampo
 Check 'csv de campo: 7 gateways' $nCsv 7
 Check 'csv fila 109 con nombre unico' ($PLANTAS.Contains('El Burgo I NCU2 GW504 (109-109)')) 'True'
 
+# ---------- acompanantes de plantas/ (ambitos_*, coordenadas...) ----------
+# Un .json sin lista 'plantas' no es una topologia: el generador lo deja al lado
+# (los ambitos_ de San Jose) y el toolbox no lo usa. Es-Topologia lo distingue y
+# el arranque lo salta EN SILENCIO, sin el AVISO "ilegible" que soltaba antes.
+Check 'topologia real es topologia' (Es-Topologia ([pscustomobject]@{ plantas = @(@{nombre='X'; ip='1.2.3.4'}) })) 'True'
+Check 'ambitos_ (sin lista plantas) no es topologia' (Es-Topologia ([pscustomobject]@{ ambitos = @{}; seguidores = 10 })) 'False'
+Check 'plantas vacia no es topologia' (Es-Topologia ([pscustomobject]@{ plantas = @() })) 'False'
+Check 'null no es topologia' (Es-Topologia $null) 'False'
+# el bucle de arranque se salta los acompanantes usando Es-Topologia
+Check 'el arranque filtra por Es-Topologia' ($src.Contains('if (-not (Es-Topologia $jj)) { continue }')) 'True'
+# y el ZIP de campo no se lleva ni los ambitos_* ni los test_* de plantas/
+$wfRel = Get-Content (Join-Path $raizTb '../../.github/workflows/toolbox-release.yml') -Raw
+Check 'la release excluye ambitos_ del zip' ($wfRel.Contains('tcu-toolbox/plantas/ambitos_*')) 'True'
+Check 'la release excluye test_ del zip' ($wfRel.Contains('tcu-toolbox/plantas/test_*')) 'True'
+
 # ---------- filtro de variables ----------
 $todos = @($VARIABLES.Keys) + @($ESTADO.Keys | ForEach-Object { 'ESTADO ' + $_ })
 $r = @(Filtrar-Nombres $todos 'soc')

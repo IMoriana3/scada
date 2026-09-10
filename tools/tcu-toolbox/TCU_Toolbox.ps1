@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.73'
+$VERSION_TOOLBOX = '11.74'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -143,6 +143,19 @@ function Cargar-FicheroPlantas([string]$ruta) {
     # los tramos del mismo gateway, en una sola entrada (ver Tramos-Juntar)
     foreach ($x in @(Tramos-Juntar $nuevas)) { $PLANTAS[$x.nombre] = $x.e }
     return $n
+}
+
+# Un .json de la carpeta plantas/ que no trae una lista 'plantas' con contenido
+# NO es una topologia: es un fichero ACOMPANANTE que el generador deja al lado
+# -los ambitos_* (la asignacion gateway/TCU seguidor a seguidor sacada del Excel
+# de coordenadas, que usa un test como verdad de referencia), o unas coordenadas
+# sueltas-. El toolbox no lo carga, asi que al arrancar se salta EN SILENCIO en
+# vez de soltar un "ilegible (sin lista 'plantas')" que asustaba sin ser nada.
+# @($null).Count vale 1 en PS 5.1, asi que la lista se filtra a mano. Pura.
+function Es-Topologia($jsonObj) {
+    if (-not $jsonObj) { return $false }
+    if (-not $jsonObj.PSObject.Properties['plantas']) { return $false }
+    return @(@($jsonObj.plantas) | Where-Object { $null -ne $_ }).Count -gt 0
 }
 
 # ---------- los TRAMOS de un gateway son UN gateway ----------
@@ -380,18 +393,24 @@ if (Test-Path $rutaCsv) {
 $dirPlantas = Join-Path $PSScriptRoot 'plantas'
 if (Test-Path $dirPlantas) {
     foreach ($f in @(Get-ChildItem $dirPlantas | Where-Object { $_.Extension -in '.json', '.csv' } | Sort-Object Name)) {
-        try {
-            $script:MsgsInicio += "plantas/$($f.Name): $(Cargar-FicheroPlantas $f.FullName) entradas"
-            # y si el fichero se contradice a si mismo, decirlo AL ARRANCAR: un
-            # JSON mal generado no da error, solo hace que se lea menos planta
-            if ($f.Extension -eq '.json') {
-                try {
-                    $jj = Get-Content $f.FullName -Raw | ConvertFrom-Json
-                    foreach ($a in @(Topologia-Avisos $jj.plantas)) { $script:MsgsInicio += "AVISO topologia: $a" }
-                } catch {}
-            }
+        # Un .json sin lista 'plantas' es un acompanante (ambitos_*, coordenadas):
+        # el generador lo deja en la carpeta y el toolbox no lo carga. Se salta en
+        # SILENCIO, sin el AVISO "ilegible" que soltaba antes. El .csv no se
+        # pre-parsea: va directo al cargador, como siempre.
+        $jj = $null
+        if ($f.Extension -eq '.json') {
+            try { $jj = Get-Content $f.FullName -Raw | ConvertFrom-Json }
+            catch { $script:MsgsInicio += "AVISO: plantas/$($f.Name) ilegible ($_) - ignorado"; continue }
+            if (-not (Es-Topologia $jj)) { continue }
         }
-        catch { $script:MsgsInicio += "AVISO: plantas/$($f.Name) ilegible ($_) - ignorado" }
+        try { $script:MsgsInicio += "plantas/$($f.Name): $(Cargar-FicheroPlantas $f.FullName) entradas" }
+        catch { $script:MsgsInicio += "AVISO: plantas/$($f.Name) ilegible ($_) - ignorado"; continue }
+        # y si el fichero se contradice a si mismo, decirlo AL ARRANCAR: un JSON
+        # mal generado no da error, solo hace que se lea menos planta. Va en su
+        # propio try: un fallo de los avisos NUNCA tumba una carga que fue bien.
+        if ($f.Extension -eq '.json') {
+            try { foreach ($a in @(Topologia-Avisos $jj.plantas)) { $script:MsgsInicio += "AVISO topologia: $a" } } catch {}
+        }
     }
 }
 Construir-EntradasAuto

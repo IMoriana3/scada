@@ -37,7 +37,11 @@ jobs:
           test -n "$VER"
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
           cd tools
-          zip -r "../TCU_Toolbox_v${VER}.zip" tcu-toolbox -x "tcu-toolbox/logs/*" "tcu-toolbox/backups/*" "tcu-toolbox/informes/*" "tcu-toolbox/config_local.json" "tcu-toolbox/tests/*"
+          # Fuera del ZIP de campo lo que el toolbox no usa: logs/backups/informes,
+          # la suite (tests/) y los ACOMPANANTES de plantas/ -los ambitos_* y los
+          # test_*.py, que no son topologias y solo sirven a la QA-. Asi el
+          # portatil no se los encuentra ni suelta avisos por ellos.
+          zip -r "../TCU_Toolbox_v${VER}.zip" tcu-toolbox -x "tcu-toolbox/logs/*" "tcu-toolbox/backups/*" "tcu-toolbox/informes/*" "tcu-toolbox/config_local.json" "tcu-toolbox/tests/*" "tcu-toolbox/plantas/ambitos_*" "tcu-toolbox/plantas/test_*"
           VAG=$(grep -oP "VERSION_AGENTE = '\K[0-9.]+" tcu-agente/TCU_Agente.ps1)
           test -n "$VAG"
           echo "vag=$VAG" >> "$GITHUB_OUTPUT"
