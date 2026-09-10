@@ -75,6 +75,15 @@ se mueve** — un AVISO por modo no es una visita. Y en el historial,
 acaba de poner en OFF: es correcto, dejó de seguir, pero cambia lo que el
 comparador enseña entre dos barridos.
 
+**Los ficheros acompanantes de `plantas/` se ignoran en silencio (v11.74)** — el
+generador deja junto a cada topologia algun fichero de apoyo (los `ambitos_*` de
+San Jose: la asignacion gateway/TCU seguidor a seguidor sacada del Excel de
+coordenadas, que solo usa la QA). No son topologias, y el toolbox soltaba al
+arrancar un aviso *«plantas/ambitos_… ilegible (sin lista 'plantas') – ignorado»*
+que asustaba sin ser nada. Ahora un `.json` sin lista `plantas` (funcion pura
+`Es-Topologia`) se salta **sin ruido**, y el ZIP de campo ya **no los empaqueta**
+(ni los `ambitos_*` ni los `test_*` de la carpeta). La planta se carga igual.
+
 **El gateway se elige con casillas, no en el desplegable (v11.73)** — cada NCU
 sale UNA vez en el desplegable, con su nombre a secas: se acabaron las entradas
 "NCU16 GW1"/"GW2"/"(auto)" mezcladas. Una vez elegida la NCU, si tiene dos
