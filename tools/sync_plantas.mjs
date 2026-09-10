@@ -72,7 +72,7 @@ for (const p of PLANTAS) {
     const a = JSON.stringify(c.obj[k]), b = JSON.stringify(s.obj[k]);
     if (a !== b) dif.push(`${k} ${a === undefined ? '(no está)' : a}→${b === undefined ? '(fuera)' : b}`);
   }
-  if (JSON.stringify(c.obj.bifilo) !== JSON.stringify(s.obj.bifilo)) dif.push('bífilo ' + JSON.stringify(s.obj.bifilo));
+  if (JSON.stringify(c.obj.bifila) !== JSON.stringify(s.obj.bifila)) dif.push('bífila ' + JSON.stringify(s.obj.bifila));
   console.log(`  ~ ${p}: ${dif.join(' · ') || 'difiere en los datos'}`);
 }
 
