@@ -1,0 +1,7 @@
+# Lo que genera la herramienta en el portatil: nunca al repo.
+# ncus.json puede llevar "pass" en claro y credenciales.*.xml son de ESTE usuario de Windows.
+logs-ncu/
+ncus.json
+credenciales.*.xml
+descargas.log
+*.parte

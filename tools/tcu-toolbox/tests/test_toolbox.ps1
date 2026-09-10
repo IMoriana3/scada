@@ -258,6 +258,30 @@ Check 'la release excluye test_ del zip' ($wfRel.Contains('tcu-toolbox/plantas/t
 Check 'la release empaqueta descarga-logs dentro de tcu-toolbox' ($wfRel.Contains('cp -r descarga-logs tcu-toolbox/descarga-logs')) 'True'
 Check 'y le copia las topologias sin los ambitos_' ($wfRel.Contains('rm -f tcu-toolbox/descarga-logs/plantas/ambitos_*')) 'True'
 
+# ---------- descarga de logs: lo PURO del script real (API Sunner) ----------
+# tools/descarga-logs/descarga_logs_ncu.ps1 es el script con el que esta
+# automatizada Ayora (cookie sunner_auth, ZIP diario por NCU). Aqui solo lo
+# que no toca red: la lista de NCU sacada de las topologias REALES de la
+# toolbox, y el esquema de credenciales. El HTTP se prueba en planta.
+$srcDL = Get-Content (Join-Path $raizTb '../descarga-logs/descarga_logs_ncu.ps1') -Raw
+$iA = $srcDL.IndexOf('function Ncus-DeTopologia'); $fA = $srcDL.IndexOf('# ---- login: rutas candidatas')
+$iB = $srcDL.IndexOf('function UsuarioDe');        $fB = $srcDL.IndexOf('# ---- credenciales de la planta')
+$iC = $srcDL.IndexOf('function SubredDe');         $fC = $srcDL.IndexOf('function RutaCred')
+$Usuario = 'admin'; $Password = $null; $script:CredPlanta = $null; $Planta = ''
+Invoke-Expression ($srcDL.Substring($iA, $fA - $iA) + "`n" + $srcDL.Substring($iB, $fB - $iB) + "`n" + $srcDL.Substring($iC, $fC - $iC))
+$sjDL = Ncus-DeTopologia (Get-Content (Join-Path $raizTb 'plantas/24019-san-jose.json') -Raw | ConvertFrom-Json)
+Check 'descarga: San Jose -> 21 NCU (una por IP, no una por gateway)' (@($sjDL).Count) 21
+Check 'descarga: numeros a dos cifras y ordenados' ((@($sjDL | Select-Object -First 3) | ForEach-Object { $_.ncu }) -join ',') '01,02,03'
+Check 'descarga: NCU01 de San Jose es 10.21.236.1' ((@($sjDL | Where-Object { $_.ncu -eq '01' }))[0].ip) '10.21.236.1'
+Check 'descarga: IPs unicas' (@($sjDL | Select-Object -ExpandProperty ip -Unique).Count) 21
+$ayDL = Ncus-DeTopologia (Get-Content (Join-Path $raizTb 'plantas/24025-ayora.json') -Raw | ConvertFrom-Json)
+Check 'descarga: Ayora -> 16 NCU' (@($ayDL).Count) 16
+Check 'descarga: esquema Sunner admin/NCU<nn>' (ClaveDe ([pscustomobject]@{ncu='5'; ip='1.2.3.4'})) 'NCU05'
+Check 'descarga: usuario por defecto admin' (UsuarioDe ([pscustomobject]@{ncu='5'; ip='1.2.3.4'})) 'admin'
+Check 'descarga: pass por NCU manda sobre el esquema' (ClaveDe ([pscustomobject]@{ncu='5'; ip='1.2.3.4'; pass='otra'})) 'otra'
+Check 'descarga: la planta es la subred (San Jose)' (SubredDe '10.21.236.11') '10.21.236'
+Check 'descarga: subred ignora el puerto' (SubredDe '192.168.4.45:8080') '192.168.4'
+
 # ---------- filtro de variables ----------
 $todos = @($VARIABLES.Keys) + @($ESTADO.Keys | ForEach-Object { 'ESTADO ' + $_ })
 $r = @(Filtrar-Nombres $todos 'soc')
