@@ -29,6 +29,30 @@ Este script lo resuelve sin esperar a nadie: se programa una vez y deja una carp
 
 La **topología** es el mismo JSON (o CSV) que exporta la página de IPs para la TCU Toolbox: de ahí salen la IP de cada NCU y el rango de esclavos, que es lo que dice qué ficheros pedir.
 
+## Credenciales y login
+
+El webserver de la NCU tiene **login por formulario** (dos cajas y «Entrar», no el
+cuadro nativo del navegador), con **usuario y contraseña distintos por planta**.
+El script entra como lo harías tú: pide la página, **lee el formulario** (el campo
+de contraseña, el de usuario y los ocultos tipo token — no da por supuesto ningún
+nombre), lo rellena y se queda con la **cookie de sesión**. Como cada NCU es un
+webserver aparte, **entra en cada NCU**, una vez, y reutiliza su sesión.
+
+- La primera vez para una planta te pide usuario y contraseña con entrada
+  enmascarada y los guarda en `<Destino>\credenciales.<planta>.xml`, **cifrados con
+  DPAPI para tu usuario de Windows**: copiados a otro PC o abiertos por otro
+  usuario no valen nada. Nunca van al repo ni en claro.
+- Las siguientes veces —y la tarea nocturna de `-Programar`, que corre con tu
+  mismo usuario— los leen solos. Para cambiarlos: **`-Credencial`**.
+- Si tras entrar la NCU devuelve **otra vez la página de login** en vez del CSV,
+  el script **se para al primer fichero** y te lo dice (credenciales malas), en
+  vez de guardar dos mil páginas HTML como si fueran logs.
+- Si la página de login no está en `/`, dísela: `-LoginRuta /login.html`.
+- Si un firmware no tuviera formulario, cae a HTTP Basic con las mismas
+  credenciales, por si acaso.
+- Va por HTTP, como el propio webserver: en claro dentro de la red de planta,
+  igual que al teclearlos en el navegador.
+
 ## El descubrimiento de la URL
 
 No sabemos el patrón exacto con el que el webserver de la NCU sirve un fichero, así que `-Descubrir` prueba once candidatos contra una NCU real y se queda con el que devuelve algo que **empieza por `datetime;`** — la cabecera de estos logs. Lo encontrado se guarda en `descarga.config.json` y no se vuelve a probar.
