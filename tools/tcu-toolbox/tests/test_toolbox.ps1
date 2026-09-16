@@ -2581,7 +2581,8 @@ Write-Host '== la edad del dato es una columna, no una nota =='
 Check 'edad: columna en la tabla' ($src.Contains("lvG.Columns.Add('Edad s'")) $true
 Check 'edad: la calcula el bloque compacto' ($src.Contains('Edad_s = $(if ($edad -ge 0)')) $true
 Check 'edad: en blanco si no se sabe' ([regex]::IsMatch($src, 'Edad_s = \$\(if \(\$edad -ge 0\) \{ \$edad \} else \{ '''' \}\)')) $true
-Check 'edad: la fila de la NCU no lleva' ($src.Contains("`$dn.SoC, '', `$dn.Alarmas")) $true
+# (la ultima casilla es la nota de la fila NCU: alarmas y, desde la v11.82, sus gateways)
+Check 'edad: la fila de la NCU no lleva' ($src.Contains("`$dn.SoC, '', (Diag-NotaNcu `$dn)")) $true
 # el bloque de TCUs ya no repite la edad en la nota (el de HSUs es otro sitio)
 $blqTcu = $src.Substring($src.IndexOf('function Ncu-DiagCompat'), 3000)
 Check 'edad: ya no se repite en la nota' ($blqTcu.Contains('datos de hace')) $false
@@ -4509,6 +4510,38 @@ Check 'gw json: y la CPU' $fGw.CPU_pct 18
 Check 'gw json: lo vacio no se inventa' ($null -eq $fGw.PSObject.Properties['PAN']) $true
 Check 'gw json: y sale en el JSON tal cual' ((ConvertTo-Json $fGw -Compress).Contains('"CPU_pct":18')) $true
 Check 'gw json: el boton anota identidad y carga' (([regex]::Matches($src, 'Gw-Anotar \$f @\{')).Count) 2
+
+Write-Host ''
+Write-Host '== el gateway dentro del Diagnostico y del Inventario =='
+# lo que devolvio el Digi .53 de El Burgo, como lo deja Gw-Leer
+$lectT = @{ok = $true
+           carga = (Gw-Carga '<device_stats><cpu>18</cpu><totalmem>16777216</totalmem><usedmem>8130476</usedmem><uptime>92906</uptime></device_stats>')
+           ident = (Rci-Extraer '<device_info><mac>00:40:9D:E4:F1:00</mac><product>ConnectPort X2D</product><firmware>2.27.4 (Version 82002549_N 05/15/2023)</firmware></device_info>')}
+Check 'gw diag: la linea' (Gw-Linea 1 '10.100.1.53' $lectT) 'GW1 10.100.1.53: CPU 18 %, memoria 48 % usada (7.8 de 16.0 MB), 1 d 1 h en marcha; ConnectPort X2D fw 2.27.4 (Version 82002549_N 05/15/2023)'
+Check 'gw diag: sin respuesta, se dice' (Gw-Linea 2 '10.100.1.58' @{ok = $false}) 'GW2 10.100.1.58: sin respuesta por RCI'
+$cam = Gw-Campos 1 '10.100.1.53' $lectT
+Check 'gw diag: los campos van con prefijo de gateway' $cam['GW1_CPU_pct'] 18
+Check 'gw diag: el modelo' $cam['GW1_Modelo'] 'ConnectPort X2D'
+Check 'gw diag: y la IP aunque no conteste' (Gw-Campos 2 '10.100.1.58' @{ok = $false})['GW2_IP'] '10.100.1.58'
+# se cuelgan de la fila de la NCU, no de una fila nueva (los KPI cuentan filas)
+$dnT = Diag-FilaNcu '1' $null 'x'
+[void](Gw-Anotar $dnT $cam)
+$dnT | Add-Member -NotePropertyName Gateways -NotePropertyValue (Gw-Linea 1 '10.100.1.53' $lectT) -Force
+Check 'gw diag: la fila NCU lleva la CPU como campo' $dnT.GW1_CPU_pct 18
+Check 'gw diag: y Alarmas no se toca (el comparador la usa de nota)' ($dnT.Alarmas -like 'NCU sin respuesta*') $true
+Check 'gw diag: la tabla ensena las dos cosas' ((Diag-NotaNcu $dnT) -like '*sin respuesta*|  GW1 10.100.1.53: CPU 18 %*') $true
+Check 'gw diag: sin gateways, la nota es la de siempre' (Diag-NotaNcu (Diag-FilaNcu '1' $null 'x')) (Diag-FilaNcu '1' $null 'x').Alarmas
+$objT = Gws-Objetivos-Topologia @(@{puerto=503; ip_gw='10.100.1.53'}, @{puerto=504; ip_gw='10.100.1.54'}, @{puerto=504; ip_gw='10.100.1.54'}, @{puerto=503; ip_gw=''})
+Check 'gw diag: de la topologia, los que traen ip_gw, una vez cada uno' (@($objT | ForEach-Object { "GW$($_.nGw)=$($_.ip)" }) -join ',') 'GW1=10.100.1.53,GW2=10.100.1.54'
+Check 'gw diag: sin ip_gw, ninguno (y sin nulos)' (@(Gws-Objetivos-Topologia @(@{puerto=503}, $null)).Count) 0
+Check 'gw diag: el barrido anota los gateways en los dos caminos' (([regex]::Matches($src, 'Diag-AnotarGws \$dnP? ')).Count) 2
+Check 'gw diag: y la fila NCU ensena la nota con los gateways' (([regex]::Matches($src, '\(Diag-NotaNcu \$dnP?\)')).Count) 2
+$fI = Gw-FilaInventario '1' 1 '10.100.1.53' $lectT
+Check 'gw inv: la fila del gateway' "$($fI.NCU)/GW$($fI.GW)/$($fI.Modelo)/$($fI.CPU_pct)/$($fI.Mem_total_MB)" '1/GW1/ConnectPort X2D/18/16.0'
+Check 'gw inv: sin respuesta, la fila lo dice y no inventa' ((Gw-FilaInventario '2' 2 '10.100.1.58' @{ok = $false}).Nota) 'GW2 10.100.1.58: sin respuesta por RCI'
+Check 'gw inv: van en un bloque aparte del JSON' ($src.Contains('gateways = @($script:UltimoInvGw)')) $true
+Check 'gw inv: y NUNCA entre las TCUs (Plan-Firmware hace [int] de TCU)' ($src.Contains('$script:UltimoInv += $fila')) $false
+Check 'gw inv: la lista se vacia con cada inventario' ($src.Contains("`$script:UltimoInvGw = @(); `$lblInvF.Text = ''")) $true
 $fus = Rci-Fusionar $exD (Rci-Extraer '<zigbee><pan_id>0x3dba</pan_id><channel>0x0d</channel></zigbee>')
 Check 'gw: dos consultas se funden' (Rci-Resumen $fus) 'mac, fw, pan, canal'
 Check 'gw: sin pisar lo que ya habia' $fus.fw 'Version 2.17.2.1 (Version 82001536_H 03/28/2013)'

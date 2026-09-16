@@ -35,6 +35,21 @@ En las operaciones de **planta completa**, cada línea de la consola lleva delan
 
 Consola común con colores, botón **CANCELAR** para abortar operaciones largas, y **log automático** a `logs/tcu_toolbox_AAAAMMDD.log`. La ventana es **redimensionable y maximizable** (v4.6): al agrandarla crecen las tablas y la consola, que es lo que interesa en una planta de cientos de TCUs.
 
+**El gateway dentro del Diagnóstico y del Inventario (v11.82)** — verificada
+la consulta, el Digi deja de ir solo en su botón. En el **Diagnóstico**, detrás
+de cada NCU se le pregunta a sus gateways (los que traen `ip_gw`) y lo que
+dicen se cuelga de **la fila de la NCU** como campos (`GW1_IP`, `GW1_CPU_pct`,
+`GW1_Mem_pct`, `GW1_Uptime_s`, `GW1_Modelo`, `GW1_MAC`, `GW1_FW`… y los `GW2_`),
+que el JSON del diagnóstico saca tal cual; en la tabla, al lado de las alarmas.
+Sin filas nuevas a propósito: los KPI cuentan filas, y `Alarmas` no se toca
+porque el comparador de barridos la usa de nota y la CPU cambia en cada pasada.
+En el **Inventario**, cada gateway es una fila en la tabla (azul; roja si no
+contesta) y va en un bloque **`gateways`** aparte en el JSON, nunca entre las
+`tcus`: `Plan-Firmware` y el Seguimiento PEM hacen `[int]` de la columna TCU.
+Si el Digi no contesta a la primera consulta, un timeout y fuera, sin insistir
+con las tres de identidad. El login de las casillas de Inventario global vale
+para los tres sitios. 18 comprobaciones.
+
 **La primera pasada contra un Digi real (v11.81)** — El Burgo, 16/09/2026, con
 la IP a mano: los Digi `.53` y `.54` contestaron `query_state/device_stats` a
 la primera (**CPU 19 % y 16 %, memoria al 48 %, 1 día en marcha**). La lectura
