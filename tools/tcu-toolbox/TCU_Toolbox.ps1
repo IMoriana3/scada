@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.81'
+$VERSION_TOOLBOX = '11.82'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1773,6 +1773,85 @@ function Gw-Anotar($fila, [hashtable]$campos) {
         $fila | Add-Member -NotePropertyName $k -NotePropertyValue $v -Force
     }
     return $fila
+}
+
+# ---- el gateway dentro del Diagnostico y del Inventario ----
+# Verificada la consulta en El Burgo, el Digi deja de ir solo en su boton: en el
+# barrido de diagnostico se le pregunta detras de la NCU y lo que dice se cuelga
+# de la FILA DE LA NCU como campos (GW1_CPU_pct, GW2_Modelo...), sin filas nuevas
+# que los KPI contarian como seguidores; y en el inventario va como fila propia
+# en la tabla y como bloque `gateways` aparte en el JSON, nunca entre las TCUs
+# (Plan-Firmware y el Seguimiento PEM hacen [int] de la columna TCU).
+
+# Los gateways de una topologia a los que se puede preguntar: los que traen
+# ip_gw, una vez cada uno. Pura.
+function Gws-Objetivos-Topologia($gws) {
+    $l = @()
+    foreach ($g in @($gws)) {
+        if (-not $g) { continue }
+        $ip = "$($g.ip_gw)".Trim(); if ($ip -eq '') { continue }
+        $l += ,@{ncu = ''; nGw = (Gw-Numero ([int]$g.puerto)); ip = $ip}
+    }
+    return @(Gw-Objetivos $l '')
+}
+
+# Lo leido de un gateway como campos con prefijo GWn_, para colgarlos de la fila
+# de su NCU. La IP va siempre, aunque no conteste. Pura.
+function Gw-Campos([int]$nGw, [string]$ip, $lect) {
+    $p = "GW${nGw}_"
+    $h = @{}; $h[$p + 'IP'] = $ip
+    if (-not $lect -or -not $lect.ok) { return $h }
+    if ($lect.carga -and $lect.carga.ok) {
+        $h[$p + 'CPU_pct'] = $lect.carga.cpu; $h[$p + 'Mem_pct'] = Gw-MemPct $lect.carga
+        if ($null -ne $lect.carga.mem_total) { $h[$p + 'Mem_total_MB'] = Gw-Mb $lect.carga.mem_total }
+        $h[$p + 'Uptime_s'] = $lect.carga.uptime
+    }
+    if ($lect.ident) {
+        foreach ($par in @(@('Modelo','producto'), @('MAC','mac'), @('FW','fw'), @('Boot','boot'), @('PAN','pan'), @('Canal','canal'))) {
+            if ("$($lect.ident[$par[1]])" -ne '') { $h[$p + $par[0]] = "$($lect.ident[$par[1]])" }
+        }
+    }
+    return $h
+}
+
+# Lo mismo, en una linea para la tabla y la consola. Pura.
+function Gw-Linea([int]$nGw, [string]$ip, $lect) {
+    $s = "GW$nGw ${ip}"
+    if (-not $lect -or -not $lect.ok) { return "${s}: sin respuesta por RCI" }
+    $partes = @()
+    $c = Gw-CargaResumen $lect.carga; if ($c -ne '') { $partes += $c }
+    if ($lect.ident) {
+        $m = "$($lect.ident['producto'])"
+        if ("$($lect.ident['fw'])" -ne '') { $m = ("$m fw $($lect.ident['fw'])").Trim() }
+        if ($m -ne '') { $partes += $m }
+    }
+    if ($partes.Count -eq 0) { return "${s}: contesta pero no se reconoce nada" }
+    return "${s}: " + ($partes -join '; ')
+}
+
+# La fila NCU ensena sus alarmas y, al lado, sus gateways. Alarmas NO se toca:
+# el comparador de barridos la usa de nota, y la CPU cambia en cada pasada. Pura.
+function Diag-NotaNcu($dn) {
+    $a = "$($dn.Alarmas)"
+    $g = $(if ($dn.PSObject.Properties['Gateways']) { "$($dn.Gateways)" } else { '' })
+    if ($g -eq '') { return $a }
+    if ($a -eq '') { return $g }
+    return "$a  |  $g"
+}
+
+# La fila de un gateway en el inventario (bloque `gateways` del JSON). Pura.
+function Gw-FilaInventario([string]$ncu, [int]$nGw, [string]$ip, $lect) {
+    $c = $(if ($lect -and $lect.ok -and $lect.carga -and $lect.carga.ok) { $lect.carga } else { $null })
+    $i = $(if ($lect -and $lect.ok -and $lect.ident) { $lect.ident } else { @{} })
+    return [pscustomobject]@{
+        NCU = $ncu; GW = "$nGw"; IP_gw = $ip
+        Modelo = "$($i['producto'])"; MAC = "$($i['mac'])"; FW = "$($i['fw'])"; Boot = "$($i['boot'])"
+        POST = "$($i['post'])"; ProductId = "$($i['pid'])"; HW = "$($i['hw'])"; PAN = "$($i['pan'])"; Canal = "$($i['canal'])"
+        CPU_pct = $(if ($c) { $c.cpu } else { $null }); Mem_pct = $(if ($c) { Gw-MemPct $c } else { $null })
+        Mem_total_MB = $(if ($c -and $null -ne $c.mem_total) { Gw-Mb $c.mem_total } else { $null })
+        Uptime_s = $(if ($c) { $c.uptime } else { $null })
+        Nota = (Gw-Linea $nGw $ip $lect)
+    }
 }
 
 # Lo que dos consultas han sacado, junto: device_info da MAC y firmware, y la
@@ -6016,7 +6095,7 @@ foreach ($c in @(@('Tipo',80), @('NCU',45), @('GW',40), @('Id',110), @('Num. ser
     [void]$lvIG.Columns.Add($c[0], $c[1])
 }
 $tabIG.Controls.Add($lvIG)
-$lblIGNota = LG $tabIG 'Los huecos son reales: la NCU no da serie ni MAC (el mapa R7.1 no los tiene y sus ids estan NOT READY), la HSU no da serie ni fecha, y el gateway no habla Modbus. IDENTIFICAR GATEWAYS le pregunta por HTTP/RCI al Digi su identidad y su carga (CPU y memoria, verificado en El Burgo): necesita ip_gw en el fichero de planta o la IP escrita a mano aqui abajo.' 10 890 364
+$lblIGNota = LG $tabIG 'Los huecos son reales: la NCU no da serie ni MAC (el mapa R7.1 no los tiene y sus ids estan NOT READY), la HSU no da serie ni fecha, y el gateway no habla Modbus. IDENTIFICAR GATEWAYS le pregunta por HTTP/RCI al Digi su identidad y su carga (CPU y memoria, verificado en El Burgo): necesita ip_gw en el fichero de planta o la IP escrita a mano aqui abajo. Con ip_gw, el Diagnostico y el Inventario ya lo leen solos; el login de aqui vale para los tres.' 10 890 364
 $lblIGNota.ForeColor = [System.Drawing.Color]::Gray
 
 # ============================ TAB ANALIZADOR DE BATERIAS ============================
@@ -6710,6 +6789,7 @@ $script:UltimaBat = @()
 $script:UltimaIdent = @()
 $script:UltimaAud = @()
 $script:UltimoInv = @()
+$script:UltimoInvGw = @()   # los gateways del ultimo inventario: bloque aparte, nunca entre las TCUs
 $script:UltimoPem = @()
 $script:PresetRef = $null
 $script:PresetRefNombre = ''
@@ -9319,8 +9399,9 @@ function Diag-Correr {
                 # dato. El barrido en serie ya lo hacia; el paralelo no, y es el
                 # modo por defecto.
                 $dnP = Diag-FilaNcu $eti $(if ($o) { $o.salud } else { $null }) $(if ($o) { "$($o.error)" } else { "$($r.error)" })
+                Diag-AnotarGws $dnP $r.tarea.gws ([int]$r.tarea.to)
                 $itemNP = New-Object System.Windows.Forms.ListViewItem($eti)
-                foreach ($c in @('', $dnP.TCU, $dnP.Salud, $dnP.Modo, '', '', '', '', '', $dnP.Alarmas)) { [void]$itemNP.SubItems.Add("$c") }
+                foreach ($c in @('', $dnP.TCU, $dnP.Salud, $dnP.Modo, '', '', '', '', '', (Diag-NotaNcu $dnP))) { [void]$itemNP.SubItems.Add("$c") }
                 switch ("$($dnP.Salud)") {
                     'OK'     { $itemNP.ForeColor = [System.Drawing.Color]::DarkGreen }
                     'AVISO'  { $itemNP.ForeColor = [System.Drawing.Color]::DarkOrange }
@@ -9385,8 +9466,9 @@ function Diag-Correr {
         # El reloj solo se menciona si de verdad esta desviado (Reloj-Nota):
         # colgado de cada fila parecia un problema y no lo era.
         $dn = Diag-FilaNcu "$($tr.ncu)" $ns $nsErr
+        Diag-AnotarGws $dn $tr.cx.gws ([int]$tr.cx.to)
         $itemN = New-Object System.Windows.Forms.ListViewItem("$($tr.ncu)")
-        foreach ($c in @($dn.TCU, $dn.Salud, $dn.Modo, $dn.Tilt, $dn.Objetivo, $dn.Dif, $dn.SoC, '', $dn.Alarmas)) { [void]$itemN.SubItems.Add("$c") }
+        foreach ($c in @($dn.TCU, $dn.Salud, $dn.Modo, $dn.Tilt, $dn.Objetivo, $dn.Dif, $dn.SoC, '', (Diag-NotaNcu $dn))) { [void]$itemN.SubItems.Add("$c") }
         switch ($dn.Salud) {
             'OK'     { $itemN.ForeColor = [System.Drawing.Color]::DarkGreen }
             'AVISO'  { $itemN.ForeColor = [System.Drawing.Color]::DarkOrange }
@@ -11343,7 +11425,7 @@ $btnInvF.Add_Click({ Lanzar {
     $trabajos = @(Trabajos-Planta $cx $tcus (Ncus-Filtro))
     if ($trabajos.Count -eq 0) { Con 'La planta no tiene NCUs con gateways definidos.' ([System.Drawing.Color]::Orange); return }
     Ctx-Guardar 'inventario' $cx $trabajos
-    $lvV.Items.Clear(); $script:UltimoInv = @(); $lblInvF.Text = ''; Sellar 'inv'
+    $lvV.Items.Clear(); $script:UltimoInv = @(); $script:UltimoInvGw = @(); $lblInvF.Text = ''; Sellar 'inv'
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     if ($cx.multi) {
         $totTcus = 0; foreach ($tr in $trabajos) { $totTcus += @($tr.tcus).Count }
@@ -11363,6 +11445,19 @@ $btnInvF.Add_Click({ Lanzar {
         Con ("--- NCU{0}  ({1})  TCUs {2}-{3} ---" -f $tr.ncu, $tr.ip, $tr.tcus[0], $tr.tcus[-1]) ([System.Drawing.Color]::SteelBlue)
     }
     $segs = @(Plan-Segmentos $tr.tcus $tr.cx)
+    # ---- los gateways de esta NCU, por RCI: fila en la tabla y bloque `gateways` en el JSON
+    foreach ($g in @(Gws-Objetivos-Topologia $tr.cx.gws)) {
+        if (Chequear-Cancelado) { break }
+        $l = Gw-Leer $g.ip ([int]$tr.cx.to) (Gw-CredencialUI)
+        $fila = Gw-FilaInventario $etNcu $g.nGw $g.ip $l
+        $script:UltimoInvGw += $fila
+        $itemG = New-Object System.Windows.Forms.ListViewItem($etNcu)
+        foreach ($c in @("GW$($g.nGw)", '', $fila.MAC, $fila.FW, $fila.Boot, $fila.HW, '', $fila.Nota)) { [void]$itemG.SubItems.Add("$c") }
+        $itemG.ForeColor = $(if ($l.ok) { [System.Drawing.Color]::FromArgb(0,90,160) } else { [System.Drawing.Color]::Firebrick })
+        $lvV.Items.Add($itemG) | Out-Null
+        Con "   $($fila.Nota)" $(if ($l.ok) { [System.Drawing.Color]::Gainsboro } else { [System.Drawing.Color]::Salmon })
+        [System.Windows.Forms.Application]::DoEvents()
+    }
     foreach ($seg in $segs) {
         if ($script:Cancelar) { break }
         $segOk = $true
@@ -11406,7 +11501,8 @@ $btnInvF.Add_Click({ Lanzar {
     }
     }
     Modbus-Cerrar
-    $lblInvF.Text = "$ok leidas, $ko sin respuesta"
+    $nGwOk = @($script:UltimoInvGw | Where-Object { $null -ne $_.CPU_pct }).Count
+    $lblInvF.Text = "$ok leidas, $ko sin respuesta" + $(if (@($script:UltimoInvGw).Count -gt 0) { "; gateways $nGwOk/$(@($script:UltimoInvGw).Count)" } else { '' })
     $fws = @($script:UltimoInv | Where-Object { $_.FW } | Group-Object FW)
     if ($fws.Count -gt 1) {
         Con "ATENCION: FW mezclados en la flota:" ([System.Drawing.Color]::Orange)
@@ -11619,6 +11715,44 @@ function Gw-Identidad([string]$ip, [int]$to, $cred = $null) {
              completo = ((Rci-Resumen $ext) -eq 'mac, fw, pan, canal')}
 }
 
+# El login del Digi, de las casillas de Inventario global; vale para el boton,
+# el Diagnostico y el Inventario. $null si no se ha puesto.
+function Gw-CredencialUI {
+    if ("$($txtIGUser.Text)".Trim() -eq '') { return $null }
+    $sec = New-Object System.Security.SecureString
+    foreach ($ch in "$($txtIGPass.Text)".ToCharArray()) { $sec.AppendChar($ch) }
+    return New-Object System.Management.Automation.PSCredential("$($txtIGUser.Text)".Trim(), $sec)
+}
+
+# Todo lo de un gateway, para el barrido: la carga primero y, si el Digi ni
+# contesta, un timeout y fuera (no se insiste con las tres consultas de
+# identidad). Devuelve @{ok; carga; ident}.
+function Gw-Leer([string]$ip, [int]$to, $cred = $null) {
+    $t1 = Rci-Post $ip $to $RCI_CARGA $cred
+    if ("$t1" -eq '') { return @{ok = $false; carga = $null; ident = $null} }
+    $c = Gw-Carga $t1
+    if (-not $c.ok) { $c2 = Gw-Carga (Rci-Post $ip $to $RCI_TODO $cred); if ($c2.ok) { $c = $c2 } }
+    $id = Gw-Identidad $ip $to $cred
+    return @{ok = $true; carga = $c; ident = $id.ext}
+}
+
+# En el barrido de diagnostico: los gateways de la NCU, colgados de su fila.
+function Diag-AnotarGws($dn, $gws, [int]$to) {
+    $lineas = @()
+    foreach ($g in @(Gws-Objetivos-Topologia $gws)) {
+        if ($script:Cancelar) { break }
+        $l = Gw-Leer $g.ip $to (Gw-CredencialUI)
+        [void](Gw-Anotar $dn (Gw-Campos $g.nGw $g.ip $l))
+        $linea = Gw-Linea $g.nGw $g.ip $l
+        $lineas += $linea
+        $col = $(if (-not $l.ok) { [System.Drawing.Color]::Salmon }
+                 elseif ($l.carga -and $l.carga.ok -and $l.carga.cpu -ge $GW_CPU_ALTA) { [System.Drawing.Color]::Orange }
+                 else { [System.Drawing.Color]::Gainsboro })
+        Con "   $linea" $col
+    }
+    if ($lineas.Count -gt 0) { $dn | Add-Member -NotePropertyName Gateways -NotePropertyValue ($lineas -join '; ') -Force }
+}
+
 # La carga del gateway: primero device_stats; si no se reconoce, TODO el estado
 # (query_state sin hijos), que a lo mejor la trae en otro grupo y, si no, es el
 # esquema entero para volcarlo y saber que pedir de verdad.
@@ -11650,12 +11784,7 @@ $btnIGGw.Add_Click({ Lanzar {
     }
     Con "Preguntando por HTTP/RCI a $($conIp.Count) gateway(s): identidad y carga (CPU, memoria). La carga esta verificada en El Burgo (v11.81); de la identidad, lo que falte se vuelca entero aqui." ([System.Drawing.Color]::Orange)
     # el login del Digi, si se ha puesto: solo vive en esta pulsacion
-    $cred = $null
-    if ("$($txtIGUser.Text)".Trim() -ne '') {
-        $sec = New-Object System.Security.SecureString
-        foreach ($ch in "$($txtIGPass.Text)".ToCharArray()) { $sec.AppendChar($ch) }
-        $cred = New-Object System.Management.Automation.PSCredential("$($txtIGUser.Text)".Trim(), $sec)
-    }
+    $cred = Gw-CredencialUI
     Prog-Iniciar $conIp.Count
     $n = 0; $nCarga = 0
     foreach ($g in $conIp) {
@@ -11755,9 +11884,11 @@ $btnInvJson.Add_Click({
         fecha   = (Sello-De $script:SelloDe['inv'] 'yyyy-MM-dd HH:mm:ss')
         exportado = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
         tcus    = @($script:UltimoInv)
+        # los gateways aparte: el SCADA y el Seguimiento PEM leen `tcus` haciendo [int] de TCU
+        gateways = @($script:UltimoInvGw)
     }
     if ((Exportar-Json $obj ('inventario_' + (Planta-Fichero)) 'JSON de inventario' -bloque 'inv') -ne '') {
-        Con "  $($script:UltimoInv.Count) TCUs. Subelo en la pagina Historico." ([System.Drawing.Color]::Gainsboro)
+        Con "  $($script:UltimoInv.Count) TCUs y $(@($script:UltimoInvGw).Count) gateways. Subelo en la pagina Historico." ([System.Drawing.Color]::Gainsboro)
     }
 })
 
