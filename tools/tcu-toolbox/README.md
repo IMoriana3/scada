@@ -35,6 +35,15 @@ En las operaciones de **planta completa**, cada línea de la consola lleva delan
 
 Consola común con colores, botón **CANCELAR** para abortar operaciones largas, y **log automático** a `logs/tcu_toolbox_AAAAMMDD.log`. La ventana es **redimensionable y maximizable** (v4.6): al agrandarla crecen las tablas y la consola, que es lo que interesa en una planta de cientos de TCUs.
 
+**El repetidor fantasma de las plantas sin repetidores (v11.81)** — El Burgo no
+tiene repetidores y el inventario global sacaba un `Repetidor 1 (esc )` sin NCU
+y con GW 0, e intentaba leerlo por Modbus en el esclavo 0. `Reps-DeCx` devuelve
+`@()` cuando no hay, y **una función que devuelve `@()` no emite nada**:
+`Reps-Nombrar` recibía `$null`, y `@($null)` en PS 5.1 es una lista con un
+elemento nulo, que se bautizaba. El mismo vicio que ya se había cazado con las
+HSU fantasma. Se filtra el nulo; seis comprobaciones, incluida la topología de
+El Burgo tal cual la carga el fichero.
+
 **La IP del gateway a mano (v11.80)** — al ir a probar la v11.79 en planta,
 IDENTIFICAR GATEWAYS se paraba antes de preguntar nada: **ninguna topología
 del ZIP lleva `ip_gw`** (la pasada del Excel con «IP GW 1/2» no se ha hecho).

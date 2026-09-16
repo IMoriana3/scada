@@ -4444,6 +4444,17 @@ Check 'invg: otro puerto no es un gateway' (Gw-Numero 502) 0
 Check 'invg: la NCU dice por que no da serie' ($INV_MOTIVO['NCU'] -like '*NOT READY*') $true
 Check 'invg: la HSU tambien' ($INV_MOTIVO['HSU'] -like '*R23*') $true
 Check 'invg: y el gateway dice que no es Modbus' ($INV_MOTIVO['GW'] -like '*HTTP/RCI*') $true
+# una planta SIN repetidores no tiene ninguno: @() al volver de una funcion es
+# $null, y @($null) es una lista de uno. El Burgo sacaba un "Repetidor 1 (esc )"
+Check 'reps: sin repetidores, ninguno (no un nulo bautizado)' (@(Reps-Nombrar $null).Count) 0
+Check 'reps: ni con la lista vacia' (@(Reps-Nombrar @()).Count) 0
+$cxSinReps = @{nombre='El Burgo I NCU1 GW1'; ip='10.100.1.52'; puerto=503; gws=@(@{puerto=503; ini=1; fin=56; reps=@($null); huecos=@($null)})}
+Check 'reps: El Burgo, tal cual lo carga la topologia, cero repetidores' (@(Reps-Nombrar (Reps-DeCx $cxSinReps '')).Count) 0
+$cxConRep = @{nombre='Ayora NCU5 GW1'; ip='10.1.1.5'; puerto=503; gws=@(@{puerto=503; ini=1; fin=40; reps=@(@{nombre=''; esclavo=200}); huecos=@($null)})}
+$rn = @(Reps-Nombrar (Reps-DeCx $cxConRep ''))
+Check 'reps: y con uno de verdad, uno' $rn.Count 1
+Check 'reps: numerado si la topologia no le puso nombre' $rn[0].nombre 'Repetidor 1'
+Check 'reps: con su esclavo' $rn[0].esclavo 200
 
 Write-Host ''
 Write-Host '== la identidad del gateway: otro aparato, otro protocolo =='

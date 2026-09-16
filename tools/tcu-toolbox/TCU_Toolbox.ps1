@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.80'
+$VERSION_TOOLBOX = '11.81'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -7060,7 +7060,12 @@ function Reps-DeCx($cx, [string]$gw = '') {
 # orden dentro de la planta, que es como estan rotulados en el plano. Pura.
 function Reps-Nombrar($reps) {
     $i = 0
-    return @(@($reps) | ForEach-Object {
+    # Reps-DeCx devuelve @() cuando la planta no tiene repetidores, y una funcion
+    # que devuelve @() no emite NADA: aqui llega $null, y @($null) en PS 5.1 es
+    # una lista con un elemento nulo. Sin filtrarlo, El Burgo (sin repetidores)
+    # sacaba un "Repetidor 1 (esc )" fantasma, sin NCU y con GW 0, y el
+    # inventario global se iba a leer por Modbus al esclavo 0.
+    return @(@($reps) | Where-Object { $_ } | ForEach-Object {
         $i++
         $n = "$($_.nombre)".Trim()
         if ($n -eq '') { $n = "Repetidor $i" }
