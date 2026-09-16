@@ -35,6 +35,16 @@ En las operaciones de **planta completa**, cada línea de la consola lleva delan
 
 Consola común con colores, botón **CANCELAR** para abortar operaciones largas, y **log automático** a `logs/tcu_toolbox_AAAAMMDD.log`. La ventana es **redimensionable y maximizable** (v4.6): al agrandarla crecen las tablas y la consola, que es lo que interesa en una planta de cientos de TCUs.
 
+**El gateway con puerto fijo (v11.83)** — con `503` o `504` puesto a mano en la
+barra (en vez de `auto`), IDENTIFICAR GATEWAYS decía «ninguno de los 1 gateways
+declarados trae ip_gw» en El Burgo, con las IPs ya en la topología. Con puerto
+fijo la conexión no lleva lista de gateways, y `@($null)` en PS 5.1 es una
+lista de uno: un gateway fantasma sin IP (el mismo vicio que el repetidor
+fantasma de la v11.81). Y `Params-Conexion` tampoco arrastraba el `ip_gw` de
+la entrada. Ahora `Gws-DeCx` (pura) da los gateways de una conexión en los dos
+modos, sin nulos, y el botón, el Diagnóstico y el Inventario van por ella.
+Seis comprobaciones.
+
 **El gateway dentro del Diagnóstico y del Inventario (v11.82)** — verificada
 la consulta, el Digi deja de ir solo en su botón. En el **Diagnóstico**, detrás
 de cada NCU se le pregunta a sus gateways (los que traen `ip_gw`) y lo que

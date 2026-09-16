@@ -4535,6 +4535,15 @@ $objT = Gws-Objetivos-Topologia @(@{puerto=503; ip_gw='10.100.1.53'}, @{puerto=5
 Check 'gw diag: de la topologia, los que traen ip_gw, una vez cada uno' (@($objT | ForEach-Object { "GW$($_.nGw)=$($_.ip)" }) -join ',') 'GW1=10.100.1.53,GW2=10.100.1.54'
 Check 'gw diag: sin ip_gw, ninguno (y sin nulos)' (@(Gws-Objetivos-Topologia @(@{puerto=503}, $null)).Count) 0
 Check 'gw diag: el barrido anota los gateways en los dos caminos' (([regex]::Matches($src, 'Diag-AnotarGws \$dnP? ')).Count) 2
+# con PUERTO FIJO no hay lista gws: el boton contaba @($null) como "1 gateway declarado" sin IP
+$cxFijo = @{ip='10.100.1.52'; puerto=503; gws=$null; ip_gw='10.100.1.53'; nombre='El Burgo I NCU1 GW1'}
+$dF = @(Gws-DeCx $cxFijo)
+Check 'gw fijo: con puerto fijo, el gateway de ese puerto' $dF.Count 1
+Check 'gw fijo: con su numero y su IP' "GW$($dF[0].nGw)=$($dF[0].ip)" 'GW1=10.100.1.53'
+Check 'gw fijo: y sin ip_gw, ninguno al que preguntar (no un fantasma)' (@(Gws-Objetivos-Cx @{ip='10.1.1.5'; puerto=504; gws=$null; ip_gw=''})).Count 0
+Check 'gw fijo: con auto, los de la NCU y sin nulos' (@(Gws-DeCx @{puerto=$null; gws=@(@{puerto=503; ip_gw='10.100.1.53'}, $null, @{puerto=504; ip_gw='10.100.1.54'})})).Count 2
+Check 'gw fijo: Params-Conexion arrastra el ip_gw de la entrada' ($src.Contains('$r.ip_gw = "$($pe.ip_gw)".Trim()')) $true
+Check 'gw fijo: el boton, el diagnostico y el inventario van por la conexion' (([regex]::Matches($src, 'Gws-(?:Objetivos-Cx|DeCx) \$(?:tr\.)?cx\b')).Count) 3
 Check 'gw diag: y la fila NCU ensena la nota con los gateways' (([regex]::Matches($src, '\(Diag-NotaNcu \$dnP?\)')).Count) 2
 $fI = Gw-FilaInventario '1' 1 '10.100.1.53' $lectT
 Check 'gw inv: la fila del gateway' "$($fI.NCU)/GW$($fI.GW)/$($fI.Modelo)/$($fI.CPU_pct)/$($fI.Mem_total_MB)" '1/GW1/ConnectPort X2D/18/16.0'
