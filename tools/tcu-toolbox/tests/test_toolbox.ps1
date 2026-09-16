@@ -4610,8 +4610,12 @@ Check 'objetivos: recortada' $obj[0].ip '10.100.1.54'
 Check 'objetivos: y marcada como a mano' $obj[0].ncu '?'
 Check 'objetivos: la casilla existe y manda' ($src.Contains('Gw-Objetivos $gws $txtIGGwIp.Text')) $true
 Check 'gw: la identificacion va aparte del barrido' ($src.Contains('$btnIGGw.Add_Click')) $true
-Check 'gw: el barrido de planta NO habla HTTP' (
-    $src.Substring($src.IndexOf('function InvG-Correr'), 5200) -match 'Invoke-RestMethod|rci') $false
+# Hasta la v11.82 el barrido NO hablaba HTTP: la consulta al Digi no estaba
+# verificada y vivia solo en su boton. Verificada en El Burgo, el barrido le
+# pregunta al Digi, pero SOLO por Gw-Leer (un timeout y fuera) y nunca a pelo
+$blqInvG = $src.Substring($src.IndexOf('function InvG-Correr'), 5200)
+Check 'gw: el barrido de planta le habla al Digi solo por Gw-Leer' ($blqInvG.Contains('Gw-Leer $ipGw')) $true
+Check 'gw: y nunca a pelo' ($blqInvG -match 'Invoke-RestMethod|Rci-Post') $false
 
 Write-Host ''
 Write-Host '== de que se alimenta una TCU =='
