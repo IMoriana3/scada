@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.82'
+$VERSION_TOOLBOX = '11.83'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1782,6 +1782,23 @@ function Gw-Anotar($fila, [hashtable]$campos) {
 # que los KPI contarian como seguidores; y en el inventario va como fila propia
 # en la tabla y como bloque `gateways` aparte en el JSON, nunca entre las TCUs
 # (Plan-Firmware y el Seguimiento PEM hacen [int] de la columna TCU).
+
+# Los gateways de UNA conexion como lista {ncu, nGw, ip}: con 'auto' los de la
+# NCU (gws); con puerto fijo, el de ese puerto y su ip_gw. Sin nulos: con
+# puerto fijo gws es $null, y @($null) en PS 5.1 es una lista de uno, que el
+# boton contaba como "1 gateway declarado" sin IP (v11.82 en El Burgo). Pura.
+function Gws-DeCx($cx) {
+    $l = @()
+    if ($cx.gws) {
+        foreach ($g in @($cx.gws)) { if ($g) { $l += ,@{ncu = ''; nGw = (Gw-Numero ([int]$g.puerto)); ip = "$($g.ip_gw)".Trim()} } }
+    } elseif ("$($cx.puerto)" -match '^\d+$') {
+        $l += ,@{ncu = ''; nGw = (Gw-Numero ([int]$cx.puerto)); ip = "$($cx.ip_gw)".Trim()}
+    }
+    return @($l)
+}
+
+# Y de esos, a los que se puede preguntar: los que traen ip_gw, una vez cada uno. Pura.
+function Gws-Objetivos-Cx($cx) { return @(Gw-Objetivos (Gws-DeCx $cx) '') }
 
 # Los gateways de una topologia a los que se puede preguntar: los que traen
 # ip_gw, una vez cada uno. Pura.
@@ -6993,6 +7010,9 @@ function Params-Conexion {
         $r.huecos = @($pe.huecos); $r.reps = @($pe.reps)
         $r.hsu = $pe.hsu; $r.hsus = [int]$pe.hsus
         $r.hsuLista = @($pe.hsuLista); $r.rsuLista = @($pe.rsuLista)
+        # la IP del Digi de ESE gateway: con puerto fijo no hay lista gws y sin
+        # esto el boton y el barrido no sabian a quien preguntar
+        $r.ip_gw = "$($pe.ip_gw)".Trim()
     }
     return $r
 }
@@ -9399,7 +9419,7 @@ function Diag-Correr {
                 # dato. El barrido en serie ya lo hacia; el paralelo no, y es el
                 # modo por defecto.
                 $dnP = Diag-FilaNcu $eti $(if ($o) { $o.salud } else { $null }) $(if ($o) { "$($o.error)" } else { "$($r.error)" })
-                Diag-AnotarGws $dnP $r.tarea.gws ([int]$r.tarea.to)
+                Diag-AnotarGws $dnP (Gws-Objetivos-Topologia $r.tarea.gws) ([int]$r.tarea.to)
                 $itemNP = New-Object System.Windows.Forms.ListViewItem($eti)
                 foreach ($c in @('', $dnP.TCU, $dnP.Salud, $dnP.Modo, '', '', '', '', '', (Diag-NotaNcu $dnP))) { [void]$itemNP.SubItems.Add("$c") }
                 switch ("$($dnP.Salud)") {
@@ -9466,7 +9486,7 @@ function Diag-Correr {
         # El reloj solo se menciona si de verdad esta desviado (Reloj-Nota):
         # colgado de cada fila parecia un problema y no lo era.
         $dn = Diag-FilaNcu "$($tr.ncu)" $ns $nsErr
-        Diag-AnotarGws $dn $tr.cx.gws ([int]$tr.cx.to)
+        Diag-AnotarGws $dn (Gws-Objetivos-Cx $tr.cx) ([int]$tr.cx.to)
         $itemN = New-Object System.Windows.Forms.ListViewItem("$($tr.ncu)")
         foreach ($c in @($dn.TCU, $dn.Salud, $dn.Modo, $dn.Tilt, $dn.Objetivo, $dn.Dif, $dn.SoC, '', (Diag-NotaNcu $dn))) { [void]$itemN.SubItems.Add("$c") }
         switch ($dn.Salud) {
@@ -11446,7 +11466,7 @@ $btnInvF.Add_Click({ Lanzar {
     }
     $segs = @(Plan-Segmentos $tr.tcus $tr.cx)
     # ---- los gateways de esta NCU, por RCI: fila en la tabla y bloque `gateways` en el JSON
-    foreach ($g in @(Gws-Objetivos-Topologia $tr.cx.gws)) {
+    foreach ($g in @(Gws-Objetivos-Cx $tr.cx)) {
         if (Chequear-Cancelado) { break }
         $l = Gw-Leer $g.ip ([int]$tr.cx.to) (Gw-CredencialUI)
         $fila = Gw-FilaInventario $etNcu $g.nGw $g.ip $l
@@ -11581,10 +11601,26 @@ function InvG-Correr {
             $nEq = @(Lista $g.ini $g.fin).Count
             $nRep = @($reps | Where-Object { "$($_.ncu)" -eq $eti -and [int]$_.puerto -eq [int]$g.puerto }).Count
             $ipGw = "$($g.ip_gw)".Trim()
+            # con puerto fijo la lista de gateways no trae ip_gw: va en la conexion
+            if ($ipGw -eq '' -and "$($tr.cx.ip_gw)".Trim() -ne '' -and "$($tr.cx.puerto)" -eq "$($g.puerto)") { $ipGw = "$($tr.cx.ip_gw)".Trim() }
             $nota = "$estado; esclavos $($g.ini)-$($g.fin) ($nEq) y $nRep repetidor(es)"
-            if ($ipGw -eq '') { $nota += ". Sin ip_gw en la topologia: regenera el fichero de planta desde el Excel para poder identificarlo. " + $INV_MOTIVO['GW'] }
-            else { $nota += ". $($INV_MOTIVO['GW']) - pulsa IDENTIFICAR GATEWAYS" }
-            $filas += Inv-Fila 'GW' $eti "$nGw" $(if ($ipGw) { $ipGw } else { "$($tr.ip):$($g.puerto)" }) '' '' '' '' '' '' $nota
+            if ($ipGw -eq '') {
+                $nota += ". Sin ip_gw en la topologia: regenera el fichero de planta desde el Excel para poder identificarlo, o escribe la IP a mano bajo la tabla y pulsa IDENTIFICAR GATEWAYS. " + $INV_MOTIVO['GW']
+                $filas += Inv-Fila 'GW' $eti "$nGw" "$($tr.ip):$($g.puerto)" '' '' '' '' '' '' $nota
+            } else {
+                # con la IP del Digi se le pregunta AQUI, sin segundo boton: la
+                # consulta esta verificada (El Burgo, v11.81)
+                $l = Gw-Leer $ipGw ([int]$cx.to) (Gw-CredencialUI)
+                $fg = Gw-FilaInventario $eti $nGw $ipGw $l
+                $fGw = Inv-Fila 'GW' $eti "$nGw" $ipGw '' "$($fg.MAC)" "$($fg.FW)" "$($fg.Boot)" "$($fg.HW)" '' ("$($fg.Nota)  |  $nota")
+                if ($l.ok) {
+                    [void](Gw-Anotar $fGw @{IP_gw = $ipGw; Modelo = $fg.Modelo; Boot = $fg.Boot; POST = $fg.POST; ProductId = $fg.ProductId
+                                            PAN = $fg.PAN; Canal = $fg.Canal; CPU_pct = $fg.CPU_pct; Mem_pct = $fg.Mem_pct
+                                            Mem_total_MB = $fg.Mem_total_MB; Uptime_s = $fg.Uptime_s})
+                } else { $fGw.Nota = "sin respuesta por RCI en $ipGw (o pide login: casillas bajo la tabla)  |  $nota" }
+                $filas += $fGw
+                Con "   $($fg.Nota)" $(if ($l.ok) { [System.Drawing.Color]::Gainsboro } else { [System.Drawing.Color]::Salmon })
+            }
         }
         [System.Windows.Forms.Application]::DoEvents()
     }
@@ -11737,9 +11773,9 @@ function Gw-Leer([string]$ip, [int]$to, $cred = $null) {
 }
 
 # En el barrido de diagnostico: los gateways de la NCU, colgados de su fila.
-function Diag-AnotarGws($dn, $gws, [int]$to) {
+function Diag-AnotarGws($dn, $objetivos, [int]$to) {
     $lineas = @()
-    foreach ($g in @(Gws-Objetivos-Topologia $gws)) {
+    foreach ($g in @($objetivos)) {
         if ($script:Cancelar) { break }
         $l = Gw-Leer $g.ip $to (Gw-CredencialUI)
         [void](Gw-Anotar $dn (Gw-Campos $g.nGw $g.ip $l))
@@ -11770,9 +11806,9 @@ $btnIGGw.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $gws = @()
     if ($cx.multi) {
-        foreach ($n in $cx.multi) { foreach ($g in @($n.gws)) { $gws += ,@{ncu="$($n.ncu)"; nGw=(Gw-Numero ([int]$g.puerto)); ip="$($g.ip_gw)".Trim()} } }
+        foreach ($n in $cx.multi) { foreach ($g in @($n.gws)) { if ($g) { $gws += ,@{ncu="$($n.ncu)"; nGw=(Gw-Numero ([int]$g.puerto)); ip="$($g.ip_gw)".Trim()} } } }
     } else {
-        foreach ($g in @($cx.gws)) { $gws += ,@{ncu=(Ncu-DeNombre $cx.nombre); nGw=(Gw-Numero ([int]$g.puerto)); ip="$($g.ip_gw)".Trim()} }
+        foreach ($g in @(Gws-DeCx $cx)) { $g.ncu = (Ncu-DeNombre $cx.nombre); $gws += ,$g }
     }
     $conIp = @(Gw-Objetivos $gws $txtIGGwIp.Text)
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
