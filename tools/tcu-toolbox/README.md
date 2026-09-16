@@ -35,6 +35,14 @@ En las operaciones de **planta completa**, cada línea de la consola lleva delan
 
 Consola común con colores, botón **CANCELAR** para abortar operaciones largas, y **log automático** a `logs/tcu_toolbox_AAAAMMDD.log`. La ventana es **redimensionable y maximizable** (v4.6): al agrandarla crecen las tablas y la consola, que es lo que interesa en una planta de cientos de TCUs.
 
+**La IP del gateway a mano (v11.80)** — al ir a probar la v11.79 en planta,
+IDENTIFICAR GATEWAYS se paraba antes de preguntar nada: **ninguna topología
+del ZIP lleva `ip_gw`** (la pasada del Excel con «IP GW 1/2» no se ha hecho).
+Casilla *IP del gateway a mano* bajo la tabla: con algo escrito se pregunta
+**solo a esa IP** (`Gw-Objetivos`, pura), que el técnico ya conoce porque es la
+que abre en el navegador para ver el ConnectPort. Sin ella, como antes: los de
+la topología que traigan `ip_gw`, y si ninguno, el aviso de regenerar.
+
 **La CPU del propio gateway, junto a su identidad (v11.79)** — de las TCUs se
 lee la potencia de señal de su módulo Zigbee (el recolector de cobertura lo hace
 a diario por RCI); del **gateway no se leía nada de él mismo**, y un Digi con la
