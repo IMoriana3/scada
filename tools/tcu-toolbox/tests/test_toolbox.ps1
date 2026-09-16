@@ -4543,7 +4543,14 @@ Check 'gw fijo: con su numero y su IP' "GW$($dF[0].nGw)=$($dF[0].ip)" 'GW1=10.10
 Check 'gw fijo: y sin ip_gw, ninguno al que preguntar (no un fantasma)' (@(Gws-Objetivos-Cx @{ip='10.1.1.5'; puerto=504; gws=$null; ip_gw=''})).Count 0
 Check 'gw fijo: con auto, los de la NCU y sin nulos' (@(Gws-DeCx @{puerto=$null; gws=@(@{puerto=503; ip_gw='10.100.1.53'}, $null, @{puerto=504; ip_gw='10.100.1.54'})})).Count 2
 Check 'gw fijo: Params-Conexion arrastra el ip_gw de la entrada' ($src.Contains('$r.ip_gw = "$($pe.ip_gw)".Trim()')) $true
-Check 'gw fijo: el boton, el diagnostico y el inventario van por la conexion' (([regex]::Matches($src, 'Gws-(?:Objetivos-Cx|DeCx) \$(?:tr\.)?cx\b')).Count) 3
+# 4: el boton, el diagnostico, el inventario y la propia Gws-Objetivos-Cx
+Check 'gw fijo: el boton, el diagnostico y el inventario van por la conexion' (([regex]::Matches($src, 'Gws-(?:Objetivos-Cx|DeCx) \$(?:tr\.)?cx\b')).Count) 4
+# INVENTARIO GLOBAL lee el Digi el solo cuando hay ip_gw: sin segundo boton
+$blqIG = $src.Substring($src.IndexOf('$ipGw = "$($g.ip_gw)".Trim()'), 2200)
+Check 'invg: con ip_gw se le pregunta al Digi en el propio inventario global' ($blqIG.Contains('Gw-Leer $ipGw')) $true
+Check 'invg: y sus datos van como campos de la fila GW' ($blqIG.Contains('Gw-Anotar $fGw @{IP_gw = $ipGw')) $true
+Check 'invg: con puerto fijo la IP del Digi sale de la conexion' ($blqIG.Contains('$tr.cx.ip_gw')) $true
+Check 'invg: sin ip_gw no se inventa y se dice como conseguirla' ($blqIG.Contains('escribe la IP a mano bajo la tabla')) $true
 Check 'gw diag: y la fila NCU ensena la nota con los gateways' (([regex]::Matches($src, '\(Diag-NotaNcu \$dnP?\)')).Count) 2
 $fI = Gw-FilaInventario '1' 1 '10.100.1.53' $lectT
 Check 'gw inv: la fila del gateway' "$($fI.NCU)/GW$($fI.GW)/$($fI.Modelo)/$($fI.CPU_pct)/$($fI.Mem_total_MB)" '1/GW1/ConnectPort X2D/18/16.0'

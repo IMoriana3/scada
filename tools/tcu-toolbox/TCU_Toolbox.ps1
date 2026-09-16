@@ -11601,10 +11601,26 @@ function InvG-Correr {
             $nEq = @(Lista $g.ini $g.fin).Count
             $nRep = @($reps | Where-Object { "$($_.ncu)" -eq $eti -and [int]$_.puerto -eq [int]$g.puerto }).Count
             $ipGw = "$($g.ip_gw)".Trim()
+            # con puerto fijo la lista de gateways no trae ip_gw: va en la conexion
+            if ($ipGw -eq '' -and "$($tr.cx.ip_gw)".Trim() -ne '' -and "$($tr.cx.puerto)" -eq "$($g.puerto)") { $ipGw = "$($tr.cx.ip_gw)".Trim() }
             $nota = "$estado; esclavos $($g.ini)-$($g.fin) ($nEq) y $nRep repetidor(es)"
-            if ($ipGw -eq '') { $nota += ". Sin ip_gw en la topologia: regenera el fichero de planta desde el Excel para poder identificarlo. " + $INV_MOTIVO['GW'] }
-            else { $nota += ". $($INV_MOTIVO['GW']) - pulsa IDENTIFICAR GATEWAYS" }
-            $filas += Inv-Fila 'GW' $eti "$nGw" $(if ($ipGw) { $ipGw } else { "$($tr.ip):$($g.puerto)" }) '' '' '' '' '' '' $nota
+            if ($ipGw -eq '') {
+                $nota += ". Sin ip_gw en la topologia: regenera el fichero de planta desde el Excel para poder identificarlo, o escribe la IP a mano bajo la tabla y pulsa IDENTIFICAR GATEWAYS. " + $INV_MOTIVO['GW']
+                $filas += Inv-Fila 'GW' $eti "$nGw" "$($tr.ip):$($g.puerto)" '' '' '' '' '' '' $nota
+            } else {
+                # con la IP del Digi se le pregunta AQUI, sin segundo boton: la
+                # consulta esta verificada (El Burgo, v11.81)
+                $l = Gw-Leer $ipGw ([int]$cx.to) (Gw-CredencialUI)
+                $fg = Gw-FilaInventario $eti $nGw $ipGw $l
+                $fGw = Inv-Fila 'GW' $eti "$nGw" $ipGw '' "$($fg.MAC)" "$($fg.FW)" "$($fg.Boot)" "$($fg.HW)" '' ("$($fg.Nota)  |  $nota")
+                if ($l.ok) {
+                    [void](Gw-Anotar $fGw @{IP_gw = $ipGw; Modelo = $fg.Modelo; Boot = $fg.Boot; POST = $fg.POST; ProductId = $fg.ProductId
+                                            PAN = $fg.PAN; Canal = $fg.Canal; CPU_pct = $fg.CPU_pct; Mem_pct = $fg.Mem_pct
+                                            Mem_total_MB = $fg.Mem_total_MB; Uptime_s = $fg.Uptime_s})
+                } else { $fGw.Nota = "sin respuesta por RCI en $ipGw (o pide login: casillas bajo la tabla)  |  $nota" }
+                $filas += $fGw
+                Con "   $($fg.Nota)" $(if ($l.ok) { [System.Drawing.Color]::Gainsboro } else { [System.Drawing.Color]::Salmon })
+            }
         }
         [System.Windows.Forms.Application]::DoEvents()
     }

@@ -43,7 +43,10 @@ lista de uno: un gateway fantasma sin IP (el mismo vicio que el repetidor
 fantasma de la v11.81). Y `Params-Conexion` tampoco arrastraba el `ip_gw` de
 la entrada. Ahora `Gws-DeCx` (pura) da los gateways de una conexión en los dos
 modos, sin nulos, y el botón, el Diagnóstico y el Inventario van por ella.
-Seis comprobaciones.
+Y **INVENTARIO GLOBAL lee el Digi él solo** cuando la fila del gateway tiene
+IP: modelo, MAC, FW, boot, HW en sus columnas y CPU, memoria, uptime, PAN y
+canal como campos de la fila (los mismos que salen en el JSON), sin pasar por
+IDENTIFICAR GATEWAYS, que queda para la IP a mano. Diez comprobaciones.
 
 **El gateway dentro del Diagnóstico y del Inventario (v11.82)** — verificada
 la consulta, el Digi deja de ir solo en su botón. En el **Diagnóstico**, detrás
