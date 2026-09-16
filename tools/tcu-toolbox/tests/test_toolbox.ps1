@@ -4506,6 +4506,15 @@ Check 'carga: lo que no se reconoce se vuelca' ($src.Contains('respuesta cruda a
 Check 'carga: el login se manda al Digi' ($src.Substring($src.IndexOf('function Rci-Post'), 700).Contains('$p.Credential = $cred')) $true
 Check 'carga: y la identidad va con el mismo login' ($src.Contains('Gw-Identidad $g.ip ([int]$cx.to) $cred')) $true
 Check 'carga: la clave del Digi NO se guarda en config_local' ($src.Substring($src.IndexOf('function Config-Guardar'), 1500).Contains('txtIGPass')) $false
+# las topologias no llevan ip_gw todavia: con una IP a mano se pregunta a esa y solo a esa
+$gwsT = @(@{ncu='5'; nGw=1; ip='10.21.236.5'}, @{ncu='5'; nGw=2; ip=''}, @{ncu='6'; nGw=1; ip='10.21.236.6'})
+Check 'objetivos: sin IP a mano, los de la topologia con ip_gw' (@(Gw-Objetivos $gwsT '').Count) 2
+Check 'objetivos: y ninguno si ninguna la trae' (@(Gw-Objetivos @(@{ncu='5'; nGw=1; ip=''}) '  ').Count) 0
+$obj = @(Gw-Objetivos $gwsT ' 10.100.1.54 ')
+Check 'objetivos: con IP a mano, solo esa' $obj.Count 1
+Check 'objetivos: recortada' $obj[0].ip '10.100.1.54'
+Check 'objetivos: y marcada como a mano' $obj[0].ncu '?'
+Check 'objetivos: la casilla existe y manda' ($src.Contains('Gw-Objetivos $gws $txtIGGwIp.Text')) $true
 Check 'gw: la identificacion va aparte del barrido' ($src.Contains('$btnIGGw.Add_Click')) $true
 Check 'gw: el barrido de planta NO habla HTTP' (
     $src.Substring($src.IndexOf('function InvG-Correr'), 5200) -match 'Invoke-RestMethod|rci') $false

@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.79'
+$VERSION_TOOLBOX = '11.80'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1777,6 +1777,16 @@ function Gw-Carga([string]$xml) {
     }
     if ($null -ne $r.cpu -and $r.cpu -ge 0 -and $r.cpu -le 100) { $r.ok = $true } else { $r.cpu = $null }
     return $r
+}
+
+# A que gateways se pregunta. Con una IP dada a mano, a esa y solo a esa: las
+# topologias no llevan ip_gw hasta que se regeneren desde el Excel, y el tecnico
+# ya sabe la IP del Digi (es la que abre en el navegador). Sin IP a mano, a los
+# de la topologia que la traigan. Pura.
+function Gw-Objetivos($gws, [string]$ipManual) {
+    $ip = "$ipManual".Trim()
+    if ($ip -ne '') { return ,@(@{ncu = '?'; nGw = 0; ip = $ip}) }
+    return ,@(@($gws) | Where-Object { "$($_.ip)".Trim() -ne '' })
 }
 
 # Memoria usada en %, con lo que haya: la usada, o total menos libre. Pura.
@@ -5927,6 +5937,14 @@ $txtIGPass.Location = New-Object System.Drawing.Point(416, 336)
 $txtIGPass.Size = New-Object System.Drawing.Size(110, 22)
 $txtIGPass.UseSystemPasswordChar = $true
 $tabIG.Controls.Add($txtIGPass)
+# IP del gateway a mano: mientras las topologias no lleven ip_gw, es la unica
+# forma de preguntarle a un Digi. Con algo escrito aqui, se pregunta SOLO a el.
+$lblIGGwIp = LG $tabIG 'IP del gateway a mano (si no hay ip_gw):' 540 236 339
+$lblIGGwIp.ForeColor = [System.Drawing.Color]::DimGray
+$txtIGGwIp = New-Object System.Windows.Forms.TextBox
+$txtIGGwIp.Location = New-Object System.Drawing.Point(778, 336)
+$txtIGGwIp.Size = New-Object System.Drawing.Size(120, 22)
+$tabIG.Controls.Add($txtIGGwIp)
 
 $lvIG = New-Object System.Windows.Forms.ListView
 $lvIG.Location = New-Object System.Drawing.Point(10, 56)
@@ -11549,11 +11567,12 @@ $btnIGGw.Add_Click({ Lanzar {
     } else {
         foreach ($g in @($cx.gws)) { $gws += ,@{ncu=(Ncu-DeNombre $cx.nombre); nGw=(Gw-Numero ([int]$g.puerto)); ip="$($g.ip_gw)".Trim()} }
     }
-    $conIp = @($gws | Where-Object { $_.ip -ne '' })
+    $conIp = @(Gw-Objetivos $gws $txtIGGwIp.Text)
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     if ($conIp.Count -eq 0) {
         Con "Ninguno de los $($gws.Count) gateways declarados trae ip_gw. El gateway es un Digi con su propia IP y sin ella no hay a quien preguntar." ([System.Drawing.Color]::Orange)
         Con "La hoja 'Direcciones IP' del Excel la trae en 'IP GW 1' e 'IP GW 2': regenera los ficheros de planta con  make_plantas.py --excel <fichero.xlsx>  y vuelve a intentarlo." ([System.Drawing.Color]::Orange)
+        Con "O escribe la IP del gateway en la casilla 'IP del gateway a mano', bajo la tabla, y se le pregunta solo a el." ([System.Drawing.Color]::Orange)
         return
     }
     Con "Preguntando por HTTP/RCI a $($conIp.Count) gateway(s): identidad y carga (CPU, memoria). AVISO: esta consulta no esta verificada contra un Digi real; si no reconoce la respuesta la vuelca entera aqui." ([System.Drawing.Color]::Orange)
@@ -11569,7 +11588,7 @@ $btnIGGw.Add_Click({ Lanzar {
     foreach ($g in $conIp) {
         if (Chequear-Cancelado) { break }
         $r = Gw-Identidad $g.ip ([int]$cx.to) $cred
-        $clave = "NCU$($g.ncu) GW$($g.nGw)"
+        $clave = $(if ("$($g.ncu)" -eq '?') { 'GW (IP a mano)' } else { "NCU$($g.ncu) GW$($g.nGw)" })
         if ($r.ok) {
             $n++
             Con ("{0}  {1}  ->  MAC {2}  FW {3}  PAN {4}  canal {5}   (por '{6}')" -f $clave, $g.ip,
