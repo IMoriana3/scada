@@ -1763,6 +1763,18 @@ function Gw-NotaIdentidad($ext) {
     return (($p -join '; ') + '  |  ')
 }
 
+# Los datos del Digi como CAMPOS de la fila del gateway, no solo como texto en
+# la Nota: el JSON del inventario global los saca tal cual, que es lo que el
+# SCADA y el Seguimiento PEM pueden leer. Solo lo que haya. Muta la fila.
+function Gw-Anotar($fila, [hashtable]$campos) {
+    foreach ($k in $campos.Keys) {
+        $v = $campos[$k]
+        if ($null -eq $v -or "$v" -eq '') { continue }
+        $fila | Add-Member -NotePropertyName $k -NotePropertyValue $v -Force
+    }
+    return $fila
+}
+
 # Lo que dos consultas han sacado, junto: device_info da MAC y firmware, y la
 # PAN y el canal vienen por la de zigbee. Lo primero que se vio manda. Pura.
 function Rci-Fusionar($a, $b) {
@@ -11658,6 +11670,8 @@ $btnIGGw.Add_Click({ Lanzar {
                 if ("$($f.Tipo)" -eq 'GW' -and "$($f.NCU)" -eq "$($g.ncu)" -and "$($f.GW)" -eq "$($g.nGw)") {
                     $f.MAC = "$($r.ext.mac)"; $f.FW = "$($r.ext.fw)"; $f.FW_fabrica = "$($r.ext.boot)"; $f.HW = "$($r.ext.hw)"
                     $f.Nota = (Gw-NotaIdentidad $r.ext) + "$($f.Nota)"
+                    [void](Gw-Anotar $f @{IP_gw = $g.ip; Modelo = $r.ext.producto; Boot = $r.ext.boot; POST = $r.ext.post
+                                          ProductId = $r.ext.pid; PAN = $r.ext.pan; Canal = $r.ext.canal})
                 }
             }
         } else {
@@ -11683,6 +11697,9 @@ $btnIGGw.Add_Click({ Lanzar {
             foreach ($f in @($script:UltimoInvG)) {
                 if ("$($f.Tipo)" -eq 'GW' -and "$($f.NCU)" -eq "$($g.ncu)" -and "$($f.GW)" -eq "$($g.nGw)") {
                     $f.Nota = "$res  |  " + "$($f.Nota)"
+                    [void](Gw-Anotar $f @{IP_gw = $g.ip; CPU_pct = $k.carga.cpu; Mem_pct = (Gw-MemPct $k.carga)
+                                          Mem_total_MB = $(if ($null -ne $k.carga.mem_total) { Gw-Mb $k.carga.mem_total } else { $null })
+                                          Uptime_s = $k.carga.uptime})
                 }
             }
         } else {

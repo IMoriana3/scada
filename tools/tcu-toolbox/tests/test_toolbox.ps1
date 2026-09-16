@@ -4501,6 +4501,14 @@ Check 'gw: y el modelo, sin confundirlo con el product ID' $exP.producto 'Connec
 Check 'gw: hardware strapping' $exP.hw '0x0775'
 Check 'gw: la nota lleva lo que no tiene columna' (Gw-NotaIdentidad $exP) 'ConnectPort X2D; POST 1.1.5 (release_82002548_C); id 0x00B2  |  '
 Check 'gw: y vacia si no hay nada' (Gw-NotaIdentidad (Rci-Extraer '<x/>')) ''
+# y como CAMPOS de la fila, que es lo que sale en el JSON para el SCADA y el PEM
+$fGw = Inv-Fila 'GW' '1' '2' '10.100.1.54'
+[void](Gw-Anotar $fGw @{IP_gw = '10.100.1.54'; Modelo = 'ConnectPort X2D'; CPU_pct = 18; Mem_pct = 48; PAN = ''; Uptime_s = $null})
+Check 'gw json: el modelo es un campo' $fGw.Modelo 'ConnectPort X2D'
+Check 'gw json: y la CPU' $fGw.CPU_pct 18
+Check 'gw json: lo vacio no se inventa' ($null -eq $fGw.PSObject.Properties['PAN']) $true
+Check 'gw json: y sale en el JSON tal cual' ((ConvertTo-Json $fGw -Compress).Contains('"CPU_pct":18')) $true
+Check 'gw json: el boton anota identidad y carga' (([regex]::Matches($src, 'Gw-Anotar \$f @\{')).Count) 2
 $fus = Rci-Fusionar $exD (Rci-Extraer '<zigbee><pan_id>0x3dba</pan_id><channel>0x0d</channel></zigbee>')
 Check 'gw: dos consultas se funden' (Rci-Resumen $fus) 'mac, fw, pan, canal'
 Check 'gw: sin pisar lo que ya habia' $fus.fw 'Version 2.17.2.1 (Version 82001536_H 03/28/2013)'

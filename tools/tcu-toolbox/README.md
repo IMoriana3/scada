@@ -58,7 +58,11 @@ de carga queda **verificada**. Lo que enseñó esa pasada, y lo que cambia:
 - **más campos del Digi en el inventario**, los de su página *System
   Information*: modelo, firmware (`2.27.4 (Version 82002549_N …)`), boot en
   «FW fábrica», hardware strapping en «HW», y POST, product ID, PAN y canal en
-  la nota, junto a la carga. El uptime, en días y horas. Los nombres de los
+  la nota, junto a la carga. El uptime, en días y horas. Y todo ello **como
+  campos de la fila GW** (`IP_gw`, `Modelo`, `Boot`, `POST`, `ProductId`,
+  `PAN`, `Canal`, `CPU_pct`, `Mem_pct`, `Mem_total_MB`, `Uptime_s`), que el
+  JSON del inventario global saca tal cual para que el SCADA y el Seguimiento
+  PEM puedan leerlos; en el CSV salen como columnas. Los nombres de los
   elementos RCI de boot/POST/strapping son los que cabe esperar; si el Digi
   los llama de otra forma, el volcado lo dirá;
 - a cada Digi se le pregunta **una vez** (la TCU 109 suelta es otra entrada del
