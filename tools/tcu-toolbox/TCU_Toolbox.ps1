@@ -1785,8 +1785,10 @@ function Gw-Carga([string]$xml) {
 # de la topologia que la traigan. Pura.
 function Gw-Objetivos($gws, [string]$ipManual) {
     $ip = "$ipManual".Trim()
-    if ($ip -ne '') { return ,@(@{ncu = '?'; nGw = 0; ip = $ip}) }
-    return ,@(@($gws) | Where-Object { "$($_.ip)".Trim() -ne '' })
+    # sin coma unaria: con ella el @() del llamador recibia UN elemento que era
+    # la lista entera (la suite lo cazo: 1 donde tocaban 2 y 0)
+    if ($ip -ne '') { return @(@{ncu = '?'; nGw = 0; ip = $ip}) }
+    return @(@($gws) | Where-Object { "$($_.ip)".Trim() -ne '' })
 }
 
 # Memoria usada en %, con lo que haya: la usada, o total menos libre. Pura.
