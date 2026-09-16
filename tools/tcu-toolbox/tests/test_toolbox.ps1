@@ -4482,7 +4482,31 @@ $vacio = Rci-Extraer '<rci_reply><error id="1" desc="no such target"/></rci_repl
 Check 'gw: lo que no se reconoce no se rellena' (Rci-Resumen $vacio) ''
 Check 'gw: ni la MAC' $vacio.mac ''
 Check 'gw: cuando no se reconoce, se vuelca el XML crudo' ($src.Contains('respuesta cruda, para saber que consulta hay que hacer de verdad')) $true
-Check 'gw: y se avisa de que no esta verificado' ($src.Contains('no esta verificada contra un Digi real')) $true
+Check 'gw: y se dice lo que esta verificado y lo que no' ($src.Contains('verificada en El Burgo')) $true
+# lo visto en El Burgo el 16/09/2026: device_info da la MAC Ethernet (6 bytes) y
+# el firmware como texto largo; la PAN y el canal vienen por OTRA consulta
+$xmlDigi = '<rci_reply version="1.1"><query_state><device_info><mac>00:40:9D:43:3E:1A</mac><product>ConnectPort X2</product>' +
+           '<firmware>Version 2.17.2.1 (Version 82001536_H 03/28/2013)</firmware></device_info></query_state></rci_reply>'
+$exD = Rci-Extraer $xmlDigi
+Check 'gw: la MAC Ethernet del Digi (6 bytes) tambien vale' $exD.mac '00:40:9d:43:3e:1a'
+Check 'gw: el firmware entero, no la primera palabra' $exD.fw 'Version 2.17.2.1 (Version 82001536_H 03/28/2013)'
+Check 'gw: y lo que device_info no trae, vacio' $exD.pan ''
+Check 'gw: el modelo' $exD.producto 'ConnectPort X2'
+# la pagina del Digi (El Burgo, .54): boot, POST, product ID y hardware strapping
+$exP = Rci-Extraer '<device_info><product>ConnectPort X2D</product><boot>1.1.3 (release_82002547_A)</boot><post>1.1.5 (release_82002548_C)</post><product_id>0x00B2</product_id><hardware_strapping>0x0775</hardware_strapping></device_info>'
+Check 'gw: boot' $exP.boot '1.1.3 (release_82002547_A)'
+Check 'gw: POST' $exP.post '1.1.5 (release_82002548_C)'
+Check 'gw: product ID, sin confundirlo con el modelo' $exP.pid '0x00B2'
+Check 'gw: y el modelo, sin confundirlo con el product ID' $exP.producto 'ConnectPort X2D'
+Check 'gw: hardware strapping' $exP.hw '0x0775'
+Check 'gw: la nota lleva lo que no tiene columna' (Gw-NotaIdentidad $exP) 'ConnectPort X2D; POST 1.1.5 (release_82002548_C); id 0x00B2  |  '
+Check 'gw: y vacia si no hay nada' (Gw-NotaIdentidad (Rci-Extraer '<x/>')) ''
+$fus = Rci-Fusionar $exD (Rci-Extraer '<zigbee><pan_id>0x3dba</pan_id><channel>0x0d</channel></zigbee>')
+Check 'gw: dos consultas se funden' (Rci-Resumen $fus) 'mac, fw, pan, canal'
+Check 'gw: sin pisar lo que ya habia' $fus.fw 'Version 2.17.2.1 (Version 82001536_H 03/28/2013)'
+Check 'gw: y arrastrando los campos nuevos' (Rci-Fusionar $exP $exD).mac '00:40:9d:43:3e:1a'
+Check 'gw: se piden TODAS las consultas, no se para en la primera' ($src.Substring($src.IndexOf('function Gw-Identidad'), 900).Contains('Rci-Fusionar')) $true
+Check 'gw: y si falta un campo se vuelca, aunque algo se haya reconocido' ($src.Contains('if (-not $r.completo)')) $true
 # sin ip_gw no hay a quien preguntar, y se dice como conseguirla
 Check 'gw: sin ip_gw manda a regenerar desde el Excel' ($src.Contains('make_plantas.py --excel')) $true
 
@@ -4490,23 +4514,24 @@ Write-Host ''
 Write-Host '== la carga del gateway: CPU y memoria del propio Digi =='
 # A las TCUs se les pide la radio; al gateway se le pide a si mismo. Misma regla
 # que la identidad: se saca por patron, y lo que no se reconoce no se inventa.
-$xmlC = '<rci_reply><query_state><device_stats><cpu>37</cpu><totalmem>32768</totalmem>' +
-        '<usedmem>20000</usedmem><freemem>12768</freemem></device_stats></query_state></rci_reply>'
+# los numeros son los del Digi .53 de El Burgo (16/09/2026): la memoria viene en BYTES
+$xmlC = '<rci_reply><query_state><device_stats><cpu>19</cpu><totalmem>16777216</totalmem>' +
+        '<usedmem>8130476</usedmem><freemem>8646740</freemem></device_stats></query_state></rci_reply>'
 $c = Gw-Carga $xmlC
-Check 'carga: saca la CPU' $c.cpu 37
-Check 'carga: la memoria total' $c.mem_total 32768
-Check 'carga: y la usada' $c.mem_usada 20000
+Check 'carga: saca la CPU' $c.cpu 19
+Check 'carga: la memoria total' $c.mem_total 16777216
+Check 'carga: y la usada' $c.mem_usada 8130476
 Check 'carga: y la reconoce' $c.ok $true
-Check 'carga: en una linea' (Gw-CargaResumen $c) 'CPU 37 %, memoria 61 % usada (20000 de 32768 KB)'
+Check 'carga: en una linea, con la memoria en MB' (Gw-CargaResumen $c) 'CPU 19 %, memoria 48 % usada (7.8 de 16.0 MB)'
 # como atributos, que en RCI tambien se ve; y la memoria usada sale de la libre
-$cA = Gw-Carga '<device_stats cpu="12" totalmem="1000" freemem="600"/>'
+$cA = Gw-Carga '<device_stats cpu="12" totalmem="16777216" freemem="10066329"/>'
 Check 'carga: la CPU como atributo tambien' $cA.cpu 12
-Check 'carga: la usada, de total menos libre' (Gw-CargaResumen $cA) 'CPU 12 %, memoria 40 % usada (400 de 1000 KB)'
+Check 'carga: la usada, de total menos libre' (Gw-CargaResumen $cA) 'CPU 12 %, memoria 40 % usada (6.4 de 16.0 MB)'
 Check 'carga: cpu_type no es la CPU' (Gw-Carga '<device_stats><cpu_type>ARM9</cpu_type></device_stats>').ok $false
 Check 'carga: un 250 % no es una CPU' (Gw-Carga '<cpu>250</cpu>').ok $false
 Check 'carga: un error RCI no se inventa' (Gw-Carga '<rci_reply><error id="1" desc="no such state"/></rci_reply>').ok $false
 Check 'carga: sin reconocer, resumen vacio' (Gw-CargaResumen (Gw-Carga '<x/>')) ''
-Check 'carga: el uptime en dias' (Gw-CargaResumen (Gw-Carga '<cpu>5</cpu><uptime>200000</uptime>')) 'CPU 5 %, 2 d en marcha'
+Check 'carga: el uptime en dias y horas' (Gw-CargaResumen (Gw-Carga '<cpu>5</cpu><uptime>200000</uptime>')) 'CPU 5 %, 2 d 7 h en marcha'
 Check 'carga: o en horas si no llega al dia' (Gw-CargaResumen (Gw-Carga '<cpu>5</cpu><uptime>7300</uptime>')) 'CPU 5 %, 2 h en marcha'
 Check 'carga: sin memoria total no hay porcentaje' ($null -eq (Gw-MemPct (Gw-Carga '<cpu>5</cpu><usedmem>10</usedmem>'))) $true
 # se pide device_stats; si no se reconoce, TODO el estado, y se vuelca crudo
@@ -4518,8 +4543,9 @@ Check 'carga: el login se manda al Digi' ($src.Substring($src.IndexOf('function 
 Check 'carga: y la identidad va con el mismo login' ($src.Contains('Gw-Identidad $g.ip ([int]$cx.to) $cred')) $true
 Check 'carga: la clave del Digi NO se guarda en config_local' ($src.Substring($src.IndexOf('function Config-Guardar'), 1500).Contains('txtIGPass')) $false
 # las topologias no llevan ip_gw todavia: con una IP a mano se pregunta a esa y solo a esa
-$gwsT = @(@{ncu='5'; nGw=1; ip='10.21.236.5'}, @{ncu='5'; nGw=2; ip=''}, @{ncu='6'; nGw=1; ip='10.21.236.6'})
+$gwsT = @(@{ncu='5'; nGw=1; ip='10.21.236.5'}, @{ncu='5'; nGw=2; ip=''}, @{ncu='6'; nGw=1; ip='10.21.236.6'}, @{ncu='6'; nGw=1; ip='10.21.236.6'})
 Check 'objetivos: sin IP a mano, los de la topologia con ip_gw' (@(Gw-Objetivos $gwsT '').Count) 2
+Check 'objetivos: y a cada Digi una vez (la TCU suelta es otra entrada del mismo)' (@(Gw-Objetivos $gwsT '' | ForEach-Object { $_.ip }) -join ',') '10.21.236.5,10.21.236.6'
 Check 'objetivos: y ninguno si ninguna la trae' (@(Gw-Objetivos @(@{ncu='5'; nGw=1; ip=''}) '  ').Count) 0
 $obj = @(Gw-Objetivos $gwsT ' 10.100.1.54 ')
 Check 'objetivos: con IP a mano, solo esa' $obj.Count 1
