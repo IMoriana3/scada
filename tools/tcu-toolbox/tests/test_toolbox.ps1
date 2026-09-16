@@ -2581,7 +2581,8 @@ Write-Host '== la edad del dato es una columna, no una nota =='
 Check 'edad: columna en la tabla' ($src.Contains("lvG.Columns.Add('Edad s'")) $true
 Check 'edad: la calcula el bloque compacto' ($src.Contains('Edad_s = $(if ($edad -ge 0)')) $true
 Check 'edad: en blanco si no se sabe' ([regex]::IsMatch($src, 'Edad_s = \$\(if \(\$edad -ge 0\) \{ \$edad \} else \{ '''' \}\)')) $true
-Check 'edad: la fila de la NCU no lleva' ($src.Contains("`$dn.SoC, '', `$dn.Alarmas")) $true
+# (la ultima casilla es la nota de la fila NCU: alarmas y, desde la v11.82, sus gateways)
+Check 'edad: la fila de la NCU no lleva' ($src.Contains("`$dn.SoC, '', (Diag-NotaNcu `$dn)")) $true
 # el bloque de TCUs ya no repite la edad en la nota (el de HSUs es otro sitio)
 $blqTcu = $src.Substring($src.IndexOf('function Ncu-DiagCompat'), 3000)
 Check 'edad: ya no se repite en la nota' ($blqTcu.Contains('datos de hace')) $false
