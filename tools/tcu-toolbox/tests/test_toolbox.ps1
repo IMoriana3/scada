@@ -4474,6 +4474,38 @@ Check 'gw: cuando no se reconoce, se vuelca el XML crudo' ($src.Contains('respue
 Check 'gw: y se avisa de que no esta verificado' ($src.Contains('no esta verificada contra un Digi real')) $true
 # sin ip_gw no hay a quien preguntar, y se dice como conseguirla
 Check 'gw: sin ip_gw manda a regenerar desde el Excel' ($src.Contains('make_plantas.py --excel')) $true
+
+Write-Host ''
+Write-Host '== la carga del gateway: CPU y memoria del propio Digi =='
+# A las TCUs se les pide la radio; al gateway se le pide a si mismo. Misma regla
+# que la identidad: se saca por patron, y lo que no se reconoce no se inventa.
+$xmlC = '<rci_reply><query_state><device_stats><cpu>37</cpu><totalmem>32768</totalmem>' +
+        '<usedmem>20000</usedmem><freemem>12768</freemem></device_stats></query_state></rci_reply>'
+$c = Gw-Carga $xmlC
+Check 'carga: saca la CPU' $c.cpu 37
+Check 'carga: la memoria total' $c.mem_total 32768
+Check 'carga: y la usada' $c.mem_usada 20000
+Check 'carga: y la reconoce' $c.ok $true
+Check 'carga: en una linea' (Gw-CargaResumen $c) 'CPU 37 %, memoria 61 % usada (20000 de 32768 KB)'
+# como atributos, que en RCI tambien se ve; y la memoria usada sale de la libre
+$cA = Gw-Carga '<device_stats cpu="12" totalmem="1000" freemem="600"/>'
+Check 'carga: la CPU como atributo tambien' $cA.cpu 12
+Check 'carga: la usada, de total menos libre' (Gw-CargaResumen $cA) 'CPU 12 %, memoria 40 % usada (400 de 1000 KB)'
+Check 'carga: cpu_type no es la CPU' (Gw-Carga '<device_stats><cpu_type>ARM9</cpu_type></device_stats>').ok $false
+Check 'carga: un 250 % no es una CPU' (Gw-Carga '<cpu>250</cpu>').ok $false
+Check 'carga: un error RCI no se inventa' (Gw-Carga '<rci_reply><error id="1" desc="no such state"/></rci_reply>').ok $false
+Check 'carga: sin reconocer, resumen vacio' (Gw-CargaResumen (Gw-Carga '<x/>')) ''
+Check 'carga: el uptime en dias' (Gw-CargaResumen (Gw-Carga '<cpu>5</cpu><uptime>200000</uptime>')) 'CPU 5 %, 2 d en marcha'
+Check 'carga: o en horas si no llega al dia' (Gw-CargaResumen (Gw-Carga '<cpu>5</cpu><uptime>7300</uptime>')) 'CPU 5 %, 2 h en marcha'
+Check 'carga: sin memoria total no hay porcentaje' ($null -eq (Gw-MemPct (Gw-Carga '<cpu>5</cpu><usedmem>10</usedmem>'))) $true
+# se pide device_stats; si no se reconoce, TODO el estado, y se vuelca crudo
+Check 'carga: se pide device_stats' ($src.Contains('<query_state><device_stats/></query_state>')) $true
+Check 'carga: y si no, todo el estado para ver el esquema' ($src.Contains('<query_state/>')) $true
+Check 'carga: lo que no se reconoce se vuelca' ($src.Contains('respuesta cruda a query_state')) $true
+# el Digi puede pedir login: se manda, y la clave NO se guarda con la sesion
+Check 'carga: el login se manda al Digi' ($src.Substring($src.IndexOf('function Rci-Post'), 700).Contains('$p.Credential = $cred')) $true
+Check 'carga: y la identidad va con el mismo login' ($src.Contains('Gw-Identidad $g.ip ([int]$cx.to) $cred')) $true
+Check 'carga: la clave del Digi NO se guarda en config_local' ($src.Substring($src.IndexOf('function Config-Guardar'), 1500).Contains('txtIGPass')) $false
 Check 'gw: la identificacion va aparte del barrido' ($src.Contains('$btnIGGw.Add_Click')) $true
 Check 'gw: el barrido de planta NO habla HTTP' (
     $src.Substring($src.IndexOf('function InvG-Correr'), 5200) -match 'Invoke-RestMethod|rci') $false

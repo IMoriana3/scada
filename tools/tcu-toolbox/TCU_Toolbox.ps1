@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.78'
+$VERSION_TOOLBOX = '11.79'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1741,6 +1741,67 @@ function Rci-Resumen($ext) {
     foreach ($k in @('mac','fw','pan','canal')) { if ("$($ext[$k])" -ne '') { $hay += $k } }
     if ($hay.Count -eq 0) { return '' }
     return ($hay -join ', ')
+}
+
+# ---- la CARGA del gateway: CPU y memoria del PROPIO Digi ----
+# A las TCUs se les pide su radio (el RSSI que recoge el recolector de
+# cobertura); al gateway se le pide a si mismo. Un coordinador con la CPU
+# saturada encola los mensajes Zigbee y la planta lo ve como TCUs que "no
+# contestan" sin que ninguna radio este mal. La consulta RCI de Digi para eso
+# es query_state/device_stats que, segun su referencia, trae la CPU en % y la
+# memoria en KB. Como la identidad: NO verificado contra un Digi real. Si no
+# se reconoce se vuelca crudo, y esta vez con TODO el estado del aparato
+# (query_state sin hijos), para que la primera pasada de el esquema entero.
+$RCI_CARGA = '<rci_request version="1.1"><query_state><device_stats/></query_state></rci_request>'
+$RCI_TODO  = '<rci_request version="1.1"><query_state/></rci_request>'
+$GW_CPU_ALTA = 80      # % de CPU a partir del cual se pinta en naranja; orientativo, nadie lo ha medido aun
+
+# Saca CPU (%), memoria (KB) y uptime (s) del XML por patron, sin depender del
+# anidado ni de si vienen como elemento (<cpu>37</cpu>) o atributo (cpu="37").
+# ok solo si hay una CPU entre 0 y 100: un <cpu_type>ARM9</cpu_type> no lo es,
+# y un 250 tampoco. Pura.
+function Gw-Carga([string]$xml) {
+    $t = "$xml"
+    $r = @{cpu = $null; mem_total = $null; mem_usada = $null; mem_libre = $null; uptime = $null; ok = $false}
+    $pat = @{
+        cpu       = 'cpu(?:_?(?:usage|util(?:ization)?|load|pct|percent))?'
+        mem_total = '(?:total_?mem(?:ory)?|mem(?:ory)?_?total)'
+        mem_usada = '(?:used_?mem(?:ory)?|mem(?:ory)?_?used)'
+        mem_libre = '(?:free_?mem(?:ory)?|mem(?:ory)?_?free)'
+        uptime    = 'up_?time'
+    }
+    foreach ($k in @('cpu','mem_total','mem_usada','mem_libre','uptime')) {
+        $m = [regex]::Match($t, ('(?is)<' + $pat[$k] + '\b[^>]*>\s*(\d+)'))
+        if (-not $m.Success) { $m = [regex]::Match($t, ('(?is)\b' + $pat[$k] + '\b\s*"?\s*[:=]\s*"?\s*(\d+)')) }
+        if ($m.Success) { $r[$k] = [long]$m.Groups[1].Value }
+    }
+    if ($null -ne $r.cpu -and $r.cpu -ge 0 -and $r.cpu -le 100) { $r.ok = $true } else { $r.cpu = $null }
+    return $r
+}
+
+# Memoria usada en %, con lo que haya: la usada, o total menos libre. Pura.
+function Gw-MemPct($c) {
+    if ($null -eq $c.mem_total -or $c.mem_total -le 0) { return $null }
+    $u = $c.mem_usada
+    if ($null -eq $u -and $null -ne $c.mem_libre) { $u = $c.mem_total - $c.mem_libre }
+    if ($null -eq $u -or $u -lt 0) { return $null }
+    return [int][math]::Round(100.0 * $u / $c.mem_total)
+}
+
+# Lo leido, en una linea; vacia si no se reconocio. Pura.
+function Gw-CargaResumen($c) {
+    if (-not $c -or -not $c.ok) { return '' }
+    $s = "CPU $($c.cpu) %"
+    $p = Gw-MemPct $c
+    if ($null -ne $p) {
+        $u = $c.mem_usada; if ($null -eq $u) { $u = $c.mem_total - $c.mem_libre }
+        $s += ", memoria $p % usada ($u de $($c.mem_total) KB)"
+    }
+    if ($null -ne $c.uptime) {
+        if ($c.uptime -ge 86400) { $s += ", $([int][math]::Floor($c.uptime / 86400)) d en marcha" }
+        else { $s += ", $([int][math]::Floor($c.uptime / 3600)) h en marcha" }
+    }
+    return $s
 }
 
 # ---------- leer TODAS las variables ----------
@@ -5852,6 +5913,21 @@ $tabIG.Controls.Add($btnIGJson)
 $lblIGRes = LG $tabIG '' 372 390 24
 $lblIGRes.ForeColor = [System.Drawing.Color]::DimGray
 
+# Login del Digi para IDENTIFICAR GATEWAYS. El de El Burgo no lo pide; los
+# viejos traen root / dbps. NO se guarda en config_local.json a proposito: una
+# clave no se escribe en claro en un JSON que viaja con la carpeta.
+$lblIGLogin = LG $tabIG 'Login del Digi, si lo pide (viejos: root / dbps):' 10 286 339
+$lblIGLogin.ForeColor = [System.Drawing.Color]::DimGray
+$txtIGUser = New-Object System.Windows.Forms.TextBox
+$txtIGUser.Location = New-Object System.Drawing.Point(300, 336)
+$txtIGUser.Size = New-Object System.Drawing.Size(110, 22)
+$tabIG.Controls.Add($txtIGUser)
+$txtIGPass = New-Object System.Windows.Forms.TextBox
+$txtIGPass.Location = New-Object System.Drawing.Point(416, 336)
+$txtIGPass.Size = New-Object System.Drawing.Size(110, 22)
+$txtIGPass.UseSystemPasswordChar = $true
+$tabIG.Controls.Add($txtIGPass)
+
 $lvIG = New-Object System.Windows.Forms.ListView
 $lvIG.Location = New-Object System.Drawing.Point(10, 56)
 $lvIG.Size = New-Object System.Drawing.Size(898, 274)
@@ -5862,7 +5938,7 @@ foreach ($c in @(@('Tipo',80), @('NCU',45), @('GW',40), @('Id',110), @('Num. ser
     [void]$lvIG.Columns.Add($c[0], $c[1])
 }
 $tabIG.Controls.Add($lvIG)
-$lblIGNota = LG $tabIG 'Los huecos son reales: la NCU no da serie ni MAC (el mapa R7.1 no los tiene y sus ids estan NOT READY), la HSU no da serie ni fecha, y el gateway no habla Modbus. IDENTIFICAR GATEWAYS lo pregunta por HTTP/RCI al Digi: necesita ip_gw en el fichero de planta y NO esta verificado aun contra un gateway de verdad.' 10 890 336
+$lblIGNota = LG $tabIG 'Los huecos son reales: la NCU no da serie ni MAC (el mapa R7.1 no los tiene y sus ids estan NOT READY), la HSU no da serie ni fecha, y el gateway no habla Modbus. IDENTIFICAR GATEWAYS le pregunta por HTTP/RCI al Digi su identidad y su carga (CPU y memoria): necesita ip_gw en el fichero de planta y NO esta verificado aun contra un gateway de verdad.' 10 890 364
 $lblIGNota.ForeColor = [System.Drawing.Color]::Gray
 
 # ============================ TAB ANALIZADOR DE BATERIAS ============================
@@ -11428,21 +11504,41 @@ $btnIG.Add_Click({ Lanzar { InvG-Correr } })
 # COORDINADOR no se ha visto nunca contra un Digi de verdad. Cuando no reconoce
 # la respuesta, vuelca el XML crudo: la primera pasada en planta nos da el
 # esquema en vez de adivinarlo dos veces.
-function Gw-Identidad([string]$ip, [int]$to) {
+# Un POST RCI al puerto 80 del Digi, con login si se ha dado: devuelve el XML
+# como texto, o '' si no contesta (timeout, sin ruta, o 401 sin credenciales).
+function Rci-Post([string]$ip, [int]$to, [string]$xml, $cred) {
+    $p = @{Uri = ($RCI_URL -f $ip); Method = 'Post'; ContentType = 'text/xml'; Body = $xml
+           TimeoutSec = [math]::Max(2, [int]($to / 1000))}
+    if ($cred) { $p.Credential = $cred }
+    try { $r = Invoke-RestMethod @p } catch { return '' }
+    if ($r -is [string]) { return $r }
+    if ($r -and $r.OuterXml) { return "$($r.OuterXml)" }
+    return "$r"
+}
+
+function Gw-Identidad([string]$ip, [int]$to, $cred = $null) {
     $ultimo = ''
     foreach ($q in $RCI_CONSULTAS) {
-        $xml = ''
-        try {
-            $xml = Invoke-RestMethod -Uri ($RCI_URL -f $ip) -Method Post -ContentType 'text/xml' `
-                                     -Body $q.xml -TimeoutSec ([math]::Max(2, [int]($to / 1000)))
-        } catch { continue }
-        $txt = $(if ($xml -is [string]) { $xml } else { $xml.OuterXml })
+        $txt = Rci-Post $ip $to $q.xml $cred
         if ("$txt" -eq '') { continue }
         $ultimo = "$txt"
         $ext = Rci-Extraer $ultimo
         if ((Rci-Resumen $ext) -ne '') { return @{ok = $true; ext = $ext; consulta = $q.n; crudo = $ultimo} }
     }
     return @{ok = $false; ext = $null; consulta = ''; crudo = $ultimo}
+}
+
+# La carga del gateway: primero device_stats; si no se reconoce, TODO el estado
+# (query_state sin hijos), que a lo mejor la trae en otro grupo y, si no, es el
+# esquema entero para volcarlo y saber que pedir de verdad.
+function Gw-Carga-Leer([string]$ip, [int]$to, $cred = $null) {
+    $t1 = Rci-Post $ip $to $RCI_CARGA $cred
+    $c = Gw-Carga $t1
+    if ($c.ok) { return @{ok = $true; carga = $c; consulta = 'query_state device_stats'; crudo = $t1} }
+    $t2 = Rci-Post $ip $to $RCI_TODO $cred
+    $c = Gw-Carga $t2
+    if ($c.ok) { return @{ok = $true; carga = $c; consulta = 'query_state (todo el estado)'; crudo = $t2} }
+    return @{ok = $false; carga = $null; consulta = ''; crudo = ("$t1`n$t2").Trim()}
 }
 
 $btnIGGw.Add_Click({ Lanzar {
@@ -11460,12 +11556,19 @@ $btnIGGw.Add_Click({ Lanzar {
         Con "La hoja 'Direcciones IP' del Excel la trae en 'IP GW 1' e 'IP GW 2': regenera los ficheros de planta con  make_plantas.py --excel <fichero.xlsx>  y vuelve a intentarlo." ([System.Drawing.Color]::Orange)
         return
     }
-    Con "Preguntando por HTTP/RCI a $($conIp.Count) gateway(s). AVISO: esta consulta no esta verificada contra un Digi real; si no reconoce la respuesta la vuelca entera aqui." ([System.Drawing.Color]::Orange)
+    Con "Preguntando por HTTP/RCI a $($conIp.Count) gateway(s): identidad y carga (CPU, memoria). AVISO: esta consulta no esta verificada contra un Digi real; si no reconoce la respuesta la vuelca entera aqui." ([System.Drawing.Color]::Orange)
+    # el login del Digi, si se ha puesto: solo vive en esta pulsacion
+    $cred = $null
+    if ("$($txtIGUser.Text)".Trim() -ne '') {
+        $sec = New-Object System.Security.SecureString
+        foreach ($ch in "$($txtIGPass.Text)".ToCharArray()) { $sec.AppendChar($ch) }
+        $cred = New-Object System.Management.Automation.PSCredential("$($txtIGUser.Text)".Trim(), $sec)
+    }
     Prog-Iniciar $conIp.Count
-    $n = 0
+    $n = 0; $nCarga = 0
     foreach ($g in $conIp) {
         if (Chequear-Cancelado) { break }
-        $r = Gw-Identidad $g.ip ([int]$cx.to)
+        $r = Gw-Identidad $g.ip ([int]$cx.to) $cred
         $clave = "NCU$($g.ncu) GW$($g.nGw)"
         if ($r.ok) {
             $n++
@@ -11486,11 +11589,32 @@ $btnIGGw.Add_Click({ Lanzar {
                 Con "  el gateway no ha contestado en el puerto 80 (o pide usuario y contrasena)." ([System.Drawing.Color]::Gainsboro)
             }
         }
+        # la carga del propio Digi, aparte de la identidad: puede salir una sin la otra
+        $k = Gw-Carga-Leer $g.ip ([int]$cx.to) $cred
+        if ($k.ok) {
+            $nCarga++
+            $res = Gw-CargaResumen $k.carga
+            $col = $(if ($k.carga.cpu -ge $GW_CPU_ALTA) { [System.Drawing.Color]::Orange } else { [System.Drawing.Color]::LightGreen })
+            Con ("{0}  {1}  ->  {2}   (por '{3}')" -f $clave, $g.ip, $res, $k.consulta) $col
+            foreach ($f in @($script:UltimoInvG)) {
+                if ("$($f.Tipo)" -eq 'GW' -and "$($f.NCU)" -eq "$($g.ncu)" -and "$($f.GW)" -eq "$($g.nGw)") {
+                    $f.Nota = "$res  |  " + "$($f.Nota)"
+                }
+            }
+        } else {
+            Con "$clave  $($g.ip): no se ha reconocido la CPU en la respuesta." ([System.Drawing.Color]::Salmon)
+            if ("$($k.crudo)" -ne '') {
+                Con "  --- respuesta cruda a query_state, para saber que consulta hay que hacer de verdad ---" ([System.Drawing.Color]::Gainsboro)
+                Con ("  " + ("$($k.crudo)" -replace '\s+', ' ')) ([System.Drawing.Color]::Gainsboro)
+            } else {
+                Con "  el gateway no ha contestado a query_state en el puerto 80 (o pide usuario y contrasena)." ([System.Drawing.Color]::Gainsboro)
+            }
+        }
         Prog-Paso
         [System.Windows.Forms.Application]::DoEvents()
     }
     if (@($script:UltimoInvG).Count -gt 0) { InvG-Pintar $script:UltimoInvG }
-    Con "Gateways identificados: $n de $($conIp.Count)." ([System.Drawing.Color]::SteelBlue)
+    Con "Gateways identificados: $n de $($conIp.Count); con carga (CPU) leida: $nCarga de $($conIp.Count)." ([System.Drawing.Color]::SteelBlue)
 } })
 
 $btnIGCsv.Add_Click({ [void](Exportar-Csv $script:UltimoInvG 'inventario_global' 'Inventario global' -bloque 'invg') })

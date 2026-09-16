@@ -35,6 +35,22 @@ En las operaciones de **planta completa**, cada línea de la consola lleva delan
 
 Consola común con colores, botón **CANCELAR** para abortar operaciones largas, y **log automático** a `logs/tcu_toolbox_AAAAMMDD.log`. La ventana es **redimensionable y maximizable** (v4.6): al agrandarla crecen las tablas y la consola, que es lo que interesa en una planta de cientos de TCUs.
 
+**La CPU del propio gateway, junto a su identidad (v11.79)** — de las TCUs se
+lee la potencia de señal de su módulo Zigbee (el recolector de cobertura lo hace
+a diario por RCI); del **gateway no se leía nada de él mismo**, y un Digi con la
+CPU saturada encola los mensajes Zigbee y la planta lo ve como TCUs que «no
+contestan» sin que ninguna radio esté mal. **IDENTIFICAR GATEWAYS** pide ahora,
+además de la identidad, `query_state/device_stats`: **CPU en %, memoria usada y
+tiempo en marcha**, a la consola (naranja a partir del 80 %) y en la *Nota* de
+la fila del gateway del inventario. El mismo parser, byte a byte, va en el
+recolector de cobertura (`cobertura-zigbee/zigbee_logger.ps1`), que lo escribe
+cada ciclo en `gateway_stats.csv`. Dos cosas para no engañarse: **sigue sin
+estar verificado contra un Digi real** —si no reconoce la CPU en la respuesta
+pide *todo* el estado (`query_state` sin hijos) y lo vuelca crudo, para que la
+primera pasada en planta dé el esquema entero—; y el Digi puede pedir login
+(los viejos, `root / dbps`): hay dos casillas bajo la tabla, y la clave **no se
+guarda** en `config_local.json`.
+
 **Un seguidor parado ya no sale verde (v11.60)** — el **modo** se leía, se
 pintaba en su columna y **no se miraba para la salud**. Un TCU que no está en
 AUTO no está siguiendo, tenga el ángulo que tenga, y el único que lo delataba
@@ -446,6 +462,11 @@ propósito**:
   no reconoce la respuesta, **vuelca el XML crudo a la consola**: la primera
   pasada delante de un gateway de verdad nos da el esquema en vez de adivinarlo
   dos veces. Y por eso el barrido de planta no depende de ello.
+
+Desde la v11.79 el mismo botón pide también la **carga del propio Digi**
+(`query_state/device_stats`: CPU en %, memoria, tiempo en marcha), con la misma
+regla —lo que no reconoce lo vuelca crudo, y entonces con *todo* el estado—, y
+admite el login del gateway en dos casillas bajo la tabla, que no se guardan.
 
 **Leer TODAS las variables, con el coste por delante (v11.61)** — la pestaña
 *Leer variable* se llenaba a mano, una fila por variable. Para «a ver qué tiene
