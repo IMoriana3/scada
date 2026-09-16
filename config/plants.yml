@@ -43,9 +43,14 @@ ncus:
     # puerto por gateway Zigbee. Lo usa tools/tcu-toolbox/make_plantas.py
     # para generar plantas.json; el collector lo ignora. `hsu_esclavo` es el
     # unit id de la estación de ESE gateway, para la toolbox.
+    # `ip_gw` es la IP del PROPIO Digi (el gateway es otro aparato, con su IP),
+    # NUNCA la de la NCU. En El Burgo va por la regla NCU+n: NCU1 en .52 tiene
+    # los Digi en .53 (GW1) y .54 (GW2); los dos contestaron por RCI el
+    # 16/09/2026 (CPU 19 % y 16 %, 16 MB). El .54 es el que escanea a diario el
+    # recolector de cobertura.
     gateways:
-      - { puerto: 503, tcu_ini: 1,  tcu_fin: 56,  hsu_esclavo: 230 }
-      - { puerto: 504, tcu_ini: 57, tcu_fin: 108, hsu_esclavo: 231 }
+      - { puerto: 503, tcu_ini: 1,  tcu_fin: 56,  hsu_esclavo: 230, ip_gw: "10.100.1.53" }
+      - { puerto: 504, tcu_ini: 57, tcu_fin: 108, hsu_esclavo: 231, ip_gw: "10.100.1.54" }
   - id: "NCU2"
     host: "10.100.1.56"
     port: 502
@@ -53,16 +58,18 @@ ncus:
     tcu_count: 107
     hsu_count: 2
     hsu_extended: false
+    # NCU2 en .56: Digi en .57 y .58 por la misma regla (cobertura-zigbee la da
+    # por confirmada en El Burgo), pero estos dos NO se han preguntado aun por RCI.
     gateways:
-      - { puerto: 503, tcu_ini: 1,  tcu_fin: 45,  hsu_esclavo: 230 }
-      - { puerto: 504, tcu_ini: 46, tcu_fin: 107, hsu_esclavo: 231 }
+      - { puerto: 503, tcu_ini: 1,  tcu_fin: 45,  hsu_esclavo: 230, ip_gw: "10.100.1.57" }
+      - { puerto: 504, tcu_ini: 46, tcu_fin: 107, hsu_esclavo: 231, ip_gw: "10.100.1.58" }
       # TCU 109 suelta en GW2 (rangos sacados de los .bat de Sunner; la 108
       # no existe). Confirmar en campo. Va sin hsu_esclavo: la estación del
       # GW2 ya está declarada arriba, en la fila del rango bueno.
       # `fuera_de_dwg` lo dice como DATO y no solo en este comentario: el careo
       # contra el layout (tools/test_plants_yml.py) lo informa en vez de darlo
       # por divergencia, porque es un hecho conocido y no un despiste.
-      - { puerto: 504, tcu_ini: 109, tcu_fin: 109, fuera_de_dwg: [109] }
+      - { puerto: 504, tcu_ini: 109, tcu_fin: 109, fuera_de_dwg: [109], ip_gw: "10.100.1.58" }
 
 # Medidor de tráfico: el colector cuenta los bytes de cada ciclo (Modbus contra
 # la NCU y subida a InfluxDB) y los publica en la serie `traffic`. Cuesta un

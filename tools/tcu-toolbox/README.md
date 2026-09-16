@@ -35,6 +35,45 @@ En las operaciones de **planta completa**, cada línea de la consola lleva delan
 
 Consola común con colores, botón **CANCELAR** para abortar operaciones largas, y **log automático** a `logs/tcu_toolbox_AAAAMMDD.log`. La ventana es **redimensionable y maximizable** (v4.6): al agrandarla crecen las tablas y la consola, que es lo que interesa en una planta de cientos de TCUs.
 
+**La primera pasada contra un Digi real (v11.81)** — El Burgo, 16/09/2026, con
+la IP a mano: los Digi `.53` y `.54` contestaron `query_state/device_stats` a
+la primera (**CPU 19 % y 16 %, memoria al 48 %, 1 día en marcha**). La lectura
+de carga queda **verificada**. Lo que enseñó esa pasada, y lo que cambia:
+
+- **la memoria viene en bytes, no en KB**: 16 777 216 son los 16 MB del
+  ConnectPort (en KB serían 16 GB). Se enseña en MB, con punto decimal fijo;
+- **la identidad salía a medias** («MAC · FW Version · PAN · canal»):
+  `device_info` da la MAC Ethernet (6 bytes, no los 8 de Zigbee) y el firmware
+  como texto largo, del que el patrón se quedaba con la primera palabra; y como
+  «FW» no estaba vacío, se daba por reconocida, **no se pedía la consulta de
+  zigbee ni se volcaba nada**. Ahora se piden **todas** las consultas y se
+  funden (`Rci-Fusionar`), y si falta cualquiera de los cuatro campos se vuelca
+  cada respuesta entera, con el nombre de su consulta;
+- **las IPs de los cuatro Digi de El Burgo van en la topología** (`ip_gw` en
+  `config/plants.yml`, que `make_plantas.py` ya copia): las filas GW del
+  inventario enseñan `.53/.54/.57/.58` en vez del *passthrough* `.52:503`, y el
+  botón no necesita la casilla. `.53` y `.54` están comprobadas por RCI; `.57`
+  y `.58` salen de la regla NCU+n que el visor de cobertura da por confirmada,
+  pero no se han preguntado aún;
+- **más campos del Digi en el inventario**, los de su página *System
+  Information*: modelo, firmware (`2.27.4 (Version 82002549_N …)`), boot en
+  «FW fábrica», hardware strapping en «HW», y POST, product ID, PAN y canal en
+  la nota, junto a la carga. El uptime, en días y horas. Y todo ello **como
+  campos de la fila GW** (`IP_gw`, `Modelo`, `Boot`, `POST`, `ProductId`,
+  `PAN`, `Canal`, `CPU_pct`, `Mem_pct`, `Mem_total_MB`, `Uptime_s`), que el
+  JSON del inventario global saca tal cual para que el SCADA y el Seguimiento
+  PEM puedan leerlos; en el CSV salen como columnas. Los nombres de los
+  elementos RCI de boot/POST/strapping son los que cabe esperar; si el Digi
+  los llama de otra forma, el volcado lo dirá;
+- a cada Digi se le pregunta **una vez** (la TCU 109 suelta es otra entrada del
+  mismo gateway y se le preguntaba dos veces);
+- **el repetidor fantasma**: El Burgo no tiene repetidores y el inventario
+  global sacaba un `Repetidor 1 (esc )` sin NCU y con GW 0, e intentaba leerlo
+  por Modbus en el esclavo 0. `Reps-DeCx` devuelve `@()` cuando no hay, y una
+  función que devuelve `@()` no emite nada: `Reps-Nombrar` recibía `$null`, y
+  `@($null)` en PS 5.1 es una lista con un elemento nulo, que se bautizaba. El
+  mismo vicio que ya se había cazado con las HSU fantasma. Se filtra.
+
 **La IP del gateway a mano (v11.80)** — al ir a probar la v11.79 en planta,
 IDENTIFICAR GATEWAYS se paraba antes de preguntar nada: **ninguna topología
 del ZIP lleva `ip_gw`** (la pasada del Excel con «IP GW 1/2» no se ha hecho).
@@ -475,6 +514,9 @@ Desde la v11.79 el mismo botón pide también la **carga del propio Digi**
 (`query_state/device_stats`: CPU en %, memoria, tiempo en marcha), con la misma
 regla —lo que no reconoce lo vuelca crudo, y entonces con *todo* el estado—, y
 admite el login del gateway en dos casillas bajo la tabla, que no se guardan.
+**Verificado en El Burgo (v11.81)**: la carga contesta tal cual; de la identidad,
+`device_info` da MAC Ethernet y firmware, y la PAN y el canal se buscan en las
+consultas de zigbee, volcando lo que falte.
 
 **Leer TODAS las variables, con el coste por delante (v11.61)** — la pestaña
 *Leer variable* se llenaba a mano, una fila por variable. Para «a ver qué tiene

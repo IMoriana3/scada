@@ -683,6 +683,14 @@ def main() -> None:
                     if escl:
                         entrada["hsus"] = len(escl)
                         entrada["hsu_esclavos"] = escl
+                # La IP del PROPIO Digi, si plants.yml la declara (`ip_gw`). Nunca
+                # la de la NCU: el gateway es otro aparato con su propia IP, y si
+                # coinciden la celda esta mal (mismo criterio que el modo tarjeta).
+                ipgw = str(gw.get("ip_gw") or "").strip()
+                if ipgw and ipgw == str(host).strip():
+                    print(f"AVISO: {entrada['nombre']}: ip_gw igual que la NCU ({ipgw}); no se escribe")
+                elif ipgw:
+                    entrada["ip_gw"] = ipgw
                 plantas.append(entrada)
         else:
             # fallback sin gateways declarados: rangos 1..tcu_count a ajustar a mano

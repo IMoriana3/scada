@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.80'
+$VERSION_TOOLBOX = '11.81'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1712,8 +1712,9 @@ $INV_MOTIVO = @{
 # dos veces. Hasta entonces, las columnas del gateway salen vacias con su motivo.
 $RCI_URL = 'http://{0}/UE/rci'
 $RCI_CONSULTAS = @(
-    @{n = 'query_state device_info'; xml = '<rci_request version="1.1"><query_state><device_info/></query_state></rci_request>'}
-    @{n = 'query_setting zigbee';    xml = '<rci_request version="1.1"><query_setting><zigbee/></query_setting></rci_request>'}
+    @{n = 'query_state device_info';  xml = '<rci_request version="1.1"><query_state><device_info/></query_state></rci_request>'}
+    @{n = 'query_setting zigbee';     xml = '<rci_request version="1.1"><query_setting><zigbee/></query_setting></rci_request>'}
+    @{n = 'query_state zigbee_state'; xml = '<rci_request version="1.1"><query_state><zigbee_state/></query_state></rci_request>'}
 )
 
 # Saca del XML de respuesta los cuatro campos de la pagina del gateway, SIN
@@ -1722,13 +1723,20 @@ $RCI_CONSULTAS = @(
 # MAC de Digi y un firmware en hexadecimal se reconocen igual. Pura.
 function Rci-Extraer([string]$xml) {
     $t = "$xml"
-    $r = @{mac = ''; fw = ''; pan = ''; canal = ''}
-    # MAC de 64 bits en formato Digi: ocho bytes con dos puntos. El '!' final que
-    # trae ext_addr en los descubrimientos no forma parte de la direccion.
-    $m = [regex]::Match($t, '(?i)\b([0-9a-f]{2}(?::[0-9a-f]{2}){7})\b')
+    $r = @{mac = ''; fw = ''; pan = ''; canal = ''; producto = ''; boot = ''; post = ''; hw = ''; pid = ''}
+    # MAC con dos puntos: la Ethernet del Digi son 6 bytes (device_info la da
+    # asi, visto en El Burgo) y la Zigbee de 64 bits, 8. El '!' final que trae
+    # ext_addr en los descubrimientos no forma parte de la direccion.
+    $m = [regex]::Match($t, '(?i)\b([0-9a-f]{2}(?::[0-9a-f]{2}){5,7})\b')
     if ($m.Success) { $r.mac = $m.Groups[1].Value.ToLower() }
-    foreach ($par in @(@('fw','firmware'), @('pan','pan[_ ]?id'), @('canal','channel'))) {
-        $mm = [regex]::Match($t, ('(?is)' + $par[1] + '\s*[^>]*>\s*([^<\s]+)'))
+    # los demas son los de la pagina "System Information" del ConnectPort X2D
+    # (El Burgo): modelo, boot, POST, product ID y hardware strapping
+    foreach ($par in @(@('fw','firmware'), @('pan','pan[_ ]?id'), @('canal','channel'),
+                       @('producto','(?:product|model)'), @('boot','boot(?:_?version)?'), @('post','post(?:_?version)?'),
+                       @('hw','hardware_?strapping'), @('pid','product_?id'))) {
+        # el texto ENTERO del elemento: el Digi da "Version 2.17.2.1 (Version
+        # 82001536_H ...)" y quedarse con la primera palabra dejaba "Version"
+        $mm = [regex]::Match($t, ('(?is)<' + $par[1] + '\b[^>]*>\s*([^<]+?)\s*<'))
         if (-not $mm.Success) { $mm = [regex]::Match($t, ('(?is)' + $par[1] + '"?\s*[:=]\s*"?\s*([^<",\s]+)')) }
         if ($mm.Success) { $r[$par[0]] = $mm.Groups[1].Value.Trim() }
     }
@@ -1741,6 +1749,41 @@ function Rci-Resumen($ext) {
     foreach ($k in @('mac','fw','pan','canal')) { if ("$($ext[$k])" -ne '') { $hay += $k } }
     if ($hay.Count -eq 0) { return '' }
     return ($hay -join ', ')
+}
+
+# Lo de la identidad que no tiene columna, para la Nota: modelo, POST, product
+# ID, PAN y canal; solo lo que haya. Pura.
+function Gw-NotaIdentidad($ext) {
+    $p = @()
+    if ("$($ext.producto)" -ne '') { $p += "$($ext.producto)" }
+    if ("$($ext.post)" -ne '') { $p += "POST $($ext.post)" }
+    if ("$($ext.pid)" -ne '') { $p += "id $($ext.pid)" }
+    if ("$($ext.pan)" -ne '' -or "$($ext.canal)" -ne '') { $p += "PAN $($ext.pan), canal $($ext.canal)" }
+    if ($p.Count -eq 0) { return '' }
+    return (($p -join '; ') + '  |  ')
+}
+
+# Los datos del Digi como CAMPOS de la fila del gateway, no solo como texto en
+# la Nota: el JSON del inventario global los saca tal cual, que es lo que el
+# SCADA y el Seguimiento PEM pueden leer. Solo lo que haya. Muta la fila.
+function Gw-Anotar($fila, [hashtable]$campos) {
+    foreach ($k in $campos.Keys) {
+        $v = $campos[$k]
+        if ($null -eq $v -or "$v" -eq '') { continue }
+        $fila | Add-Member -NotePropertyName $k -NotePropertyValue $v -Force
+    }
+    return $fila
+}
+
+# Lo que dos consultas han sacado, junto: device_info da MAC y firmware, y la
+# PAN y el canal vienen por la de zigbee. Lo primero que se vio manda. Pura.
+function Rci-Fusionar($a, $b) {
+    $r = @{}
+    foreach ($k in @('mac','fw','pan','canal','producto','boot','post','hw','pid')) {
+        $r[$k] = "$($a[$k])"
+        if ($r[$k] -eq '' -and "$($b[$k])" -ne '') { $r[$k] = "$($b[$k])" }
+    }
+    return $r
 }
 
 # ---- la CARGA del gateway: CPU y memoria del PROPIO Digi ----
@@ -1788,7 +1831,15 @@ function Gw-Objetivos($gws, [string]$ipManual) {
     # sin coma unaria: con ella el @() del llamador recibia UN elemento que era
     # la lista entera (la suite lo cazo: 1 donde tocaban 2 y 0)
     if ($ip -ne '') { return @(@{ncu = '?'; nGw = 0; ip = $ip}) }
-    return @(@($gws) | Where-Object { "$($_.ip)".Trim() -ne '' })
+    # y a cada Digi UNA vez: la TCU suelta de El Burgo es otra entrada del mismo
+    # gateway, y sin esto se le preguntaba dos veces
+    $vistas = @{}; $out = @()
+    foreach ($g in @($gws)) {
+        $gip = "$($g.ip)".Trim()
+        if ($gip -eq '' -or $vistas.ContainsKey($gip)) { continue }
+        $vistas[$gip] = $true; $out += ,$g
+    }
+    return @($out)
 }
 
 # Memoria usada en %, con lo que haya: la usada, o total menos libre. Pura.
@@ -1800,6 +1851,13 @@ function Gw-MemPct($c) {
     return [int][math]::Round(100.0 * $u / $c.mem_total)
 }
 
+# La memoria del Digi viene en BYTES, no en KB: 16777216 en El Burgo, que son
+# los 16 MB del ConnectPort (en KB serian 16 GB). Se ensena en MB, con punto
+# decimal fijo para que el texto sea el mismo en cualquier Windows. Pura.
+function Gw-Mb($bytes) {
+    return ([double]$bytes / 1048576).ToString('0.0', [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
 # Lo leido, en una linea; vacia si no se reconocio. Pura.
 function Gw-CargaResumen($c) {
     if (-not $c -or -not $c.ok) { return '' }
@@ -1807,11 +1865,11 @@ function Gw-CargaResumen($c) {
     $p = Gw-MemPct $c
     if ($null -ne $p) {
         $u = $c.mem_usada; if ($null -eq $u) { $u = $c.mem_total - $c.mem_libre }
-        $s += ", memoria $p % usada ($u de $($c.mem_total) KB)"
+        $s += ", memoria $p % usada ($(Gw-Mb $u) de $(Gw-Mb $c.mem_total) MB)"
     }
     if ($null -ne $c.uptime) {
-        if ($c.uptime -ge 86400) { $s += ", $([int][math]::Floor($c.uptime / 86400)) d en marcha" }
-        else { $s += ", $([int][math]::Floor($c.uptime / 3600)) h en marcha" }
+        $d = [int][math]::Floor($c.uptime / 86400); $h = [int][math]::Floor(($c.uptime % 86400) / 3600)
+        if ($d -ge 1) { $s += ", $d d $h h en marcha" } else { $s += ", $h h en marcha" }
     }
     return $s
 }
@@ -5958,7 +6016,7 @@ foreach ($c in @(@('Tipo',80), @('NCU',45), @('GW',40), @('Id',110), @('Num. ser
     [void]$lvIG.Columns.Add($c[0], $c[1])
 }
 $tabIG.Controls.Add($lvIG)
-$lblIGNota = LG $tabIG 'Los huecos son reales: la NCU no da serie ni MAC (el mapa R7.1 no los tiene y sus ids estan NOT READY), la HSU no da serie ni fecha, y el gateway no habla Modbus. IDENTIFICAR GATEWAYS le pregunta por HTTP/RCI al Digi su identidad y su carga (CPU y memoria): necesita ip_gw en el fichero de planta y NO esta verificado aun contra un gateway de verdad.' 10 890 364
+$lblIGNota = LG $tabIG 'Los huecos son reales: la NCU no da serie ni MAC (el mapa R7.1 no los tiene y sus ids estan NOT READY), la HSU no da serie ni fecha, y el gateway no habla Modbus. IDENTIFICAR GATEWAYS le pregunta por HTTP/RCI al Digi su identidad y su carga (CPU y memoria, verificado en El Burgo): necesita ip_gw en el fichero de planta o la IP escrita a mano aqui abajo.' 10 890 364
 $lblIGNota.ForeColor = [System.Drawing.Color]::Gray
 
 # ============================ TAB ANALIZADOR DE BATERIAS ============================
@@ -7060,7 +7118,12 @@ function Reps-DeCx($cx, [string]$gw = '') {
 # orden dentro de la planta, que es como estan rotulados en el plano. Pura.
 function Reps-Nombrar($reps) {
     $i = 0
-    return @(@($reps) | ForEach-Object {
+    # Reps-DeCx devuelve @() cuando la planta no tiene repetidores, y una funcion
+    # que devuelve @() no emite NADA: aqui llega $null, y @($null) en PS 5.1 es
+    # una lista con un elemento nulo. Sin filtrarlo, El Burgo (sin repetidores)
+    # sacaba un "Repetidor 1 (esc )" fantasma, sin NCU y con GW 0, y el
+    # inventario global se iba a leer por Modbus al esclavo 0.
+    return @(@($reps) | Where-Object { $_ } | ForEach-Object {
         $i++
         $n = "$($_.nombre)".Trim()
         if ($n -eq '') { $n = "Repetidor $i" }
@@ -11536,16 +11599,24 @@ function Rci-Post([string]$ip, [int]$to, [string]$xml, $cred) {
     return "$r"
 }
 
+# Se piden TODAS las consultas y se funde lo que traiga cada una: en El Burgo
+# device_info dio MAC y firmware pero ni PAN ni canal, y pararse en la primera
+# que reconocia algo dejaba la identidad a medias sin volcar nada. `completo`
+# dice si estan los cuatro campos; si no, el boton vuelca las respuestas.
 function Gw-Identidad([string]$ip, [int]$to, $cred = $null) {
-    $ultimo = ''
+    $ext = @{mac = ''; fw = ''; pan = ''; canal = ''}
+    $crudos = @(); $con = @()
     foreach ($q in $RCI_CONSULTAS) {
         $txt = Rci-Post $ip $to $q.xml $cred
         if ("$txt" -eq '') { continue }
-        $ultimo = "$txt"
-        $ext = Rci-Extraer $ultimo
-        if ((Rci-Resumen $ext) -ne '') { return @{ok = $true; ext = $ext; consulta = $q.n; crudo = $ultimo} }
+        $crudos += ,@{n = $q.n; xml = "$txt"}
+        $e = Rci-Extraer $txt
+        if ((Rci-Resumen $e) -ne '') { $con += $q.n }
+        $ext = Rci-Fusionar $ext $e
     }
-    return @{ok = $false; ext = $null; consulta = ''; crudo = $ultimo}
+    $ok = ((Rci-Resumen $ext) -ne '')
+    return @{ok = $ok; ext = $(if ($ok) { $ext } else { $null }); consulta = ($con -join ' + '); crudos = $crudos
+             completo = ((Rci-Resumen $ext) -eq 'mac, fw, pan, canal')}
 }
 
 # La carga del gateway: primero device_stats; si no se reconoce, TODO el estado
@@ -11577,7 +11648,7 @@ $btnIGGw.Add_Click({ Lanzar {
         Con "O escribe la IP del gateway en la casilla 'IP del gateway a mano', bajo la tabla, y se le pregunta solo a el." ([System.Drawing.Color]::Orange)
         return
     }
-    Con "Preguntando por HTTP/RCI a $($conIp.Count) gateway(s): identidad y carga (CPU, memoria). AVISO: esta consulta no esta verificada contra un Digi real; si no reconoce la respuesta la vuelca entera aqui." ([System.Drawing.Color]::Orange)
+    Con "Preguntando por HTTP/RCI a $($conIp.Count) gateway(s): identidad y carga (CPU, memoria). La carga esta verificada en El Burgo (v11.81); de la identidad, lo que falte se vuelca entero aqui." ([System.Drawing.Color]::Orange)
     # el login del Digi, si se ha puesto: solo vive en esta pulsacion
     $cred = $null
     if ("$($txtIGUser.Text)".Trim() -ne '') {
@@ -11593,19 +11664,25 @@ $btnIGGw.Add_Click({ Lanzar {
         $clave = $(if ("$($g.ncu)" -eq '?') { 'GW (IP a mano)' } else { "NCU$($g.ncu) GW$($g.nGw)" })
         if ($r.ok) {
             $n++
-            Con ("{0}  {1}  ->  MAC {2}  FW {3}  PAN {4}  canal {5}   (por '{6}')" -f $clave, $g.ip,
-                 $r.ext.mac, $r.ext.fw, $r.ext.pan, $r.ext.canal, $r.consulta) ([System.Drawing.Color]::LightGreen)
+            Con ("{0}  {1}  ->  {2}  MAC {3}  FW {4}  boot {5}  POST {6}  HW {7}  PAN {8}  canal {9}   (por '{10}')" -f $clave, $g.ip,
+                 $r.ext.producto, $r.ext.mac, $r.ext.fw, $r.ext.boot, $r.ext.post, $r.ext.hw, $r.ext.pan, $r.ext.canal, $r.consulta) ([System.Drawing.Color]::LightGreen)
             foreach ($f in @($script:UltimoInvG)) {
                 if ("$($f.Tipo)" -eq 'GW' -and "$($f.NCU)" -eq "$($g.ncu)" -and "$($f.GW)" -eq "$($g.nGw)") {
-                    $f.MAC = "$($r.ext.mac)"; $f.FW = "$($r.ext.fw)"
-                    $f.Nota = ("PAN {0}, canal {1}  |  " -f $r.ext.pan, $r.ext.canal) + "$($f.Nota)"
+                    $f.MAC = "$($r.ext.mac)"; $f.FW = "$($r.ext.fw)"; $f.FW_fabrica = "$($r.ext.boot)"; $f.HW = "$($r.ext.hw)"
+                    $f.Nota = (Gw-NotaIdentidad $r.ext) + "$($f.Nota)"
+                    [void](Gw-Anotar $f @{IP_gw = $g.ip; Modelo = $r.ext.producto; Boot = $r.ext.boot; POST = $r.ext.post
+                                          ProductId = $r.ext.pid; PAN = $r.ext.pan; Canal = $r.ext.canal})
                 }
             }
         } else {
             Con "$clave  $($g.ip): no se ha reconocido la identidad en la respuesta." ([System.Drawing.Color]::Salmon)
-            if ("$($r.crudo)" -ne '') {
+        }
+        # con un campo que falte se vuelca TODO lo que contesto, consulta por
+        # consulta: es lo que dice como se llama de verdad lo que falta
+        if (-not $r.completo) {
+            if (@($r.crudos).Count -gt 0) {
                 Con "  --- respuesta cruda, para saber que consulta hay que hacer de verdad ---" ([System.Drawing.Color]::Gainsboro)
-                Con ("  " + ("$($r.crudo)" -replace '\s+', ' ')) ([System.Drawing.Color]::Gainsboro)
+                foreach ($c in @($r.crudos)) { Con ("  [{0}]  {1}" -f $c.n, ("$($c.xml)" -replace '\s+', ' ')) ([System.Drawing.Color]::Gainsboro) }
             } else {
                 Con "  el gateway no ha contestado en el puerto 80 (o pide usuario y contrasena)." ([System.Drawing.Color]::Gainsboro)
             }
@@ -11620,6 +11697,9 @@ $btnIGGw.Add_Click({ Lanzar {
             foreach ($f in @($script:UltimoInvG)) {
                 if ("$($f.Tipo)" -eq 'GW' -and "$($f.NCU)" -eq "$($g.ncu)" -and "$($f.GW)" -eq "$($g.nGw)") {
                     $f.Nota = "$res  |  " + "$($f.Nota)"
+                    [void](Gw-Anotar $f @{IP_gw = $g.ip; CPU_pct = $k.carga.cpu; Mem_pct = (Gw-MemPct $k.carga)
+                                          Mem_total_MB = $(if ($null -ne $k.carga.mem_total) { Gw-Mb $k.carga.mem_total } else { $null })
+                                          Uptime_s = $k.carga.uptime})
                 }
             }
         } else {
