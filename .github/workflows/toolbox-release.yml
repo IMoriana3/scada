@@ -80,8 +80,35 @@ jobs:
             fi
           done
           hechas=$(ls -1 Seguimiento_PEM_*.xlsx 2>/dev/null | wc -l)
-          echo "fichas generadas: $hechas   ficheros sin ficha: $sin_ficha"
+          plantas=$(ls -1 ../tools/tcu-toolbox/plantas/*.json 2>/dev/null | wc -l)
+          echo "fichas generadas: $hechas   ficheros sin ficha: $sin_ficha   plantas: $plantas"
           ls -l
+          # ── QUE EL CONTADOR SIRVA DE ALGO ───────────────────────────────
+          # Este paso lleva `continue-on-error`, e imprimia `hechas` y
+          # `sin_ficha` sin que NADIE los mirara: con CERO fichas generadas
+          # salia igual de verde que con todas, y la release se publicaba sin
+          # ellas. Misma familia que los cuatro pasos de Siting que decian
+          # «esto no es un verde» y salian en verde.
+          #
+          # No se pone el job en rojo —el `continue-on-error` esta ahi a
+          # proposito, para que un fallo de openpyxl no impida publicar la
+          # toolbox— pero deja de pasar callando: cero fichas es un aviso
+          # visible y el recuento va al resumen de la corrida.
+          {
+            echo "### Fichas de Seguimiento PEM"
+            echo ""
+            echo "| plantas | fichas generadas | sin ficha |"
+            echo "|---:|---:|---:|"
+            echo "| $plantas | $hechas | $sin_ficha |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$hechas" -eq 0 ]; then
+            echo "::warning title=SIN FICHAS::no se ha generado NINGUNA ficha de $plantas plantas. La release sale sin ellas."
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "> ⚠️ **ninguna ficha generada.** La release sale sin ellas." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$sin_ficha" -gt 0 ]; then
+            echo "::warning title=FICHAS INCOMPLETAS::$sin_ficha planta(s) se han quedado sin ficha."
+            printf '\n> ⚠️ %s planta(s) sin ficha.\n' "$sin_ficha" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Crear o actualizar la release
         run: |
