@@ -30,6 +30,15 @@ jobs:
   # en planta: justo el betatesting que queremos quitar de encima. Van en
   # WINDOWS porque la logica carga System.Windows.Forms (Add-Type), que el
   # PowerShell de Linux no trae; en Windows estan pwsh, WinForms y Python.
+
+      # EL ENLACE A LA GUÍA DE PUERTAS, COMPROBADO. Un enlace roto al documento
+      # que dice «una puerta verde afirma dos cosas» sería el chiste final.
+      # Resuelve el fichero en el clon de `proyectos` que haya al lado —el del
+      # PIN si este repo lo fija— y si no hay, lo trae con --depth 1 (es
+      # público). Sin red y sin clon sale con rc = 2, no con 0.
+      - name: el enlace a la guía de puertas apunta a algo que existe
+        run: bash docs/enlace_guia.sh
+
   toolbox:
     runs-on: windows-latest
     steps:
