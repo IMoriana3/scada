@@ -566,3 +566,15 @@ Diagnóstico realizado contra la **NCU-02 (`10.100.1.56`)** vía el túnel de so
 ---
 
 *Factiun · proyecto interno.*
+
+---
+
+## Cómo se comprueba una comprobación
+
+El estándar de puertas —piso por banco, alcance publicado, los tres estados
+MIDE / NO COMPROBADO / ROJO— vive en un solo sitio:
+**[`proyectos/docs/puertas-y-alcance.md`](https://github.com/IMoriana3/proyectos/blob/main/docs/puertas-y-alcance.md)**.
+
+Un original y enlaces; dos copias divergen. `docs/enlace_guia.sh` comprueba en
+CI que este enlace apunta a algo que existe — un enlace roto a la guía de
+puertas sería el chiste final.
