@@ -4596,7 +4596,7 @@ $nav.Location = New-Object System.Drawing.Point(10, 72)
 $nav.Size = New-Object System.Drawing.Size(176, 663)
 $nav.HideSelection = $false
 $nav.ShowLines = $false; $nav.ShowRootLines = $false; $nav.ShowPlusMinus = $false
-$nav.FullRowSelect = $true; $nav.ItemHeight = 20
+$nav.FullRowSelect = $true; $nav.ItemHeight = 18   # 34 lineas x 18 = 612 en los 663 de alto: caben sin scroll, y sobra para dos hojas mas
 $nav.BorderStyle = 'FixedSingle'
 $form.Controls.Add($nav)
 
@@ -13430,7 +13430,10 @@ function Gr-LeerNcu($tr) {
     $r = @{sp = @(); din = 0; timeout = $null}
     Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
     try {
-        $r.sp  = @(@(FC03-Leer $UNIT_NCU (Dir-Trama ($GR_SP_BASE + 1)) 7) | ForEach-Object { [int]$_ })
+        # FC03-Leer devuelve ",$palabras" para que no se despliegue sola: hay que
+        # asignarla y recorrerla, no envolverla en @() -eso da UN elemento-
+        $w = FC03-Leer $UNIT_NCU (Dir-Trama ($GR_SP_BASE + 1)) 7
+        $r.sp  = @($w | ForEach-Object { [int]$_ })
         $r.din = [int](FC03-Leer $UNIT_NCU (Dir-Trama 30100) 1)[0]
         try { $r.timeout = [int](FC03-Leer $UNIT_NCU (Dir-Trama 40080) 1)[0] } catch { $r.timeout = $null }
     } finally { Modbus-Cerrar }
@@ -13576,10 +13579,12 @@ $btnGRAplicar.Add_Click({ Lanzar {
                     foreach ($c in $cam) { Con ("NCU{0} TCU {1,3}: {2} -> {3}" -f $tr.ncu, $c.tcu, $c.de, $c.a) ([System.Drawing.Color]::LightGreen) }
                 } else {
                     $sps = $(if ("$($acc.tipo)" -eq 'sptodas') { 1..7 } else { @([int]$acc.sp) })
-                    $antes = @(@(FC03-Leer $UNIT_NCU (Dir-Trama ($GR_SP_BASE + 1)) 7) | ForEach-Object { [int]$_ })
+                    $wA = FC03-Leer $UNIT_NCU (Dir-Trama ($GR_SP_BASE + 1)) 7
+                    $antes = @($wA | ForEach-Object { [int]$_ })
                     foreach ($sp in $sps) { $via = Gr-EscribirBits ($GR_SP_BASE + $sp) $bits ([bool]$acc.poner) $false }
                     Start-Sleep -Milliseconds 800
-                    $despues = @(@(FC03-Leer $UNIT_NCU (Dir-Trama ($GR_SP_BASE + 1)) 7) | ForEach-Object { [int]$_ })
+                    $wD = FC03-Leer $UNIT_NCU (Dir-Trama ($GR_SP_BASE + 1)) 7
+                    $despues = @($wD | ForEach-Object { [int]$_ })
                     $malos = @(); $notas = @()
                     foreach ($sp in $sps) {
                         $v = Gr-Veredicto ([int]$antes[$sp - 1]) ([int]$despues[$sp - 1]) $bits ([bool]$acc.poner)
