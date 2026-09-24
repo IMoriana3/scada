@@ -35,6 +35,30 @@ En las operaciones de **planta completa**, cada línea de la consola lleva delan
 
 Consola común con colores, botón **CANCELAR** para abortar operaciones largas, y **log automático** a `logs/tcu_toolbox_AAAAMMDD.log`. La ventana es **redimensionable y maximizable** (v4.6): al agrandarla crecen las tablas y la consola, que es lo que interesa en una planta de cientos de TCUs.
 
+**Órdenes secuenciales: la receta, no el botón (v11.85)** — sustituir una TCU
+no es *una* orden: es escribir sus parámetros, **guardarlos en NVM** y
+devolverla a AUTO, en ese orden y sin saltarse ninguno. Eso se hacía a mano,
+pestaña por pestaña, y lo que se olvida siempre es el NVM: la TCU queda bien
+hasta que se reinicia y vuelve a lo de antes. Pestaña **Órdenes secuenciales**
+(bloque TCUs): se monta la receta una vez, se guarda en un JSON y se repite.
+
+Pasos: escribir variable, guardar en NVM, poner modo, limpiar alarmas de motor,
+posición segura, sincronizar reloj, leer una variable y esperar.
+
+**La receta se ejecuta ENTERA sobre CADA TCU**, no paso a paso sobre toda la
+selección, y eso no es un detalle: si una TCU falla al escribir, a esa no se le
+guarda el NVM ni se la suelta a AUTO — se para su secuencia y las demás siguen.
+Al revés (escribir en las cien y luego guardar NVM en las cien) una TCU que
+falló al escribir se llevaría un NVM de lo que ya tenía.
+
+Antes de lanzar: **SIMULAR** no toca ningún equipo y dice, TCU a TCU, lo que
+haría cada paso; la confirmación enseña los pasos numerados, **el tiempo
+estimado** (una espera de 5 s por TCU en una planta son horas, y eso se ve
+antes) y si algún paso mueve seguidores, en cuyo caso va con guardia de viento.
+La validación es lo que más trabajo ahorra: **escribir y no guardar en NVM** se
+canta como aviso, igual que **guardar el NVM antes de escribir** (ese guarda lo
+que ya había). Escribir es de rol técnico; el de lectura puede simular.
+
 **Los grupos de la NCU, que es como manda ella (v11.84)** — la NCU no ordena
 TCU a TCU: manda por **grupos**, y eso es lo que hace el *Group Control* de su
 página web. Pestaña **Grupos NCU**, que lee y escribe:

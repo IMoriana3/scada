@@ -3872,7 +3872,9 @@ foreach ($op in @('NVM', 'Sincronizar', 'Backup NCU', 'Modo', 'Clear', 'Stow', '
 }
 # el bucle comun de PEM
 Check 'pem: Pem-PorTcu existe' ($src.Contains('function Pem-PorTcu(')) $true
-Check 'pem: y lo usan las cuatro acciones' ([regex]::Matches($src, [regex]::Escape('Pem-PorTcu $trabajos')).Count) 5
+# modo, clear, stow, quitar stow, test de motor y las recetas de la pestana
+# Ordenes secuenciales: todas recorren TCUs por el mismo sitio
+Check 'pem: y lo usan todas las acciones que recorren TCUs' ([regex]::Matches($src, [regex]::Escape('Pem-PorTcu $trabajos')).Count) 6
 Check 'pem: la guardia de viento va por NCU' ($src.Contains('Guardia-Viento $tr.cx')) $true
 Check 'pem: los contadores del test viven en un hashtable' ($src.Contains('$c = @{pasa=0; falla=0; salta=0; lim=0}')) $true
 # los backups de planta llevan la NCU en el nombre: si no, la TCU 12 de la NCU3
@@ -4626,6 +4628,68 @@ Check 'grupos: el boton que escribe es de tecnico' ($src.Contains('$btnFwPrep, $
 Check 'grupos: y pide confirmacion antes de mover nada' ($src.Contains('Gr-TextoConfirmar $acc $bits $trabajos.Count')) $true
 Check 'grupos: con guardia de viento por NCU' ($src.Contains('(Gr-NecesitaViento $acc) -and -not (Gr-GuardiaViento $tr.cx $chkGRViento.Checked)')) $true
 Check 'grupos: la pestana lee ademas los interruptores de limpieza' ($src.Contains("Gr-Estado `"`$(`$tr.ncu)`" `$l.sp `$l.din")) $true
+
+Write-Host ''
+Write-Host '== ordenes secuenciales: una receta que se ejecuta entera por TCU =='
+$pasoVar  = @{tipo='variable'; valor='40001 input_time_segundos = 30'}
+$pasoNvm  = @{tipo='nvm';      valor=''}
+$pasoAuto = @{tipo='modo';     valor='AUTO'}
+$receta   = @($pasoVar, $pasoNvm, $pasoAuto)
+Check 'receta: un paso se lee en una linea' (Sec-Texto $pasoAuto) 'Poner modo : AUTO'
+Check 'receta: y uno sin parametro tambien' (Sec-Texto $pasoNvm) 'Guardar en NVM'
+Check 'receta: un tipo que no existe no se inventa' ($null -eq (Sec-Tipo 'apagar')) $true
+# el tiempo sale ANTES: una espera por TCU en una planta son horas
+Check 'receta: minutos sobre 10 TCUs' (Sec-Minutos $receta 10) 2
+Check 'receta: y una espera de 30 s por TCU se nota' (Sec-Minutos (@($pasoVar) + @(@{tipo='esperar'; valor='30'})) 10) 6
+# guardia de viento solo si algun paso mueve
+Check 'receta: escribir y guardar NVM no mueve nada' (Sec-Mueve @($pasoVar, $pasoNvm)) $false
+Check 'receta: poner AUTO si mueve' (Sec-Mueve $receta) $true
+Check 'receta: un stow tambien' (Sec-Mueve @(@{tipo='stow'; valor='1'})) $true
+Check 'receta: solo leer no escribe' (Sec-Escribe @(@{tipo='leer'; valor='40001 input_time_segundos'})) $false
+Check 'receta: escribir una variable si' (Sec-Escribe @($pasoVar)) $true
+# lo que esta MAL no se lanza
+Check 'validar: una receta vacia no se lanza' (@((Sec-Validar @()).errores).Count) 1
+Check 'validar: una variable sin valor' (@((Sec-Validar @(@{tipo='variable'; valor='40001 input_time_segundos'}) $VARIABLES).errores).Count) 1
+Check 'validar: una variable que no esta en el mapa' ((Sec-Validar @(@{tipo='variable'; valor='inventada = 3'}) $VARIABLES).errores[0] -like '*no esta en el mapa*') $true
+Check 'validar: un modo que no existe' ((Sec-Validar @(@{tipo='modo'; valor='RAPIDO'})).errores[0] -like '*AUTO, MANUAL u OFF*') $true
+Check 'validar: una posicion segura fuera de 0-7' (@((Sec-Validar @(@{tipo='stow'; valor='9'})).errores).Count) 1
+Check 'validar: una espera de 0 s' (@((Sec-Validar @(@{tipo='esperar'; valor='0'})).errores).Count) 1
+Check 'validar: y una espera desmesurada' (@((Sec-Validar @(@{tipo='esperar'; valor='9999'})).errores).Count) 1
+# EL OLVIDO CLASICO: escribir y no guardar en NVM
+$sinNvm = Sec-Validar @($pasoVar, $pasoAuto) $VARIABLES
+Check 'validar: escribir sin NVM se canta' ($sinNvm.avisos[0] -like '*vuelve a lo de antes*') $true
+Check 'validar: pero no impide lanzarla' (@($sinNvm.errores).Count) 0
+$nvmAntes = Sec-Validar @($pasoNvm, $pasoVar) $VARIABLES
+Check 'validar: guardar NVM antes de escribir se canta' ($nvmAntes.avisos[0] -like '*guarda lo que ya habia*') $true
+$buena = Sec-Validar $receta $VARIABLES
+Check 'validar: la receta buena no tiene errores' (@($buena.errores).Count) 0
+Check 'validar: ni avisos' (@($buena.avisos).Count) 0
+# la confirmacion ensena los pasos numerados, el tiempo y que mueve
+$resu = Sec-Resumen $receta 10 'NCU1' $buena
+Check 'resumen: numera los pasos' ($resu -like '*1. Escribir variable*2. Guardar en NVM*3. Poner modo : AUTO*') $true
+Check 'resumen: dice que se ejecuta entera en cada TCU' ($resu -like '*ENTERA en cada TCU*') $true
+Check 'resumen: avisa de que mueve' ($resu -like '*MUEVEN LOS SEGUIDORES*') $true
+Check 'resumen: y el tiempo estimado' ($resu -like '*~2 min*') $true
+# guardar y cargar la receta
+$objR = Sec-AObjeto 'El Burgo' $receta
+Check 'guardar: lleva su tipo' $objR.tipo 'receta_tcu'
+Check 'guardar: y los pasos' (@($objR.pasos).Count) 3
+$vuelta = Sec-DeObjeto $objR
+Check 'cargar: vuelven los mismos pasos' (@($vuelta.pasos | ForEach-Object { $_.tipo }) -join ',') 'variable,nvm,modo'
+Check 'cargar: con su valor' $vuelta.pasos[2].valor 'AUTO'
+$eR = ''; try { [void](Sec-DeObjeto ([pscustomobject]@{tipo='inventario_tcu'})) } catch { $eR = 'rechazado' }
+Check 'cargar: un JSON que no es receta se rechaza' $eR 'rechazado'
+# el fuente: como se ejecuta y quien puede
+$blqSec = $src.Substring($src.IndexOf('function Sec-Correr'), 3600)
+Check 'receta: se recorre TCU a TCU con el recorredor comun' ($blqSec.Contains('Pem-PorTcu $trabajos {')) $true
+Check 'receta: y una TCU que falla se para ahi' ($blqSec.Contains("Sec-Fila `$ncu `$tcu '(resto de la receta)' 'SALTADO'")) $true
+Check 'receta: guardia de viento solo si mueve' ($blqSec.Contains('(Sec-Mueve $pasos)')) $true
+Check 'receta: con errores no se lanza' ($blqSec.Contains('La receta tiene errores y no se lanza')) $true
+Check 'receta: el boton que ejecuta es de tecnico' ($src.Contains('$btnGRAplicar, $btnSECEjec,')) $true
+Check 'receta: y el rol de lectura puede simularla' ($blqSec.Contains('Puedes SIMULARLA')) $true
+# SIMULAR no escribe: cada paso sale antes de tocar el equipo
+$blqPaso = $src.Substring($src.IndexOf('function Sec-EjecutarPaso'), 4200)
+Check 'simular: todos los pasos salen antes de escribir' (([regex]::Matches($blqPaso, 'if \(\$simular\)')).Count -ge 7) $true
 Check 'gw diag: y la fila NCU ensena la nota con los gateways' (([regex]::Matches($src, '\(Diag-NotaNcu \$dnP?\)')).Count) 2
 $fI = Gw-FilaInventario '1' 1 '10.100.1.53' $lectT
 Check 'gw inv: la fila del gateway' "$($fI.NCU)/GW$($fI.GW)/$($fI.Modelo)/$($fI.CPU_pct)/$($fI.Mem_total_MB)" '1/GW1/ConnectPort X2D/18/16.0'
