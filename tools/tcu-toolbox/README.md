@@ -35,6 +35,65 @@ En las operaciones de **planta completa**, cada línea de la consola lleva delan
 
 Consola común con colores, botón **CANCELAR** para abortar operaciones largas, y **log automático** a `logs/tcu_toolbox_AAAAMMDD.log`. La ventana es **redimensionable y maximizable** (v4.6): al agrandarla crecen las tablas y la consola, que es lo que interesa en una planta de cientos de TCUs.
 
+**Lo que el R8 añade, y cinco filas que no estaban en ningún mapa (v11.86)** —
+el R8 del mapa Modbus de la NCU es **estrictamente aditivo** sobre el R7.1: 12
+registros nuevos, cero retirados, cero cambios de significado, reparto de
+direcciones idéntico. Nada de lo que la herramienta ya hacía cambia. Los doce se
+usan, en dos sitios.
+
+*El ángulo de la posición segura 7* (`40030`-`40039`, uno por grupo), en la
+pestaña **Grupos NCU**. Hasta el R7.1 la SP7 se podía **pedir** por Modbus pero
+su ángulo solo se ponía desde la página de la NCU: pedirla a ciegas mandaba los
+seguidores a donde alguien hubiera dejado puesto. Ahora la maniobra entera
+—limpieza, lavado, inspección, un vuelo termográfico— cabe en la pestaña: el
+ángulo, la petición y el `40080`, que los devuelve solos a automático. El plazo
+se escribe **antes** de la petición; al revés, entre una y otro hay un rato con
+el plazo viejo, que puede ser 0 (o sea, no vuelven nunca).
+
+Como son RW se **releen**, al contrario que auto/manual. Y eso no es un adorno:
+la NCU puede no tomar la escritura —*Allow writing on the modbus map*— y puede
+tomarla **recortada** al rango del grupo, y las dos cosas se dicen. El registro
+admite ±180°, que no es el rango de ningún seguidor: se para lo absurdo antes de
+escribir y del resto responde la relectura. La **SP7 deja de estar exenta de la
+guardia de viento**: es la *custom*, su ángulo es arbitrario, y llevar un grupo a
+una posición de trabajo no protege de nada. Las 1..6 siguen exentas.
+
+*Límites de recorrido por TCU* (`50047`/`50048`), pestaña nueva **Límites de
+recorrido** (bloque TCUs). Límite software este/oeste por seguidor, puesto desde
+la NCU, que se quita escribiendo `0x7FFF`. **No es el rango de tilt del equipo**
+(`41111`-`41137`, que es su configuración y había que restaurar a mano: un olvido
+deja un seguidor mutilado y con pinta de estar bien configurado). Esto es
+temporal y se deshace con un botón — para trabajar debajo de un seguidor es justo
+lo que faltaba. Pestaña propia y no un paso de *Órdenes secuenciales* a
+propósito: estos dos registros son **de la NCU** (puerto 502, unidad 1) y las
+recetas hablan el mapa de la TCU por Zigbee en el 503/504.
+
+*Y cinco filas que el extractor del mapa perdía.* Descarta las filas sin
+«Variable name», y el documento describe ahí subvariables sin bautizar — estaban
+en el R7 igual que en el R8, así que no son nuevas: es que nunca llegaron al
+JSON. Dos se ponen a trabajar, porque vienen en palabras **que ya se leían** y
+contestan *por qué está quieto*: el **bit 6 de FlagsA** (`30504`), que dice que el
+SoC no da para mover el motor en automático —se deducía de los umbrales de SoC,
+o sea que se adivinaba lo que el bit ya decía—, y los **bits 15..13 del MSR**
+(`30501`), que dicen **qué** posición segura está activa: se leían para verificar
+un STOW recién mandado y no se enseñaban nunca, así que un seguidor abanderado
+por la NCU o por viento salía en AUTO con una desviación grande y sin motivo.
+Las dos, en los dos caminos (vía NCU y Zigbee directo).
+
+No se añaden los bits 9 y 10 de FlagsA: el R8 declara el calefactor y la
+relajación de batería **los dos** en el bit 10. El PDF v6 de la TCU desempata
+(calefactor en el 9) y hasta confirmarlo contra un equipo, adivinar cuál sobra
+sería peor que no tenerlos.
+
+Erratas del documento, anotadas donde toca: `50048` se describe como *east
+limit* siendo el oeste, y en el MSR el imán sale como `U1` en `(12..11)` y el BLE
+como `U2` en `(13..12)`, pisándose entre sí y con la posición segura.
+
+**Nada de esto se ha ejecutado contra una NCU de verdad**: la suite prueba las
+funciones puras y el fuente contra el simulador. Los registros son del R8, y una
+NCU con firmware anterior no los tiene: contesta excepción, se dice, y la columna
+queda **vacía** en vez de inventarse un «sin ángulo».
+
 **Órdenes secuenciales: la receta, no el botón (v11.85)** — sustituir una TCU
 no es *una* orden: es escribir sus parámetros, **guardarlos en NVM** y
 devolverla a AUTO, en ese orden y sin saltarse ninguno. Eso se hacía a mano,

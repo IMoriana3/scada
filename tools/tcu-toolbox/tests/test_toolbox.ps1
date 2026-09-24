@@ -4577,7 +4577,7 @@ Check 'grupos: poner bits no borra los otros' "$($mp.mascara)/$($mp.valor)" '655
 $mq = Gr-Mascara 5 $false
 Check 'grupos: quitar bits deja los otros' "$($mq.mascara)/$($mq.valor)" '65530/0'
 # la lista de acciones: 7 pedir + 7 quitar + todas + auto + manual
-Check 'grupos: acciones ofrecidas' (@($GR_ACCIONES).Count) 17
+Check 'grupos: acciones ofrecidas' (@($GR_ACCIONES).Count) 19
 Check 'grupos: la de limpieza es la posicion segura 4' ((Gr-Accion 'Pedir posicion segura 4 (limpieza)').sp) 4
 Check 'grupos: y la de viento la 1' ((Gr-Accion 'Pedir posicion segura 1 (viento)').sp) 1
 Check 'grupos: una accion que no existe no se inventa' ($null -eq (Gr-Accion 'Apagar la planta')) $true
@@ -4625,9 +4625,156 @@ Check 'escribir: mascara primero, para no pisar otros grupos' ($blqGr.Contains('
 Check 'escribir: y si la NCU no la acepta, leer-modificar-escribir' ($blqGr.Contains('la NCU no acepta FC22')) $true
 Check 'escribir: auto/manual van con FC16, que no se pueden releer' ($blqGr.Contains('registro de solo escritura')) $true
 Check 'grupos: el boton que escribe es de tecnico' ($src.Contains('$btnFwPrep, $btnGRAplicar,')) $true
-Check 'grupos: y pide confirmacion antes de mover nada' ($src.Contains('Gr-TextoConfirmar $acc $bits $trabajos.Count')) $true
+Check 'grupos: y pide confirmacion antes de mover nada' ($src.Contains('Gr-TextoConfirmar $acc $bits $trabajos.Count $angTxt $segundos')) $true
 Check 'grupos: con guardia de viento por NCU' ($src.Contains('(Gr-NecesitaViento $acc) -and -not (Gr-GuardiaViento $tr.cx $chkGRViento.Checked)')) $true
-Check 'grupos: la pestana lee ademas los interruptores de limpieza' ($src.Contains("Gr-Estado `"`$(`$tr.ncu)`" `$l.sp `$l.din")) $true
+Check 'grupos: la pestana lee ademas los interruptores de limpieza y el angulo de la SP7' ($src.Contains("Gr-Estado `"`$(`$tr.ncu)`" `$l.sp `$l.din `$l.sp7")) $true
+
+Write-Host ''
+Write-Host '== el angulo de la posicion segura 7 y los limites por TCU (mapa R8) =='
+# ---- grados <-> palabra ----
+Check 'ang: 38,5 grados son 3850 centesimas' (Ang-Palabra 38.5) 3850
+Check 'ang: y vuelven a salir iguales' (Ang-Grados 3850) 38.5
+Check 'ang: negativo en complemento a dos' (Ang-Palabra -12.25) 64311
+Check 'ang: y se lee negativo' (Ang-Grados 64311) -12.25
+Check 'ang: el cero es un angulo, no la ausencia de uno' (Ang-Grados 0) 0
+# el centinela NO se lee como 327,67 grados: eso pareceria un dato
+Check 'ang: 0x7FFF es "sin angulo", no un angulo' ($null -eq (Ang-Grados 0x7FFF)) $true
+Check 'ang: y se dice con palabras' (Ang-Texto 0x7FFF) 'sin angulo'
+Check 'ang: un angulo se dice con dos decimales y punto' (Ang-Texto 3850) '38.50 deg'
+# ---- lo que se teclea ----
+Check 'ang: se admite la coma del teclado espanol' (Ang-Parse '38,5').palabra 3850
+Check 'ang: y el punto del mapa' (Ang-Parse '38.5').palabra 3850
+Check 'ang: vacio no es cero, es "no lo toques"' (Ang-Parse '  ').hay $false
+Check 'ang: y vacio no se queja' (Ang-Parse '  ').nota ''
+Check 'ang: lo que no es un numero se rechaza' (Ang-Parse 'plano').hay $false
+Check 'ang: y se dice por que' ((Ang-Parse 'plano').nota -like "*no es un angulo*") $true
+# el registro admite +-180 y ningun seguidor llega ahi: el rango del registro
+# no es el rango del equipo
+$angAbs = Ang-Parse '120'
+Check 'ang: mas de 90 grados se rechaza aunque el registro lo admita' $angAbs.hay $false
+Check 'ang: y se dice que ningun seguidor llega' ($angAbs.nota -like '*ningun seguidor llega*') $true
+Check 'ang: 7FFF tecleado es el centinela' (Ang-Parse '0x7FFF').palabra 32767
+Check 'ang: y "nada" tambien' (Ang-Parse 'nada').palabra 32767
+# ---- la relectura, que es lo unico que prueba que la NCU lo ha tomado ----
+Check 'ang: releido igual, aceptado' (Ang-Veredicto 3850 3850).ok $true
+$angNo = Ang-Veredicto 3850 32767
+Check 'ang: si la NCU sigue sin angulo, FALLA' $angNo.ok $false
+Check 'ang: y dice donde mirar' ($angNo.nota -like '*Allow writing on the modbus map*') $true
+$angRec = Ang-Veredicto 4500 3000
+Check 'ang: recortado por la NCU tambien es FALLA' $angRec.ok $false
+Check 'ang: y se dice que el seguidor no ira donde pediste' ($angRec.nota -like '*RECORTADO*no ira donde pediste*') $true
+
+# ---- las dos acciones nuevas ----
+Check 'sp7: la accion de llevar a un angulo existe' ((Gr-Accion 'Llevar a un angulo (posicion segura 7, la custom)').tipo) 'sp7ir'
+Check 'sp7: y la de quitar el angulo' ((Gr-Accion 'Quitar el angulo de la posicion segura 7 (sin angulo)').tipo) 'sp7nada'
+# LA REGLA QUE IMPORTA: la 7 es la CUSTOM, su angulo es arbitrario y por tanto
+# pedirla NO es una accion protectora. Las 1..6 si.
+Check 'viento: llevar a un angulo pide guardia' (Gr-NecesitaViento (Gr-Accion 'Llevar a un angulo (posicion segura 7, la custom)')) $true
+Check 'viento: y pedir la 7 tambien, que es la custom' (Gr-NecesitaViento (Gr-Accion 'Pedir posicion segura 7')) $true
+Check 'viento: pero pedir la 1 (viento) sigue exenta' (Gr-NecesitaViento (Gr-Accion 'Pedir posicion segura 1 (viento)')) $false
+Check 'viento: y la 4 (limpieza) tambien, que no se cambia lo que ya valia' (Gr-NecesitaViento (Gr-Accion 'Pedir posicion segura 4 (limpieza)')) $false
+# ---- la confirmacion de las dos nuevas ----
+$cf7 = Gr-TextoConfirmar (Gr-Accion 'Llevar a un angulo (posicion segura 7, la custom)') 5 2 '38.50 deg' 900
+Check 'confirmar: ensena el angulo' ($cf7 -like '*38.50 deg*') $true
+Check 'confirmar: dice que se moveran a ese angulo' ($cf7 -like '*SE MOVERAN A ESE ANGULO*') $true
+Check 'confirmar: avisa de que el 40080 es de la NCU entera' ($cf7 -like '*NCU ENTERA*') $true
+$cf7sin = Gr-TextoConfirmar (Gr-Accion 'Llevar a un angulo (posicion segura 7, la custom)') 5 2 '38.50 deg' $null
+Check 'confirmar: sin plazo, dice que no se toca el 40080' ($cf7sin -like '*NO se toca la vuelta a automatico*') $true
+$cf7n = Gr-TextoConfirmar (Gr-Accion 'Quitar el angulo de la posicion segura 7 (sin angulo)') 5 2 'sin angulo'
+Check 'confirmar: quitar el angulo no mueve nada' ($cf7n -like '*No mueve nada ahora*') $true
+Check 'confirmar: y no se confunde con retirar la peticion' ($cf7n -like "*NO retira una peticion*") $true
+# pedir la 7 "a pelo" tiene que advertir de que el angulo es el que haya
+$cf7pelo = Gr-TextoConfirmar (Gr-Accion 'Pedir posicion segura 7') 5 2
+Check 'confirmar: pedir la 7 avisa de que es la custom' ($cf7pelo -like '*es la CUSTOM*') $true
+
+# ---- el angulo en la tabla de grupos ----
+$spT2 = @(0,0,0,0,0,0,0)
+$filasA = @(Gr-Estado '1' $spT2 0 @(3850, 0x7FFF, 0,0,0,0,0,0,0,0))
+Check 'sp7: el angulo del grupo 1 sale en su fila' $filasA[0].Angulo_SP7 '38.50 deg'
+Check 'sp7: y el grupo sin angulo lo dice' $filasA[1].Angulo_SP7 'sin angulo'
+# una NCU con firmware anterior al R8 no tiene esos registros: la columna queda
+# VACIA, que no es lo mismo que "sin angulo"
+$filasB = @(Gr-Estado '1' $spT2 0 $null)
+Check 'sp7: sin lectura, la columna vacia (no "sin angulo")' $filasB[0].Angulo_SP7 ''
+Check 'sp7: y el resto de la fila sigue saliendo' $filasB[0].Posiciones 'ninguna'
+
+# ---- de lista de grupos a bitset (el camino de vuelta de Ncu-Grupos) ----
+Check 'grupos: lista a bits' (Grupos-Bits @(1,3,5)) 21
+Check 'grupos: y lo que no es grupo no entra' (Grupos-Bits @(0,11,2)) 2
+Check 'grupos: vacio son cero bits' (Grupos-Bits @()) 0
+
+# ---- limites de recorrido por TCU ----
+Check 'lim: la TCU 1 empieza en 50047' (Lim-Dir 1 $LIM_ESTE) 50047
+Check 'lim: y su limite oeste en 50048' (Lim-Dir 1 $LIM_OESTE) 50048
+Check 'lim: el paso es de 50 registros' (Lim-Dir 2 $LIM_ESTE) 50097
+Check 'lim: la TCU 44 cae donde toca' (Lim-Dir 44 $LIM_ESTE) 52197
+$eLim = ''; try { [void](Lim-Dir 300 $LIM_ESTE) } catch { $eLim = 'rechazada' }
+Check 'lim: una TCU fuera del bloque se rechaza' $eLim 'rechazada'
+$eLim2 = ''; try { [void](Lim-Dir 0 $LIM_ESTE) } catch { $eLim2 = 'rechazada' }
+Check 'lim: y la TCU 0 no existe' $eLim2 'rechazada'
+# el par: un limite este por encima del oeste deja al seguidor sin recorrido
+$lv1 = Lim-Validar '-40' '40'
+Check 'lim: un par con sentido pasa' $lv1.ok $true
+Check 'lim: y guarda las dos palabras' "$($lv1.este.palabra) $($lv1.oeste.palabra)" '61536 4000'
+$lv2 = Lim-Validar '40' '-40'
+Check 'lim: este por encima del oeste se rechaza' $lv2.ok $false
+Check 'lim: y se dice que se queda sin recorrido' ($lv2.nota -like '*sin recorrido*') $true
+$lv3 = Lim-Validar '10' '10'
+Check 'lim: iguales tambien (recorrido cero)' $lv3.ok $false
+$lv4 = Lim-Validar '' ''
+Check 'lim: sin ningun limite no hay nada que escribir' $lv4.ok $false
+$lv5 = Lim-Validar '-30' ''
+Check 'lim: uno solo vale, el otro no se toca' $lv5.ok $true
+Check 'lim: y el que no se toca se queda sin palabra' $lv5.oeste.hay $false
+$lv6 = Lim-Validar 'plano' '40'
+Check 'lim: un angulo mal escrito se rechaza diciendo cual' ($lv6.nota -like '*limite este*') $true
+# lo que se ve en la tabla
+Check 'lim: sin limites, "sin limitar"' (Lim-Recorrido 0x7FFF 0x7FFF) 'sin limitar'
+Check 'lim: con los dos, el recorrido que queda' (Lim-Recorrido (Ang-Palabra -20) (Ang-Palabra 20)) '40.00 deg'
+Check 'lim: con uno solo, se dice cual' (Lim-Recorrido 0x7FFF (Ang-Palabra 20)) 'hasta 20.00 deg al oeste'
+Check 'lim: y el otro' (Lim-Recorrido (Ang-Palabra -20) 0x7FFF) 'desde -20.00 deg al este'
+Check 'lim: un par imposible se canta en la tabla' (Lim-Recorrido (Ang-Palabra 20) (Ang-Palabra -20)) 'SIN RECORRIDO (este >= oeste)'
+$fLim = Lim-Fila '3' 12 (Ang-Palabra -20) (Ang-Palabra 20) 'limitar' 'OK' 'escrito y releido'
+Check 'lim: la fila lleva todas las columnas' (@($fLim.PSObject.Properties).Count) 8
+Check 'lim: con la NCU y la TCU delante' "$($fLim.NCU)/$($fLim.TCU)" '3/12'
+# la confirmacion
+$lcf = Lim-TextoConfirmar (Lim-Validar '-20' '20') 44 2 $false
+Check 'lim: la confirmacion dice que NO mueve nada ahora' ($lcf -like '*NO mueve los seguidores ahora*') $true
+Check 'lim: y que es temporal, no la configuracion del seguidor' ($lcf -like '*no la configuracion del seguidor*') $true
+Check 'lim: con las TCUs y las NCUs delante' ($lcf -like '*TCUs: 44*NCU(s): 2*') $true
+$lcfQ = Lim-TextoConfirmar $null 44 2 $true
+Check 'lim: quitar dice que recuperan su recorrido configurado' ($lcfQ -like '*recuperan todo el recorrido*') $true
+
+# ---- el fuente: transporte, rol y orden de escritura ----
+# ESTO es lo que no se puede equivocar: 50047/50048 son de la NCU (puerto 502,
+# unidad 1), no de la TCU. Si entraran en $VARIABLES o en las recetas irian por
+# Zigbee a un hueco del mapa de la TCU.
+Check 'lim: no se cuela en el mapa de variables de la TCU' ($VARIABLES.Keys -join ' ' -notlike '*5004*') $true
+Check 'lim: ni en los tipos de paso de las recetas' (($SEC_TIPOS | ForEach-Object { "$($_.tipo)" }) -notcontains 'limite') $true
+$blqLim = $src.Substring($src.IndexOf('function Lim-Recorrer'), 1200)
+Check 'lim: el bucle abre el puerto de la NCU, no el del gateway' ($blqLim.Contains('Modbus-Conectar $tr.ip $PUERTO_NCU')) $true
+Check 'lim: y la unidad es la NCU' ($src.Contains('FC16-Escribir $UNIT_NCU (Lim-Dir $tcu $LIM_ESTE)')) $true
+Check 'lim: los dos botones que escriben son de tecnico' ($src.Contains('$btnLIMAplicar, $btnLIMQuitar,')) $true
+Check 'lim: poner y quitar comparten cuerpo (no pueden desviarse)' ($src.Contains('$btnLIMQuitar.Add_Click({ Lanzar { Lim-Aplicar $true } })')) $true
+$blqSp7 = $src.Substring($src.IndexOf("if (`"`$(`$acc.tipo)`" -eq 'sp7ir' -or"), 2400)
+Check 'sp7: el plazo se escribe ANTES de la peticion' ($blqSp7.IndexOf('FC16-Escribir $UNIT_NCU 40080') -lt $blqSp7.IndexOf('Gr-EscribirAngulo')) $true
+Check 'sp7: y la peticion solo si el angulo quedo bien' ($blqSp7.Contains('if ($e.malos.Count -gt 0)')) $true
+Check 'sp7: quitar el angulo no toca la peticion' ($blqSp7.Contains('NO se ha tocado la peticion')) $true
+# el bit que dice POR QUE un seguidor esta quieto, en los dos caminos
+Check 'soc: el bit 6 se cuenta via NCU' ($src.Contains('(($fl -shr $BIT_SOC_NO_MUEVE) -band 1)')) $true
+Check 'soc: y por Zigbee directo' ($src.Contains('(($st -shr $BIT_SOC_NO_MUEVE) -band 1)')) $true
+Check 'soc: es el bit 6' $BIT_SOC_NO_MUEVE 6
+# la quinta subvariable que el extractor perdia: QUE posicion segura esta activa.
+# Un seguidor abanderado salia en AUTO con una desviacion grande y sin motivo.
+Check 'sp: ninguna activa' (Sp-Activa 0) 0
+Check 'sp: la 1 esta en los bits 15..13' (Sp-Activa (1 -shl 13)) 1
+Check 'sp: y la 7 es el tope' (Sp-Activa (7 -shl 13)) 7
+Check 'sp: el modo no se confunde con la posicion segura' (Sp-Activa 0x0200) 0
+Check 'sp: sin posicion segura, sin nota' (Sp-Nota 0) ''
+Check 'sp: y con ella, dice cual y como se llama' (Sp-Nota (1 -shl 13)) 'posicion segura 1 (viento) activa'
+Check 'sp: la 7 no tiene nombre y no se lo inventa' (Sp-Nota (7 -shl 13)) 'posicion segura 7 activa'
+Check 'sp: se cuenta via NCU' ($src.Contains('$nSp = Sp-Nota $msr')) $true
+Check 'sp: y por Zigbee directo' ($src.Contains('$nSp = Sp-Nota $r1[0]')) $true
 
 Write-Host ''
 Write-Host '== ordenes secuenciales: una receta que se ejecuta entera por TCU =='

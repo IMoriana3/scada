@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.85'
+$VERSION_TOOLBOX = '11.86'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -751,6 +751,15 @@ $CRIT_AL1 = (1 -shl 2) -bor (1 -shl 4) -bor (1 -shl 14)                    # ran
 $CRIT_AL2 = (1 -shl 4) -bor (1 -shl 5) -bor (1 -shl 8) -bor (1 -shl 15)   # corto, sobrecorriente, eje, driver
 # el 15 (driver de motor) no existe en el mapa de la NCU: fuera de su mascara
 $CRIT_AL2_NCU = (1 -shl 4) -bor (1 -shl 5) -bor (1 -shl 8)
+# El bit 6 de la palabra de flags (30504 via NCU, 30006 por Zigbee) dice que el
+# SoC NO DA para mover el motor en automatico. Es la RAZON de que un seguidor
+# este quieto, dicha por el propio equipo, y la teniamos delante sin usarla: el
+# extractor del mapa descarta las filas sin "Variable name" y esta es una de
+# ellas, asi que nunca llego al JSON. Aparece igual en el R8 (hoja TCU Compat)
+# y en el v6.1 de la TCU, en el mismo bit, asi que vale para los dos caminos.
+# Hasta ahora esto se deducia de los umbrales de SoC, que es adivinar lo que el
+# bit ya decia.
+$BIT_SOC_NO_MUEVE = 6
 
 function Bits-Texto([int]$valor, [hashtable]$tabla) {
     $lista = @()
@@ -955,6 +964,25 @@ function Viento-Seguro([string]$ipNcu, [int]$to, [int]$puerto = 0) {
 $MODOS_TCU = @('OFF','MANUAL','AUTO','?')
 function Modo-De([int]$mainStatus) { return $MODOS_TCU[(($mainStatus -shr 8) -band 0x3)] }
 function Comis-De([int]$mainStatus) { return (($mainStatus -shr 3) -band 0x3) }
+
+# QUE posicion segura tiene activa un seguidor: bits 15..13 de la palabra de
+# estado (30501 via NCU, 30001 por Zigbee). Lo leiamos ya para comprobar un
+# STOW que acabamos de mandar, y no se ensenaba nunca en el diagnostico: un
+# seguidor abanderado por la NCU, o por viento, salia con su modo AUTO y una
+# desviacion grande sin decir por que. Es el motivo, y venia en la misma
+# palabra.
+#
+# Esta subvariable es una de las cinco que el extractor del mapa perdia (se
+# llama SafePositionState_s0 y el filtro de "ejemplo de otra unidad" se la
+# comia: las unidades se numeran desde 1, o sea que el _s0 es errata por _s1).
+# Pura.
+function Sp-Activa([int]$mainStatus) { return (($mainStatus -shr 13) -band 0x7) }
+function Sp-Nota([int]$mainStatus) {
+    $n = Sp-Activa $mainStatus
+    if ($n -eq 0) { return '' }
+    $et = $(if ($GR_SP_NOMBRE.ContainsKey($n)) { " ($($GR_SP_NOMBRE[$n]))" } else { '' })
+    return "posicion segura $n$et activa"
+}
 
 # ---------- un seguidor parado no puede salir verde ----------
 # El modo se leia, se pintaba en su columna y NO se miraba para la salud. Un
@@ -1485,6 +1513,85 @@ $GR_AUTO    = 40070     # auto_mode   por grupo, SOLO ESCRITURA
 $GR_MANUAL  = 40071     # manual_mode por grupo, SOLO ESCRITURA
 $GR_SP_NOMBRE = @{1 = 'viento'; 3 = 'nieve'; 4 = 'limpieza'}
 
+# ---- el angulo de la posicion segura 7, que es la CUSTOM (mapa R8) ----
+# El R8 anade 40030..40039: el angulo al que va CADA grupo cuando se le pide la
+# posicion segura 7. Hasta el R7.1 la SP7 se podia PEDIR por Modbus pero el
+# angulo solo se ponia desde la pagina de la NCU, asi que pedirla a ciegas
+# mandaba los seguidores a donde alguien hubiera dejado puesto. Ahora la
+# maniobra entera -limpieza, lavado, inspeccion, un vuelo termografico- cabe en
+# tres escrituras: el angulo, la peticion (bit del 40007) y el 40080, que la
+# devuelve sola a automatico.
+#
+# 0x7FFF significa SIN ANGULO: la NCU no impone ninguno. Es el valor de fabrica
+# y es lo que hay que escribir para deshacer. Un 0 NO deshace: el 0 es el
+# angulo cero, que es una posicion como cualquier otra.
+$GR_SP7_BASE = 40030    # grupo g -> 40030 + g - 1
+$GR_SP7      = 7        # la posicion segura que lleva angulo
+$ANG_NADA    = 0x7FFF   # 32767: "sin angulo" / limite desactivado
+# El registro admite +-180 grados, que es un angulo al que no llega ningun
+# seguidor: el rango del REGISTRO no es el rango del EQUIPO. El limite de
+# verdad es el tilt configurado de cada TCU (41111/41125), y eso no se puede
+# consultar por el puerto 502. Asi que aqui se para lo absurdo -pasarse de la
+# vertical- y del resto responde la relectura: si la NCU recorta el angulo, se
+# ve y se dice, en vez de dar por bueno lo que se mando.
+$ANG_MAX = 90.0
+
+# Grados a la palabra I16 del mapa (centesimas de grado) y al contrario. Las
+# dos las usan los angulos de grupo (40030-40039) y los limites por TCU
+# (50047/50048), que van en las mismas unidades y con el mismo centinela.
+# Puras.
+function Ang-Palabra([double]$grados) {
+    $c = [int][math]::Round($grados * 100.0)
+    if ($c -lt -32768 -or $c -gt 32767) { throw "angulo fuera del registro: $grados deg" }
+    if ($c -lt 0) { $c += 65536 }
+    return ($c -band 0xFFFF)
+}
+function Ang-Grados($palabra) {
+    if ($null -eq $palabra -or "$palabra" -eq '') { return $null }
+    $w = [int]$palabra -band 0xFFFF
+    if ($w -eq $ANG_NADA) { return $null }          # sin angulo, no "163,83 deg"
+    if ($w -gt 32767) { $w -= 65536 }
+    return ([double]$w / 100.0)
+}
+# Lo que se ve en la tabla. Un centinela se dice con palabras, no con el numero
+# que le toco: 0x7FFF leido como angulo son 327,67 grados y eso parece un dato.
+function Ang-Texto($palabra) {
+    $g = Ang-Grados $palabra
+    if ($null -eq $g) { return 'sin angulo' }
+    return ($g.ToString('0.00', $INV) + ' deg')
+}
+# El angulo que se teclea. Admite coma y punto -el portatil va en espanol y el
+# mapa en ingles- y vacio no es cero: es "no lo toques". Pura.
+function Ang-Parse([string]$txt) {
+    $t = "$txt".Trim().Replace(',', '.')
+    if ($t -eq '') { return @{hay = $false; palabra = $null; nota = ''} }
+    if ($t -match '^(0x)?7fff$' -or $t.ToLower() -eq 'nada' -or $t.ToLower() -eq 'ninguno') {
+        return @{hay = $true; palabra = $ANG_NADA; nota = 'sin angulo'}
+    }
+    $d = 0.0
+    if (-not [double]::TryParse($t, [Globalization.NumberStyles]::Float, $INV, [ref]$d)) {
+        return @{hay = $false; palabra = $null; nota = "'$txt' no es un angulo"}
+    }
+    if ([math]::Abs($d) -gt $ANG_MAX) {
+        return @{hay = $false; palabra = $null; nota = "$txt deg pasa de $($ANG_MAX.ToString('0', $INV)): ningun seguidor llega ahi"}
+    }
+    return @{hay = $true; palabra = (Ang-Palabra $d); nota = (Ang-Texto (Ang-Palabra $d))}
+}
+# Veredicto de un angulo escrito, releyendolo. La NCU puede no tomarlo -el mapa
+# se escribe solo si "Allow writing on the modbus map" esta puesto- y puede
+# tomarlo RECORTADO al rango del grupo. Las dos cosas hay que decirlas: la
+# segunda no es un fallo, pero el seguidor no va a ir donde se pidio. Pura.
+function Ang-Veredicto($pedida, $leida) {
+    $p = [int]$pedida -band 0xFFFF; $l = [int]$leida -band 0xFFFF
+    if ($p -eq $l) { return @{ok = $true; nota = ''} }
+    $gp = Ang-Grados $p; $gl = Ang-Grados $l
+    if ($null -eq $gl) {
+        return @{ok = $false; nota = "pedido $(Ang-Texto $p) y la NCU sigue sin angulo; mira 'Allow writing on the modbus map' en su pagina"}
+    }
+    if ($null -ne $gp -and [math]::Abs($gp - $gl) -le 0.01) { return @{ok = $true; nota = ''} }
+    return @{ok = $false; nota = "pedido $(Ang-Texto $p) y la NCU ha guardado $(Ang-Texto $l): lo ha RECORTADO a su rango, el seguidor no ira donde pediste"}
+}
+
 # El texto de grupos que se teclea, a bitset: "1,3,5", "1-4", "todos". Lo que
 # no se entiende se rechaza en vez de mandar un comando a un grupo cualquiera.
 # Pura.
@@ -1506,6 +1613,18 @@ function Grupos-Parse([string]$txt) {
 }
 
 # Cuantos grupos hay en un bitset. Pura.
+# Una lista de numeros de grupo, a bitset. Es el camino de vuelta de
+# Ncu-Grupos y hace falta para decir EN QUE grupos ha fallado algo. Pura.
+function Grupos-Bits($grupos) {
+    $b = 0
+    foreach ($g in @($grupos)) {
+        $n = [int]$g
+        if ($n -lt 1 -or $n -gt $GR_N) { continue }
+        $b = $b -bor (1 -shl ($n - 1))
+    }
+    return $b
+}
+
 function Grupos-Cuantos([int]$w) {
     $n = 0
     for ($i = 0; $i -lt $GR_N; $i++) { if ($w -band (1 -shl $i)) { $n++ } }
@@ -1534,6 +1653,10 @@ foreach ($sp in 1..7) {
 $GR_ACCIONES += ,@{n = 'Quitar TODAS las posiciones seguras'; tipo = 'sptodas'; poner = $false}
 $GR_ACCIONES += ,@{n = 'Pasar a AUTO';   tipo = 'modo'; modo = 'AUTO'}
 $GR_ACCIONES += ,@{n = 'Pasar a MANUAL'; tipo = 'modo'; modo = 'MANUAL'}
+# Las dos del R8. Van las ultimas y no cambian el orden de las de antes, que es
+# lo que fija el desplegable por defecto.
+$GR_ACCIONES += ,@{n = "Llevar a un angulo (posicion segura $GR_SP7, la custom)"; tipo = 'sp7ir';  sp = $GR_SP7; poner = $true}
+$GR_ACCIONES += ,@{n = "Quitar el angulo de la posicion segura $GR_SP7 (sin angulo)"; tipo = 'sp7nada'}
 
 function Gr-Accion([string]$nombre) {
     foreach ($a in $GR_ACCIONES) { if ("$($a.n)" -eq "$nombre") { return $a } }
@@ -1543,19 +1666,31 @@ function Gr-Accion([string]$nombre) {
 # Que acciones piden guardia de viento. PEDIR una posicion segura es la accion
 # PROTECTORA -es justo lo que se quiere con viento- y no se bloquea nunca.
 # Quitarla, o soltar el grupo a auto o a manual, deja de proteger: esas si.
+#
+# CON UNA EXCEPCION, y la deja ver el R8: la SP7 es la CUSTOM. Su angulo lo
+# pone quien quiera (40030-40039) y no tiene por que proteger de nada -la
+# maniobra tipica es llevar el grupo a una posicion de trabajo-, asi que pedir
+# la 7 se trata como lo que es, mover seguidores a un angulo arbitrario, y pide
+# guardia. Las 1..6 son posiciones seguras configuradas y siguen exentas.
 # Pura.
 function Gr-NecesitaViento($acc) {
     if (-not $acc) { return $true }
-    if ("$($acc.tipo)" -eq 'sp' -and $acc.poner) { return $false }
+    if ("$($acc.tipo)" -eq 'sp' -and $acc.poner -and [int]$acc.sp -ne $GR_SP7) { return $false }
     return $true
 }
 
 # El estado de los diez grupos de una NCU: los siete registros de posicion
-# segura (40001..40007, en ese orden) y el 30100, cuyos bits 3..12 son los
-# interruptores de limpieza de los grupos 1..10. Una fila por grupo. Pura.
-function Gr-Estado([string]$ncu, $sp, [int]$din) {
+# segura (40001..40007, en ese orden), el 30100 -cuyos bits 3..12 son los
+# interruptores de limpieza de los grupos 1..10- y, si se han leido, los diez
+# angulos de la SP7 (40030..40039). Una fila por grupo. Pura.
+#
+# $sp7 puede venir a $null: las NCUs con firmware anterior al R8 no tienen esos
+# registros y el barrido no se cae por eso. La columna queda vacia, que no es lo
+# mismo que "sin angulo".
+function Gr-Estado([string]$ncu, $sp, [int]$din, $sp7 = $null) {
     $r = @()
     $regs = @($sp)
+    $angs = @($sp7)
     for ($g = 1; $g -le $GR_N; $g++) {
         $bit = 1 -shl ($g - 1)
         $pedidas = @()
@@ -1569,6 +1704,7 @@ function Gr-Estado([string]$ncu, $sp, [int]$din) {
             NCU = "$ncu"; Grupo = "$g"
             Limpieza = $(if ($din -band (1 -shl ($g + 2))) { 'INTERRUPTOR ON' } else { '-' })
             Posiciones = $(if ($pedidas.Count -eq 0) { 'ninguna' } else { ($pedidas -join '; ') })
+            Angulo_SP7 = $(if ($g -le $angs.Count -and $null -ne $angs[$g - 1] -and "$($angs[$g - 1])" -ne '') { Ang-Texto $angs[$g - 1] } else { '' })
             Accion = ''; Resultado = ''; Nota = ''
         }
     }
@@ -1606,16 +1742,35 @@ function Gr-Cambiadas($antes, $despues) {
 # Lo que se le pregunta al tecnico antes de mover nada. Dice en que sentido se
 # mueven los seguidores -no es lo mismo irse a posicion segura que volver al
 # sol- y admite que no sabemos cuantos son. Pura.
-function Gr-TextoConfirmar($acc, [int]$bits, [int]$nNcus) {
+function Gr-TextoConfirmar($acc, [int]$bits, [int]$nNcus, [string]$ang = '', $segundos = $null) {
     $t = "$($acc.n)`r`n`r`nGrupos: $(Ncu-Grupos $bits)   -   NCU(s): $nNcus"
+    if ("$($acc.tipo)" -eq 'sp7ir') {
+        $t += "`r`n`r`nAngulo: $ang"
+        $t += "`r`n`r`nLOS SEGUIDORES DE ESOS GRUPOS SE MOVERAN A ESE ANGULO. La posicion segura 7 es la CUSTOM: el angulo es el que se pida, no una posicion de proteccion."
+        if ($null -ne $segundos) {
+            $t += "`r`n`r`nVuelven solos a automatico a los $segundos s (registro 40080, y es de la NCU ENTERA: afecta tambien a los grupos que no tocas)."
+        } else {
+            $t += "`r`n`r`nNO se toca la vuelta a automatico (40080): se quedaran ahi hasta que caduque el plazo que la NCU ya tenga puesto, o hasta que se les quite la peticion a mano."
+        }
+        $t += "`r`n`r`nCUANTOS seguidores son, no se sabe: el mapa no dice que TCU esta en que grupo. Y el angulo que la NCU acepta lo limita el rango de tilt de cada seguidor, que por el puerto 502 no se puede consultar: se relee despues y se dice si lo ha recortado.`r`n`r`nContinuar?"
+        return $t
+    }
+    if ("$($acc.tipo)" -eq 'sp7nada') {
+        $t += "`r`n`r`nSe deja la posicion segura 7 de esos grupos SIN ANGULO (0x7FFF). No mueve nada ahora: quita el angulo para que nadie pida luego la 7 y los mande a un sitio que no eligio."
+        $t += "`r`n`r`nOJO: esto NO retira una peticion de la 7 que ya este puesta. Para eso, 'Quitar posicion segura 7'.`r`n`r`nContinuar?"
+        return $t
+    }
     if ("$($acc.tipo)" -eq 'sp' -and $acc.poner) {
         $t += "`r`n`r`nLOS SEGUIDORES DE ESOS GRUPOS SE MOVERAN a la posicion segura."
+        if ([int]$acc.sp -eq $GR_SP7) {
+            $t += " La 7 es la CUSTOM: iran al angulo que tenga puesto cada grupo, que NO es necesariamente una posicion de proteccion. Mira la columna Angulo SP7 antes."
+        }
     } elseif ("$($acc.tipo)" -eq 'modo' -and "$($acc.modo)" -eq 'MANUAL') {
         $t += "`r`n`r`nLOS SEGUIDORES DE ESOS GRUPOS DEJARAN DE SEGUIR AL SOL y se quedaran donde esten."
     } else {
         $t += "`r`n`r`nLOS SEGUIDORES DE ESOS GRUPOS VUELVEN A SEGUIR AL SOL: se moveran, y dejan de estar protegidos por esa posicion segura."
     }
-    $t += "`r`n`r`nCUANTOS seguidores son, no se sabe: el mapa R7.1 no dice que TCU esta en que grupo. Si no estas seguro, mirala en la pagina de la NCU antes.`r`n`r`nContinuar?"
+    $t += "`r`n`r`nCUANTOS seguidores son, no se sabe: el mapa no dice que TCU esta en que grupo, y el R8 tampoco lo arregla. Si no estas seguro, mirala en la pagina de la NCU antes.`r`n`r`nContinuar?"
     return $t
 }
 
@@ -1628,6 +1783,91 @@ function Ncu-Grupos([int]$w) {
     for ($i = 0; $i -lt 10; $i++) { if ($w -band (1 -shl $i)) { $g += ($i + 1) } }
     if ($g.Count -eq 0) { return ("0x{0:X4}" -f $w) }
     return ($g -join ',')
+}
+
+# ======================= LIMITES DE RECORRIDO POR TCU =======================
+# El R8 anade 50047 y 50048 al bloque que la NCU tiene POR CADA TCU: un limite
+# software este y oeste, en centesimas de grado, con 0x7FFF para desactivarlo.
+#
+# Y no es lo mismo que el rango de tilt del seguidor. Ese vive en la TCU
+# (41111..41137, siete tramos, en float y por Zigbee) y es SU CONFIGURACION:
+# para restringir el recorrido de un seguidor habia que sobrescribirla y
+# acordarse de devolverla, con lo que un olvido deja un seguidor mutilado y con
+# pinta de estar bien configurado. Esto es otra cosa y por eso merece pestana
+# propia: un limite TEMPORAL, puesto desde la NCU, que se quita escribiendo el
+# centinela. Para trabajar debajo de un seguidor es justo lo que faltaba.
+#
+# OJO AL TRANSPORTE, que es la trampa: estos dos registros son de la NCU, no de
+# la TCU. Se escriben en el PUERTO 502 con unidad 1 (la NCU) y la TCU se
+# selecciona por la DIRECCION, no por el esclavo. No entran en $VARIABLES ni en
+# Ordenes secuenciales, que hablan el mapa de la TCU por Zigbee en el 503/504:
+# un 50047 por ahi iria a un hueco del mapa de la TCU.
+$LIM_BASE  = 50000      # bloque "TCU Registers": 50000..62799, 50 registros x 256 TCUs
+$LIM_PASO  = 50
+$LIM_ESTE  = 47         # CustomEastLimit_s1
+$LIM_OESTE = 48         # CustomWestLimit_s1  (el R8 describe este como "east": errata suya)
+$LIM_TCU_MAX = 256
+
+# Donde cae un registro del bloque por TCU. Pura.
+function Lim-Dir([int]$tcu, [int]$off) {
+    if ($tcu -lt 1 -or $tcu -gt $LIM_TCU_MAX) { throw "TCU $tcu fuera del bloque de la NCU (1..$LIM_TCU_MAX)" }
+    return ($LIM_BASE + ($tcu - 1) * $LIM_PASO + $off)
+}
+
+# Los dos limites que se han teclelado, validados como PAR. Un limite este por
+# encima del oeste no es un limite: es un seguidor sin recorrido, y es el mismo
+# error que ya se vigila en la auditoria de rangos de tilt. Pura.
+function Lim-Validar([string]$este, [string]$oeste) {
+    $e = Ang-Parse $este
+    $o = Ang-Parse $oeste
+    if (-not $e.hay -and "$($e.nota)" -ne '') { return @{ok = $false; nota = "limite este: $($e.nota)"} }
+    if (-not $o.hay -and "$($o.nota)" -ne '') { return @{ok = $false; nota = "limite oeste: $($o.nota)"} }
+    if (-not $e.hay -and -not $o.hay) { return @{ok = $false; nota = 'no has puesto ningun limite'} }
+    $ge = Ang-Grados $e.palabra
+    $go = Ang-Grados $o.palabra
+    if ($null -ne $ge -and $null -ne $go -and $ge -ge $go) {
+        return @{ok = $false; nota = ("el limite este ({0}) no puede ser mayor o igual que el oeste ({1}): el seguidor se queda sin recorrido" -f (Ang-Texto $e.palabra), (Ang-Texto $o.palabra))}
+    }
+    return @{ok = $true; nota = ''; este = $e; oeste = $o}
+}
+
+# Una fila de la tabla. Todas las columnas siempre, que Export-Csv mira solo el
+# primer objeto. Pura.
+function Lim-Fila([string]$ncu, $tcu, $este, $oeste, [string]$accion = '', [string]$res = '', [string]$nota = '') {
+    return [pscustomobject]@{
+        NCU = "$ncu"; TCU = "$tcu"
+        Este = $(if ($null -eq $este) { '' } else { Ang-Texto $este })
+        Oeste = $(if ($null -eq $oeste) { '' } else { Ang-Texto $oeste })
+        Recorrido = $(if ($null -eq $este -or $null -eq $oeste) { '' } else { Lim-Recorrido $este $oeste })
+        Accion = $accion; Resultado = $res; Nota = $nota
+    }
+}
+
+# Cuanto recorrido le queda al seguidor con esos dos limites puestos. Es el dato
+# que dice de un vistazo si alguien se dejo un limite que estorba: "sin limite"
+# no es lo mismo que "13 deg de recorrido". Pura.
+function Lim-Recorrido($este, $oeste) {
+    $ge = Ang-Grados $este; $go = Ang-Grados $oeste
+    if ($null -eq $ge -and $null -eq $go) { return 'sin limitar' }
+    if ($null -eq $ge) { return ("hasta " + (Ang-Texto $oeste) + " al oeste") }
+    if ($null -eq $go) { return ("desde " + (Ang-Texto $este) + " al este") }
+    if ($ge -ge $go) { return 'SIN RECORRIDO (este >= oeste)' }
+    return (($go - $ge).ToString('0.00', $INV) + ' deg')
+}
+
+# El texto que se ensena antes de escribir. Pura.
+function Lim-TextoConfirmar($val, [int]$nTcus, [int]$nNcus, [bool]$quitar) {
+    if ($quitar) {
+        $t = "QUITAR el limite de recorrido (0x7FFF en los dos)`r`n`r`nTCUs: $nTcus   -   NCU(s): $nNcus"
+        $t += "`r`n`r`nLos seguidores recuperan todo el recorrido que tengan configurado en su propio rango de tilt. No se mueven por esto, pero dejan de estar retenidos.`r`n`r`nContinuar?"
+        return $t
+    }
+    $t = "LIMITAR el recorrido`r`n`r`nTCUs: $nTcus   -   NCU(s): $nNcus"
+    $t += "`r`n`r`nEste:  " + $(if ($val.este.hay)  { Ang-Texto $val.este.palabra }  else { 'no se toca' })
+    $t += "`r`nOeste: " + $(if ($val.oeste.hay) { Ang-Texto $val.oeste.palabra } else { 'no se toca' })
+    $t += "`r`n`r`nEsto NO mueve los seguidores ahora: les recorta hasta donde pueden llegar. Si alguno esta YA fuera del limite, se movera cuando le toque seguir."
+    $t += "`r`n`r`nEs un limite TEMPORAL de la NCU, no la configuracion del seguidor: para deshacerlo esta el boton de quitar, no hay que restaurar nada a mano.`r`n`r`nContinuar?"
+    return $t
 }
 
 # Lee esa configuracion de la NCU a la que se este conectado. Un registro que
@@ -3349,6 +3589,9 @@ function Ncu-DiagCompat([int[]]$tcus) {
                 if ($dif -gt 5) { $notas += ("dif {0:0.0} deg" -f $dif) }
                 if ((($fl -shr 15) -band 1) -eq 0) { $notas += 'system OK = 0' }
                 if ((($fl -shr 11) -band 1) -eq 1) { $notas += 'alarma motor enclavada' }
+                if ((($fl -shr $BIT_SOC_NO_MUEVE) -band 1) -eq 1) { $notas += 'SoC insuficiente para mover en automatico' }
+                $nSp = Sp-Nota $msr
+                if ($nSp -ne '') { $notas += $nSp }
                 # la edad va en su columna; aqui solo si es tanta que el dato
                 # ya no vale para decidir nada
                 if ($edad -gt 90) { $notas += "dato viejo" }
@@ -6166,6 +6409,69 @@ $tabSEC.Controls.Add($lvSECR)
 $lblSECNota = LG $tabSEC 'Sustituir una TCU no es UNA orden: es escribir sus parametros, GUARDARLOS EN NVM y devolverla a AUTO, en ese orden. Aqui se monta esa receta una vez, se guarda y se repite. La receta se ejecuta ENTERA sobre CADA TCU: si una falla un paso, esa se para ahi y las demas siguen (al reves, escribir en todas y luego guardar NVM en todas, le guardaria el NVM a una que fallo al escribir). SIMULAR no toca ningun equipo. El cuadro TCUs de aqui manda sobre el de arriba; en blanco, todas las de la seleccion.' 10 890 350
 $lblSECNota.ForeColor = [System.Drawing.Color]::Gray
 
+# ======================= TAB LIMITES DE RECORRIDO =======================
+# 50047/50048 del bloque por TCU de la NCU (mapa R8). Pestana propia y no un
+# paso de Ordenes secuenciales a proposito: esto se habla con la NCU en el 502,
+# y las recetas hablan con la TCU por Zigbee en el 503/504.
+$tabLIM = New-Object System.Windows.Forms.TabPage
+$tabLIM.Text = 'Limites de recorrido'
+$tabs.TabPages.Add($tabLIM)
+
+$btnLIMLeer = New-Object System.Windows.Forms.Button
+$btnLIMLeer.Text = 'LEER LIMITES'
+$btnLIMLeer.Location = New-Object System.Drawing.Point(10, 18)
+$btnLIMLeer.Size = New-Object System.Drawing.Size(150, 28)
+$btnLIMLeer.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnLIMLeer.ForeColor = [System.Drawing.Color]::White
+$tabLIM.Controls.Add($btnLIMLeer)
+
+$lblLIMRes = LG $tabLIM '' 176 650 24
+$lblLIMRes.ForeColor = [System.Drawing.Color]::DimGray
+
+$btnLIMCsv = New-Object System.Windows.Forms.Button
+$btnLIMCsv.Text = 'CSV'
+$btnLIMCsv.Location = New-Object System.Drawing.Point(838, 18)
+$btnLIMCsv.Size = New-Object System.Drawing.Size(70, 28)
+$btnLIMCsv.Enabled = $false
+$tabLIM.Controls.Add($btnLIMCsv)
+
+$btnLIMAplicar = New-Object System.Windows.Forms.Button
+$btnLIMAplicar.Text = 'LIMITAR'
+$btnLIMAplicar.Location = New-Object System.Drawing.Point(10, 52)
+$btnLIMAplicar.Size = New-Object System.Drawing.Size(110, 28)
+$btnLIMAplicar.BackColor = [System.Drawing.Color]::FromArgb(150,60,0)
+$btnLIMAplicar.ForeColor = [System.Drawing.Color]::White
+$tabLIM.Controls.Add($btnLIMAplicar)
+
+[void](LG $tabLIM 'TCUs:' 130 46 54)
+$txtLIMTcus = TG $tabLIM '' 180 52 110
+[void](LG $tabLIM 'Este [deg]:' 298 70 54)
+$txtLIMEste = TG $tabLIM '' 372 52 60
+[void](LG $tabLIM 'Oeste [deg]:' 438 80 54)
+$txtLIMOeste = TG $tabLIM '' 522 52 60
+
+# Quitar el limite es la accion de DESHACER y va en su propio boton: buscarla
+# en un desplegable cuando hay una brigada debajo de un seguidor es lo que no
+# tiene que pasar.
+$btnLIMQuitar = New-Object System.Windows.Forms.Button
+$btnLIMQuitar.Text = 'QUITAR LIMITE'
+$btnLIMQuitar.Location = New-Object System.Drawing.Point(594, 52)
+$btnLIMQuitar.Size = New-Object System.Drawing.Size(140, 28)
+$tabLIM.Controls.Add($btnLIMQuitar)
+
+$lvLIM = New-Object System.Windows.Forms.ListView
+$lvLIM.Location = New-Object System.Drawing.Point(10, 86)
+$lvLIM.Size = New-Object System.Drawing.Size(898, 222)
+$lvLIM.View = 'Details'; $lvLIM.FullRowSelect = $true; $lvLIM.GridLines = $true
+foreach ($c in @(@('NCU',45), @('TCU',52), @('Este',90), @('Oeste',90), @('Recorrido',130),
+                 @('Accion',130), @('Resultado',80), @('Nota',240))) {
+    [void]$lvLIM.Columns.Add($c[0], $c[1])
+}
+$tabLIM.Controls.Add($lvLIM)
+
+$lblLIMNota = LG $tabLIM 'Limite software de recorrido POR TCU, puesto desde la NCU: 50047 (este) y 50048 (oeste) del bloque 50000 + (TCU-1)*50, en el puerto 502. NO es el rango de tilt del seguidor (41111-41137, que es SU configuracion y hay que restaurar a mano): esto es temporal y se deshace con QUITAR LIMITE, que escribe el centinela 0x7FFF. Sirve para retener un seguidor mientras se trabaja debajo. Poner un limite NO mueve nada ahora: recorta hasta donde puede llegar, y si esta ya fuera se movera cuando le toque seguir. El limite este tiene que ser menor que el oeste o el seguidor se queda sin recorrido, y eso se rechaza antes de escribir. Cada valor se relee: si la NCU no lo toma -mira "Allow writing on the modbus map" en su pagina- se dice, no se da por bueno.' 10 890 318
+$lblLIMNota.ForeColor = [System.Drawing.Color]::Gray
+
 # ============================ TAB GRUPOS NCU ============================
 # El "Group Control" de la pagina de la NCU, por Modbus. Ver el bloque de
 # logica de grupos para lo que el mapa NO dice (que TCU esta en que grupo) y
@@ -6221,14 +6527,25 @@ $tabGR.Controls.Add($chkGRViento)
 
 $lvGR = New-Object System.Windows.Forms.ListView
 $lvGR.Location = New-Object System.Drawing.Point(10, 86)
-$lvGR.Size = New-Object System.Drawing.Size(898, 258)
+$lvGR.Size = New-Object System.Drawing.Size(898, 222)
 $lvGR.View = 'Details'; $lvGR.FullRowSelect = $true; $lvGR.GridLines = $true
-foreach ($c in @(@('NCU',45), @('Grupo',52), @('Limpieza',100), @('Posiciones seguras pedidas',200),
-                 @('Accion',150), @('Resultado',90), @('Nota',240))) {
+foreach ($c in @(@('NCU',45), @('Grupo',52), @('Limpieza',100), @('Posiciones seguras pedidas',180),
+                 @('Angulo SP7',90), @('Accion',140), @('Resultado',80), @('Nota',200))) {
     [void]$lvGR.Columns.Add($c[0], $c[1])
 }
 $tabGR.Controls.Add($lvGR)
-$lblGRNota = LG $tabGR 'El Group Control de la pagina de la NCU, por Modbus: posicion segura por grupo (40001-40007) y auto/manual (40070/40071). Es UNA escritura por NCU y la reparte ella; el STOW de la pestana PEM es otra cosa, escribe el 42000 de CADA TCU por Zigbee. El mapa R7.1 NO dice que TCU esta en que grupo, asi que no se puede saber a cuantos seguidores afecta antes de mandarlo: despues se mira cuales han cambiado de modo. Auto/manual son de SOLO ESCRITURA y no se pueden releer. Pedir posicion segura protege y no pide guardia de viento; quitarla o soltar a auto/manual, si.' 10 890 350
+
+# La fila de la posicion segura 7: va debajo de la tabla y no en la fila de la
+# accion porque solo dos acciones la usan, y arriba enturbiaba las otras
+# quince. Vacio = no se toca, que no es lo mismo que cero.
+[void](LG $tabGR 'Angulo SP7 [deg]:' 10 112 318)
+$txtGRAng = TG $tabGR '' 126 316 66
+[void](LG $tabGR 'Vuelta a auto [s]:' 200 112 318)
+$txtGRTo = TG $tabGR '' 316 316 66
+$lblGRAngNota = LG $tabGR 'solo para las dos acciones de angulo; en blanco no se toca el 40080' 390 508 318
+$lblGRAngNota.ForeColor = [System.Drawing.Color]::Gray
+
+$lblGRNota = LG $tabGR 'El Group Control de la pagina de la NCU, por Modbus: posicion segura por grupo (40001-40007), su angulo cuando es la 7 (40030-40039, mapa R8) y auto/manual (40070/40071). Es UNA escritura por NCU y la reparte ella; el STOW de la pestana PEM es otra cosa, escribe el 42000 de CADA TCU por Zigbee. El mapa NO dice que TCU esta en que grupo -el R8 tampoco-, asi que no se puede saber a cuantos seguidores afecta antes de mandarlo: despues se mira cuales han cambiado de modo. Auto/manual son de SOLO ESCRITURA y no se pueden releer; los angulos si, y se releen siempre. La 7 es la CUSTOM: pedirla mueve los seguidores a un angulo arbitrario, asi que pide guardia de viento igual que quitar una posicion segura. Las 1..6 no.' 10 890 350
 $lblGRNota.ForeColor = [System.Drawing.Color]::Gray
 
 # ============================ TAB COMM ESCLAVOS ============================
@@ -9818,6 +10135,9 @@ function Diag-LeerTcu([byte]$tcu) {
     if ($dif -gt 5) { $notas += ("dif {0:0.0} deg" -f $dif) }
     if ((($st -shr 15) -band 1) -eq 0) { $notas += 'system OK = 0' }
     if ((($st -shr 11) -band 1) -eq 1) { $notas += 'alarma motor enclavada' }
+    if ((($st -shr $BIT_SOC_NO_MUEVE) -band 1) -eq 1) { $notas += 'SoC insuficiente para mover en automatico' }
+    $nSp = Sp-Nota $r1[0]
+    if ($nSp -ne '') { $notas += $nSp }
     $nModo = Modo-Nota $modo
     if ($nModo -ne '') { $notas += $nModo }
 
@@ -13926,7 +14246,7 @@ function Gr-GuardiaViento($cx, [bool]$activa) {
 # Lo que hay que leer de una NCU para pintar sus grupos. Deja la conexion
 # cerrada pase lo que pase.
 function Gr-LeerNcu($tr) {
-    $r = @{sp = @(); din = 0; timeout = $null}
+    $r = @{sp = @(); din = 0; timeout = $null; sp7 = $null}
     Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
     try {
         # FC03-Leer devuelve ",$palabras" para que no se despliegue sola: hay que
@@ -13935,8 +14255,40 @@ function Gr-LeerNcu($tr) {
         $r.sp  = @($w | ForEach-Object { [int]$_ })
         $r.din = [int](FC03-Leer $UNIT_NCU (Dir-Trama 30100) 1)[0]
         try { $r.timeout = [int](FC03-Leer $UNIT_NCU (Dir-Trama 40080) 1)[0] } catch { $r.timeout = $null }
+        # Los angulos de la SP7 son del R8: una NCU con firmware anterior
+        # contesta excepcion a esas direcciones, y eso NO es un fallo de la
+        # NCU. Se deja a $null y la columna sale vacia, que es lo honesto:
+        # "no se ha podido leer" no es "sin angulo".
+        try {
+            $w7 = FC03-Leer $UNIT_NCU (Dir-Trama $GR_SP7_BASE) $GR_N
+            $r.sp7 = @($w7 | ForEach-Object { [int]$_ })
+        } catch { $r.sp7 = $null }
     } finally { Modbus-Cerrar }
     return $r
+}
+
+# Escribe el angulo de la SP7 en unos grupos y lo relee. Son registros
+# independientes, uno por grupo, asi que no hay mascara de bits que valga: se
+# escribe el de cada grupo del bitset. Devuelve @{malos; notas}.
+function Gr-EscribirAngulo([int]$bits, [int]$palabra) {
+    $malos = @(); $notas = @()
+    for ($g = 1; $g -le $GR_N; $g++) {
+        if (-not ($bits -band (1 -shl ($g - 1)))) { continue }
+        $addr = $GR_SP7_BASE + $g - 1
+        try {
+            FC16-Escribir $UNIT_NCU $addr @($palabra)
+        } catch {
+            $malos += $g; $notas += "g${g}: la NCU rechaza la escritura ($_)"; continue
+        }
+        Start-Sleep -Milliseconds 150
+        $leida = $null
+        try { $leida = [int](FC03-Leer $UNIT_NCU (Dir-Trama $addr) 1)[0] } catch { }
+        if ($null -eq $leida) { $malos += $g; $notas += "g${g}: escrito y no se ha podido releer"; continue }
+        $v = Ang-Veredicto $palabra $leida
+        if (-not $v.ok) { $malos += $g }
+        if ("$($v.nota)" -ne '') { $notas += ("g${g}: " + $v.nota) }
+    }
+    return @{malos = $malos; notas = $notas}
 }
 
 # Escribe unos bits en un registro de grupos. FC22 (mascara) es lo correcto
@@ -13966,7 +14318,7 @@ function Gr-Pintar($filas) {
     $lvGR.Items.Clear()
     foreach ($f in @($filas)) {
         $it = New-Object System.Windows.Forms.ListViewItem("$($f.NCU)")
-        foreach ($c in @($f.Grupo, $f.Limpieza, $f.Posiciones, $f.Accion, $f.Resultado, $f.Nota)) { [void]$it.SubItems.Add("$c") }
+        foreach ($c in @($f.Grupo, $f.Limpieza, $f.Posiciones, $f.Angulo_SP7, $f.Accion, $f.Resultado, $f.Nota)) { [void]$it.SubItems.Add("$c") }
         switch ("$($f.Resultado)") {
             'OK'            { $it.ForeColor = [System.Drawing.Color]::DarkGreen }
             'FALLA'         { $it.ForeColor = [System.Drawing.Color]::Firebrick }
@@ -14004,7 +14356,7 @@ $btnGRLeer.Add_Click({ Lanzar {
                                                        Accion=''; Resultado='SIN RESPUESTA'; Nota=$err}
             Con ("NCU{0}: {1}" -f $tr.ncu, $err) ([System.Drawing.Color]::Salmon)
         } else {
-            foreach ($f in @(Gr-Estado "$($tr.ncu)" $l.sp $l.din)) {
+            foreach ($f in @(Gr-Estado "$($tr.ncu)" $l.sp $l.din $l.sp7)) {
                 $script:UltimoGrupos += ,$f
                 if ("$($f.Posiciones)" -ne 'ninguna') {
                     $nCon++
@@ -14016,6 +14368,7 @@ $btnGRLeer.Add_Click({ Lanzar {
                 }
             }
             if ($null -ne $l.timeout) { Con ("NCU{0}: vuelta a auto tras posicion personalizada, {1} s" -f $tr.ncu, $l.timeout) ([System.Drawing.Color]::Gainsboro) }
+            if ($null -eq $l.sp7) { Con ("NCU{0}: no contesta a 40030-40039 (el angulo de la SP7 es del mapa R8): columna Angulo SP7 vacia." -f $tr.ncu) ([System.Drawing.Color]::Gainsboro) }
         }
         Prog-Paso
         [System.Windows.Forms.Application]::DoEvents()
@@ -14030,6 +14383,181 @@ $btnGRLeer.Add_Click({ Lanzar {
 
 $btnGRCsv.Add_Click({ [void](Exportar-Csv $script:UltimoGrupos 'grupos_ncu' 'Grupos NCU' -bloque 'grupos') })
 
+# ---------------------------------------------------------------------------
+#  Limites de recorrido por TCU (50047/50048 de la NCU, mapa R8)
+# ---------------------------------------------------------------------------
+$script:UltimoLim = @()
+
+function Lim-Pintar($filas) {
+    $lvLIM.BeginUpdate()
+    $lvLIM.Items.Clear()
+    foreach ($f in @($filas)) {
+        $it = New-Object System.Windows.Forms.ListViewItem("$($f.NCU)")
+        foreach ($c in @($f.TCU, $f.Este, $f.Oeste, $f.Recorrido, $f.Accion, $f.Resultado, $f.Nota)) { [void]$it.SubItems.Add("$c") }
+        switch ("$($f.Resultado)") {
+            'OK'    { $it.ForeColor = [System.Drawing.Color]::DarkGreen }
+            'FALLA' { $it.ForeColor = [System.Drawing.Color]::Firebrick }
+            default {
+                # limitado y sin accion: es un estado que hay que ver, no un fallo
+                if ("$($f.Recorrido)" -eq 'SIN RECORRIDO (este >= oeste)') { $it.ForeColor = [System.Drawing.Color]::Firebrick }
+                elseif ("$($f.Recorrido)" -ne 'sin limitar' -and "$($f.Recorrido)" -ne '') { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
+            }
+        }
+        [void]$lvLIM.Items.Add($it)
+    }
+    $lvLIM.EndUpdate()
+    Lv-Reiniciar $lvLIM
+}
+
+# Los dos registros de una TCU, de una sola peticion: son adyacentes.
+function Lim-LeerTcu([int]$tcu) {
+    $w = FC03-Leer $UNIT_NCU (Dir-Trama (Lim-Dir $tcu $LIM_ESTE)) 2
+    $p = @($w | ForEach-Object { [int]$_ })
+    return @{este = $p[0]; oeste = $p[1]}
+}
+
+# Escribe los dos limites de una TCU y los relee. Si solo se pide uno, el otro
+# no se toca: escribir el par entero obligaria a saber el que no quieres cambiar
+# y un valor de mas es un limite que nadie pidio.
+function Lim-EscribirTcu([int]$tcu, $este, $oeste) {
+    if ($null -ne $este -and $null -ne $oeste) {
+        FC16-Escribir $UNIT_NCU (Lim-Dir $tcu $LIM_ESTE) @([int]$este, [int]$oeste)
+    } else {
+        if ($null -ne $este)  { FC16-Escribir $UNIT_NCU (Lim-Dir $tcu $LIM_ESTE)  @([int]$este) }
+        if ($null -ne $oeste) { FC16-Escribir $UNIT_NCU (Lim-Dir $tcu $LIM_OESTE) @([int]$oeste) }
+    }
+    Start-Sleep -Milliseconds 150
+    $l = Lim-LeerTcu $tcu
+    $notas = @(); $ok = $true
+    if ($null -ne $este) {
+        $v = Ang-Veredicto $este $l.este
+        if (-not $v.ok) { $ok = $false }
+        if ("$($v.nota)" -ne '') { $notas += ('este: ' + $v.nota) }
+    }
+    if ($null -ne $oeste) {
+        $v = Ang-Veredicto $oeste $l.oeste
+        if (-not $v.ok) { $ok = $false }
+        if ("$($v.nota)" -ne '') { $notas += ('oeste: ' + $v.nota) }
+    }
+    return @{ok = $ok; notas = $notas; leido = $l}
+}
+
+# El bucle es el mismo para leer y para escribir: recorre las NCUs, y dentro de
+# cada una sus TCUs, con UNA conexion al 502 por NCU. No usa Pem-PorTcu porque
+# ese abre el puerto del GATEWAY por segmento y aqui se habla con la NCU.
+function Lim-Recorrer($trabajos, [scriptblock]$porTcu) {
+    Prog-Iniciar (Cuantas-Tcus $trabajos)
+    foreach ($tr in @($trabajos)) {
+        if ($script:Cancelar) { break }
+        $script:NcuLog = "$($tr.ncu)"
+        $abierta = $true
+        try { Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to } catch { $abierta = $false }
+        if (-not $abierta) {
+            foreach ($tcu in @($tr.tcus)) {
+                $script:UltimoLim += ,(Lim-Fila "$($tr.ncu)" $tcu $null $null '' 'FALLA' "sin conexion a $($tr.ip):$PUERTO_NCU")
+                Prog-Paso
+            }
+            continue
+        }
+        try {
+            foreach ($tcu in @($tr.tcus)) {
+                if (Chequear-Cancelado) { break }
+                & $porTcu $tr $tcu | Out-Null
+                Prog-Paso
+                [System.Windows.Forms.Application]::DoEvents()
+            }
+        } finally { Modbus-Cerrar }
+    }
+    $script:NcuLog = ''
+}
+
+$btnLIMLeer.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtLIMTcus.Text 'Limites') (Gw-Sel))
+    if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU (mira el cuadro NCUs).' ([System.Drawing.Color]::Orange); return }
+    $lvLIM.Items.Clear(); $script:UltimoLim = @(); $lblLIMRes.Text = ''; $btnLIMCsv.Enabled = $false; Sellar 'limites'
+    Ctx-Guardar 'limites' $cx $trabajos
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Limites de recorrido de $(Cuantas-Tcus $trabajos) TCU(s) por el puerto ${PUERTO_NCU}: 50047 (este) y 50048 (oeste) del bloque de la NCU." ([System.Drawing.Color]::SteelBlue)
+    # $c y no tres escalares: GetNewClosure copia el ambito y un $nLim++ de
+    # dentro no llegaria a este $nLim. Una hashtable se muta por referencia.
+    $c = @{lim = 0; mal = 0; sin = 0}
+    Lim-Recorrer $trabajos {
+        param($tr, $tcu)
+        try {
+            $l = Lim-LeerTcu $tcu
+            $f = Lim-Fila "$($tr.ncu)" $tcu $l.este $l.oeste
+            $script:UltimoLim += ,$f
+            if ("$($f.Recorrido)" -eq 'sin limitar') { $c.sin++ }
+            else {
+                $c.lim++
+                Con ("NCU{0} TCU {1,3}: limitado -> este {2}, oeste {3} ({4})" -f $tr.ncu, $tcu, $f.Este, $f.Oeste, $f.Recorrido) ([System.Drawing.Color]::Orange)
+            }
+        } catch {
+            $c.mal++
+            $script:UltimoLim += ,(Lim-Fila "$($tr.ncu)" $tcu $null $null '' 'FALLA' "$_")
+        }
+    }.GetNewClosure()
+    Lim-Pintar $script:UltimoLim
+    $btnLIMCsv.Enabled = (@($script:UltimoLim).Count -gt 0)
+    $lblLIMRes.Text = "TCUs limitadas: $($c.lim)   |   sin limitar: $($c.sin)" + $(if ($c.mal -gt 0) { "   |   sin lectura: $($c.mal)" } else { '' })
+    if ($c.mal -gt 0 -and $c.lim -eq 0 -and $c.sin -eq 0) {
+        Con 'Ninguna TCU contesta a 50047/50048: esos registros son del mapa R8, y una NCU con firmware anterior no los tiene.' ([System.Drawing.Color]::Orange)
+    }
+    Prog-Fin
+} })
+
+$btnLIMCsv.Add_Click({ [void](Exportar-Csv $script:UltimoLim 'limites_recorrido' 'Limites de recorrido' -bloque 'limites') })
+
+# Poner y quitar comparten todo menos los dos valores: un solo cuerpo, y el
+# boton de quitar no puede desviarse de lo que hace el de poner.
+function Lim-Aplicar([bool]$quitar) {
+    if (-not (Puede 'tecnico')) { Con 'Rol de solo lectura: este boton no escribe nada.' ([System.Drawing.Color]::Orange); return }
+    $cx = Params-Conexion
+    $val = $null
+    if ($quitar) {
+        $val = @{ok = $true; este = @{hay = $true; palabra = $ANG_NADA}; oeste = @{hay = $true; palabra = $ANG_NADA}}
+    } else {
+        $val = Lim-Validar $txtLIMEste.Text $txtLIMOeste.Text
+        if (-not $val.ok) { throw $val.nota }
+    }
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtLIMTcus.Text 'Limites') (Gw-Sel))
+    if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU (mira el cuadro NCUs).' ([System.Drawing.Color]::Orange); return }
+    $nT = Cuantas-Tcus $trabajos
+    if ($nT -eq 0) { throw 'la seleccion no deja ninguna TCU' }
+    $r = [System.Windows.Forms.MessageBox]::Show((Lim-TextoConfirmar $val $nT $trabajos.Count $quitar), 'Limite de recorrido', 'YesNo', 'Warning')
+    if ($r -ne 'Yes') { return }
+    $lvLIM.Items.Clear(); $script:UltimoLim = @(); $lblLIMRes.Text = ''; $btnLIMCsv.Enabled = $false; Sellar 'limites'
+    Ctx-Guardar 'limites' $cx $trabajos
+    $etq = $(if ($quitar) { 'quitar limite' } else { 'limitar' })
+    $wE = $(if ($val.este.hay)  { $val.este.palabra }  else { $null })
+    $wO = $(if ($val.oeste.hay) { $val.oeste.palabra } else { $null })
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con ("{0} en {1} TCU(s) de {2} NCU(s), por el puerto {3}" -f $etq.ToUpper(), $nT, $trabajos.Count, $PUERTO_NCU) ([System.Drawing.Color]::SteelBlue)
+    $c = @{ok = 0; falla = 0}
+    Lim-Recorrer $trabajos {
+        param($tr, $tcu)
+        try {
+            $e = Lim-EscribirTcu $tcu $wE $wO
+            $res = $(if ($e.ok) { 'OK' } else { 'FALLA' })
+            if ($e.ok) { $c.ok++ } else { $c.falla++ }
+            $script:UltimoLim += ,(Lim-Fila "$($tr.ncu)" $tcu $e.leido.este $e.leido.oeste $etq $res `
+                                            $(if (@($e.notas).Count -gt 0) { ($e.notas) -join ' | ' } else { 'escrito y releido' }))
+            if (-not $e.ok) { Con ("NCU{0} TCU {1,3}: {2}" -f $tr.ncu, $tcu, (($e.notas) -join ' | ')) ([System.Drawing.Color]::Salmon) }
+        } catch {
+            $c.falla++
+            $script:UltimoLim += ,(Lim-Fila "$($tr.ncu)" $tcu $null $null $etq 'FALLA' "$_")
+        }
+    }.GetNewClosure()
+    Lim-Pintar $script:UltimoLim
+    $btnLIMCsv.Enabled = (@($script:UltimoLim).Count -gt 0)
+    $lblLIMRes.Text = "TCUs: OK $($c.ok)   |   con fallo $($c.falla)"
+    Prog-Fin
+}
+
+$btnLIMAplicar.Add_Click({ Lanzar { Lim-Aplicar $false } })
+$btnLIMQuitar.Add_Click({ Lanzar { Lim-Aplicar $true } })
+
 $btnGRAplicar.Add_Click({ Lanzar {
     if (-not (Puede 'tecnico')) { Con 'Rol de solo lectura: este boton no escribe nada.' ([System.Drawing.Color]::Orange); return }
     $cx = Params-Conexion
@@ -14037,9 +14565,25 @@ $btnGRAplicar.Add_Click({ Lanzar {
     if (-not $acc) { throw 'elige una accion de la lista' }
     $bits = Grupos-Parse $txtGRGrupos.Text
     if ($bits -eq 0) { throw "escribe a que grupos va: 1,3,5   o   1-4   o   todos" }
+    # el angulo y el plazo solo los usan las dos acciones del R8, pero se
+    # validan ANTES de confirmar: enterarse de que el angulo esta mal escrito
+    # despues de decir "si" a mover seguidores es tarde
+    $angW = $null; $angTxt = ''; $segundos = $null
+    if ("$($acc.tipo)" -eq 'sp7ir') {
+        $a = Ang-Parse $txtGRAng.Text
+        if (-not $a.hay) { throw $(if ("$($a.nota)" -ne '') { $a.nota } else { "pon el angulo al que quieres llevar los grupos (Angulo SP7)" }) }
+        $angW = $a.palabra; $angTxt = $a.nota
+        $tt = "$($txtGRTo.Text)".Trim()
+        if ($tt -ne '') {
+            $n = 0
+            if (-not [int]::TryParse($tt, [ref]$n) -or $n -lt 0 -or $n -gt 65535) { throw "la vuelta a auto son segundos, 0..65535 (registro 40080)" }
+            $segundos = $n
+        }
+    }
+    if ("$($acc.tipo)" -eq 'sp7nada') { $angW = $ANG_NADA; $angTxt = 'sin angulo' }
     $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
     if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU (mira el cuadro NCUs).' ([System.Drawing.Color]::Orange); return }
-    $r = [System.Windows.Forms.MessageBox]::Show((Gr-TextoConfirmar $acc $bits $trabajos.Count), 'Comando de grupo a la NCU', 'YesNo', 'Warning')
+    $r = [System.Windows.Forms.MessageBox]::Show((Gr-TextoConfirmar $acc $bits $trabajos.Count $angTxt $segundos), 'Comando de grupo a la NCU', 'YesNo', 'Warning')
     if ($r -ne 'Yes') { return }
     $lvGR.Items.Clear(); $script:UltimoGrupos = @(); $lblGRRes.Text = ''; $btnGRCsv.Enabled = $false; Sellar 'grupos'
     Ctx-Guardar 'grupos' $cx $trabajos
@@ -14061,7 +14605,39 @@ $btnGRAplicar.Add_Click({ Lanzar {
         try {
             Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
             try {
-                if ("$($acc.tipo)" -eq 'modo') {
+                if ("$($acc.tipo)" -eq 'sp7ir' -or "$($acc.tipo)" -eq 'sp7nada') {
+                    # el plazo primero: si se pone despues, entre la peticion y
+                    # el plazo hay un rato en el que los seguidores estan fuera
+                    # con el plazo viejo, que puede ser 0 (o sea, nunca vuelven)
+                    if ($null -ne $segundos) {
+                        FC16-Escribir $UNIT_NCU 40080 @([int]$segundos)
+                        $via = "40080 = $segundos s"
+                    }
+                    $e = Gr-EscribirAngulo $bits $angW
+                    if ($e.malos.Count -gt 0) {
+                        $res = 'FALLA'
+                        $nota = ("angulo NO puesto en los grupos {0}. " -f (Ncu-Grupos (Grupos-Bits $e.malos))) + (($e.notas) -join ' | ')
+                    } else {
+                        # el angulo ya esta puesto y releido; ahora la peticion,
+                        # y solo si la accion es llevarlos alli
+                        if ("$($acc.tipo)" -eq 'sp7ir') {
+                            $wA = FC03-Leer $UNIT_NCU (Dir-Trama ($GR_SP_BASE + $GR_SP7)) 1
+                            $antesSp = [int]$wA[0]
+                            $via2 = Gr-EscribirBits ($GR_SP_BASE + $GR_SP7) $bits $true $false
+                            Start-Sleep -Milliseconds 800
+                            $wD = FC03-Leer $UNIT_NCU (Dir-Trama ($GR_SP_BASE + $GR_SP7)) 1
+                            $v = Gr-Veredicto $antesSp ([int]$wD[0]) $bits $true
+                            $res = $(if ($v.ok) { 'OK' } else { 'FALLA' })
+                            $nota = ("angulo $angTxt releido y confirmado; peticion de la SP$GR_SP7 por $via2. ") +
+                                    $(if ("$($v.nota)" -ne '') { $v.nota } else { 'los grupos quedan pidiendo la posicion segura 7' }) +
+                                    $(if ("$via" -ne '') { " ($via)" } else { '' }) +
+                                    $(if (@($e.notas).Count -gt 0) { ' | ' + (($e.notas) -join ' | ') } else { '' })
+                        } else {
+                            $res = 'OK'
+                            $nota = "angulo dejado en 0x7FFF (sin angulo) y releido. NO se ha tocado la peticion de la SP$GR_SP7"
+                        }
+                    }
+                } elseif ("$($acc.tipo)" -eq 'modo') {
                     # auto/manual no se pueden releer: se comprueba por efecto,
                     # mirando que TCUs cambian de modo en la cache de la NCU
                     $antes = $null
@@ -16060,6 +16636,7 @@ $NAV_ARBOL = @(
     @{bloque = 'TCUs'; hojas = @(
         @{txt='Diagnóstico';   tab=$tabG; vista='TCU'}
         @{txt='Órdenes secuenciales'; tab=$tabSEC}
+        @{txt='Límites de recorrido'; tab=$tabLIM}
         @{txt='Auditoría';     tab=$tabF}
         @{txt='Baterías';      tab=$tabB}
         @{txt='Análisis de baterías'; tab=$tabBA}
@@ -16140,7 +16717,7 @@ if ($nav.Nodes.Count -gt 0 -and $nav.Nodes[0].Nodes.Count -gt 0) { $nav.Selected
 
 # Todas las tablas de resultados filtran y ordenan al pulsar su cabecera.
 foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvFWd, $lvSat, $lvND, $lvH, $lvN, $lvE, $lvI, $lvC, $lvB, $lvT,
-                     $lvAN, $lvFN, $lvAH, $lvFH, $lvRA, $lvRF, $lvRB, $lvIG, $lvBA, $lvGR, $lvSEC, $lvSECR)) { Lv-Filtrable $tabla }
+                     $lvAN, $lvFN, $lvAH, $lvFH, $lvRA, $lvRF, $lvRB, $lvIG, $lvBA, $lvGR, $lvSEC, $lvSECR, $lvLIM)) { Lv-Filtrable $tabla }
 
 # La cabecera de pestanas no se puede ocultar con una propiedad: no existe. Lo
 # que si se puede es sacarla fuera del panel, que recorta lo que se sale. La
@@ -16253,6 +16830,7 @@ function Dialogo-Login($usuarios) {
 # tecnico para arriba; lo que toca identidad de red, firmware o topologia, solo
 # de administrador.
 $BOTONES_TECNICO = @($btnEscribir, $btnNvm, $btnCsvTcu, $btnFallidas, $btnSync, $btnFwPrep, $btnGRAplicar, $btnSECEjec,
+                     $btnLIMAplicar, $btnLIMQuitar,
                      $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComisSet,
                      $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm)
 # La topologia decide a que equipos apunta todo lo demas: cambiarla es de admin.
