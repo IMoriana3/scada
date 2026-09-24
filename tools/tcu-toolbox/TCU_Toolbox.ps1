@@ -6151,16 +6151,16 @@ $lblSECRes.ForeColor = [System.Drawing.Color]::DimGray
 
 $lvSEC = New-Object System.Windows.Forms.ListView
 $lvSEC.Location = New-Object System.Drawing.Point(10, 86)
-$lvSEC.Size = New-Object System.Drawing.Size(430, 258)
+$lvSEC.Size = New-Object System.Drawing.Size(898, 110)
 $lvSEC.View = 'Details'; $lvSEC.FullRowSelect = $true; $lvSEC.GridLines = $true
-foreach ($c in @(@('#',28), @('Paso',170), @('Parametro',210))) { [void]$lvSEC.Columns.Add($c[0], $c[1]) }
+foreach ($c in @(@('#',30), @('Paso',220), @('Parametro',380), @('Nota',260))) { [void]$lvSEC.Columns.Add($c[0], $c[1]) }
 $tabSEC.Controls.Add($lvSEC)
 
 $lvSECR = New-Object System.Windows.Forms.ListView
-$lvSECR.Location = New-Object System.Drawing.Point(446, 86)
-$lvSECR.Size = New-Object System.Drawing.Size(462, 258)
+$lvSECR.Location = New-Object System.Drawing.Point(10, 200)
+$lvSECR.Size = New-Object System.Drawing.Size(898, 144)
 $lvSECR.View = 'Details'; $lvSECR.FullRowSelect = $true; $lvSECR.GridLines = $true
-foreach ($c in @(@('NCU',40), @('TCU',42), @('Paso',150), @('Estado',70), @('Nota',150))) { [void]$lvSECR.Columns.Add($c[0], $c[1]) }
+foreach ($c in @(@('NCU',45), @('TCU',45), @('Paso',260), @('Estado',80), @('Nota',450))) { [void]$lvSECR.Columns.Add($c[0], $c[1]) }
 $tabSEC.Controls.Add($lvSECR)
 
 $lblSECNota = LG $tabSEC 'Sustituir una TCU no es UNA orden: es escribir sus parametros, GUARDARLOS EN NVM y devolverla a AUTO, en ese orden. Aqui se monta esa receta una vez, se guarda y se repite. La receta se ejecuta ENTERA sobre CADA TCU: si una falla un paso, esa se para ahi y las demas siguen (al reves, escribir en todas y luego guardar NVM en todas, le guardaria el NVM a una que fallo al escribir). SIMULAR no toca ningun equipo. El cuadro TCUs de aqui manda sobre el de arriba; en blanco, todas las de la seleccion.' 10 890 350
@@ -13654,6 +13654,7 @@ function Sec-PintarPasos {
         $it = New-Object System.Windows.Forms.ListViewItem("$i")
         [void]$it.SubItems.Add($(if ($d) { $d.n } else { "?? $($p.tipo)" }))
         [void]$it.SubItems.Add("$($p.valor)")
+        [void]$it.SubItems.Add($(if ($d -and $d.mueve) { 'mueve los seguidores' } elseif ($d -and -not $d.escribe) { 'no escribe' } else { '' }))
         if ($d -and $d.mueve) { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
         elseif (-not $d) { $it.ForeColor = [System.Drawing.Color]::Firebrick }
         [void]$lvSEC.Items.Add($it)
@@ -13874,7 +13875,7 @@ $btnSECDown.Add_Click({
 $btnSECGuardar.Add_Click({
     if (@($script:SecPasos).Count -eq 0) { Con 'No hay receta que guardar.' ([System.Drawing.Color]::Orange); return }
     $nom = "$($cbPlanta.SelectedItem)"
-    [void](Exportar-Json (Sec-AObjeto $nom $script:SecPasos) 'receta' 'Receta' 4 'secuencia')
+    [void](Exportar-Json (Sec-AObjeto $nom $script:SecPasos) 'receta' 'Receta' 4 -bloque 'secuencia')
 })
 $btnSECCargar.Add_Click({
     $dlg = New-Object System.Windows.Forms.OpenFileDialog

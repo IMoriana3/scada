@@ -3872,7 +3872,9 @@ foreach ($op in @('NVM', 'Sincronizar', 'Backup NCU', 'Modo', 'Clear', 'Stow', '
 }
 # el bucle comun de PEM
 Check 'pem: Pem-PorTcu existe' ($src.Contains('function Pem-PorTcu(')) $true
-Check 'pem: y lo usan las cuatro acciones' ([regex]::Matches($src, [regex]::Escape('Pem-PorTcu $trabajos')).Count) 5
+# modo, clear, stow, quitar stow, test de motor y las recetas de la pestana
+# Ordenes secuenciales: todas recorren TCUs por el mismo sitio
+Check 'pem: y lo usan todas las acciones que recorren TCUs' ([regex]::Matches($src, [regex]::Escape('Pem-PorTcu $trabajos')).Count) 6
 Check 'pem: la guardia de viento va por NCU' ($src.Contains('Guardia-Viento $tr.cx')) $true
 Check 'pem: los contadores del test viven en un hashtable' ($src.Contains('$c = @{pasa=0; falla=0; salta=0; lim=0}')) $true
 # los backups de planta llevan la NCU en el nombre: si no, la TCU 12 de la NCU3
