@@ -1,4 +1,4 @@
-# Mapa Modbus de la NCU — derivado de NCU_Modbus_Map_R7.xlsx
+# Mapa Modbus de la NCU — derivado de NCU_Modbus_Map_R7.xlsx, repasado contra el R8
 # SOLO LECTURA. El rango 40000+ (comandos) se excluye deliberadamente.
 #
 # OJO: esto es el SUBCONJUNTO que lee el colector, no el mapa entero. El R7 trae ademas los
@@ -14,10 +14,23 @@ tcu_compat:
   max_tcus: 200
   fields:
     # offset: definición
-    1:  {name: msr,            type: u16, bits: {bt_active: [0,0], sleep_state: [1,2], day_time: [7,7], main_state: [8,9], safe_position: [13,15]}}
+    # magnet y ble tambien venian sin bautizar en el documento. El Excel de la NCU se contradice
+    # -los pone en (12..11) y (13..12), que se pisan entre si y con safe_position (15..13)-, pero el
+    # 30001 del PDF v6 de la TCU es el mismo registro y lo desempata: iman 11, BLE 12.
+    1:  {name: msr,            type: u16, bits: {bt_active: [0,0], sleep_state: [1,2], day_time: [7,7],
+      main_state: [8,9], magnet: [11,11], ble_enabled: [12,12], safe_position: [13,15]}}
     2:  {name: alarms1,        type: u16}
     3:  {name: alarms2,        type: u16}
-    4:  {name: flags_a,        type: u16, bits: {west_limit: [0,0], east_limit: [1,1], motor_locked: [11,11], system_ok: [15,15]}}
+    # Los bits 5 y 6 faltaban, y no por descuido nuestro: el extractor del mapa descarta las filas
+    # sin "Variable name", y el documento describe estas dos SIN bautizarlas. El 6 es el que importa,
+    # porque es el MOTIVO de que un seguidor este quieto dicho por el propio equipo, en vez de
+    # deducirlo de los umbrales de SoC. Estan igual en el R7 y en el R8 (hoja TCU Compat) y en el
+    # 30006 del PDF v6 de la TCU: el registro ya se leia, esto solo decodifica lo que ya venia.
+    # No se anaden los bits 9 y 10 (calefactor y relajacion de bateria): el R8 los declara LOS DOS
+    # en el bit 10. El PDF de la TCU desempata -calefactor 9, relajacion 10- y cuando eso este
+    # confirmado contra un equipo se anaden; adivinar cual de los dos es seria peor que no tenerlos.
+    4:  {name: flags_a,        type: u16, bits: {west_limit: [0,0], east_limit: [1,1],
+      batt_preservation: [5,5], soc_cannot_move: [6,6], motor_locked: [11,11], system_ok: [15,15]}}
     5:  {name: panel_voltage,  type: u16, unit: mV}
     6:  {name: tilt_angle,     type: f32, unit: rad, to_deg: true}
     8:  {name: motor_current,  type: u16, unit: mA}
