@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.83'
+$VERSION_TOOLBOX = '11.84'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1317,6 +1317,160 @@ $NCU_RW = @(
     @{n = '40007 force_sp_7 [grupos]';            addr = 40007; tipo = 'grupos'}
     @{n = '40080 custom_position_timeout [s]';    addr = 40080; tipo = 'u16'}
 )
+
+# ---------- los GRUPOS de la NCU: lo que hace su "Group Control" ----------
+# La NCU manda sobre sus TCUs por GRUPOS y esa es la via que usa su propia
+# pagina web: pedir una posicion segura a un grupo entero, o pasarlo a auto o a
+# manual. Es UNA escritura en el 502 y la reparte ella. El STOW de la pestana
+# PEM es otra cosa y las dos hacen falta: alli se escribe el 42000 de CADA TCU
+# por Zigbee -una a una, y se eligen las TCUs que uno quiera-; aqui se manda
+# sobre el grupo tal y como lo tiene definido la planta, de golpe.
+#
+# LO QUE EL MAPA NO DICE, y hay que decirlo en voz alta: en que grupo esta cada
+# TCU. La pagina de la NCU lo sabe -columna Group- pero el mapa R7.1 no expone
+# ningun registro con eso, asi que la herramienta NO PUEDE saber a cuantos
+# seguidores afecta un comando ANTES de mandarlo. Sale en la confirmacion en
+# vez de callarlo, y despues se mira que TCUs han cambiado de modo: eso, de
+# paso, es lo unico que revela quien esta en el grupo.
+$GR_N       = 10        # grupos por NCU: bits 0..9 de cada registro
+$GR_SP_BASE = 40000     # force_sp_N vive en 40000 + N  (40001..40007)
+$GR_AUTO    = 40070     # auto_mode   por grupo, SOLO ESCRITURA
+$GR_MANUAL  = 40071     # manual_mode por grupo, SOLO ESCRITURA
+$GR_SP_NOMBRE = @{1 = 'viento'; 3 = 'nieve'; 4 = 'limpieza'}
+
+# El texto de grupos que se teclea, a bitset: "1,3,5", "1-4", "todos". Lo que
+# no se entiende se rechaza en vez de mandar un comando a un grupo cualquiera.
+# Pura.
+function Grupos-Parse([string]$txt) {
+    $t = "$txt".Trim().ToLower()
+    if ($t -eq '') { return 0 }
+    if ($t -eq 'todos' -or $t -eq 'todas' -or $t -eq '*') { return ((1 -shl $GR_N) - 1) }
+    $bits = 0
+    foreach ($tr in ($t -split '[,; ]+')) {
+        if ($tr -eq '') { continue }
+        $m = [regex]::Match($tr, '^(\d+)\s*(?:-\s*(\d+))?$')
+        if (-not $m.Success) { throw "grupos: '$tr' no es un grupo ni un rango (usa 1,3,5 o 1-4 o 'todos')" }
+        $a = [int]$m.Groups[1].Value
+        $b = $(if ($m.Groups[2].Success) { [int]$m.Groups[2].Value } else { $a })
+        if ($a -lt 1 -or $b -gt $GR_N -or $b -lt $a) { throw "grupos: '$tr' fuera de 1..$GR_N" }
+        for ($g = $a; $g -le $b; $g++) { $bits = $bits -bor (1 -shl ($g - 1)) }
+    }
+    return $bits
+}
+
+# Cuantos grupos hay en un bitset. Pura.
+function Grupos-Cuantos([int]$w) {
+    $n = 0
+    for ($i = 0; $i -lt $GR_N; $i++) { if ($w -band (1 -shl $i)) { $n++ } }
+    return $n
+}
+
+# Las dos mascaras de FC22 para poner o quitar unos bits SIN tocar los demas:
+# en un registro de grupos, escribir el valor entero pisaria los grupos que
+# otro haya pedido. Pura.
+function Gr-Mascara([int]$bits, [bool]$poner) {
+    if ($poner) { return @{mascara = 0xFFFF; valor = ($bits -band 0xFFFF)} }
+    return @{mascara = ((-bnot $bits) -band 0xFFFF); valor = 0}
+}
+
+# Lo que se le puede pedir a un grupo. Tabla, para que la lista de la pestana y
+# lo que hace cada accion salgan del mismo sitio.
+$GR_ACCIONES = @()
+foreach ($sp in 1..7) {
+    $et = $(if ($GR_SP_NOMBRE.ContainsKey($sp)) { " ($($GR_SP_NOMBRE[$sp]))" } else { '' })
+    $GR_ACCIONES += ,@{n = "Pedir posicion segura $sp$et"; tipo = 'sp'; sp = $sp; poner = $true}
+}
+foreach ($sp in 1..7) {
+    $et = $(if ($GR_SP_NOMBRE.ContainsKey($sp)) { " ($($GR_SP_NOMBRE[$sp]))" } else { '' })
+    $GR_ACCIONES += ,@{n = "Quitar posicion segura $sp$et"; tipo = 'sp'; sp = $sp; poner = $false}
+}
+$GR_ACCIONES += ,@{n = 'Quitar TODAS las posiciones seguras'; tipo = 'sptodas'; poner = $false}
+$GR_ACCIONES += ,@{n = 'Pasar a AUTO';   tipo = 'modo'; modo = 'AUTO'}
+$GR_ACCIONES += ,@{n = 'Pasar a MANUAL'; tipo = 'modo'; modo = 'MANUAL'}
+
+function Gr-Accion([string]$nombre) {
+    foreach ($a in $GR_ACCIONES) { if ("$($a.n)" -eq "$nombre") { return $a } }
+    return $null
+}
+
+# Que acciones piden guardia de viento. PEDIR una posicion segura es la accion
+# PROTECTORA -es justo lo que se quiere con viento- y no se bloquea nunca.
+# Quitarla, o soltar el grupo a auto o a manual, deja de proteger: esas si.
+# Pura.
+function Gr-NecesitaViento($acc) {
+    if (-not $acc) { return $true }
+    if ("$($acc.tipo)" -eq 'sp' -and $acc.poner) { return $false }
+    return $true
+}
+
+# El estado de los diez grupos de una NCU: los siete registros de posicion
+# segura (40001..40007, en ese orden) y el 30100, cuyos bits 3..12 son los
+# interruptores de limpieza de los grupos 1..10. Una fila por grupo. Pura.
+function Gr-Estado([string]$ncu, $sp, [int]$din) {
+    $r = @()
+    $regs = @($sp)
+    for ($g = 1; $g -le $GR_N; $g++) {
+        $bit = 1 -shl ($g - 1)
+        $pedidas = @()
+        for ($i = 0; $i -lt 7 -and $i -lt $regs.Count; $i++) {
+            if (([int]$regs[$i] -band $bit) -ne 0) {
+                $n = $i + 1
+                $pedidas += $(if ($GR_SP_NOMBRE.ContainsKey($n)) { "$n ($($GR_SP_NOMBRE[$n]))" } else { "$n" })
+            }
+        }
+        $r += ,[pscustomobject]@{
+            NCU = "$ncu"; Grupo = "$g"
+            Limpieza = $(if ($din -band (1 -shl ($g + 2))) { 'INTERRUPTOR ON' } else { '-' })
+            Posiciones = $(if ($pedidas.Count -eq 0) { 'ninguna' } else { ($pedidas -join '; ') })
+            Accion = ''; Resultado = ''; Nota = ''
+        }
+    }
+    return $r
+}
+
+# Veredicto de una escritura releyendo el registro: la NCU puede no tomarla
+# -el mapa se escribe solo si "Allow writing on the modbus map" esta puesto en
+# su pagina-, y eso no se puede suponer. Pura.
+function Gr-Veredicto([int]$antes, [int]$despues, [int]$bits, [bool]$poner) {
+    $esperado = $(if ($poner) { ($antes -bor $bits) } else { ($antes -band (-bnot $bits)) }) -band 0xFFFF
+    $d = $despues -band 0xFFFF
+    if ($d -eq $esperado) { return @{ok = $true; nota = ''} }
+    $falta = $(if ($poner) { ($bits -band (-bnot $d)) } else { ($bits -band $d) }) -band 0xFFFF
+    if ($falta -eq 0) {
+        return @{ok = $true; nota = ("los grupos pedidos si, pero la NCU ha movido ademas otros (leido 0x{0:X4}, esperado 0x{1:X4})" -f $d, $esperado)}
+    }
+    return @{ok = $false; nota = ("la NCU no ha tomado los grupos {0} (leido 0x{1:X4}, esperado 0x{2:X4}); mira 'Allow writing on the modbus map' en su pagina" -f (Ncu-Grupos $falta), $d, $esperado)}
+}
+
+# Que TCUs han cambiado de modo entre dos lecturas del bloque compacto. Es la
+# unica forma de saber quien cuelga de un grupo, porque el mapa no lo dice.
+# Pura: recibe dos tablas {tcu -> objeto con .Modo}.
+function Gr-Cambiadas($antes, $despues) {
+    $r = @()
+    if ($null -eq $antes -or $null -eq $despues) { return @($r) }
+    foreach ($k in @($despues.Keys | Sort-Object { [int]$_ })) {
+        $a = $antes[$k]; $b = $despues[$k]
+        if ($null -eq $a -or $null -eq $b) { continue }
+        if ("$($a.Modo)" -ne "$($b.Modo)") { $r += ,@{tcu = [int]$k; de = "$($a.Modo)"; a = "$($b.Modo)"} }
+    }
+    return @($r)
+}
+
+# Lo que se le pregunta al tecnico antes de mover nada. Dice en que sentido se
+# mueven los seguidores -no es lo mismo irse a posicion segura que volver al
+# sol- y admite que no sabemos cuantos son. Pura.
+function Gr-TextoConfirmar($acc, [int]$bits, [int]$nNcus) {
+    $t = "$($acc.n)`r`n`r`nGrupos: $(Ncu-Grupos $bits)   -   NCU(s): $nNcus"
+    if ("$($acc.tipo)" -eq 'sp' -and $acc.poner) {
+        $t += "`r`n`r`nLOS SEGUIDORES DE ESOS GRUPOS SE MOVERAN a la posicion segura."
+    } elseif ("$($acc.tipo)" -eq 'modo' -and "$($acc.modo)" -eq 'MANUAL') {
+        $t += "`r`n`r`nLOS SEGUIDORES DE ESOS GRUPOS DEJARAN DE SEGUIR AL SOL y se quedaran donde esten."
+    } else {
+        $t += "`r`n`r`nLOS SEGUIDORES DE ESOS GRUPOS VUELVEN A SEGUIR AL SOL: se moveran, y dejan de estar protegidos por esa posicion segura."
+    }
+    $t += "`r`n`r`nCUANTOS seguidores son, no se sabe: el mapa R7.1 no dice que TCU esta en que grupo. Si no estas seguro, mirala en la pagina de la NCU antes.`r`n`r`nContinuar?"
+    return $t
+}
 
 # Un bitset de grupos, en algo que se pueda leer de un vistazo. 0 es lo normal
 # y se dice "ninguno" en vez de "0", que en una columna de grupos se confunde
@@ -4442,7 +4596,7 @@ $nav.Location = New-Object System.Drawing.Point(10, 72)
 $nav.Size = New-Object System.Drawing.Size(176, 663)
 $nav.HideSelection = $false
 $nav.ShowLines = $false; $nav.ShowRootLines = $false; $nav.ShowPlusMinus = $false
-$nav.FullRowSelect = $true; $nav.ItemHeight = 20
+$nav.FullRowSelect = $true; $nav.ItemHeight = 18   # 34 lineas x 18 = 612 en los 663 de alto: caben sin scroll, y sobra para dos hojas mas
 $nav.BorderStyle = 'FixedSingle'
 $form.Controls.Add($nav)
 
@@ -5771,6 +5925,71 @@ foreach ($c in @(@('NCU',45), @('IP',110), @('FW',70), @('Estado',86), @('GW1',5
 $tabND.Controls.Add($lvND)
 [void](LG $tabND 'Solo la NCU: lo que ella misma declara por el puerto 502 (30100-30105, version en el 50 y las peticiones de posicion segura por grupo en 40001-40007). No lee ninguna TCU. El cuadro NCUs de arriba acota cuales.' 10 890 366)
 
+# ============================ TAB GRUPOS NCU ============================
+# El "Group Control" de la pagina de la NCU, por Modbus. Ver el bloque de
+# logica de grupos para lo que el mapa NO dice (que TCU esta en que grupo) y
+# por que pedir posicion segura no pide guardia de viento y quitarla si.
+$tabGR = New-Object System.Windows.Forms.TabPage
+$tabGR.Text = 'Grupos NCU'
+$tabs.TabPages.Add($tabGR)
+
+$btnGRLeer = New-Object System.Windows.Forms.Button
+$btnGRLeer.Text = 'LEER GRUPOS'
+$btnGRLeer.Location = New-Object System.Drawing.Point(10, 18)
+$btnGRLeer.Size = New-Object System.Drawing.Size(150, 28)
+$btnGRLeer.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnGRLeer.ForeColor = [System.Drawing.Color]::White
+$tabGR.Controls.Add($btnGRLeer)
+
+$lblGRRes = LG $tabGR '' 176 650 24
+$lblGRRes.ForeColor = [System.Drawing.Color]::DimGray
+
+$btnGRCsv = New-Object System.Windows.Forms.Button
+$btnGRCsv.Text = 'CSV'
+$btnGRCsv.Location = New-Object System.Drawing.Point(838, 18)
+$btnGRCsv.Size = New-Object System.Drawing.Size(70, 28)
+$btnGRCsv.Enabled = $false
+$tabGR.Controls.Add($btnGRCsv)
+
+# El boton que escribe va en rojo y en su propia fila: no se pulsa sin querer.
+$btnGRAplicar = New-Object System.Windows.Forms.Button
+$btnGRAplicar.Text = 'APLICAR A GRUPOS'
+$btnGRAplicar.Location = New-Object System.Drawing.Point(10, 52)
+$btnGRAplicar.Size = New-Object System.Drawing.Size(170, 28)
+$btnGRAplicar.BackColor = [System.Drawing.Color]::FromArgb(150,60,0)
+$btnGRAplicar.ForeColor = [System.Drawing.Color]::White
+$tabGR.Controls.Add($btnGRAplicar)
+
+[void](LG $tabGR 'Grupos:' 190 54 58)
+$txtGRGrupos = TG $tabGR '' 248 52 90
+[void](LG $tabGR 'Accion:' 346 54 58)
+$cbGRAccion = New-Object System.Windows.Forms.ComboBox
+$cbGRAccion.Location = New-Object System.Drawing.Point(404, 52)
+$cbGRAccion.Size = New-Object System.Drawing.Size(260, 22)
+$cbGRAccion.DropDownStyle = 'DropDownList'
+foreach ($a in $GR_ACCIONES) { [void]$cbGRAccion.Items.Add($a.n) }
+$cbGRAccion.SelectedIndex = 3          # "Pedir posicion segura 4 (limpieza)"
+$tabGR.Controls.Add($cbGRAccion)
+
+$chkGRViento = New-Object System.Windows.Forms.CheckBox
+$chkGRViento.Text = 'guardia de viento'
+$chkGRViento.Location = New-Object System.Drawing.Point(674, 54)
+$chkGRViento.Size = New-Object System.Drawing.Size(150, 22)
+$chkGRViento.Checked = $true
+$tabGR.Controls.Add($chkGRViento)
+
+$lvGR = New-Object System.Windows.Forms.ListView
+$lvGR.Location = New-Object System.Drawing.Point(10, 86)
+$lvGR.Size = New-Object System.Drawing.Size(898, 258)
+$lvGR.View = 'Details'; $lvGR.FullRowSelect = $true; $lvGR.GridLines = $true
+foreach ($c in @(@('NCU',45), @('Grupo',52), @('Limpieza',100), @('Posiciones seguras pedidas',200),
+                 @('Accion',150), @('Resultado',90), @('Nota',240))) {
+    [void]$lvGR.Columns.Add($c[0], $c[1])
+}
+$tabGR.Controls.Add($lvGR)
+$lblGRNota = LG $tabGR 'El Group Control de la pagina de la NCU, por Modbus: posicion segura por grupo (40001-40007) y auto/manual (40070/40071). Es UNA escritura por NCU y la reparte ella; el STOW de la pestana PEM es otra cosa, escribe el 42000 de CADA TCU por Zigbee. El mapa R7.1 NO dice que TCU esta en que grupo, asi que no se puede saber a cuantos seguidores afecta antes de mandarlo: despues se mira cuales han cambiado de modo. Auto/manual son de SOLO ESCRITURA y no se pueden releer. Pedir posicion segura protege y no pide guardia de viento; quitarla o soltar a auto/manual, si.' 10 890 350
+$lblGRNota.ForeColor = [System.Drawing.Color]::Gray
+
 # ============================ TAB COMM ESCLAVOS ============================
 $tabN = New-Object System.Windows.Forms.TabPage
 $tabN.Text = 'Comm esclavos'
@@ -5996,7 +6215,7 @@ foreach ($c in @(@('Parametro',260), @('Valor comun',120), @('Cuantas',70), @('N
     [void]$lvAN.Columns.Add($c[0], $c[1])
 }
 $tabAN.Controls.Add($lvAN)
-$lblANNota = LG $tabAN 'Toda la hoja NCU RW del mapa R7.1: las siete peticiones de posicion segura por grupo (40001-40007, y en operacion normal son "ninguno") y el timeout de posicion personalizada (40080). El auto/manual por grupo (40070/40071) es de SOLO ESCRITURA: no se puede leer en que modo esta un grupo.' 10 890 350
+$lblANNota = LG $tabAN 'Toda la hoja NCU RW del mapa R7.1: las siete peticiones de posicion segura por grupo (40001-40007, y en operacion normal son "ninguno") y el timeout de posicion personalizada (40080). El auto/manual por grupo (40070/40071) es de SOLO ESCRITURA: no se puede leer en que modo esta un grupo. Mandarlos, y pedir o quitar una posicion segura a un grupo, se hace en la pestana Grupos.' 10 890 350
 $lblANNota.ForeColor = [System.Drawing.Color]::Gray
 
 # ============================ TAB FIRMWARE NCU ============================
@@ -13178,6 +13397,220 @@ $btnNComm.Add_Click({ Lanzar {
 } })
 
 # ------------------------- DIAGNOSTICO PROPIO DE LA NCU -------------------------
+# ---------------------------------------------------------------------------
+#  Grupos de la NCU: leer su estado y mandarles comandos
+# ---------------------------------------------------------------------------
+$script:UltimoGrupos = @()
+
+# Guardia de viento para las maniobras de grupo. La decision la toma
+# Viento-Seguro, la misma que usa el test de motor; esto solo es el dialogo,
+# con las palabras de esta pestana.
+function Gr-GuardiaViento($cx, [bool]$activa) {
+    if (-not $activa) { return $true }
+    Con 'Guardia de viento: consultando HSUs via NCU...' ([System.Drawing.Color]::Gainsboro)
+    $v = Viento-Seguro $cx.ip $cx.to
+    if ($null -eq $v) {
+        $r = [System.Windows.Forms.MessageBox]::Show(
+            "No hay datos de HSU via NCU: no puedo comprobar el viento.`r`nContinuar BAJO TU RESPONSABILIDAD?",
+            'Guardia de viento', 'YesNo', 'Warning')
+        return ($r -eq 'Yes')
+    }
+    if ($v.alarma -or $v.nivel -gt 0) {
+        Con ("GUARDIA DE VIENTO: nivel {0}{1} - maniobra de grupo BLOQUEADA." -f $v.nivel, $(if ($v.alarma) { ' con ALARMA DE VIENTO' } else { '' })) ([System.Drawing.Color]::Salmon)
+        [void][System.Windows.Forms.MessageBox]::Show("Hay viento (nivel $($v.nivel)). Con viento no se saca a un grupo de su posicion segura.", 'Guardia de viento', 'OK', 'Stop')
+        return $false
+    }
+    Con 'Guardia de viento: nivel 0, sin alarmas - adelante.' ([System.Drawing.Color]::LightGreen)
+    return $true
+}
+
+# Lo que hay que leer de una NCU para pintar sus grupos. Deja la conexion
+# cerrada pase lo que pase.
+function Gr-LeerNcu($tr) {
+    $r = @{sp = @(); din = 0; timeout = $null}
+    Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
+    try {
+        # FC03-Leer devuelve ",$palabras" para que no se despliegue sola: hay que
+        # asignarla y recorrerla, no envolverla en @() -eso da UN elemento-
+        $w = FC03-Leer $UNIT_NCU (Dir-Trama ($GR_SP_BASE + 1)) 7
+        $r.sp  = @($w | ForEach-Object { [int]$_ })
+        $r.din = [int](FC03-Leer $UNIT_NCU (Dir-Trama 30100) 1)[0]
+        try { $r.timeout = [int](FC03-Leer $UNIT_NCU (Dir-Trama 40080) 1)[0] } catch { $r.timeout = $null }
+    } finally { Modbus-Cerrar }
+    return $r
+}
+
+# Escribe unos bits en un registro de grupos. FC22 (mascara) es lo correcto
+# -toca solo esos bits, y de forma atomica-, pero no todo equipo la soporta: si
+# la NCU la rechaza se cae a leer-modificar-escribir con FC16 y se dice cual de
+# las dos ha valido, porque la segunda tiene carrera con quien mas escriba. Los
+# registros de auto/manual son de SOLO ESCRITURA: ahi no hay nada que leer.
+function Gr-EscribirBits([int]$addr, [int]$bits, [bool]$poner, [bool]$soloEscritura) {
+    if ($soloEscritura) {
+        FC16-Escribir $UNIT_NCU $addr @($bits)
+        return 'FC16 (registro de solo escritura)'
+    }
+    $m = Gr-Mascara $bits $poner
+    try {
+        FC22-Mascara $UNIT_NCU $addr $m.mascara $m.valor
+        return 'FC22'
+    } catch {
+        $v = [int](FC03-Leer $UNIT_NCU (Dir-Trama $addr) 1)[0]
+        $n = $(if ($poner) { ($v -bor $bits) } else { ($v -band (-bnot $bits)) }) -band 0xFFFF
+        FC16-Escribir $UNIT_NCU $addr @($n)
+        return 'FC16 (la NCU no acepta FC22)'
+    }
+}
+
+function Gr-Pintar($filas) {
+    $lvGR.BeginUpdate()
+    $lvGR.Items.Clear()
+    foreach ($f in @($filas)) {
+        $it = New-Object System.Windows.Forms.ListViewItem("$($f.NCU)")
+        foreach ($c in @($f.Grupo, $f.Limpieza, $f.Posiciones, $f.Accion, $f.Resultado, $f.Nota)) { [void]$it.SubItems.Add("$c") }
+        switch ("$($f.Resultado)") {
+            'OK'            { $it.ForeColor = [System.Drawing.Color]::DarkGreen }
+            'FALLA'         { $it.ForeColor = [System.Drawing.Color]::Firebrick }
+            'SIN RESPUESTA' { $it.ForeColor = [System.Drawing.Color]::Firebrick }
+            'SALTADO'       { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
+            default {
+                if ("$($f.Posiciones)" -ne 'ninguna' -and "$($f.Posiciones)" -ne '') { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
+                elseif ("$($f.Limpieza)" -eq 'INTERRUPTOR ON') { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
+            }
+        }
+        [void]$lvGR.Items.Add($it)
+    }
+    $lvGR.EndUpdate()
+    Lv-Reiniciar $lvGR
+}
+
+$btnGRLeer.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
+    if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU (mira el cuadro NCUs).' ([System.Drawing.Color]::Orange); return }
+    $lvGR.Items.Clear(); $script:UltimoGrupos = @(); $lblGRRes.Text = ''; $btnGRCsv.Enabled = $false; Sellar 'grupos'
+    Ctx-Guardar 'grupos' $cx $trabajos
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Grupos de $($trabajos.Count) NCU(s) por el puerto ${PUERTO_NCU}: posiciones seguras pedidas e interruptores de limpieza." ([System.Drawing.Color]::SteelBlue)
+    Prog-Iniciar $trabajos.Count
+    $nCon = 0; $nLimp = 0; $nMal = 0
+    foreach ($tr in $trabajos) {
+        if (Chequear-Cancelado) { break }
+        $script:NcuLog = "$($tr.ncu)"
+        $l = $null; $err = ''
+        try { $l = Gr-LeerNcu $tr } catch { $err = "$_" }
+        if ($null -eq $l) {
+            $nMal++
+            $script:UltimoGrupos += ,[pscustomobject]@{NCU="$($tr.ncu)"; Grupo='-'; Limpieza=''; Posiciones=''
+                                                       Accion=''; Resultado='SIN RESPUESTA'; Nota=$err}
+            Con ("NCU{0}: {1}" -f $tr.ncu, $err) ([System.Drawing.Color]::Salmon)
+        } else {
+            foreach ($f in @(Gr-Estado "$($tr.ncu)" $l.sp $l.din)) {
+                $script:UltimoGrupos += ,$f
+                if ("$($f.Posiciones)" -ne 'ninguna') {
+                    $nCon++
+                    Con ("NCU{0} grupo {1}: posicion segura pedida -> {2}" -f $f.NCU, $f.Grupo, $f.Posiciones) ([System.Drawing.Color]::Orange)
+                }
+                if ("$($f.Limpieza)" -eq 'INTERRUPTOR ON') {
+                    $nLimp++
+                    Con ("NCU{0} grupo {1}: interruptor de limpieza ACTIVADO" -f $f.NCU, $f.Grupo) ([System.Drawing.Color]::Orange)
+                }
+            }
+            if ($null -ne $l.timeout) { Con ("NCU{0}: vuelta a auto tras posicion personalizada, {1} s" -f $tr.ncu, $l.timeout) ([System.Drawing.Color]::Gainsboro) }
+        }
+        Prog-Paso
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    $script:NcuLog = ''
+    Gr-Pintar $script:UltimoGrupos
+    $btnGRCsv.Enabled = (@($script:UltimoGrupos).Count -gt 0)
+    $lblGRRes.Text = "Grupos con posicion segura: $nCon   |   con interruptor de limpieza: $nLimp" +
+                     $(if ($nMal -gt 0) { "   |   NCUs sin respuesta: $nMal" } else { '' })
+    Prog-Fin
+} })
+
+$btnGRCsv.Add_Click({ [void](Exportar-Csv $script:UltimoGrupos 'grupos_ncu' 'Grupos NCU' -bloque 'grupos') })
+
+$btnGRAplicar.Add_Click({ Lanzar {
+    if (-not (Puede 'tecnico')) { Con 'Rol de solo lectura: este boton no escribe nada.' ([System.Drawing.Color]::Orange); return }
+    $cx = Params-Conexion
+    $acc = Gr-Accion "$($cbGRAccion.SelectedItem)"
+    if (-not $acc) { throw 'elige una accion de la lista' }
+    $bits = Grupos-Parse $txtGRGrupos.Text
+    if ($bits -eq 0) { throw "escribe a que grupos va: 1,3,5   o   1-4   o   todos" }
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
+    if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU (mira el cuadro NCUs).' ([System.Drawing.Color]::Orange); return }
+    $r = [System.Windows.Forms.MessageBox]::Show((Gr-TextoConfirmar $acc $bits $trabajos.Count), 'Comando de grupo a la NCU', 'YesNo', 'Warning')
+    if ($r -ne 'Yes') { return }
+    $lvGR.Items.Clear(); $script:UltimoGrupos = @(); $lblGRRes.Text = ''; $btnGRCsv.Enabled = $false; Sellar 'grupos'
+    Ctx-Guardar 'grupos' $cx $trabajos
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con ("{0} -> grupos {1} en {2} NCU(s)" -f $acc.n, (Ncu-Grupos $bits), $trabajos.Count) ([System.Drawing.Color]::SteelBlue)
+    Prog-Iniciar $trabajos.Count
+    $nOk = 0; $nFalla = 0; $nSalta = 0
+    foreach ($tr in $trabajos) {
+        if (Chequear-Cancelado) { break }
+        $script:NcuLog = "$($tr.ncu)"
+        if ((Gr-NecesitaViento $acc) -and -not (Gr-GuardiaViento $tr.cx $chkGRViento.Checked)) {
+            $nSalta++
+            $script:UltimoGrupos += ,[pscustomobject]@{NCU="$($tr.ncu)"; Grupo=(Ncu-Grupos $bits); Limpieza=''; Posiciones=''
+                                                       Accion="$($acc.n)"; Resultado='SALTADO'; Nota='guardia de viento de esta NCU'}
+            Prog-Paso
+            continue
+        }
+        $res = 'FALLA'; $nota = ''; $via = ''
+        try {
+            Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
+            try {
+                if ("$($acc.tipo)" -eq 'modo') {
+                    # auto/manual no se pueden releer: se comprueba por efecto,
+                    # mirando que TCUs cambian de modo en la cache de la NCU
+                    $antes = $null
+                    try { $antes = Ncu-DiagCompat @($tr.tcus) } catch { }
+                    $via = Gr-EscribirBits $(if ("$($acc.modo)" -eq 'AUTO') { $GR_AUTO } else { $GR_MANUAL }) $bits $true $true
+                    Start-Sleep -Seconds 3
+                    $despues = $null
+                    try { $despues = Ncu-DiagCompat @($tr.tcus) } catch { }
+                    $cam = @(Gr-Cambiadas $antes $despues)
+                    $res = 'OK'
+                    $nota = ("escrito por {0}. {1} TCU(s) ya han cambiado de modo" -f $via, $cam.Count)
+                    if ($cam.Count -eq 0) { $nota += ' (la NCU refresca su cache cada pocos minutos: vuelve a diagnosticar en un rato para verlo)' }
+                    else { $nota += (": " + (($cam | Select-Object -First 12 | ForEach-Object { "$($_.tcu) $($_.de)->$($_.a)" }) -join ', ')) }
+                    foreach ($c in $cam) { Con ("NCU{0} TCU {1,3}: {2} -> {3}" -f $tr.ncu, $c.tcu, $c.de, $c.a) ([System.Drawing.Color]::LightGreen) }
+                } else {
+                    $sps = $(if ("$($acc.tipo)" -eq 'sptodas') { 1..7 } else { @([int]$acc.sp) })
+                    $wA = FC03-Leer $UNIT_NCU (Dir-Trama ($GR_SP_BASE + 1)) 7
+                    $antes = @($wA | ForEach-Object { [int]$_ })
+                    foreach ($sp in $sps) { $via = Gr-EscribirBits ($GR_SP_BASE + $sp) $bits ([bool]$acc.poner) $false }
+                    Start-Sleep -Milliseconds 800
+                    $wD = FC03-Leer $UNIT_NCU (Dir-Trama ($GR_SP_BASE + 1)) 7
+                    $despues = @($wD | ForEach-Object { [int]$_ })
+                    $malos = @(); $notas = @()
+                    foreach ($sp in $sps) {
+                        $v = Gr-Veredicto ([int]$antes[$sp - 1]) ([int]$despues[$sp - 1]) $bits ([bool]$acc.poner)
+                        if (-not $v.ok) { $malos += $sp }
+                        if ("$($v.nota)" -ne '') { $notas += ("sp${sp}: " + $v.nota) }
+                    }
+                    $res = $(if ($malos.Count -eq 0) { 'OK' } else { 'FALLA' })
+                    $nota = ("escrito por {0}. " -f $via) + $(if ($notas.Count -gt 0) { ($notas -join ' | ') } else { 'releido y confirmado en la NCU' })
+                }
+            } finally { Modbus-Cerrar }
+        } catch { $res = 'FALLA'; $nota = "$_" }
+        if ($res -eq 'OK') { $nOk++ } else { $nFalla++ }
+        $script:UltimoGrupos += ,[pscustomobject]@{NCU="$($tr.ncu)"; Grupo=(Ncu-Grupos $bits); Limpieza=''; Posiciones=''
+                                                   Accion="$($acc.n)"; Resultado=$res; Nota=$nota}
+        Con ("NCU{0,-3} {1,-8} {2}" -f $tr.ncu, $res, $nota) $(if ($res -eq 'OK') { [System.Drawing.Color]::LightGreen } else { [System.Drawing.Color]::Salmon })
+        Prog-Paso
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    $script:NcuLog = ''
+    Gr-Pintar $script:UltimoGrupos
+    $btnGRCsv.Enabled = (@($script:UltimoGrupos).Count -gt 0)
+    $lblGRRes.Text = "NCUs: OK $nOk   |   con fallo $nFalla" + $(if ($nSalta -gt 0) { "   |   saltadas por viento $nSalta" } else { '' })
+    Con 'Pulsa LEER GRUPOS para ver como queda el estado de los grupos.' ([System.Drawing.Color]::Gainsboro)
+    Prog-Fin
+} })
+
 $script:UltimoNcuDiag = @()
 $btnNDiag.Add_Click({ Lanzar {
     $cx = Params-Conexion
@@ -14725,7 +15158,7 @@ $btnANLeer.Add_Click({ Lanzar {
     foreach ($f in $abanderados) {
         Con "ATENCION: $($f.Parametro) esta puesto (grupos $($f.Comun)) en la mayoria de las NCUs. Una peticion de posicion segura activa deja esos grupos abanderados." ([System.Drawing.Color]::Orange)
     }
-    Con 'El auto/manual por grupo (40070/40071) no sale aqui: el mapa R7.1 los declara de SOLO ESCRITURA, asi que no hay forma de leer en que modo esta cada grupo.' ([System.Drawing.Color]::Gainsboro)
+    Con 'El auto/manual por grupo (40070/40071) no sale aqui: el mapa R7.1 los declara de SOLO ESCRITURA, asi que no hay forma de leer en que modo esta cada grupo. Se mandan desde la pestana Grupos.' ([System.Drawing.Color]::Gainsboro)
 } })
 $btnANCsv.Add_Click({
     if (@($script:UltimaAudNcu).Count -eq 0) { return }
@@ -15110,6 +15543,7 @@ $NAV_ARBOL = @(
     # es lo mismo que ahora hace la pestana propia pero peor y de rebote.
     @{bloque = 'NCU'; hojas = @(
         @{txt='Diagnóstico propio'; tab=$tabND}
+        @{txt='Grupos';             tab=$tabGR}
         @{txt='Comm esclavos';      tab=$tabN}
         @{txt='Estabilidad';        tab=$tabE}
         @{txt='Auditoría';          tab=$tabAN}
@@ -15206,7 +15640,7 @@ if ($nav.Nodes.Count -gt 0 -and $nav.Nodes[0].Nodes.Count -gt 0) { $nav.Selected
 
 # Todas las tablas de resultados filtran y ordenan al pulsar su cabecera.
 foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvFWd, $lvSat, $lvND, $lvH, $lvN, $lvE, $lvI, $lvC, $lvB, $lvT,
-                     $lvAN, $lvFN, $lvAH, $lvFH, $lvRA, $lvRF, $lvRB, $lvIG, $lvBA)) { Lv-Filtrable $tabla }
+                     $lvAN, $lvFN, $lvAH, $lvFH, $lvRA, $lvRF, $lvRB, $lvIG, $lvBA, $lvGR)) { Lv-Filtrable $tabla }
 
 # La cabecera de pestanas no se puede ocultar con una propiedad: no existe. Lo
 # que si se puede es sacarla fuera del panel, que recorta lo que se sale. La
@@ -15318,7 +15752,7 @@ function Dialogo-Login($usuarios) {
 # Botones que cada rol NO puede usar. Todo lo que escriba en un equipo es de
 # tecnico para arriba; lo que toca identidad de red, firmware o topologia, solo
 # de administrador.
-$BOTONES_TECNICO = @($btnEscribir, $btnNvm, $btnCsvTcu, $btnFallidas, $btnSync, $btnFwPrep,
+$BOTONES_TECNICO = @($btnEscribir, $btnNvm, $btnCsvTcu, $btnFallidas, $btnSync, $btnFwPrep, $btnGRAplicar,
                      $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComisSet,
                      $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm)
 # La topologia decide a que equipos apunta todo lo demas: cambiarla es de admin.
