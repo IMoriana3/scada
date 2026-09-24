@@ -35,6 +35,38 @@ En las operaciones de **planta completa**, cada línea de la consola lleva delan
 
 Consola común con colores, botón **CANCELAR** para abortar operaciones largas, y **log automático** a `logs/tcu_toolbox_AAAAMMDD.log`. La ventana es **redimensionable y maximizable** (v4.6): al agrandarla crecen las tablas y la consola, que es lo que interesa en una planta de cientos de TCUs.
 
+**Los grupos de la NCU, que es como manda ella (v11.84)** — la NCU no ordena
+TCU a TCU: manda por **grupos**, y eso es lo que hace el *Group Control* de su
+página web. Pestaña **Grupos NCU**, que lee y escribe:
+
+- **Leer**: los diez grupos de cada NCU con las **posiciones seguras pedidas**
+  (40001‑40007: viento, nieve, limpieza y cuatro libres), los **interruptores
+  de limpieza** (bits 3‑12 del 30100, que hasta ahora solo salían como nota) y
+  el timeout de vuelta a auto (40080).
+- **Escribir**: pedir o quitar una posición segura a los grupos que se digan
+  (`1,3,5`, `1-4`, `todos`), quitarlas todas, o pasarlos a **AUTO**/**MANUAL**
+  (40070/40071). Es **una escritura por NCU** y la reparte ella; el **STOW** de
+  la pestaña PEM es otra cosa y sigue estando: ese escribe el 42000 de **cada
+  TCU** por Zigbee, una a una, sobre las TCU que uno elija.
+
+Lo que mueve seguidores va con las mismas guardas que el test de motor: rol de
+**técnico**, **confirmación** que dice en qué sentido se moverán, y **guardia
+de viento** — con un matiz que importa: *pedir* posición segura es la acción
+protectora y **no se bloquea nunca** (con viento es justo lo que se quiere);
+*quitarla*, o soltar el grupo a auto o a manual, sí.
+
+Y dos cosas que se dicen en vez de callarlas. **El mapa R7.1 no dice qué TCU
+está en qué grupo** (su página sí lo sabe, columna *Group*, pero no hay
+registro), así que la herramienta **no puede decir a cuántos seguidores afecta
+un comando antes de mandarlo**: lo admite en la confirmación, y después mira
+qué TCU han cambiado de modo, que es lo único que revela quién está en el
+grupo. Y **auto/manual son de solo escritura**: no se pueden releer, así que se
+comprueban por efecto, avisando de que la caché de la NCU tarda unos minutos.
+La escritura va por **FC22 (máscara)** para no pisar los grupos que otro haya
+pedido, con caída a leer‑modificar‑escribir si la NCU no la acepta, y siempre
+se relee para confirmar: si el `Allow writing on the modbus map` de la NCU está
+quitado, se dice.
+
 **El gateway con puerto fijo (v11.83)** — con `503` o `504` puesto a mano en la
 barra (en vez de `auto`), IDENTIFICAR GATEWAYS decía «ninguno de los 1 gateways
 declarados trae ip_gw» en El Burgo, con las IPs ya en la topología. Con puerto

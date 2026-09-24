@@ -4551,6 +4551,81 @@ Check 'invg: con ip_gw se le pregunta al Digi en el propio inventario global' ($
 Check 'invg: y sus datos van como campos de la fila GW' ($blqIG.Contains('Gw-Anotar $fGw @{IP_gw = $ipGw')) $true
 Check 'invg: con puerto fijo la IP del Digi sale de la conexion' ($blqIG.Contains('$tr.cx.ip_gw')) $true
 Check 'invg: sin ip_gw no se inventa y se dice como conseguirla' ($blqIG.Contains('escribe la IP a mano bajo la tabla')) $true
+
+Write-Host ''
+Write-Host '== los grupos de la NCU: su Group Control por Modbus =='
+Check 'grupos: una lista' (Grupos-Parse '1,3,5') 21
+Check 'grupos: un rango' (Grupos-Parse '1-4') 15
+Check 'grupos: mezclados y con espacios' (Grupos-Parse ' 2 , 5-6 ') 50
+Check 'grupos: todos' (Grupos-Parse 'todos') 1023
+Check 'grupos: vacio es ninguno' (Grupos-Parse '') 0
+Check 'grupos: cuantos son' (Grupos-Cuantos (Grupos-Parse '1,3,5')) 3
+Check 'grupos: y se leen por su numero' (Ncu-Grupos (Grupos-Parse '1,3,5')) '1,3,5'
+# lo que no se entiende NO se manda: un comando de grupo mueve seguidores
+$e1 = ''; try { [void](Grupos-Parse '11') } catch { $e1 = 'rechazado' }
+Check 'grupos: el 11 no existe y se rechaza' $e1 'rechazado'
+$e2 = ''; try { [void](Grupos-Parse '0') } catch { $e2 = 'rechazado' }
+Check 'grupos: el 0 tampoco' $e2 'rechazado'
+$e3 = ''; try { [void](Grupos-Parse 'limpieza') } catch { $e3 = 'rechazado' }
+Check 'grupos: ni una palabra cualquiera' $e3 'rechazado'
+# la mascara toca SOLO esos bits: escribir el registro entero pisaria lo que
+# otro haya pedido para los demas grupos
+$mp = Gr-Mascara 5 $true
+Check 'grupos: poner bits no borra los otros' "$($mp.mascara)/$($mp.valor)" '65535/5'
+$mq = Gr-Mascara 5 $false
+Check 'grupos: quitar bits deja los otros' "$($mq.mascara)/$($mq.valor)" '65530/0'
+# la lista de acciones: 7 pedir + 7 quitar + todas + auto + manual
+Check 'grupos: acciones ofrecidas' (@($GR_ACCIONES).Count) 17
+Check 'grupos: la de limpieza es la posicion segura 4' ((Gr-Accion 'Pedir posicion segura 4 (limpieza)').sp) 4
+Check 'grupos: y la de viento la 1' ((Gr-Accion 'Pedir posicion segura 1 (viento)').sp) 1
+Check 'grupos: una accion que no existe no se inventa' ($null -eq (Gr-Accion 'Apagar la planta')) $true
+# PEDIR posicion segura protege: con viento es justo lo que se quiere, no se
+# bloquea. Quitarla o soltar el grupo, si.
+Check 'viento: pedir posicion segura NO se bloquea' (Gr-NecesitaViento (Gr-Accion 'Pedir posicion segura 1 (viento)')) $false
+Check 'viento: quitarla si' (Gr-NecesitaViento (Gr-Accion 'Quitar posicion segura 4 (limpieza)')) $true
+Check 'viento: quitarlas todas tambien' (Gr-NecesitaViento (Gr-Accion 'Quitar TODAS las posiciones seguras')) $true
+Check 'viento: y soltar a AUTO' (Gr-NecesitaViento (Gr-Accion 'Pasar a AUTO')) $true
+Check 'viento: y a MANUAL (deja de seguir, pero tambien deja de protegerse)' (Gr-NecesitaViento (Gr-Accion 'Pasar a MANUAL')) $true
+# el estado: 40001..40007 y los interruptores de limpieza del 30100 (bits 3..12)
+$spT = @(0,0,0,5,0,0,0)          # force_sp_4 pedida a los grupos 1 y 3
+$filasG = @(Gr-Estado '1' $spT 16)   # bit 4 del 30100 = interruptor del grupo 2
+Check 'estado: una fila por grupo' $filasG.Count 10
+Check 'estado: el grupo 1 tiene pedida la de limpieza' $filasG[0].Posiciones '4 (limpieza)'
+Check 'estado: el 2 no' $filasG[1].Posiciones 'ninguna'
+Check 'estado: pero el 2 tiene el interruptor de limpieza' $filasG[1].Limpieza 'INTERRUPTOR ON'
+Check 'estado: y el 1 no' $filasG[0].Limpieza '-'
+Check 'estado: el grupo 3 tambien la tiene pedida' $filasG[2].Posiciones '4 (limpieza)'
+# se relee y se comprueba: la NCU puede no aceptar la escritura
+Check 'veredicto: aceptada' (Gr-Veredicto 0 5 5 $true).ok $true
+$vNo = Gr-Veredicto 0 1 5 $true
+Check 'veredicto: a medias es FALLA' $vNo.ok $false
+Check 'veredicto: y dice que grupo falta' ($vNo.nota -like '*grupos 3*') $true
+Check 'veredicto: y donde mirar' ($vNo.nota -like '*Allow writing on the modbus map*') $true
+Check 'veredicto: quitar lo que ya no esta, aceptado' (Gr-Veredicto 5 0 5 $false).ok $true
+# auto/manual no se pueden releer: se comprueba por efecto, y eso revela quien
+# esta en el grupo (el mapa R7.1 no lo dice)
+$mAntes = @{}; $mAntes[1] = [pscustomobject]@{Modo='AUTO'}; $mAntes[2] = [pscustomobject]@{Modo='AUTO'}
+$mDesp  = @{}; $mDesp[1]  = [pscustomobject]@{Modo='MANUAL'}; $mDesp[2] = [pscustomobject]@{Modo='AUTO'}
+$camG = @(Gr-Cambiadas $mAntes $mDesp)
+Check 'cambiadas: solo la que cambio' $camG.Count 1
+Check 'cambiadas: cual y de que a que' "$($camG[0].tcu) $($camG[0].de)->$($camG[0].a)" '1 AUTO->MANUAL'
+Check 'cambiadas: sin lectura previa, ninguna (no se inventa)' (@(Gr-Cambiadas $null $mDesp).Count) 0
+# la confirmacion dice EN QUE SENTIDO se mueven y admite lo que no sabemos
+$cfPone = Gr-TextoConfirmar (Gr-Accion 'Pedir posicion segura 4 (limpieza)') 5 2
+Check 'confirmar: al proteger, dice que se mueven a posicion segura' ($cfPone -like '*SE MOVERAN a la posicion segura*') $true
+$cfQuita = Gr-TextoConfirmar (Gr-Accion 'Pasar a AUTO') 5 2
+Check 'confirmar: al soltar, dice que vuelven a seguir al sol' ($cfQuita -like '*VUELVEN A SEGUIR AL SOL*') $true
+Check 'confirmar: y ninguna promete cuantos seguidores son' ($cfPone -like '*no se sabe*' -and $cfQuita -like '*no se sabe*') $true
+Check 'confirmar: con los grupos y las NCUs delante' ($cfPone -like '*Grupos: 1,3*NCU(s): 2*') $true
+# el fuente: como se escribe y quien puede
+$blqGr = $src.Substring($src.IndexOf('function Gr-EscribirBits'), 900)
+Check 'escribir: mascara primero, para no pisar otros grupos' ($blqGr.Contains('FC22-Mascara $UNIT_NCU')) $true
+Check 'escribir: y si la NCU no la acepta, leer-modificar-escribir' ($blqGr.Contains('la NCU no acepta FC22')) $true
+Check 'escribir: auto/manual van con FC16, que no se pueden releer' ($blqGr.Contains('registro de solo escritura')) $true
+Check 'grupos: el boton que escribe es de tecnico' ($src.Contains('$btnFwPrep, $btnGRAplicar,')) $true
+Check 'grupos: y pide confirmacion antes de mover nada' ($src.Contains('Gr-TextoConfirmar $acc $bits $trabajos.Count')) $true
+Check 'grupos: con guardia de viento por NCU' ($src.Contains('(Gr-NecesitaViento $acc) -and -not (Gr-GuardiaViento $tr.cx $chkGRViento.Checked)')) $true
+Check 'grupos: la pestana lee ademas los interruptores de limpieza' ($src.Contains("Gr-Estado `"`$(`$tr.ncu)`" `$l.sp `$l.din")) $true
 Check 'gw diag: y la fila NCU ensena la nota con los gateways' (([regex]::Matches($src, '\(Diag-NotaNcu \$dnP?\)')).Count) 2
 $fI = Gw-FilaInventario '1' 1 '10.100.1.53' $lectT
 Check 'gw inv: la fila del gateway' "$($fI.NCU)/GW$($fI.GW)/$($fI.Modelo)/$($fI.CPU_pct)/$($fI.Mem_total_MB)" '1/GW1/ConnectPort X2D/18/16.0'
