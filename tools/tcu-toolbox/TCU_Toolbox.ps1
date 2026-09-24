@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.84'
+$VERSION_TOOLBOX = '11.85'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1317,6 +1317,153 @@ $NCU_RW = @(
     @{n = '40007 force_sp_7 [grupos]';            addr = 40007; tipo = 'grupos'}
     @{n = '40080 custom_position_timeout [s]';    addr = 40080; tipo = 'u16'}
 )
+
+# ---------- ordenes secuenciales: una receta de pasos sobre las mismas TCUs ----------
+# Sustituir una TCU no es UNA orden: es escribir sus parametros, guardarlos en
+# NVM y devolverla a AUTO, en ese orden y sin saltarse ninguno. Eso se venia
+# haciendo a mano, pestana por pestana, y lo que se olvida SIEMPRE es el NVM:
+# la TCU queda bien hasta que se reinicia y vuelve a lo de antes.
+#
+# Una receta es una lista de pasos que se ejecuta ENTERA SOBRE CADA TCU, no
+# paso a paso sobre toda la seleccion. Asi, si una TCU falla al escribir, a esa
+# no se le guarda el NVM ni se la pone en AUTO: se para su secuencia y las
+# demas siguen. Al reves -escribir en las 100 y luego guardar NVM en las 100-
+# una TCU que fallo al escribir se llevaria un NVM de lo que ya tenia.
+$SEC_TIPOS = @(
+    @{tipo='variable'; n='Escribir variable';           param='nombre = valor'; escribe=$true;  mueve=$false; seg=1.2}
+    @{tipo='nvm';      n='Guardar en NVM';              param='';               escribe=$true;  mueve=$false; seg=1.5}
+    @{tipo='modo';     n='Poner modo';                  param='AUTO, MANUAL u OFF'; escribe=$true; mueve=$true; seg=3.5}
+    @{tipo='clear';    n='Limpiar alarmas de motor';    param='';               escribe=$true;  mueve=$false; seg=0.7}
+    @{tipo='stow';     n='Posicion segura (0 la quita)'; param='0 a 7';         escribe=$true;  mueve=$true;  seg=1.1}
+    @{tipo='reloj';    n='Sincronizar reloj UTC';       param='';               escribe=$true;  mueve=$false; seg=0.6}
+    @{tipo='leer';     n='Leer variable (solo comprobar)'; param='nombre';      escribe=$false; mueve=$false; seg=0.5}
+    @{tipo='esperar';  n='Esperar';                     param='segundos';       escribe=$false; mueve=$false; seg=0}
+)
+$SEC_ESPERA_MAX = 120     # segundos por paso: mas que esto, por TCU, es una tarde
+
+function Sec-Tipo([string]$t) {
+    foreach ($d in $SEC_TIPOS) { if ("$($d.tipo)" -eq "$t") { return $d } }
+    return $null
+}
+
+# Un paso, en una linea legible. Pura.
+function Sec-Texto($p) {
+    $d = Sec-Tipo "$($p.tipo)"
+    $n = $(if ($d) { $d.n } else { "?? $($p.tipo)" })
+    $v = "$($p.valor)".Trim()
+    if ($v -eq '') { return $n }
+    return "$n : $v"
+}
+
+# Lo que tarda la receta entera sobre N TCUs, en minutos. Sale en la
+# confirmacion: una espera de 5 s por TCU en una planta son horas, y eso hay
+# que verlo ANTES. Pura.
+function Sec-Minutos($pasos, [int]$nTcus) {
+    $seg = 0.0
+    foreach ($p in @($pasos)) {
+        $d = Sec-Tipo "$($p.tipo)"
+        if (-not $d) { continue }
+        if ("$($p.tipo)" -eq 'esperar') {
+            $e = 0; [void][int]::TryParse("$($p.valor)".Trim(), [ref]$e)
+            $seg += $e
+        } else { $seg += [double]$d.seg }
+    }
+    return [math]::Ceiling($seg * [math]::Max(1, $nTcus) / 60.0)
+}
+
+# Algun paso mueve seguidores (modo o stow): entonces hay guardia de viento. Pura.
+function Sec-Mueve($pasos) {
+    foreach ($p in @($pasos)) { $d = Sec-Tipo "$($p.tipo)"; if ($d -and $d.mueve) { return $true } }
+    return $false
+}
+# Alguno escribe: si no, la receta es de solo lectura y no pide rol ni confirmacion dura. Pura.
+function Sec-Escribe($pasos) {
+    foreach ($p in @($pasos)) { $d = Sec-Tipo "$($p.tipo)"; if ($d -and $d.escribe) { return $true } }
+    return $false
+}
+
+# Lo que esta MAL en la receta (impide ejecutar) y lo que es SOSPECHOSO (deja
+# ejecutar pero se canta). El olvido clasico es escribir y no guardar en NVM:
+# la TCU queda bien hasta que se reinicia. Pura.
+function Sec-Validar($pasos, $variables = $null) {
+    $errores = @(); $avisos = @()
+    $l = @($pasos)
+    if ($l.Count -eq 0) { return @{errores = @('la receta no tiene ningun paso'); avisos = @()} }
+    $iVar = -1; $iNvm = -1; $iModo = -1
+    for ($i = 0; $i -lt $l.Count; $i++) {
+        $p = $l[$i]
+        $d = Sec-Tipo "$($p.tipo)"
+        $v = "$($p.valor)".Trim()
+        $etq = "paso $($i + 1)"
+        if (-not $d) { $errores += "${etq}: '$($p.tipo)' no es un paso que exista"; continue }
+        switch ("$($p.tipo)") {
+            'variable' {
+                if ($iVar -lt 0) { $iVar = $i }
+                $part = $v -split '\s*=\s*', 2
+                if ($part.Count -lt 2 -or "$($part[0])".Trim() -eq '' -or "$($part[1])".Trim() -eq '') {
+                    $errores += "${etq}: escribe 'nombre de variable = valor'"
+                } elseif ($null -ne $variables -and -not $variables.Contains("$($part[0])".Trim())) {
+                    $errores += "${etq}: la variable '$("$($part[0])".Trim())' no esta en el mapa"
+                }
+            }
+            'nvm'  { if ($iNvm -lt 0) { $iNvm = $i } }
+            'modo' {
+                if ($iModo -lt 0) { $iModo = $i }
+                if (@('AUTO','MANUAL','OFF') -notcontains $v.ToUpper()) { $errores += "${etq}: el modo es AUTO, MANUAL u OFF" }
+            }
+            'stow' {
+                $n = -1; [void][int]::TryParse($v, [ref]$n)
+                if ($n -lt 0 -or $n -gt 7) { $errores += "${etq}: la posicion segura va de 0 a 7 (0 la quita)" }
+            }
+            'esperar' {
+                $n = -1; [void][int]::TryParse($v, [ref]$n)
+                if ($n -lt 1 -or $n -gt $SEC_ESPERA_MAX) { $errores += "${etq}: la espera va de 1 a $SEC_ESPERA_MAX segundos, y es POR TCU" }
+            }
+            'leer' { if ($v -eq '') { $errores += "${etq}: di que variable hay que leer" }
+                     elseif ($null -ne $variables -and -not $variables.Contains($v)) { $errores += "${etq}: la variable '$v' no esta en el mapa" } }
+        }
+    }
+    # el olvido que cuesta una segunda visita
+    if ($iVar -ge 0 -and $iNvm -lt 0) {
+        $avisos += 'escribes variables y NO guardas en NVM: la TCU queda bien hasta que se reinicie, y entonces vuelve a lo de antes'
+    }
+    if ($iVar -ge 0 -and $iNvm -ge 0 -and $iNvm -lt $iVar) {
+        $avisos += 'guardas en NVM ANTES de escribir: ese NVM guarda lo que ya habia, no lo que vas a escribir'
+    }
+    if ($iNvm -lt 0 -and $iVar -lt 0 -and $iModo -ge 0) { }   # una receta de solo modo es legitima
+    return @{errores = @($errores); avisos = @($avisos)}
+}
+
+# Lo que se le ensena al tecnico antes de lanzar. Pura.
+function Sec-Resumen($pasos, [int]$nTcus, [string]$donde, $val) {
+    $t = "RECETA de $(@($pasos).Count) paso(s) sobre $nTcus TCU(s) de ${donde}:`r`n"
+    $i = 0
+    foreach ($p in @($pasos)) { $i++; $t += "`r`n  $i. $(Sec-Texto $p)" }
+    $t += "`r`n`r`nSe ejecuta la receta ENTERA en cada TCU, una detras de otra. Si una falla un paso, esa TCU se para ahi y las demas siguen."
+    if (Sec-Mueve $pasos) { $t += "`r`n`r`nHAY PASOS QUE MUEVEN LOS SEGUIDORES." }
+    $t += "`r`n`r`nTiempo estimado: ~$(Sec-Minutos $pasos $nTcus) min."
+    foreach ($a in @($val.avisos)) { $t += "`r`n`r`nAVISO: $a" }
+    $t += "`r`n`r`nContinuar?"
+    return $t
+}
+
+# La receta como objeto para guardarla, y de vuelta. Pura.
+function Sec-AObjeto([string]$nombre, $pasos) {
+    return [ordered]@{
+        tipo = 'receta_tcu'; nombre = "$nombre"; toolbox = $VERSION_TOOLBOX
+        creada = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        pasos = @(@($pasos) | ForEach-Object { [ordered]@{tipo = "$($_.tipo)"; valor = "$($_.valor)"} })
+    }
+}
+function Sec-DeObjeto($obj) {
+    if (-not $obj -or "$($obj.tipo)" -ne 'receta_tcu') { throw 'ese JSON no es una receta (le falta tipo=receta_tcu)' }
+    $l = @()
+    foreach ($p in @($obj.pasos)) {
+        if (-not $p) { continue }
+        $l += ,@{tipo = "$($p.tipo)"; valor = "$($p.valor)"}
+    }
+    return @{nombre = "$($obj.nombre)"; pasos = @($l)}
+}
 
 # ---------- los GRUPOS de la NCU: lo que hace su "Group Control" ----------
 # La NCU manda sobre sus TCUs por GRUPOS y esa es la via que usa su propia
@@ -5924,6 +6071,100 @@ foreach ($c in @(@('NCU',45), @('IP',110), @('FW',70), @('Estado',86), @('GW1',5
 }
 $tabND.Controls.Add($lvND)
 [void](LG $tabND 'Solo la NCU: lo que ella misma declara por el puerto 502 (30100-30105, version en el 50 y las peticiones de posicion segura por grupo en 40001-40007). No lee ninguna TCU. El cuadro NCUs de arriba acota cuales.' 10 890 366)
+
+# ============================ TAB ORDENES SECUENCIALES ============================
+# Una receta de pasos que se ejecuta ENTERA sobre CADA TCU. Ver el bloque de
+# logica de recetas para por que va por TCU y no paso a paso sobre la seleccion.
+$tabSEC = New-Object System.Windows.Forms.TabPage
+$tabSEC.Text = 'Ordenes secuenciales'
+$tabs.TabPages.Add($tabSEC)
+
+$btnSECAdd = New-Object System.Windows.Forms.Button
+$btnSECAdd.Text = 'ANADIR PASO'
+$btnSECAdd.Location = New-Object System.Drawing.Point(10, 18)
+$btnSECAdd.Size = New-Object System.Drawing.Size(120, 28)
+$btnSECAdd.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnSECAdd.ForeColor = [System.Drawing.Color]::White
+$tabSEC.Controls.Add($btnSECAdd)
+
+$cbSECTipo = New-Object System.Windows.Forms.ComboBox
+$cbSECTipo.Location = New-Object System.Drawing.Point(136, 20)
+$cbSECTipo.Size = New-Object System.Drawing.Size(200, 22)
+$cbSECTipo.DropDownStyle = 'DropDownList'
+foreach ($d in $SEC_TIPOS) { [void]$cbSECTipo.Items.Add($d.n) }
+$cbSECTipo.SelectedIndex = 0
+$tabSEC.Controls.Add($cbSECTipo)
+
+$txtSECValor = TG $tabSEC '' 342 20 240
+$txtSECValor.Text = ''
+
+$btnSECDel = New-Object System.Windows.Forms.Button
+$btnSECDel.Text = 'QUITAR'
+$btnSECDel.Location = New-Object System.Drawing.Point(588, 18)
+$btnSECDel.Size = New-Object System.Drawing.Size(90, 28)
+$tabSEC.Controls.Add($btnSECDel)
+
+$btnSECUp = New-Object System.Windows.Forms.Button
+$btnSECUp.Text = 'SUBIR'
+$btnSECUp.Location = New-Object System.Drawing.Point(684, 18)
+$btnSECUp.Size = New-Object System.Drawing.Size(64, 28)
+$tabSEC.Controls.Add($btnSECUp)
+
+$btnSECDown = New-Object System.Windows.Forms.Button
+$btnSECDown.Text = 'BAJAR'
+$btnSECDown.Location = New-Object System.Drawing.Point(754, 18)
+$btnSECDown.Size = New-Object System.Drawing.Size(64, 28)
+$tabSEC.Controls.Add($btnSECDown)
+
+$btnSECGuardar = New-Object System.Windows.Forms.Button
+$btnSECGuardar.Text = 'GUARDAR RECETA'
+$btnSECGuardar.Location = New-Object System.Drawing.Point(10, 52)
+$btnSECGuardar.Size = New-Object System.Drawing.Size(130, 28)
+$tabSEC.Controls.Add($btnSECGuardar)
+
+$btnSECCargar = New-Object System.Windows.Forms.Button
+$btnSECCargar.Text = 'CARGAR RECETA'
+$btnSECCargar.Location = New-Object System.Drawing.Point(146, 52)
+$btnSECCargar.Size = New-Object System.Drawing.Size(130, 28)
+$tabSEC.Controls.Add($btnSECCargar)
+
+# Simular no toca ningun equipo: dice, TCU a TCU, lo que haria cada paso. Es lo
+# que se mira antes de lanzar una receta sobre una planta entera.
+$btnSECSim = New-Object System.Windows.Forms.Button
+$btnSECSim.Text = 'SIMULAR'
+$btnSECSim.Location = New-Object System.Drawing.Point(282, 52)
+$btnSECSim.Size = New-Object System.Drawing.Size(110, 28)
+$tabSEC.Controls.Add($btnSECSim)
+
+$btnSECEjec = New-Object System.Windows.Forms.Button
+$btnSECEjec.Text = 'EJECUTAR'
+$btnSECEjec.Location = New-Object System.Drawing.Point(398, 52)
+$btnSECEjec.Size = New-Object System.Drawing.Size(140, 28)
+$btnSECEjec.BackColor = [System.Drawing.Color]::FromArgb(150,60,0)
+$btnSECEjec.ForeColor = [System.Drawing.Color]::White
+$tabSEC.Controls.Add($btnSECEjec)
+
+[void](LG $tabSEC 'TCUs:' 548 44 58)
+$txtSECTcus = TG $tabSEC '' 596 52 110
+$lblSECRes = LG $tabSEC '' 716 190 58
+$lblSECRes.ForeColor = [System.Drawing.Color]::DimGray
+
+$lvSEC = New-Object System.Windows.Forms.ListView
+$lvSEC.Location = New-Object System.Drawing.Point(10, 86)
+$lvSEC.Size = New-Object System.Drawing.Size(430, 258)
+$lvSEC.View = 'Details'; $lvSEC.FullRowSelect = $true; $lvSEC.GridLines = $true
+foreach ($c in @(@('#',28), @('Paso',170), @('Parametro',210))) { [void]$lvSEC.Columns.Add($c[0], $c[1]) }
+$tabSEC.Controls.Add($lvSEC)
+
+$lvSECR = New-Object System.Windows.Forms.ListView
+$lvSECR.Location = New-Object System.Drawing.Point(446, 86)
+$lvSECR.Size = New-Object System.Drawing.Size(462, 258)
+$lvSECR.View = 'Details'; $lvSECR.FullRowSelect = $true; $lvSECR.GridLines = $true
+foreach ($c in @(@('NCU',40), @('TCU',42), @('Paso',150), @('Estado',70), @('Nota',150))) { [void]$lvSECR.Columns.Add($c[0], $c[1]) }
+$tabSEC.Controls.Add($lvSECR)
+
+$lblSECNota = LG $tabSEC 'Sustituir una TCU no es UNA orden: es escribir sus parametros, GUARDARLOS EN NVM y devolverla a AUTO, en ese orden. Aqui se monta esa receta una vez, se guarda y se repite. La receta se ejecuta ENTERA sobre CADA TCU: si una falla un paso, esa se para ahi y las demas siguen (al reves, escribir en todas y luego guardar NVM en todas, le guardaria el NVM a una que fallo al escribir). SIMULAR no toca ningun equipo. El cuadro TCUs de aqui manda sobre el de arriba; en blanco, todas las de la seleccion.' 10 890 350
+$lblSECNota.ForeColor = [System.Drawing.Color]::Gray
 
 # ============================ TAB GRUPOS NCU ============================
 # El "Group Control" de la pagina de la NCU, por Modbus. Ver el bloque de
@@ -13398,6 +13639,263 @@ $btnNComm.Add_Click({ Lanzar {
 
 # ------------------------- DIAGNOSTICO PROPIO DE LA NCU -------------------------
 # ---------------------------------------------------------------------------
+#  Ordenes secuenciales: montar una receta y ejecutarla TCU a TCU
+# ---------------------------------------------------------------------------
+$script:SecPasos  = @()    # la receta que se esta montando
+$script:UltimoSec = @()    # el resultado de la ultima ejecucion
+
+function Sec-PintarPasos {
+    $lvSEC.BeginUpdate()
+    $lvSEC.Items.Clear()
+    $i = 0
+    foreach ($p in @($script:SecPasos)) {
+        $i++
+        $d = Sec-Tipo "$($p.tipo)"
+        $it = New-Object System.Windows.Forms.ListViewItem("$i")
+        [void]$it.SubItems.Add($(if ($d) { $d.n } else { "?? $($p.tipo)" }))
+        [void]$it.SubItems.Add("$($p.valor)")
+        if ($d -and $d.mueve) { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
+        elseif (-not $d) { $it.ForeColor = [System.Drawing.Color]::Firebrick }
+        [void]$lvSEC.Items.Add($it)
+    }
+    $lvSEC.EndUpdate()
+    $v = Sec-Validar $script:SecPasos $VARIABLES
+    $lblSECRes.Text = $(if (@($v.errores).Count -gt 0) { "$(@($v.errores).Count) error(es)" }
+                        elseif (@($v.avisos).Count -gt 0) { "$(@($script:SecPasos).Count) pasos, con avisos" }
+                        else { "$(@($script:SecPasos).Count) pasos" })
+    $lblSECRes.ForeColor = $(if (@($v.errores).Count -gt 0) { [System.Drawing.Color]::Firebrick }
+                             elseif (@($v.avisos).Count -gt 0) { [System.Drawing.Color]::DarkOrange }
+                             else { [System.Drawing.Color]::DimGray })
+}
+
+function Sec-Fila([string]$ncu, $tcu, [string]$paso, [string]$estado, [string]$nota) {
+    $it = New-Object System.Windows.Forms.ListViewItem("$ncu")
+    foreach ($c in @("$tcu", $paso, $estado, $nota)) { [void]$it.SubItems.Add("$c") }
+    switch -Wildcard ($estado) {
+        'OK*'       { $it.ForeColor = [System.Drawing.Color]::DarkGreen }
+        'SIMULADO*' { $it.ForeColor = [System.Drawing.Color]::SteelBlue }
+        'FALLA*'    { $it.ForeColor = [System.Drawing.Color]::Firebrick }
+        'SALTADO*'  { $it.ForeColor = [System.Drawing.Color]::Gray }
+        default     { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
+    }
+    [void]$lvSECR.Items.Add($it)
+    $script:UltimoSec += [pscustomobject]@{NCU=$ncu; TCU="$tcu"; Paso=$paso; Estado=$estado; Nota=$nota}
+    if ($estado -notlike 'OK*' -and $estado -notlike 'SIMULADO*') {
+        Con ("{0}TCU {1,3}  {2}  {3}  {4}" -f $(if ($ncu) { "NCU$ncu " } else { '' }), $tcu, $paso, $estado, $nota) ([System.Drawing.Color]::Salmon)
+    }
+    [System.Windows.Forms.Application]::DoEvents()
+}
+
+# UN paso sobre UNA TCU ya conectada. Devuelve @{ok; nota}. No pinta nada: el
+# que llama decide como contarlo, y asi esto se puede probar por partes.
+function Sec-EjecutarPaso([byte]$tcu, $p, [bool]$simular) {
+    $v = "$($p.valor)".Trim()
+    switch ("$($p.tipo)") {
+        'variable' {
+            $part = $v -split '\s*=\s*', 2
+            $nom = "$($part[0])".Trim(); $val = "$($part[1])".Trim()
+            if (-not $VARIABLES.Contains($nom)) { return @{ok = $false; nota = "la variable '$nom' no esta en el mapa"} }
+            $def = $VARIABLES[$nom]
+            $esc = Valor-A-Escritura $def $val
+            if ($simular) { return @{ok = $true; nota = "escribiria $val en el registro $($def.addr)"} }
+            $previo = ''
+            try { $previo = Leer-Decodificado $tcu $def } catch { }
+            if ("$($esc.modo)" -eq 'fc16') { FC16-Escribir $tcu $esc.addr $esc.palabras }
+            else { FC22-Mascara $tcu $esc.addr $esc.and $esc.or }
+            Start-Sleep -Milliseconds 250
+            # un registro de comando no se relee: no guarda lo que se le escribe
+            if ($ADDR_COMANDO -contains [int]$def.addr) { return @{ok = $true; nota = "$val escrito (registro de comando: no se relee)"} }
+            $leido = ''
+            try { $leido = Leer-Decodificado $tcu $def } catch { return @{ok = $false; nota = "escrito, pero no se ha podido releer: $_"} }
+            if ("$leido" -eq "$val") { return @{ok = $true; nota = "$previo -> $leido"} }
+            return @{ok = $false; nota = "escrito $val y la TCU devuelve $leido"}
+        }
+        'nvm' {
+            if ($simular) { return @{ok = $true; nota = 'guardaria la configuracion en NVM (40007 bit 15)'} }
+            FC22-Mascara $tcu 40007 0x7FFF 0x8000
+            Start-Sleep -Milliseconds 500
+            return @{ok = $true; nota = 'NVM solicitado (el bit no se relee: es de comando)'}
+        }
+        'modo' {
+            $m = @{'OFF'=0; 'MANUAL'=1; 'AUTO'=2}[$v.ToUpper()]
+            if ($simular) { return @{ok = $true; nota = "pondria modo $($v.ToUpper())"} }
+            $antes = Modo-Actual $tcu
+            if ($antes -eq $m) { return @{ok = $true; nota = "ya estaba en $($v.ToUpper()) (no se ha escrito)"} }
+            if (Fijar-Modo $tcu $m) { return @{ok = $true; nota = "$(Modo-Nombre $antes) -> $($v.ToUpper())"} }
+            return @{ok = $false; nota = "no ha entrado en modo $($v.ToUpper())"}
+        }
+        'clear' {
+            if ($simular) { return @{ok = $true; nota = 'desenclavaria las alarmas de motor (40007 bit 13)'} }
+            FC22-Mascara $tcu 40007 0xDFFF 0x2000
+            Start-Sleep -Milliseconds 400
+            $st = (FC03-Leer $tcu (Dir-Trama 30006) 1)[0]
+            if (($st -shr 11) -band 1) { return @{ok = $false; nota = 'la alarma sigue enclavada (hay que mirar la causa)'} }
+            return @{ok = $true; nota = 'sin alarmas de motor enclavadas'}
+        }
+        'stow' {
+            $n = [int]$v
+            if ($simular) { return @{ok = $true; nota = $(if ($n -gt 0) { "pediria la posicion segura $n" } else { 'quitaria el stow' })} }
+            FC22-Mascara $tcu 42000 0xFFF8 $n
+            Start-Sleep -Milliseconds 800
+            $w = (FC03-Leer $tcu (Dir-Trama 30001) 1)[0]
+            $activo = ($w -shr 13) -band 0x7
+            if ($activo -eq $n) { return @{ok = $true; nota = $(if ($n -gt 0) { "posicion segura $n activa (moviendose)" } else { 'stow retirado' })} }
+            return @{ok = $false; nota = "pedida $n y 30001 marca $activo (puede haber otra fuente: NCU o viento)"}
+        }
+        'reloj' {
+            if ($simular) { return @{ok = $true; nota = 'pondria la fecha y hora de este PC'} }
+            FC22-Mascara $tcu 40007 0xFFFE 0x0001
+            $ahora = Get-Date
+            FC16-Escribir $tcu 40001 @($ahora.Second, $ahora.Minute, $ahora.Hour, $ahora.Day, $ahora.Month, $ahora.Year)
+            FC22-Mascara $tcu 40007 0xFFFD 0x0002
+            FC22-Mascara $tcu 40007 0xFFFC 0x0000
+            return @{ok = $true; nota = $ahora.ToString('yyyy-MM-dd HH:mm:ss')}
+        }
+        'leer' {
+            if (-not $VARIABLES.Contains($v)) { return @{ok = $false; nota = "la variable '$v' no esta en el mapa"} }
+            if ($simular) { return @{ok = $true; nota = "leeria $v"} }
+            $l = Leer-Decodificado $tcu $VARIABLES[$v]
+            return @{ok = $true; nota = "$v = $l"}
+        }
+        'esperar' {
+            $n = [int]$v
+            if ($simular) { return @{ok = $true; nota = "esperaria $n s"} }
+            Start-Sleep -Seconds $n
+            return @{ok = $true; nota = "$n s"}
+        }
+    }
+    return @{ok = $false; nota = "paso desconocido: $($p.tipo)"}
+}
+
+function Sec-Correr([bool]$simular) {
+    $pasos = @($script:SecPasos)
+    $val = Sec-Validar $pasos $VARIABLES
+    if (@($val.errores).Count -gt 0) {
+        Con 'La receta tiene errores y no se lanza:' ([System.Drawing.Color]::Salmon)
+        foreach ($e in @($val.errores)) { Con "  - $e" ([System.Drawing.Color]::Salmon) }
+        return
+    }
+    if (-not $simular -and (Sec-Escribe $pasos) -and -not (Puede 'tecnico')) {
+        Con 'Rol de solo lectura: esta receta escribe en los equipos. Puedes SIMULARLA.' ([System.Drawing.Color]::Orange)
+        return
+    }
+    $cx = Params-Conexion
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtSECTcus.Text 'Secuencia') (Gw-Sel))
+    $nTcus = Cuantas-Tcus $trabajos
+    if ($nTcus -eq 0) { Con 'La seleccion no deja ninguna TCU (mira los cuadros de arriba y el TCUs de esta pestana).' ([System.Drawing.Color]::Orange); return }
+    $donde = $(if ($cx.multi) { "$($trabajos.Count) NCUs de la PLANTA COMPLETA" } else { "$($cx.ip):$($cx.etiqueta)" })
+    if (-not $simular) {
+        $r = [System.Windows.Forms.MessageBox]::Show((Sec-Resumen $pasos $nTcus $donde $val), 'Ejecutar receta', 'YesNo', 'Warning')
+        if ($r -ne 'Yes') { return }
+    }
+    $lvSECR.Items.Clear(); $script:UltimoSec = @(); Sellar 'secuencia'
+    Ctx-Guardar 'secuencia' $cx $trabajos
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con ("{0}: {1} paso(s) sobre {2} TCU(s) de {3}  (~{4} min)" -f $(if ($simular) { 'SIMULACION de receta' } else { 'RECETA' }),
+         $pasos.Count, $nTcus, $donde, (Sec-Minutos $pasos $nTcus)) ([System.Drawing.Color]::SteelBlue)
+    foreach ($a in @($val.avisos)) { Con "AVISO: $a" ([System.Drawing.Color]::Orange) }
+    $c = @{ok = 0; falla = 0}
+    $antesNcu = $null
+    if (-not $simular -and (Sec-Mueve $pasos)) {
+        $antesNcu = {
+            param($tr, $ncu)
+            if (Guardia-Viento $tr.cx) { return $true }
+            foreach ($tcu in @($tr.tcus)) { Sec-Fila $ncu $tcu '(toda la receta)' 'SALTADO' 'guardia de viento de esta NCU'; $c.falla++ }
+            return $false
+        }.GetNewClosure()
+    }
+    Pem-PorTcu $trabajos {
+        param($tcu, $ncu, $tr, $seg)
+        $nPaso = 0
+        foreach ($p in $pasos) {
+            if ($script:Cancelar) { break }
+            $nPaso++
+            $etq = "$nPaso. $(Sec-Texto $p)"
+            $res = $null
+            try { $res = Sec-EjecutarPaso $tcu $p $simular }
+            catch {
+                $res = @{ok = $false; nota = "$_"}
+                if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
+            }
+            if ($res.ok) {
+                Sec-Fila $ncu $tcu $etq $(if ($simular) { 'SIMULADO' } else { 'OK' }) $res.nota
+            } else {
+                Sec-Fila $ncu $tcu $etq 'FALLA' $res.nota
+                # esta TCU se para aqui: no se le guarda NVM ni se la suelta a
+                # AUTO despues de un paso que no ha salido
+                if ($nPaso -lt $pasos.Count) {
+                    Sec-Fila $ncu $tcu '(resto de la receta)' 'SALTADO' "se para en el paso $nPaso"
+                }
+                $c.falla++
+                return
+            }
+        }
+        $c.ok++
+    }.GetNewClosure() $antesNcu
+    Lv-Reiniciar $lvSECR
+    $lblSECRes.Text = "TCUs completas: $($c.ok)   |   con fallo: $($c.falla)"
+    $lblSECRes.ForeColor = $(if ($c.falla -gt 0) { [System.Drawing.Color]::Firebrick } else { [System.Drawing.Color]::DimGray })
+    Con ("{0}: {1} TCU(s) completas, {2} con fallo." -f $(if ($simular) { 'Simulacion' } else { 'Receta' }), $c.ok, $c.falla) ([System.Drawing.Color]::SteelBlue)
+    Prog-Fin
+}
+
+$btnSECAdd.Add_Click({
+    $d = @($SEC_TIPOS | Where-Object { $_.n -eq "$($cbSECTipo.SelectedItem)" })[0]
+    if (-not $d) { return }
+    $script:SecPasos += ,@{tipo = "$($d.tipo)"; valor = "$($txtSECValor.Text)".Trim()}
+    $txtSECValor.Text = ''
+    Sec-PintarPasos
+})
+$btnSECDel.Add_Click({
+    if ($lvSEC.SelectedIndices.Count -eq 0) { return }
+    $i = $lvSEC.SelectedIndices[0]
+    $l = @($script:SecPasos); $nuevo = @()
+    for ($k = 0; $k -lt $l.Count; $k++) { if ($k -ne $i) { $nuevo += ,$l[$k] } }
+    $script:SecPasos = @($nuevo)
+    Sec-PintarPasos
+})
+$btnSECUp.Add_Click({
+    if ($lvSEC.SelectedIndices.Count -eq 0) { return }
+    $i = $lvSEC.SelectedIndices[0]
+    if ($i -le 0) { return }
+    $l = @($script:SecPasos); $t = $l[$i - 1]; $l[$i - 1] = $l[$i]; $l[$i] = $t
+    $script:SecPasos = @($l); Sec-PintarPasos
+    if ($lvSEC.Items.Count -gt ($i - 1)) { $lvSEC.Items[$i - 1].Selected = $true }
+})
+$btnSECDown.Add_Click({
+    if ($lvSEC.SelectedIndices.Count -eq 0) { return }
+    $i = $lvSEC.SelectedIndices[0]
+    $l = @($script:SecPasos)
+    if ($i -ge ($l.Count - 1)) { return }
+    $t = $l[$i + 1]; $l[$i + 1] = $l[$i]; $l[$i] = $t
+    $script:SecPasos = @($l); Sec-PintarPasos
+    if ($lvSEC.Items.Count -gt ($i + 1)) { $lvSEC.Items[$i + 1].Selected = $true }
+})
+$btnSECGuardar.Add_Click({
+    if (@($script:SecPasos).Count -eq 0) { Con 'No hay receta que guardar.' ([System.Drawing.Color]::Orange); return }
+    $nom = "$($cbPlanta.SelectedItem)"
+    [void](Exportar-Json (Sec-AObjeto $nom $script:SecPasos) 'receta' 'Receta' 4 'secuencia')
+})
+$btnSECCargar.Add_Click({
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    $dlg.Filter = 'Recetas (*.json)|*.json|Todos (*.*)|*.*'
+    $dlg.InitialDirectory = $PSScriptRoot
+    if ($dlg.ShowDialog() -ne 'OK') { return }
+    try {
+        $obj = Get-Content $dlg.FileName -Raw | ConvertFrom-Json
+        $r = Sec-DeObjeto $obj
+        $script:SecPasos = @($r.pasos)
+        Sec-PintarPasos
+        Con "Receta cargada: $($r.nombre) - $(@($r.pasos).Count) pasos ($($dlg.FileName))" ([System.Drawing.Color]::LightGreen)
+        $v = Sec-Validar $script:SecPasos $VARIABLES
+        foreach ($e in @($v.errores)) { Con "  ERROR: $e" ([System.Drawing.Color]::Salmon) }
+        foreach ($a in @($v.avisos)) { Con "  AVISO: $a" ([System.Drawing.Color]::Orange) }
+    } catch { Con "No se ha podido cargar la receta: $_" ([System.Drawing.Color]::Salmon) }
+})
+$btnSECSim.Add_Click({ Lanzar { Sec-Correr $true } })
+$btnSECEjec.Add_Click({ Lanzar { Sec-Correr $false } })
+
+# ---------------------------------------------------------------------------
 #  Grupos de la NCU: leer su estado y mandarles comandos
 # ---------------------------------------------------------------------------
 $script:UltimoGrupos = @()
@@ -15560,6 +16058,7 @@ $NAV_ARBOL = @(
         @{txt='Buscar repetidor';      tab=$tabRB})}
     @{bloque = 'TCUs'; hojas = @(
         @{txt='Diagnóstico';   tab=$tabG; vista='TCU'}
+        @{txt='Órdenes secuenciales'; tab=$tabSEC}
         @{txt='Auditoría';     tab=$tabF}
         @{txt='Baterías';      tab=$tabB}
         @{txt='Análisis de baterías'; tab=$tabBA}
@@ -15640,7 +16139,7 @@ if ($nav.Nodes.Count -gt 0 -and $nav.Nodes[0].Nodes.Count -gt 0) { $nav.Selected
 
 # Todas las tablas de resultados filtran y ordenan al pulsar su cabecera.
 foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvFWd, $lvSat, $lvND, $lvH, $lvN, $lvE, $lvI, $lvC, $lvB, $lvT,
-                     $lvAN, $lvFN, $lvAH, $lvFH, $lvRA, $lvRF, $lvRB, $lvIG, $lvBA, $lvGR)) { Lv-Filtrable $tabla }
+                     $lvAN, $lvFN, $lvAH, $lvFH, $lvRA, $lvRF, $lvRB, $lvIG, $lvBA, $lvGR, $lvSEC, $lvSECR)) { Lv-Filtrable $tabla }
 
 # La cabecera de pestanas no se puede ocultar con una propiedad: no existe. Lo
 # que si se puede es sacarla fuera del panel, que recorta lo que se sale. La
@@ -15752,7 +16251,7 @@ function Dialogo-Login($usuarios) {
 # Botones que cada rol NO puede usar. Todo lo que escriba en un equipo es de
 # tecnico para arriba; lo que toca identidad de red, firmware o topologia, solo
 # de administrador.
-$BOTONES_TECNICO = @($btnEscribir, $btnNvm, $btnCsvTcu, $btnFallidas, $btnSync, $btnFwPrep, $btnGRAplicar,
+$BOTONES_TECNICO = @($btnEscribir, $btnNvm, $btnCsvTcu, $btnFallidas, $btnSync, $btnFwPrep, $btnGRAplicar, $btnSECEjec,
                      $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComisSet,
                      $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm)
 # La topologia decide a que equipos apunta todo lo demas: cambiarla es de admin.
