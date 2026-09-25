@@ -3983,7 +3983,7 @@ foreach ($b in @('GLOBAL', 'NCU', 'HSU', 'REPETIDORES', 'TCUs')) {
 # peor de como estaba
 Check 'nav: abre en el diagnostico de planta' ($src.Contains("@{txt='Diagnóstico de planta'; tab=`$tabG; vista='todo'}")) $true
 # El arbol es lo unico que se lee en pantalla: va con tildes y con ñ.
-Check 'nav: las etiquetas van bien escritas' ($src.Contains("@{txt='Lectura de señales'; tab=`$tabH})")) $true
+Check 'nav: las etiquetas van bien escritas' ($src.Contains("@{txt='Lectura de señales'; tab=`$tabH}")) $true
 Check 'nav: y sin "senales" sin ñ' ($src.Contains("Lectura de senales'; tab")) $false
 # y tienen que caber todas sin barra de scroll: 31 lineas a 20 px son 620, y el
 # arbol llega hasta abajo del todo (663). Con 400 px se veian 18 de 31.
@@ -3995,7 +3995,7 @@ Check 'nav: caben todas las lineas sin scroll' (($lineasNav * [int]$mIt.Groups['
 Check 'nav: el arbol sigue a los saltos del codigo' ($src.Contains('$tabs.Add_SelectedIndexChanged(')) $true
 # cada pestana tiene que ser alcanzable: una pestana sin hoja es una pestana a
 # la que ya no se puede llegar, porque la cabecera no se ve
-$tabsCreadas = @([regex]::Matches($src, '\$(tab\w*) = New-Object System\.Windows\.Forms\.TabPage') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+$tabsCreadas = @([regex]::Matches($src, '\$(tab\w*) = (?:New-Object System\.Windows\.Forms\.TabPage|Disp-NuevaPestana)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
 $mArbol = [regex]::Match($src, '\$NAV_ARBOL = @\((?<c>[\s\S]*?)\r?\n\)')
 $enArbol = @([regex]::Matches($mArbol.Groups['c'].Value, 'tab=\$(\w+)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
 Check 'nav: ninguna pestana inalcanzable' (@($tabsCreadas | Where-Object { $enArbol -notcontains $_ }) -join ',') ''
