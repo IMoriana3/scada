@@ -4573,7 +4573,7 @@ Check 'grupos: ni una palabra cualquiera' $e3 'rechazado'
 # la mascara toca SOLO esos bits: escribir el registro entero pisaria lo que
 # otro haya pedido para los demas grupos
 $mp = Gr-Mascara 5 $true
-Check 'grupos: poner bits no borra los otros' "$($mp.mascara)/$($mp.valor)" '65535/5'
+Check 'grupos: poner bits no borra los otros' "$($mp.mascara)/$($mp.valor)" '65530/5'
 $mq = Gr-Mascara 5 $false
 Check 'grupos: quitar bits deja los otros' "$($mq.mascara)/$($mq.valor)" '65530/0'
 # la lista de acciones: 7 pedir + 7 quitar + todas + auto + manual
