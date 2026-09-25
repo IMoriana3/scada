@@ -71,7 +71,9 @@ class PlantIdentity:
 
     @property
     def operationally_usable(self):
-        return not self.development and self.manifest["record_status"] == "accepted"
+        live_capability = self.manifest.get("capabilities", {}).get("scada.live", {})
+        return (not self.development and self.manifest["record_status"] == "accepted"
+                and live_capability.get("available") is True)
 
     def _binding(self, kind, value, scope_type, scope_id, at, *, asset_type=None):
         found = {b["asset_id"] for b in self.bindings

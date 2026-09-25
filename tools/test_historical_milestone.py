@@ -89,6 +89,15 @@ class Milestone(unittest.TestCase):
         rows = self.identity.inventory()
         self.assertEqual([(r["ncu"], r["tcu"]) for r in rows], [("NCU1", 1), ("NCU2", 109)])
         self.assertFalse(self.identity.operationally_usable)
+        self.identity.development = False
+        self.identity.manifest["record_status"] = "accepted"
+        self.assertFalse(self.identity.operationally_usable)  # scada.live absent
+        self.identity.manifest["capabilities"] = {"scada.live": {"available": False}}
+        self.assertFalse(self.identity.operationally_usable)
+        self.identity.manifest["capabilities"]["scada.live"]["available"] = True
+        self.assertTrue(self.identity.operationally_usable)
+        self.identity.development = True
+        self.identity.manifest["record_status"] = "provisional"
         with self.assertRaises(IdentityUnavailable):
             PlantIdentity(self.directory, self.config)  # unmerged package must not run
         (self.directory / "identity/registry-r1.json").write_text("{}")
