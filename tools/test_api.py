@@ -16,6 +16,7 @@ import sys
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(RAIZ, "api"))
+sys.path.insert(0, RAIZ)  # shared, read-only IdentityRegistry consumer
 os.environ.setdefault("INFLUXDB_TOKEN", "banco")     # main.py lo exige al importar
 
 try:

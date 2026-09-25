@@ -2,8 +2,10 @@
 # El collector lanza una tarea async por NCU.
 
 plant:
-  id: "elburgo"              # cambia a "ayora_24025", "san_jose_24019", etc.
+  id: "23003"                # plant_id del IdentityRegistry; el slug elburgo es alias legado
   name: "El Burgo I"
+  timezone: "Europe/Madrid" # IANA; representación local, almacenamiento UTC
+  layout_slug: "elburgo"    # locator explícito de DWG para el banco de layout, no identidad
 
 polling:
   interval_s: 30             # ciclo completo de lectura por NCU
@@ -28,6 +30,7 @@ float_word_order: "big"
 # TCU son los esclavos 57..108, exacto— y su único nodo meteo es HSU_V020_231.
 ncus:
   - id: "NCU1"
+    asset_id: "06ee64ea-bb8d-47b4-8597-9b35c8ffc0b3" # IdentityRegistry r1
     host: "10.100.1.52"
     port: 502
     unit_id: 1
@@ -52,6 +55,7 @@ ncus:
       - { puerto: 503, tcu_ini: 1,  tcu_fin: 56,  hsu_esclavo: 230, ip_gw: "10.100.1.53" }
       - { puerto: 504, tcu_ini: 57, tcu_fin: 108, hsu_esclavo: 231, ip_gw: "10.100.1.54" }
   - id: "NCU2"
+    asset_id: "2b48971f-113c-4adb-8dc4-247cd7b44239" # IdentityRegistry r1
     host: "10.100.1.56"
     port: 502
     unit_id: 1

@@ -14,25 +14,42 @@ services:
       DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN}
 
   collector:
-    build: ./collector
+    build:
+      context: .
+      dockerfile: collector/Dockerfile
     restart: unless-stopped
     depends_on: [influxdb]
     volumes:
       - ./config:/config:ro
+      # Montar el repo publicado: SCADA_PACKAGE_REPO=/plant-package y
+      # SCADA_PLANT_PACKAGE=/plant-package/plants/23003 dentro del contenedor.
+      # - /ruta/a/SolarGPTfull:/plant-package:ro
     environment:
       INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
       CONFIG_DIR: /config
+      SCADA_PLANT_PACKAGE: ${SCADA_PLANT_PACKAGE:-}
+      SCADA_PACKAGE_REPO: ${SCADA_PACKAGE_REPO:-}
+      SCADA_PACKAGE_PUBLISHED_COMMIT: ${SCADA_PACKAGE_PUBLISHED_COMMIT:-}
 
   api:
-    build: ./api
+    build:
+      context: .
+      dockerfile: api/Dockerfile
     restart: unless-stopped
     depends_on: [influxdb]
     ports: ["8000:8000"]
+    volumes:
+      - ./config:/config:ro
+      # - /ruta/a/SolarGPTfull:/plant-package:ro
     environment:
       INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
       INFLUXDB_ORG: ${INFLUXDB_ORG}
       INFLUXDB_BUCKET: ${INFLUXDB_BUCKET}
       INFLUXDB_URL: http://influxdb:8086
+      CONFIG_DIR: /config
+      SCADA_PLANT_PACKAGE: ${SCADA_PLANT_PACKAGE:-}
+      SCADA_PACKAGE_REPO: ${SCADA_PACKAGE_REPO:-}
+      SCADA_PACKAGE_PUBLISHED_COMMIT: ${SCADA_PACKAGE_PUBLISHED_COMMIT:-}
 
 volumes:
   influxdb-data:

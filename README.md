@@ -43,6 +43,24 @@ La NCU actúa como **gateway Modbus** de todos sus TCU en un único espacio de d
 
 ## Funcionalidades
 
+### Histórico y disponibilidad medida (El Burgo 23003)
+
+En el `index.html` existente, conectar SCADA, seleccionar El Burgo y abrir la ficha de una TCU. **Histórico de esta TCU** abre una gráfica con `Desde` y `Hasta` en hora de planta (`Europe/Madrid`), saltos de día de calendario local, día completo y últimas 6/12/24 h. Los chips activan variables; el color identifica la variable y la línea continua/discontinua distingue la TCU principal de **Comparar con…**. Ambas comparten los mismos instantes UTC de consulta. Las horas inexistentes por cambio de horario se rechazan y las horas repetidas requieren elegir el offset UTC.
+
+En el sinóptico, **Capa** separa `Estado instantáneo`, `Disponibilidad de telemetría medida` (día local y filtro NCU) y `RF modelado (radio geométrico)`. La métrica contractual de disponibilidad cuenta muestras `tracker_status.health` recibidas de `source=modbus` frente a slots esperados por la cadencia de `config/plants.yml`; devuelve `UNKNOWN` para día incompleto o menos de dos slots observados. Los huecos no se cuentan como estado offline: `offline_observed_pct` sólo usa muestras recibidas. La intensidad azul es continua y no pretende clasificar bueno/degradado/pobre sin umbrales aprobados. RSSI y `ack_failures` no forman parte de esta serie, por lo que no se publican como métricas de esta capa. Los puntos anteriores sin etiqueta `source` quedan excluidos; el driver simulado se declara como tal y no se presenta como disponibilidad medida real.
+
+La identidad sale del **Plant Package/IdentityRegistry r1**, externo y de sólo lectura, mediante bindings explícitos `operational_asset_key`, `modbus_slave` y `asset_id`. `tcu_count` sigue sólo para el estimador LEGACY; no define TCUs sondeadas. Antes de arrancar API o collector:
+
+```sh
+export SCADA_PLANT_PACKAGE=/ruta/al/repo/plants/23003
+export SCADA_PACKAGE_REPO=/ruta/al/repo
+export SCADA_PACKAGE_PUBLISHED_COMMIT=<sha-mergeado-en-main>
+```
+
+La revisión indicada debe ser ancestro de `main`; los bytes de manifiesto y registro deben coincidir con ella, y el hash del registro con el manifiesto. Si falta el paquete o no pasa la comprobación, el colector no arranca y las rutas de identidad responden sin datos. Para desarrollo local **exclusivamente**, `SCADA_IDENTITY_DEVELOPMENT=1` permite el paquete provisional con `read_only=true` y `operationally_usable=false`; no habilita operación. El ejemplo de montaje está en `docker-compose.yml`. No se copia un segundo modelo de planta al repositorio.
+
+Nuevas rutas: `GET /identity`, `GET /assets/live`, `GET /assets/history?asset_id=<uuid>&compare_asset_id=<uuid>&from=<ISO con offset>&to=<ISO con offset>&fields=soc,...` y `GET /coverage/measured?day=YYYY-MM-DD[&ncu_asset_id=<uuid>]`. Las rutas LEGACY `/live` y `/history/{ncu}/{tcu}` permanecen para compatibilidad; la nueva UI usa sólo rutas basadas en `asset_id`. La consulta histórica reutiliza InfluxDB; no hay otro almacenamiento. Ver [auditoría y limitaciones](docs/audit/SCADA-HISTORICAL-MEASURED-COVERAGE.md).
+
 - Lee cada NCU de la planta cada X segundos (por defecto 30 s) y normaliza la telemetría de sus TCU: ángulo real, ángulo objetivo, modo (AUTO/MANUAL/OFF), backtracking, SoC/SoH, tensión y temperatura de batería, corriente de motor, alarmas y antigüedad de comunicaciones.
 - Guarda histórico en InfluxDB con retención configurable.
 - Expone los datos ya digeridos en una API REST simple para el frontend.

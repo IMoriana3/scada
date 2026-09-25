@@ -7,6 +7,21 @@ on:
   push:
   pull_request:
 jobs:
+  historical-api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Instalar dependencias de API y banco Modbus
+        run: pip install -r api/requirements.txt 'pymodbus>=3.6' httpx
+      - name: Histórico, identidad y compatibilidad API
+        run: |
+          python -m unittest tools.test_historical_milestone -v
+          python tools/test_api.py
+          python tools/test_comms_age.py
+
   node:
     runs-on: ubuntu-latest
     steps:

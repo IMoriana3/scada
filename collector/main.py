@@ -17,6 +17,7 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 from decode import tracker_health
 from events import RegistroEventos
 from traffic import TrafficMeter
+from scada_identity import configured_identity
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
@@ -30,6 +31,11 @@ def load_cfg():
         plants = yaml.safe_load(f)
     with open(f"{CFG_DIR}/modbus_map.yml") as f:
         mmap = yaml.safe_load(f)
+    identity = configured_identity(plants)  # fail closed before opening Modbus
+    inventory = identity.inventory()
+    for ncu in plants["ncus"]:
+        ncu["tcu_ids"] = [r["tcu"] for r in inventory if r["ncu"] == ncu["id"]]
+        ncu["interval_s"] = ncu.get("interval_s", plants["polling"]["interval_s"])
     return plants, mmap
 
 
@@ -59,7 +65,7 @@ def clasificar(trackers):
     return trackers
 
 
-def tracker_points(plant_id, ncu_id, trackers):
+def tracker_points(plant_id, ncu_id, trackers, source=None):
     """Puntos InfluxDB de un ciclo de TCUs (se escriben en un solo POST)."""
     points = []
     for t in trackers:
@@ -69,6 +75,10 @@ def tracker_points(plant_id, ncu_id, trackers):
              .tag("plant", plant_id).tag("ncu", ncu_id).tag("tcu", str(t["tcu"]))
              .field("health", health)
              .field("alarms", ",".join(t["alarms"])))
+        if source:
+            if source not in ("modbus", "simulated"):
+                raise ValueError("Origen de telemetría no reconocido")
+            p.tag("source", source)
         if t["comms_age_s"] is not None:
             p.field("comms_age_s", float(t["comms_age_s"]))
         for k in ("tilt_angle", "target_angle", "soc", "soh", "battery_voltage",
@@ -104,15 +114,15 @@ def write_traffic(write_api, bucket, org, plant_id, ncu_id, snap, meter):
     meter.cloud_write([p.to_line_protocol()])
 
 
-async def poll_ncu(cfg, mmap, ncu_cfg, write_api):
+async def poll_ncu(cfg, mmap, ncu_cfg, write_api, meter=None):
     plant_id = cfg["plant"]["id"]
     bucket, org = cfg["influxdb"]["bucket"], cfg["influxdb"]["org"]
-    interval = cfg["polling"]["interval_s"]
-    meter = TrafficMeter() if cfg.get("traffic", {}).get("enabled", True) else None
+    interval = ncu_cfg["interval_s"]
     eventos = RegistroEventos(plant_id, ncu_cfg["id"], interval)
     drv = make_driver(cfg, ncu_cfg, mmap, meter)
     first = True
     t_prev = time.monotonic()
+    next_poll = t_prev
     while True:
         try:
             await drv.connect()
@@ -121,7 +131,6 @@ async def poll_ncu(cfg, mmap, ncu_cfg, write_api):
             # cuesta una lectura más -- es la misma de siempre, movida de sitio.
             ncu_status = await drv.read_ncu()
             trackers = clasificar(await drv.read_trackers())
-            meteo = await drv.read_meteo()
             await drv.close()
             # El sello del evento se toma AQUI, con la lectura recien hecha, no
             # al escribir: entre las dos cosas hay una escritura HTTP que puede
@@ -135,10 +144,10 @@ async def poll_ncu(cfg, mmap, ncu_cfg, write_api):
                 first = False
 
             write_points(write_api, bucket, org,
-                         tracker_points(plant_id, ncu_cfg["id"], trackers), meter)
+                         tracker_points(plant_id, ncu_cfg["id"], trackers, cfg["driver"]), meter)
 
-            # NCU + meteo van en el MISMO POST: cada escritura HTTP paga sus
-            # cabeceras, y por un enlace 4G eso pesa más que los propios datos.
+            # La NCU comparte ciclo de 30 s con las TCUs. La HSU tiene tarea
+            # propia de 10 s, para no prometer una cadencia que no se sondea.
             estado = [Point("ncu_status").tag("plant", plant_id).tag("ncu", ncu_cfg["id"])]
             for k, v in ncu_status.items():
                 estado[0].field(k, float(v))
@@ -149,16 +158,10 @@ async def poll_ncu(cfg, mmap, ncu_cfg, write_api):
             skew = next((t["skew_s"] for t in trackers if t.get("skew_s") is not None), None)
             if skew is not None:
                 estado[0].field("clock_skew_s", float(skew))
-            for m in meteo:
-                p = (Point("meteo").tag("plant", plant_id)
-                     .tag("ncu", ncu_cfg["id"]).tag("hsu", str(m["hsu"])))
-                for k, v in m["fields"].items():
-                    p.field(k, float(v))
-                estado.append(p)
-            # Los flancos van en el MISMO POST que estado y meteo: casi siempre
+            # Los flancos van en el MISMO POST que estado: casi siempre
             # son cero puntos, y cuando no lo son no merecen una escritura HTTP
             # propia con sus cabeceras.
-            estado += eventos.flancos(trackers, ncu_status, meteo, ts_ciclo)
+            estado += eventos.flancos(trackers, ncu_status, [], ts_ciclo)
             write_points(write_api, bucket, org, estado, meter)
 
             if meter:
@@ -173,14 +176,53 @@ async def poll_ncu(cfg, mmap, ncu_cfg, write_api):
                      "" if not meter else
                      " — LAN %.1f kB, nube %.1f kB" % (snap["lan_b"] / 1e3,
                                                        snap["cloud_gz_b"] / 1e3))
-            await asyncio.sleep(interval)
         except Exception as e:
             log.error("[%s] %s — reintento en %ds", ncu_cfg["id"], e, interval)
             try:
                 await drv.close()
             except Exception:
                 pass
-            await asyncio.sleep(interval)
+        next_poll += interval
+        await asyncio.sleep(max(0, next_poll - time.monotonic()))
+        if next_poll < time.monotonic() - interval:
+            next_poll = time.monotonic()
+
+
+async def poll_meteo(cfg, mmap, ncu_cfg, write_api, meter=None):
+    """Separate HSU rhythm; missing samples never masquerade as offline TCUs."""
+    plant_id = cfg["plant"]["id"]
+    interval = ncu_cfg.get("meteo_interval_s", cfg["polling"]["meteo_interval_s"])
+    if interval <= 0:
+        raise ValueError("meteo_interval_s debe ser positivo")
+    events = RegistroEventos(plant_id, ncu_cfg["id"], interval)
+    drv = make_driver(cfg, ncu_cfg, mmap, meter)
+    next_poll = time.monotonic()
+    while True:
+        try:
+            await drv.connect()
+            meteo = await drv.read_meteo()
+            await drv.close()
+            ts = datetime.now(timezone.utc)
+            points = []
+            for m in meteo:
+                p = (Point("meteo").tag("plant", plant_id).tag("ncu", ncu_cfg["id"])
+                     .tag("hsu", str(m["hsu"])))
+                for k, v in m["fields"].items():
+                    p.field(k, float(v))
+                points.append(p)
+            points += events.flancos([], {}, meteo, ts)
+            write_points(write_api, cfg["influxdb"]["bucket"], cfg["influxdb"]["org"],
+                         points, meter)
+        except Exception as exc:
+            log.error("[%s] meteo: %s — reintento en %ds", ncu_cfg["id"], exc, interval)
+            try:
+                await drv.close()
+            except Exception:
+                pass
+        next_poll += interval
+        await asyncio.sleep(max(0, next_poll - time.monotonic()))
+        if next_poll < time.monotonic() - interval:
+            next_poll = time.monotonic()
 
 
 async def main():
@@ -194,7 +236,12 @@ async def main():
     write_api = influx.write_api(write_options=SYNCHRONOUS)
     log.info("Collector arrancando: planta=%s driver=%s NCUs=%d",
              cfg["plant"]["id"], cfg["driver"], len(cfg["ncus"]))
-    await asyncio.gather(*(poll_ncu(cfg, mmap, n, write_api) for n in cfg["ncus"]))
+    jobs = []
+    for n in cfg["ncus"]:
+        meter = TrafficMeter() if cfg.get("traffic", {}).get("enabled", True) else None
+        jobs.extend((poll_ncu(cfg, mmap, n, write_api, meter),
+                     poll_meteo(cfg, mmap, n, write_api, meter)))
+    await asyncio.gather(*jobs)
 
 
 if __name__ == "__main__":

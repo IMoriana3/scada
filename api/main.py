@@ -9,6 +9,12 @@ GET /meteo/history        -> series de las HSU (viento, dirección, nieve…)
 """
 import os
 import re
+from datetime import date, datetime
+from uuid import UUID
+
+import yaml
+from scada_identity import configured_identity, IdentityUnavailable
+from historical import CHART_FIELDS, history_for_assets, measured_day
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +28,83 @@ URL = os.environ.get("INFLUXDB_URL", "http://influxdb:8086")
 ORG = os.environ.get("INFLUXDB_ORG", "factiun")
 BUCKET = os.environ.get("INFLUXDB_BUCKET", "trackers")
 client = InfluxDBClient(url=URL, token=os.environ["INFLUXDB_TOKEN"], org=ORG)
+
+
+def _identity():
+    try:
+        with open(os.path.join(os.environ.get("CONFIG_DIR", "config"), "plants.yml"),
+                  encoding="utf-8") as f:
+            return configured_identity(yaml.safe_load(f))
+    except (IdentityUnavailable, OSError, KeyError, ValueError) as exc:
+        raise HTTPException(503, f"IdentityRegistry no disponible: {exc}") from exc
+
+
+@app.get("/identity")
+def identity_inventory():
+    identity = _identity()
+    return {"plant_id": identity.registry["plant_id"], "revision": identity.registry["revision"],
+            "timezone": identity.timezone, "read_only": True,
+            "operationally_usable": identity.operationally_usable,
+            "assets": identity.inventory()}
+
+
+@app.get("/assets/live")
+def asset_live(ncu_asset_id: str | None = None):
+    identity = _identity()
+    if ncu_asset_id:
+        try:
+            UUID(ncu_asset_id)
+        except ValueError as exc:
+            raise HTTPException(400, "NCU asset_id inválido") from exc
+    rows = [r for r in identity.inventory() if ncu_asset_id is None
+            or r["ncu_asset_id"] == ncu_asset_id]
+    if ncu_asset_id and not rows:
+        raise HTTPException(400, "NCU fuera de la planta")
+    binding = {(r["ncu"], str(r["tcu"])): r for r in rows}
+    plant = identity.registry["plant_id"]
+    q = f'''from(bucket: "{BUCKET}")
+  |> range(start: -10m)
+  |> filter(fn: (r) => r._measurement == "tracker_status" and r.plant == "{plant}" and (r.source == "modbus" or r.source == "simulated"))
+  |> last()
+  |> pivot(rowKey: ["ncu","tcu"], columnKey: ["_field"], valueColumn: "_value")
+'''
+    out = []
+    for table in client.query_api().query(q):
+        for rec in table.records:
+            v = rec.values
+            row = binding.get((v.get("ncu"), str(v.get("tcu"))))
+            if row:
+                out.append({"asset_id": row["asset_id"], "layout_key": row["layout_key"],
+                            "source": v.get("source"), **{k: v.get(k) for k in _LIVE_KEYS}})
+    return {"count": len(out), "trackers": out, "read_only": True,
+            "operationally_usable": identity.operationally_usable}
+
+
+@app.get("/assets/history")
+def asset_history(asset_id: str, from_: datetime = Query(alias="from"),
+                  to: datetime = Query(), compare_asset_id: str | None = None,
+                  fields: str = "tilt_angle,target_angle,soc"):
+    ids = [asset_id] + ([compare_asset_id] if compare_asset_id else [])
+    try:
+        for asset in ids:
+            UUID(asset)
+        selected = [f.strip() for f in fields.split(",") if f.strip()]
+        if not selected or any(f not in CHART_FIELDS for f in selected):
+            raise ValueError("Campos numéricos no reconocidos")
+        return history_for_assets(client.query_api(), BUCKET, _identity(), ids, from_, to, selected)
+    except (ValueError, IdentityUnavailable) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/coverage/measured")
+def measured_coverage(day: date, ncu_asset_id: str | None = None):
+    try:
+        if ncu_asset_id:
+            UUID(ncu_asset_id)
+        return measured_day(client.query_api(), BUCKET, _identity(), day,
+                            ncu_asset_id=ncu_asset_id)
+    except (ValueError, IdentityUnavailable) as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 #: Patrón de un tag interpolable (ncu, tcu). Mismo criterio que en
