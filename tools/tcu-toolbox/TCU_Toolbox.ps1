@@ -4998,7 +4998,7 @@ $nav.Location = New-Object System.Drawing.Point(10, 72)
 $nav.Size = New-Object System.Drawing.Size(176, 663)
 $nav.HideSelection = $false
 $nav.ShowLines = $false; $nav.ShowRootLines = $false; $nav.ShowPlusMinus = $false
-$nav.FullRowSelect = $true; $nav.ItemHeight = 18   # 34 lineas x 18 = 612 en los 663 de alto: caben sin scroll, y sobra para dos hojas mas
+$nav.FullRowSelect = $true; $nav.ItemHeight = 17   # 38 lineas x 17 = 646 en los 663 de alto
 $nav.BorderStyle = 'FixedSingle'
 $form.Controls.Add($nav)
 
@@ -5173,11 +5173,11 @@ function Disp-Objetivos([string]$equipo) {
 }
 
 function Disp-Puertos($o, [string]$equipo) {
-    if ($equipo -eq 'NCU') { return ,@($PUERTO_NCU) }
+    if ($equipo -eq 'NCU') { return @($PUERTO_NCU) }
     $recordado = Hsu-PuertoRecordado $o.ip ([int]$o.unit)
     $p = @($(if ($o.puertos) { $o.puertos } else { @($o.puerto) }))
-    if ($recordado -and $p -contains $recordado) { return ,@($recordado) }
-    return ,$p
+    if ($recordado -and $p -contains $recordado) { return @($recordado) }
+    return $p
 }
 
 function Disp-Ejecutar([string]$equipo, [bool]$escritura, $grid, $salida) {
@@ -5247,24 +5247,24 @@ function Disp-Ejecutar([string]$equipo, [bool]$escritura, $grid, $salida) {
 }
 
 function Disp-NuevaPestana([string]$equipo, [bool]$escritura) {
-    $tab = New-Object System.Windows.Forms.TabPage
-    $tab.Text = $(if ($escritura) { 'Escribir variable' } else { 'Leer variable' })
-    [void]$tabs.TabPages.Add($tab)
-    [void](LG $tab 'Filtro' 10 24)
-    $filtro = TG $tab '' 58 6 230
-    $contador = LG $tab '' 296 30
+    $page = New-Object System.Windows.Forms.TabPage
+    $page.Text = $(if ($escritura) { 'Escribir variable' } else { 'Leer variable' })
+    [void]$tabs.TabPages.Add($page)
+    [void](LG $page 'Filtro' 10 24)
+    $filtro = TG $page '' 58 6 230
+    $contador = LG $page '' 296 30
     $quitar = New-Object System.Windows.Forms.Button
     $quitar.Text = 'Quitar'; $quitar.Location = New-Object System.Drawing.Point(470,5); $quitar.Size = New-Object System.Drawing.Size(82,29)
-    [void]$tab.Controls.Add($quitar)
+    [void]$page.Controls.Add($quitar)
     $todas = New-Object System.Windows.Forms.Button
     $todas.Text = 'TODAS'; $todas.Location = New-Object System.Drawing.Point(558,5); $todas.Size = New-Object System.Drawing.Size(80,29)
-    if (-not $escritura) { [void]$tab.Controls.Add($todas) }
+    if (-not $escritura) { [void]$page.Controls.Add($todas) }
     $accion = New-Object System.Windows.Forms.Button
     $accion.Text = $(if ($escritura) { 'ESCRIBIR' } else { 'LEER' })
     $accion.Location = New-Object System.Drawing.Point(720,5); $accion.Size = New-Object System.Drawing.Size(125,30)
     $accion.BackColor = $(if ($escritura) { [System.Drawing.Color]::FromArgb(0,120,60) } else { [System.Drawing.Color]::FromArgb(0,90,160) })
     $accion.ForeColor = [System.Drawing.Color]::White
-    [void]$tab.Controls.Add($accion)
+    [void]$page.Controls.Add($accion)
     $grid = New-Object System.Windows.Forms.DataGridView
     $grid.Location = New-Object System.Drawing.Point(10,45); $grid.Size = New-Object System.Drawing.Size(898,150)
     $grid.AllowUserToAddRows = $true; $grid.RowHeadersVisible = $true; $grid.RowHeadersWidth = 24
@@ -5280,11 +5280,11 @@ function Disp-NuevaPestana([string]$equipo, [bool]$escritura) {
     $info = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
     $info.HeaderText = 'Registro / tipo'; $info.Width = $(if ($escritura) { 330 } else { 405 }); $info.ReadOnly = $true
     [void]$grid.Columns.Add($info)
-    [void]$tab.Controls.Add($grid)
+    [void]$page.Controls.Add($grid)
     $salida = New-Object System.Windows.Forms.ListView
     $salida.Location = New-Object System.Drawing.Point(10,205); $salida.Size = New-Object System.Drawing.Size(898,170)
     $salida.View = 'Details'; $salida.FullRowSelect = $true; $salida.GridLines = $true
-    [void]$tab.Controls.Add($salida)
+    [void]$page.Controls.Add($salida)
     $mapa = $DISP_MAP[$equipo]
     $refrescar = {
         $usados = @($grid.Rows | Where-Object { -not $_.IsNewRow -and $_.Cells[0].Value } | ForEach-Object { [string]$_.Cells[0].Value })
@@ -5309,7 +5309,7 @@ function Disp-NuevaPestana([string]$equipo, [bool]$escritura) {
         foreach ($n in @($variable.Items)) { if ($puestos -notcontains $n) { $i=$grid.Rows.Add(); $grid.Rows[$i].Cells[0].Value=$n } }
     }.GetNewClosure())
     $accion.Add_Click({ Lanzar { Disp-Ejecutar $equipo $escritura $grid $salida } }.GetNewClosure())
-    return $tab
+    return $page
 }
 $tabNcuLeer = Disp-NuevaPestana 'NCU' $false
 $tabNcuEscribir = Disp-NuevaPestana 'NCU' $true
