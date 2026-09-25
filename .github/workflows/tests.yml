@@ -71,6 +71,9 @@ jobs:
           }
 
           $rc = 0
+          Write-Host '── test_group_write_fallback.ps1 ──'
+          pwsh -NoProfile -File test_group_write_fallback.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
           Write-Host '── test_toolbox.ps1 ──'
           pwsh -NoProfile -File test_toolbox.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
