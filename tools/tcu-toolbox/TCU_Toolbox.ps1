@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.87'
+$VERSION_TOOLBOX = '11.88'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -4998,7 +4998,7 @@ $nav.Location = New-Object System.Drawing.Point(10, 72)
 $nav.Size = New-Object System.Drawing.Size(176, 663)
 $nav.HideSelection = $false
 $nav.ShowLines = $false; $nav.ShowRootLines = $false; $nav.ShowPlusMinus = $false
-$nav.FullRowSelect = $true; $nav.ItemHeight = 18   # 34 lineas x 18 = 612 en los 663 de alto: caben sin scroll, y sobra para dos hojas mas
+$nav.FullRowSelect = $true; $nav.ItemHeight = 16   # 40 lineas x 16 = 640 en los 663 de alto
 $nav.BorderStyle = 'FixedSingle'
 $form.Controls.Add($nav)
 
@@ -5017,6 +5017,304 @@ $tabs.Name = 'cuerpoTabs'
 $tabs.Location = New-Object System.Drawing.Point(0, 0)
 $tabs.Size = New-Object System.Drawing.Size(925, 400)
 $pnlCuerpo.Controls.Add($tabs)
+
+# Variables de NCU R7.1 y HSU R23: solo registros completos del mapa.
+# Los subcampos comparten palabra con otros parametros; escribirlos aqui
+# requeriria una mascara y por eso no se ofrecen como variables independientes.
+$DISP_MAP = @{NCU=@{}; HSU=@{}}
+# Snapshot de registros completos del mapa de fabricante NCU R7.1 / HSU R23.
+# Fuente: tools/modbus_src/ncu_r7_hsu_r23.json (cobertura-zigbee).
+$DISP_MAP['NCU']['30002 HsuGlobal'] = @{addr=30002; tipo='u16hex'; acc='R'}
+$DISP_MAP['NCU']['30100 DIGITAL_INPUT'] = @{addr=30100; tipo='u16hex'; acc='R'}
+$DISP_MAP['NCU']['30101 MainStatus'] = @{addr=30101; tipo='u16hex'; acc='R'}
+$DISP_MAP['NCU']['30104 DATE_TIME'] = @{addr=30104; tipo='u32'; acc='R'}
+$DISP_MAP['NCU']['40001 force_sp_1'] = @{addr=40001; tipo='u16hex'; acc='RW'}
+$DISP_MAP['NCU']['40002 force_sp_2'] = @{addr=40002; tipo='u16hex'; acc='RW'}
+$DISP_MAP['NCU']['40003 force_sp_3'] = @{addr=40003; tipo='u16hex'; acc='RW'}
+$DISP_MAP['NCU']['40004 force_sp_4'] = @{addr=40004; tipo='u16hex'; acc='RW'}
+$DISP_MAP['NCU']['40005 force_sp_5'] = @{addr=40005; tipo='u16hex'; acc='RW'}
+$DISP_MAP['NCU']['40006 force_sp_6'] = @{addr=40006; tipo='u16hex'; acc='RW'}
+$DISP_MAP['NCU']['40007 force_sp_7'] = @{addr=40007; tipo='u16hex'; acc='RW'}
+$DISP_MAP['NCU']['40070 auto_mode'] = @{addr=40070; tipo='u16hex'; acc='W'}
+$DISP_MAP['NCU']['40071 manual_mode'] = @{addr=40071; tipo='u16hex'; acc='W'}
+$DISP_MAP['NCU']['40080 custom_position_timeout'] = @{addr=40080; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['30000 ProductId'] = @{addr=30000; tipo='u16'; acc='R'}
+$DISP_MAP['HSU']['30002 Alarms1'] = @{addr=30002; tipo='u16'; acc='R'}
+$DISP_MAP['HSU']['30003 WindSpeed_mps'] = @{addr=30003; tipo='f32'; acc='R'}
+$DISP_MAP['HSU']['30005 WindDir_deg'] = @{addr=30005; tipo='f32'; acc='R'}
+$DISP_MAP['HSU']['30007 SnowLevel_m'] = @{addr=30007; tipo='f32'; acc='R'}
+$DISP_MAP['HSU']['30009 RainGaugeLastMinute_mmh'] = @{addr=30009; tipo='u16'; acc='R'}
+$DISP_MAP['HSU']['30011 ExternalRHx10'] = @{addr=30011; tipo='u16'; acc='R'}
+$DISP_MAP['HSU']['30016 ZBMacAddressLow'] = @{addr=30016; tipo='u32'; acc='R'}
+$DISP_MAP['HSU']['30018 ZBMacAddressHigh'] = @{addr=30018; tipo='u32'; acc='R'}
+$DISP_MAP['HSU']['30021 Lithium primary battery Voltage'] = @{addr=30021; tipo='u16'; acc='R'}
+$DISP_MAP['HSU']['30022 WindSpeed_mps_RAW'] = @{addr=30022; tipo='f32'; acc='R'}
+$DISP_MAP['HSU']['30024 WindDir_deg_RAW'] = @{addr=30024; tipo='f32'; acc='R'}
+$DISP_MAP['HSU']['30026 TemperatureMeasurement_K'] = @{addr=30026; tipo='u16'; acc='R'}
+$DISP_MAP['HSU']['30027 VpowMeasurement_mV'] = @{addr=30027; tipo='u16'; acc='R'}
+$DISP_MAP['HSU']['30028 VccMeasurement_mV'] = @{addr=30028; tipo='u16'; acc='R'}
+$DISP_MAP['HSU']['30033 DateFirstLithiumDischarge'] = @{addr=30033; tipo='u16'; acc='R'}
+$DISP_MAP['HSU']['30035 PrecipitationTypeRK400'] = @{addr=30035; tipo='u16'; acc='R'}
+$DISP_MAP['HSU']['30036 RainfallRK400_mmh'] = @{addr=30036; tipo='f32'; acc='R'}
+$DISP_MAP['HSU']['30038 CompIrradiance1_Wm2'] = @{addr=30038; tipo='u16'; acc='R'}
+$DISP_MAP['HSU']['30039 CompIrradiance2_Wm2'] = @{addr=30039; tipo='u16'; acc='R'}
+$DISP_MAP['HSU']['30040 InternalTemp1_Cx10'] = @{addr=30040; tipo='s16'; acc='R'}
+$DISP_MAP['HSU']['30041 InternalTemp2_Cx10'] = @{addr=30041; tipo='s16'; acc='R'}
+$DISP_MAP['HSU']['30042 ModuleTemp1_Cx10'] = @{addr=30042; tipo='s16'; acc='R'}
+$DISP_MAP['HSU']['30043 ModuleTemp2_Cx10'] = @{addr=30043; tipo='s16'; acc='R'}
+$DISP_MAP['HSU']['31000 WindDirectionPrev'] = @{addr=31000; tipo='u16'; acc='R'}
+$DISP_MAP['HSU']['31002 SnowLevelMax'] = @{addr=31002; tipo='u16'; acc='R'}
+$DISP_MAP['HSU']['31003 IrradianceAvg'] = @{addr=31003; tipo='u16'; acc='R'}
+$DISP_MAP['HSU']['36760 WindDirectionPrev'] = @{addr=36760; tipo='u16'; acc='R'}
+$DISP_MAP['HSU']['36762 SnowLevelMax'] = @{addr=36762; tipo='u16'; acc='R'}
+$DISP_MAP['HSU']['40008 SnowSensorHeight_cm'] = @{addr=40008; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41002 ModbusConfig1'] = @{addr=41002; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41004 ModbusConfig2'] = @{addr=41004; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41008 Config'] = @{addr=41008; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41011 WindSpeedLow_mps'] = @{addr=41011; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41013 WindSpeedMid_mps'] = @{addr=41013; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41017 WindLowTime_s'] = @{addr=41017; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41018 WindMidTime_s'] = @{addr=41018; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41019 WindHighTime_s'] = @{addr=41019; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41020 WindVaneOffset_deg'] = @{addr=41020; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41022 WindSection1_deg'] = @{addr=41022; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41024 WindSection2_deg'] = @{addr=41024; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41026 WindSection3_deg'] = @{addr=41026; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41028 WindSection4_deg'] = @{addr=41028; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41030 WindSection5_deg'] = @{addr=41030; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41032 WindSection6_deg'] = @{addr=41032; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41034 WindSection7_deg'] = @{addr=41034; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41036 WindSection8_deg'] = @{addr=41036; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41038 WindSection9_deg'] = @{addr=41038; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41040 WindSection10_deg'] = @{addr=41040; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41042 WindSection11_deg'] = @{addr=41042; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41044 WindSection12_deg'] = @{addr=41044; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41046 WindSection13_deg'] = @{addr=41046; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41048 WindSection14_deg'] = @{addr=41048; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41050 WindSection15_deg'] = @{addr=41050; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41052 WindSection16_deg'] = @{addr=41052; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41054 SnowLevelThreshold_m'] = @{addr=41054; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41057 ConfigGustyWind'] = @{addr=41057; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41058 WindSpeedGust_mps'] = @{addr=41058; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41076 WindLevel1Thr_mps'] = @{addr=41076; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41078 WindLevel2Thr_mps'] = @{addr=41078; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41080 WindLevel3Thr_mps'] = @{addr=41080; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41082 WindLevel4Thr_mps'] = @{addr=41082; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41084 WindLevel5Thr_mps'] = @{addr=41084; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41086 WindLevel6Thr_mps'] = @{addr=41086; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41088 WindLevel7Thr_mps'] = @{addr=41088; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41090 WindLevel1OnTime_s'] = @{addr=41090; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41091 WindLevel2OnTime_s'] = @{addr=41091; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41092 WindLevel3OnTime_s'] = @{addr=41092; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41093 WindLevel4OnTime_s'] = @{addr=41093; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41094 WindLevel5OnTime_s'] = @{addr=41094; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41095 WindLevel6OnTime_s'] = @{addr=41095; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41096 WindLevel7OnTime_s'] = @{addr=41096; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41097 WindLevel1OffTime_s'] = @{addr=41097; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41098 WindLevel2OffTime_s'] = @{addr=41098; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41099 WindLevel3OffTime_s'] = @{addr=41099; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41100 WindLevel4OffTime_s'] = @{addr=41100; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41101 WindLevel5OffTime_s'] = @{addr=41101; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41102 WindLevel6OffTime_s'] = @{addr=41102; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41103 WindLevel7OffTime_s'] = @{addr=41103; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41104 WindLevel8Thr_mps'] = @{addr=41104; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41106 WindLevel9Thr_mps'] = @{addr=41106; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41108 WindLevel10Thr_mps'] = @{addr=41108; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41110 WindLevel8OnTime_s'] = @{addr=41110; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41111 WindLevel9OnTime_s'] = @{addr=41111; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41112 WindLevel10OnTime_s'] = @{addr=41112; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41113 WindLevel8OffTime_s'] = @{addr=41113; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41114 WindLevel9OffTime_s'] = @{addr=41114; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41115 WindLevel10OffTime_s'] = @{addr=41115; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41200 WindSpeed2Low_mps'] = @{addr=41200; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41202 WindSpeed2Mid_mps'] = @{addr=41202; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41204 WindLowTime2_s'] = @{addr=41204; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41205 WindMidTime2_s'] = @{addr=41205; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41206 WindSpeed3Low_mps'] = @{addr=41206; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41208 WindSpeed3Mid_mps'] = @{addr=41208; tipo='f32'; acc='RW'}
+$DISP_MAP['HSU']['41210 WindLowTime3_s'] = @{addr=41210; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41211 WindMidTime3_s'] = @{addr=41211; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41214 SafePosTimeout'] = @{addr=41214; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41217 SnowOnTime_m'] = @{addr=41217; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41218 SnowOffTime_m'] = @{addr=41218; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41219 SnowSamplePeriod_m'] = @{addr=41219; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41220 SnowChangeThr_mm'] = @{addr=41220; tipo='u16'; acc='RW'}
+$DISP_MAP['HSU']['41222 AutoresetCheckSnowSensorLevel_mm'] = @{addr=41222; tipo='u16'; acc='RW'}
+
+function Disp-Filas($grid, $mapa, [bool]$escritura) {
+    $r = @(); $vistos = @{}
+    foreach ($fila in $grid.Rows) {
+        if ($fila.IsNewRow -or -not $fila.Cells[0].Value) { continue }
+        $nombre = [string]$fila.Cells[0].Value
+        if (-not $mapa.ContainsKey($nombre)) { throw "Variable desconocida: $nombre" }
+        if ($vistos.ContainsKey($nombre)) { throw "Variable repetida: $nombre" }
+        $vistos[$nombre] = $true
+        $def = $mapa[$nombre]
+        if ($escritura) {
+            if ($def.acc -notmatch 'W') { throw "$nombre es de solo lectura" }
+            $valor = "$($fila.Cells[1].Value)".Trim()
+            if ($valor -eq '') { throw "Falta el nuevo valor de $nombre" }
+            $r += @{nombre=$nombre; def=$def; valor=$valor; esc=(Valor-A-Escritura $def $valor)}
+        } else { $r += @{nombre=$nombre; def=$def} }
+    }
+    return ,$r
+}
+
+function Disp-Objetivos([string]$equipo) {
+    if ($equipo -eq 'NCU') {
+        $cx = Params-Conexion
+        $tr = @(Trabajos-Planta $cx $null (Ncus-Filtro))
+        return @{cx=$cx; objs=@($tr | ForEach-Object {
+            @{etiqueta=$(if ($null -ne $_.ncu) { "NCU$($_.ncu)" } else { "NCU $($_.ip)" }); ip=$_.ip; puerto=$PUERTO_NCU; unit=[byte]1}
+        })}
+    }
+    $objs = @(Hsu-Objetivos)
+    return @{cx=@{to=(Val-Int $txtTo.Text 'Timeout' 500 60000)}; objs=$objs}
+}
+
+function Disp-Puertos($o, [string]$equipo) {
+    if ($equipo -eq 'NCU') { return @($PUERTO_NCU) }
+    $recordado = Hsu-PuertoRecordado $o.ip ([int]$o.unit)
+    $p = @($(if ($o.puertos) { $o.puertos } else { @($o.puerto) }))
+    if ($recordado -and $p -contains $recordado) { return @($recordado) }
+    return $p
+}
+
+function Disp-Ejecutar([string]$equipo, [bool]$escritura, $grid, $salida) {
+    $defs = Disp-Filas $grid $DISP_MAP[$equipo] $escritura
+    if ($defs.Count -eq 0) { throw 'Elige al menos una variable en la tabla.' }
+    $alcance = Disp-Objetivos $equipo
+    $objs = @($alcance.objs)
+    if ($objs.Count -eq 0) { throw "No hay $equipo en la seleccion." }
+    # Todas las validaciones suceden antes de tocar el equipo.
+    if ($escritura) {
+        $detalle = @($defs | ForEach-Object { "$($_.nombre) = $($_.valor)  (reg $($_.def.addr), $($_.def.tipo))" }) -join "`r`n"
+        $destinos = @($objs | ForEach-Object { "$($_.etiqueta) $($_.ip):$($_.puerto) esclavo $($_.unit)" }) -join "`r`n"
+        $r = [System.Windows.Forms.MessageBox]::Show("Destinos ($($objs.Count)):`r`n$destinos`r`n`r`nVariables:`r`n$detalle`r`n`r`n¿Confirmas la escritura?", "Escribir variables $equipo", 'YesNo', 'Warning')
+        if ($r -ne 'Yes') { return }
+    }
+    $salida.Items.Clear(); $salida.Columns.Clear()
+    foreach ($c in @(@('Equipo',170),@('Variable',290),@('Registro / tipo',150),@('Valor / resultado',260))) { [void]$salida.Columns.Add($c[0],$c[1]) }
+    Prog-Iniciar ($objs.Count * $defs.Count)
+    foreach ($o in $objs) {
+        if (Chequear-Cancelado) { break }
+        $pt = 0; $err = ''
+        foreach ($p in @(Disp-Puertos $o $equipo)) {
+            try {
+                Modbus-Conectar $o.ip ([int]$p) $alcance.cx.to
+                # Para una HSU aun no localizada, primero se identifica la
+                # estacion con una lectura: nunca se prueba una escritura en
+                # distintos gateways ni se reenvia tras un fallo incierto.
+                if ($equipo -eq 'HSU') {
+                    [void](FC03-Leer ([byte]$o.unit) (Dir-Trama 30000) 1)
+                }
+                $pt = [int]$p
+                if ($equipo -eq 'HSU') { Hsu-RecordarPuerto $o.ip ([int]$o.unit) $pt }
+                break
+            } catch { $err = "$_"; Modbus-Cerrar }
+        }
+        foreach ($d in $defs) {
+            if (Chequear-Cancelado) { break }
+            $resultado = ''
+            try {
+                if (-not $pt) { throw "sin conexion o respuesta: $err" }
+                if ($escritura) {
+                    try { FC16-Escribir ([byte]$o.unit) $d.esc.addr ([int[]]$d.esc.palabras) }
+                    catch {
+                        # Solo la excepcion explicita IllegalFunction permite
+                        # probar FC06: ante timeout no se repite la escritura.
+                        if ($d.esc.palabras.Count -ne 1 -or "$_" -notmatch 'IllegalFunction') { throw }
+                        FC06-Escribir ([byte]$o.unit) $d.esc.addr ([int]$d.esc.palabras[0])
+                    }
+                    if ($d.def.acc -eq 'W') { $resultado = 'Enviado (solo escritura; sin verificacion)' }
+                    else {
+                        $actual = FC03-Leer ([byte]$o.unit) (Dir-Trama $d.def.addr) $d.esc.palabras.Count
+                        $ok = $true
+                        for ($i=0; $i -lt $actual.Count; $i++) { if ($actual[$i] -ne $d.esc.esperado[$i]) { $ok = $false } }
+                        $resultado = $(if ($ok) { 'Verificado: ' + (Leer-Decodificado ([byte]$o.unit) $d.def) } else { 'ERROR: lectura posterior no coincide' })
+                    }
+                } else { $resultado = Leer-Decodificado ([byte]$o.unit) $d.def }
+            } catch { $resultado = "ERROR: $_"; Con "$($o.etiqueta) $($d.nombre): $resultado" ([System.Drawing.Color]::Salmon) }
+            $it = New-Object System.Windows.Forms.ListViewItem("$($o.etiqueta) [$($o.ip):$pt]")
+            foreach ($x in @($d.nombre,"$($d.def.addr) / $($d.def.tipo)",$resultado)) { [void]$it.SubItems.Add("$x") }
+            if ($resultado -like 'ERROR:*') { $it.ForeColor = [System.Drawing.Color]::Firebrick }
+            [void]$salida.Items.Add($it)
+            Prog-Paso
+            [System.Windows.Forms.Application]::DoEvents()
+        }
+        Modbus-Cerrar
+    }
+}
+
+function Disp-NuevaPestana([string]$equipo, [bool]$escritura) {
+    $page = New-Object System.Windows.Forms.TabPage
+    $page.Text = $(if ($escritura) { 'Escribir variable' } else { 'Leer variable' })
+    [void]$tabs.TabPages.Add($page)
+    [void](LG $page 'Filtro' 10 24)
+    $filtro = TG $page '' 58 6 230
+    $contador = LG $page '' 296 30
+    $quitar = New-Object System.Windows.Forms.Button
+    $quitar.Text = 'Quitar'; $quitar.Location = New-Object System.Drawing.Point(470,5); $quitar.Size = New-Object System.Drawing.Size(82,29)
+    [void]$page.Controls.Add($quitar)
+    $todas = New-Object System.Windows.Forms.Button
+    $todas.Text = 'TODAS'; $todas.Location = New-Object System.Drawing.Point(558,5); $todas.Size = New-Object System.Drawing.Size(80,29)
+    if (-not $escritura) { [void]$page.Controls.Add($todas) }
+    $accion = New-Object System.Windows.Forms.Button
+    $accion.Text = $(if ($escritura) { 'ESCRIBIR' } else { 'LEER' })
+    $accion.Location = New-Object System.Drawing.Point(720,5); $accion.Size = New-Object System.Drawing.Size(125,30)
+    $accion.BackColor = $(if ($escritura) { [System.Drawing.Color]::FromArgb(0,120,60) } else { [System.Drawing.Color]::FromArgb(0,90,160) })
+    $accion.ForeColor = [System.Drawing.Color]::White
+    [void]$page.Controls.Add($accion)
+    $grid = New-Object System.Windows.Forms.DataGridView
+    $grid.Location = New-Object System.Drawing.Point(10,45); $grid.Size = New-Object System.Drawing.Size(898,150)
+    $grid.AllowUserToAddRows = $true; $grid.RowHeadersVisible = $true; $grid.RowHeadersWidth = 24
+    $grid.BackgroundColor = [System.Drawing.Color]::White
+    $variable = New-Object System.Windows.Forms.DataGridViewComboBoxColumn
+    $variable.HeaderText = 'Variable'; $variable.Width = $(if ($escritura) { 365 } else { 440 })
+    [void]$grid.Columns.Add($variable)
+    if ($escritura) {
+        $valor = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+        $valor.HeaderText = 'Nuevo valor'; $valor.Width = 150
+        [void]$grid.Columns.Add($valor)
+    }
+    $info = New-Object System.Windows.Forms.DataGridViewTextBoxColumn
+    $info.HeaderText = 'Registro / tipo'; $info.Width = $(if ($escritura) { 330 } else { 405 }); $info.ReadOnly = $true
+    [void]$grid.Columns.Add($info)
+    [void]$page.Controls.Add($grid)
+    $salida = New-Object System.Windows.Forms.ListView
+    $salida.Location = New-Object System.Drawing.Point(10,205); $salida.Size = New-Object System.Drawing.Size(898,170)
+    $salida.View = 'Details'; $salida.FullRowSelect = $true; $salida.GridLines = $true
+    [void]$page.Controls.Add($salida)
+    $mapa = $DISP_MAP[$equipo]
+    $refrescar = {
+        $usados = @($grid.Rows | Where-Object { -not $_.IsNewRow -and $_.Cells[0].Value } | ForEach-Object { [string]$_.Cells[0].Value })
+        $coinciden = @(Nombres-Ordenados @($mapa.Keys | Where-Object { (-not $escritura -or $mapa[$_].acc -match 'W') -and (Buscar-Casa $_ $filtro.Text) }))
+        $variable.Items.Clear()
+        foreach ($n in $coinciden) { [void]$variable.Items.Add($n) }
+        foreach ($n in $usados) { if (-not $variable.Items.Contains($n)) { [void]$variable.Items.Add($n) } }
+        $contador.Text = "$($coinciden.Count) variables"
+    }.GetNewClosure()
+    $filtro.Add_TextChanged($refrescar); & $refrescar
+    $grid.Add_DataError({param($s,$e) $e.ThrowException = $false})
+    $grid.Add_CellValueChanged({
+        param($s,$e)
+        if ($e.ColumnIndex -eq 0 -and $e.RowIndex -ge 0) {
+            $n = [string]$grid.Rows[$e.RowIndex].Cells[0].Value
+            if ($mapa.ContainsKey($n)) { $grid.Rows[$e.RowIndex].Cells[$grid.Columns.Count-1].Value = "reg $($mapa[$n].addr)  tipo $($mapa[$n].tipo)  [$($mapa[$n].acc)]" }
+        }
+    }.GetNewClosure())
+    $quitar.Add_Click({ Quitar-Filas $grid; & $refrescar }.GetNewClosure())
+    $todas.Add_Click({
+        $puestos = @($grid.Rows | Where-Object { -not $_.IsNewRow -and $_.Cells[0].Value } | ForEach-Object { [string]$_.Cells[0].Value })
+        foreach ($n in @($variable.Items)) { if ($puestos -notcontains $n) { $i=$grid.Rows.Add(); $grid.Rows[$i].Cells[0].Value=$n } }
+    }.GetNewClosure())
+    $accion.Add_Click({ Lanzar { Disp-Ejecutar $equipo $escritura $grid $salida } }.GetNewClosure())
+    return $page
+}
+$tabNcuLeer = Disp-NuevaPestana 'NCU' $false
+$tabNcuEscribir = Disp-NuevaPestana 'NCU' $true
+$tabHsuLeer = Disp-NuevaPestana 'HSU' $false
+$tabHsuEscribir = Disp-NuevaPestana 'HSU' $true
 
 # ============================ TAB ESCRIBIR ============================
 $tabW = New-Object System.Windows.Forms.TabPage
@@ -16642,6 +16940,8 @@ $NAV_ARBOL = @(
     @{bloque = 'NCU'; hojas = @(
         @{txt='Diagnóstico propio'; tab=$tabND}
         @{txt='Grupos';             tab=$tabGR}
+        @{txt='Leer variable';      tab=$tabNcuLeer}
+        @{txt='Escribir variable';  tab=$tabNcuEscribir}
         @{txt='Comm esclavos';      tab=$tabN}
         @{txt='Estabilidad';        tab=$tabE}
         @{txt='Auditoría';          tab=$tabAN}
@@ -16650,7 +16950,9 @@ $NAV_ARBOL = @(
         @{txt='Diagnóstico';        tab=$tabG; vista='HSU'}
         @{txt='Auditoría';          tab=$tabAH}
         @{txt='Firmware';           tab=$tabFH}
-        @{txt='Lectura de señales'; tab=$tabH})}
+        @{txt='Lectura de señales'; tab=$tabH}
+        @{txt='Leer variable';      tab=$tabHsuLeer}
+        @{txt='Escribir variable';  tab=$tabHsuEscribir})}
     @{bloque = 'REPETIDORES'; hojas = @(
         @{txt='Diagnóstico y batería'; tab=$tabG; vista='REP'}
         @{txt='Auditoría';             tab=$tabRA}
