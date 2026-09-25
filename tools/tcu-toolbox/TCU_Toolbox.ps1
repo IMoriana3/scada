@@ -1635,7 +1635,7 @@ function Grupos-Cuantos([int]$w) {
 # en un registro de grupos, escribir el valor entero pisaria los grupos que
 # otro haya pedido. Pura.
 function Gr-Mascara([int]$bits, [bool]$poner) {
-    if ($poner) { return @{mascara = 0xFFFF; valor = ($bits -band 0xFFFF)} }
+    if ($poner) { return @{mascara = ((-bnot $bits) -band 0xFFFF); valor = ($bits -band 0xFFFF)} }
     return @{mascara = ((-bnot $bits) -band 0xFFFF); valor = 0}
 }
 
@@ -4052,6 +4052,18 @@ function FC16-Escribir([byte]$unit, [int]$addr, [int[]]$palabras) {
         $pdu[7 + 2*$i] = $palabras[$i] -band 0xFF
     }
     [void](Modbus-Transaccion $unit $pdu)
+}
+
+function FC06-Escribir([byte]$unit, [int]$addr, [int]$palabra) {
+    $pdu = [byte[]](6, (($addr -shr 8) -band 0xFF), ($addr -band 0xFF),
+        (($palabra -shr 8) -band 0xFF), ($palabra -band 0xFF))
+    $r = Modbus-Transaccion $unit $pdu
+    if ($r.Length -ne 5 -or [int]$r[1] -ne [int]$pdu[1] -or
+        [int]$r[2] -ne [int]$pdu[2] -or [int]$r[3] -ne [int]$pdu[3] -or
+        [int]$r[4] -ne [int]$pdu[4]) {
+        $script:Sucio = $true
+        throw 'Respuesta FC06 no coincide con direccion y valor enviados'
+    }
 }
 
 function FC22-Mascara([byte]$unit, [int]$addr, [int]$and, [int]$or) {
@@ -14276,7 +14288,7 @@ function Gr-EscribirAngulo([int]$bits, [int]$palabra) {
         if (-not ($bits -band (1 -shl ($g - 1)))) { continue }
         $addr = $GR_SP7_BASE + $g - 1
         try {
-            FC16-Escribir $UNIT_NCU $addr @($palabra)
+            [void](Gr-EscribirPalabra $addr $palabra)
         } catch {
             $malos += $g; $notas += "g${g}: la NCU rechaza la escritura ($_)"; continue
         }
@@ -14296,20 +14308,31 @@ function Gr-EscribirAngulo([int]$bits, [int]$palabra) {
 # la NCU la rechaza se cae a leer-modificar-escribir con FC16 y se dice cual de
 # las dos ha valido, porque la segunda tiene carrera con quien mas escriba. Los
 # registros de auto/manual son de SOLO ESCRITURA: ahi no hay nada que leer.
+function Gr-EscribirPalabra([int]$addr, [int]$palabra) {
+    try {
+        FC16-Escribir $UNIT_NCU $addr @($palabra)
+        return 'FC16'
+    } catch {
+        # Un timeout puede indicar que la orden se ejecuto: no repetirla.
+        if ("$_" -notmatch 'IllegalFunction') { throw }
+        FC06-Escribir $UNIT_NCU $addr $palabra
+        return 'FC06 (NCU rechazo FC16)'
+    }
+}
+
 function Gr-EscribirBits([int]$addr, [int]$bits, [bool]$poner, [bool]$soloEscritura) {
     if ($soloEscritura) {
-        FC16-Escribir $UNIT_NCU $addr @($bits)
-        return 'FC16 (registro de solo escritura)'
+        return ((Gr-EscribirPalabra $addr $bits) + ' (registro de solo escritura)')
     }
     $m = Gr-Mascara $bits $poner
     try {
         FC22-Mascara $UNIT_NCU $addr $m.mascara $m.valor
         return 'FC22'
     } catch {
+        if ("$_" -notmatch 'IllegalFunction') { throw }
         $v = [int](FC03-Leer $UNIT_NCU (Dir-Trama $addr) 1)[0]
         $n = $(if ($poner) { ($v -bor $bits) } else { ($v -band (-bnot $bits)) }) -band 0xFFFF
-        FC16-Escribir $UNIT_NCU $addr @($n)
-        return 'FC16 (la NCU no acepta FC22)'
+        return ((Gr-EscribirPalabra $addr $n) + ' (la NCU no acepta FC22)')
     }
 }
 
