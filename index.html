@@ -159,6 +159,19 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 .fi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:8px}
 .fi-grid .stat .v{font-size:17px}
 .fi-grid .stat.na .v{color:var(--muted);font-size:14px;font-weight:400}
+.hist-box{width:min(1020px,100%)}
+.hist-controls{display:flex;gap:9px;align-items:end;flex-wrap:wrap;margin-bottom:10px}
+.hist-controls label{font-size:11px;color:var(--muted);display:grid;gap:3px}
+.hist-controls input,.hist-controls select,#coverage-day{background:var(--surface-2);border:1px solid var(--line-2);border-radius:6px;padding:6px;color:var(--text)}
+.hist-variables{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.hist-variables button{border:1px solid var(--line-2);border-radius:14px;padding:4px 9px;font:600 11px var(--mono);color:var(--muted);background:var(--surface-2)}
+.hist-variables button.active{border-color:currentColor;background:var(--panel)}
+.hist-status{font:11px var(--mono);color:var(--muted);margin:6px 0}
+.hist-chart{width:100%;height:auto;background:#fff;border-radius:8px}
+.hist-chart text{font:11px sans-serif;fill:#344557}
+.hist-legend{display:flex;gap:12px;flex-wrap:wrap;font:11px var(--mono);margin-top:8px}
+.coverage-control{position:absolute;right:14px;top:58px;z-index:8;background:var(--panel);border:1px solid var(--line);padding:7px;border-radius:8px;display:flex;gap:7px;align-items:center;flex-wrap:wrap;font:11px var(--mono)}
+.coverage-control select{background:var(--surface-2);border:1px solid var(--line-2);color:var(--text)}
 /* ---- Identidad Factiun: back-link, marca y footer ---- */
 .header .back{color:rgba(231,238,244,.72);text-decoration:none;font:600 12px/1 var(--mono);padding:5px 9px;border:1px solid rgba(231,238,244,.18);border-radius:8px;white-space:nowrap}
 .header .back:hover{color:#fff;border-color:var(--accent)}
@@ -290,6 +303,10 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
     <!-- LIENZO -->
     <div class="stage" id="stage">
       <canvas id="cv"></canvas>
+      <div class="coverage-control" id="coverage-control">
+        <label for="coverage-layer">Capa</label><select id="coverage-layer"><option value="instant">Estado instantáneo</option><option value="measured">Disponibilidad de telemetría medida</option><option value="model">RF modelado (radio geométrico)</option></select>
+        <input id="coverage-day" type="date" aria-label="Día local de cobertura medida"><button class="btn btn-sm" id="coverage-refresh">Aplicar</button>
+      </div>
       <div class="stage-actions">
         <button class="btn" id="fit">Ajustar</button>
         <button class="btn" id="export-png">Imagen</button>
@@ -349,6 +366,25 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
     <div class="eq-body" id="fi-body"></div>
     <div class="eq-foot">
       <button class="btn" id="fi-link">Copiar enlace a esta ficha</button>
+      <button class="btn btn-primary" id="fi-history">Histórico de esta TCU</button>
+    </div>
+  </div>
+</div>
+<div class="eq-modal" id="hist-modal">
+  <div class="eq-box hist-box">
+    <div class="eq-head"><h3>Histórico TCU · datos medidos</h3><button class="x" id="hist-close" title="Cerrar">×</button></div>
+    <div class="eq-body">
+      <div class="hist-controls">
+        <label>Desde · hora local<input id="hist-from" type="datetime-local"></label>
+        <select id="hist-from-offset" aria-label="Offset desde" hidden></select>
+        <label>Hasta · hora local<input id="hist-to" type="datetime-local"></label>
+        <select id="hist-to-offset" aria-label="Offset hasta" hidden></select>
+        <button class="btn btn-sm" id="hist-prev">← Día anterior</button><button class="btn btn-sm" id="hist-next">Día siguiente →</button>
+        <button class="btn btn-sm" id="hist-day">Día completo</button><button class="btn btn-sm" data-hist-hours="6">6 h</button><button class="btn btn-sm" data-hist-hours="12">12 h</button><button class="btn btn-sm" data-hist-hours="24">24 h</button>
+      </div>
+      <div class="hist-controls"><label>Comparar con…<select id="hist-compare"><option value="">Sin comparación</option></select></label><button class="btn btn-primary btn-sm" id="hist-load">Consultar</button></div>
+      <div class="hist-variables" id="hist-variables"></div><div class="hist-status" id="hist-status"></div>
+      <svg id="hist-chart" class="hist-chart" role="img" aria-label="Series temporales por variable y TCU"></svg><div class="hist-legend" id="hist-legend"></div>
     </div>
   </div>
 </div>
@@ -1095,6 +1131,9 @@ function assignColors(){
   S.pbColor={}; const pbs=[...new Set(S.motors.map(m=>m.pb).filter(Boolean))]; pbs.forEach((p,i)=>S.pbColor[p]=PB_PALETTE[i%PB_PALETTE.length]);
 }
 function motorColor(m){
+  if(S.scada.on && window.ScadaHistory && ScadaHistory.layer==="measured") return ScadaHistory.coverageColor(m);
+  if(S.scada.on && window.ScadaHistory && ScadaHistory.layer==="model")
+    return m.ncu==null?"#9aa6b2":hueColor(S.ncuColor[m.ncu]??0,false);
   if(S.scada.on){ const d=scadaOf(m); if(!d) return "#c4ccd4";
     return d.health==="ok"?"#1f9d57":d.health==="warn"?"#F2A900":d.health==="alarm"?"#e0322c":"#9aa6b2"; }
   if(m.ncu==null) return "#9aa6b2";
@@ -1173,7 +1212,12 @@ function updatePanel(){
       <span class="fill"><span class="bar"><span style="width:${pct}%"></span></span> ${n.count}/${S.p.capNCU} · GW ${n.gw[0].length}/${n.gw[1].length}</span>
     </div>`;
   }).join("");
-  list.querySelectorAll(".ncu-item").forEach(el=>el.onclick=()=>{ S.sel=S.sel===el.dataset.id?null:el.dataset.id; updatePanel(); draw(); });
+  list.querySelectorAll(".ncu-item").forEach(el=>el.onclick=async()=>{
+    S.sel=S.sel===el.dataset.id?null:el.dataset.id; updatePanel(); draw();
+    if(S.scada.on && window.ScadaHistory && ScadaHistory.layer==="measured"){
+      try{ await ScadaHistory.fetchCoverage(); }catch(e){ alert(e.message); }
+    }
+  });
   const _ae=document.getElementById("ayora-edit"), _nh=document.getElementById("ncu-hint");
   if(_ae){ _ae.style.display=S.fromAyora?"block":"none"; _ae.textContent=S.preset?"Desbloquear edición":"Bloquear edición (solo lectura)"; }
   if(_nh) _nh.textContent = S.fromAyora ? (S.preset?"(solo lectura — pulsa Desbloquear)":"(editable — arrastra para mover)") : "(clic o arrastra para reubicar)";
@@ -1181,6 +1225,14 @@ function updatePanel(){
 }
 function warnHtml(cls,ic,msg){ return `<div class="warnbox ${cls}"><span>${ic}</span><span>${msg}</span></div>`; }
 function renderLegend(){
+  if(S.scada.on && window.ScadaHistory && ScadaHistory.layer==="measured"){
+    document.getElementById("legend").innerHTML='<div class="li">Disponibilidad de telemetría medida del día (%)</div><div class="li"><span class="sw" style="background:hsl(205 68% 36%)"></span>Intensidad azul = porcentaje; sin umbrales aprobados</div><div class="li"><span class="sw" style="background:#9aa6b2"></span>Gris = UNKNOWN o sin binding</div>';
+    return;
+  }
+  if(S.scada.on && window.ScadaHistory && ScadaHistory.layer==="instant"){
+    document.getElementById("legend").innerHTML='<div class="li">Estado instantáneo del equipo (health)</div><div class="li">Verde = ok · ámbar = warn · rojo = alarm · gris = offline/sin dato</div>';
+    return;
+  }
   const pbs=[...new Set(S.motors.map(m=>m.pb).filter(Boolean))];
   let h=`<div class="li"><span class="sw" style="border-radius:50%;background:${hueColor(0,false)}"></span>Motor (color = NCU)</div>
     <div class="li"><span class="sw" style="background:var(--navy);transform:rotate(45deg)"></span>NCU</div>
@@ -1398,7 +1450,7 @@ cv.addEventListener("pointermove",e=>{
     tip.innerHTML=`<span class="t-id">${best.id}</span>${best.gz?' · '+(S.altLabel||'GZ')+' '+best.gz:(best.pb?' · '+best.pb:'')}<br>${best.count} TCU · GW ${best.gw[0].length}/${best.gw[1].length}${best.tipo?' · '+best.tipo:''}${utmTip(best.x,best.y)}`; draw(); }
   else {
     let bm=null,bdm=10*DPR; for(let i=0;i<S.motors.length;i++){ const s=w2s(S.motors[i]); const d=Math.hypot(s.x-mx,s.y-my); if(d<bdm){bdm=d;bm=i;} }
-    if(bm!=null && (S.motors[bm].tcu || S.scada.on)){ const mm=S.motors[bm]; if(S.hover){S.hover=null;draw();} tip.style.opacity=1; tip.style.left=(e.clientX-rect.left+12)+"px"; tip.style.top=(e.clientY-rect.top+12)+"px"; tip.innerHTML=`<span class="t-id">${mm.tcu||("TCU "+(mm.scadaIdx||"?"))}</span><br>${mm.pb?mm.pb+' \u00b7 ':''}${mm.ncu||''}${mm.gw?' \u00b7 GW'+mm.gw:''}${utmTip(mm.x,mm.y)}${scadaTip(mm)}`; }
+    if(bm!=null && (S.motors[bm].tcu || S.scada.on)){ const mm=S.motors[bm]; if(S.hover){S.hover=null;draw();} tip.style.opacity=1; tip.style.left=(e.clientX-rect.left+12)+"px"; tip.style.top=(e.clientY-rect.top+12)+"px"; tip.innerHTML=`<span class="t-id">${mm.tcu||("TCU "+mm.id)}</span><br>${mm.pb?mm.pb+' \u00b7 ':''}${mm.ncu||''}${mm.gw?' \u00b7 GW'+mm.gw:''}${utmTip(mm.x,mm.y)}${scadaTip(mm)}`; }
     else if(S.hover){ S.hover=null; tip.style.opacity=0; draw(); }
     else { tip.style.opacity=0; }
   }
@@ -1556,20 +1608,19 @@ cv.addEventListener("pointercancel",e=>{ ptrs.delete(e.pointerId); if(ptrs.size<
 document.getElementById("zoom-in").onclick=()=>zoomBy(1.45);
 document.getElementById("zoom-out").onclick=()=>zoomBy(1/1.45);
 /* ===================== SCADA en vivo ===================== */
-// Mapeo motor -> índice Modbus: secuencial 1..N dentro de cada NCU, ordenado por (GW, nº en GW).
-// OJO: convención por defecto. La asignación real de direcciones TCU se fija en comisionado;
-// si difiere, se puede sobreescribir con un CSV de mapeo (ncu;tcu_modbus;nomenclatura).
-function buildScadaIndex(){
-  const byNcu={};
-  S.motors.forEach(m=>{ if(!m.ncu)return; (byNcu[m.ncu]=byNcu[m.ncu]||[]).push(m); });
-  Object.values(byNcu).forEach(arr=>{
-    arr.sort((a,b)=>(a.gw||1)-(b.gw||1) || (a.tn||0)-(b.tn||0));
-    arr.forEach((m,i)=>{ m.scadaIdx=i+1; });
-  });
+// El enlace de telemetría exige el locator de escena explícito del IdentityRegistry.
+function scadaOf(m){
+  if(!window.ScadaHistory) return null;
+  const id=ScadaHistory.assetForMotor(m);
+  return id?S.scada.data[id]||null:null;
 }
-function scadaOf(m){ if(!m.ncu||!m.scadaIdx) return null; return S.scada.data[m.ncu+"|"+m.scadaIdx]||null; }
 function scadaTip(m){
   if(!S.scada.on) return "";
+  if(window.ScadaHistory && ScadaHistory.layer==="measured"){
+    const metric=ScadaHistory.coverageMetric(m);
+    if(!metric) return "<br>Disponibilidad: UNKNOWN · sin binding o métrica";
+    return `<br>Disponibilidad de telemetría: ${metric.telemetry_availability_pct==null?"UNKNOWN":metric.telemetry_availability_pct.toFixed(2)+"%"} (${metric.received}/${metric.expected}) · offline observado ${metric.offline_observed_pct==null?"UNKNOWN":metric.offline_observed_pct+"%"}`;
+  }
   const d=scadaOf(m);
   if(!d) return `<br><span style="opacity:.6">sin datos SCADA</span>`;
   const H={ok:"#7be0a8",warn:"#ffd35c",alarm:"#ff8a80",offline:"#aab6c2"};
@@ -1595,17 +1646,13 @@ function scNoSigue(d){ const m=d&&d.main_state; return m!=null&&+m!==2; }
 /* ===================== Ficha de campo por TCU (B2) =====================
    DOS CLAVES, y la distincion es el corazon de esto:
 
-     · identidad de RUNTIME -> `ncu|scadaIdx`. Es lo que `scadaOf()` consulta
-       contra `S.scada.data`. No cambia.
+     · identidad de RUNTIME -> binding explícito de escena del 06_PLANT a asset_id.
+       `scadaOf()` solo consulta por ese asset_id.
      · ancla del DEEP-LINK  -> `ncu + gw + tn`. Es lo que viaja en el hash.
 
-   Por que el enlace NO se ancla a `scadaIdx`: lo numera `buildScadaIndex()`
-   ordenando los motores de cada NCU por (gw, tn), asi que es un indice DERIVADO
-   del plano. El dia que el plano se toque -- y esta pendiente, la conciliacion
-   219-vs-215 con la TCU 109 en "confirmar en campo" -- todos los scadaIdx se
-   corren, y un enlace guardado en un correo de postventa caeria en OTRO tracker
-   con cara de correcto. Un enlace verosimil al hierro equivocado es peor que un
-   404: el 404 se ve.
+   El deep-link ancla una referencia al plano, y al abrir el histórico esta
+   referencia se resuelve mediante el binding explícito publicado. Si no existe
+   ese binding, el histórico no se consulta.
 
    Y `tn` no es "un indice mas estable", que seria la razon equivocada para
    elegirlo. Es el MODELO DEL NUMERO FISICO: la linea que lo asigna espeja
@@ -1637,7 +1684,7 @@ function fiRender(r){
   let h="";
   if(r.stale) h+=`<div class="fi-flag stale"><b>Enlace de un plano anterior.</b> El enlace dice GW${r.gw} y este TCU esta hoy en GW${m.gw||1}. Se abre el tracker cuyo numero fisico (T${String(m.tn).padStart(3,"0")}) coincide, que es el que manda — pero comprueba que es el que buscabas antes de actuar sobre el.</div>`;
   h+=`<div class="fi-id"><span class="big">${m.tcu||(m.ncu+"·T"+m.tn)}</span>`
-   + `<span class="sub">${m.ncu} · GW${m.gw||1} · nº fisico ${m.tn} · indice SCADA ${m.scadaIdx!=null?m.scadaIdx:"—"}</span></div>`;
+   + `<span class="sub">${m.ncu} · GW${m.gw||1} · nº fisico ${m.tn} · asset_id ${window.ScadaHistory?.assetForMotor(m)||"sin binding"}</span></div>`;
   if(!S.scada.on) return h+`<div class="fi-flag warn">El modo SCADA esta apagado: la ficha muestra la identidad del equipo, no su estado. Pulsa <b>SCADA</b> para conectar la API.</div>`;
   if(!d) return h+`<div class="fi-flag warn">La API no ha devuelto este TCU en el ultimo ciclo. No es lo mismo que estar offline: <b>no ha llegado la respuesta</b>.</div>`;
   h+=`<div style="margin-bottom:12px"><span class="fi-dot" style="background:${H[d.health]||"#7b8794"}"></span>`
@@ -1735,15 +1782,15 @@ async function scadaPoll(){
   const sc=S.scada;
   if((sc.n=(sc.n||0)+1)===1||sc.n%10===0) scadaTraffic(sc);
   try{
-    const r=await fetch(sc.url.replace(/\/$/,"")+"/live",{cache:"no-store"});
+    const r=await fetch(sc.url.replace(/\/$/,"")+"/assets/live",{cache:"no-store"});
     if(!r.ok) throw new Error("HTTP "+r.status);
     const j=await r.json();
     sc.data={};
     const cnt={ok:0,warn:0,alarm:0,offline:0};
-    for(const t of (j.trackers||[])){ sc.data[t.ncu+"|"+t.tcu]=t; if(cnt[t.health]!=null)cnt[t.health]++; }
+    for(const t of (j.trackers||[])){ sc.data[t.asset_id]=t; if(cnt[t.health]!=null)cnt[t.health]++; }
     sc.last=new Date(); sc.err=null;
     publishMeteo(sc);   // publica el viento real (HSU) al bus compartido \u2192 el anem\u00f3metro del 3D (cobertura) gira con \u00e9l
-    scadaChip().innerHTML=`SCADA \u00b7 ${j.count} TCU \u00b7 <span style="color:#7be0a8">${cnt.ok}</span> / <span style="color:#ffd35c">${cnt.warn}</span> / <span style="color:#ff8a80">${cnt.alarm}</span> / <span style="color:#aab6c2">${cnt.offline} off</span> \u00b7 ${sc.last.toLocaleTimeString().slice(0,8)}`+trafficLine(sc);
+    scadaChip().innerHTML=`SCADA ${j.trackers?.some(t=>t.source==="simulated")?"· SIMULADO ":""}\u00b7 ${j.count} TCU \u00b7 <span style="color:#7be0a8">${cnt.ok}</span> / <span style="color:#ffd35c">${cnt.warn}</span> / <span style="color:#ff8a80">${cnt.alarm}</span> / <span style="color:#aab6c2">${cnt.offline} off</span> \u00b7 ${sc.last.toLocaleTimeString().slice(0,8)}`+trafficLine(sc);
   }catch(e){
     sc.err=String(e.message||e);
     scadaChip().innerHTML=`SCADA \u00b7 <span style="color:#ff8a80">error: ${sc.err}</span>${sc.last?` \u00b7 \u00faltimo dato ${sc.last.toLocaleTimeString().slice(0,8)}`:""}`+trafficLine(sc);
@@ -1754,27 +1801,29 @@ async function scadaPoll(){
   if(S.ficha&&S.ficha.m) document.getElementById("fi-body").innerHTML=fiRender(S.ficha);
   draw();
 }
-function scadaStart(){
+async function scadaStart(){
   const sc=S.scada;
   let url=sc.url||localStorage.getItem("scadaApiUrl")||"http://localhost:8000";
   url=prompt("URL de la API del SCADA (FastAPI):",url);
   if(!url) return false;
   sc.url=url.trim(); localStorage.setItem("scadaApiUrl",sc.url);
-  buildScadaIndex();
-  sc.on=true;
-  scadaPoll();
-  sc.timer=setInterval(scadaPoll,sc.interval*1000);
-  return true;
+  try{
+    await ScadaHistory.connect(sc.url);
+    sc.on=true; renderLegend(); await scadaPoll();
+    sc.timer=setInterval(scadaPoll,sc.interval*1000);
+    return true;
+  }catch(e){ alert("Identidad SCADA no disponible: "+e.message); return false; }
 }
 function scadaStop(){
   const sc=S.scada;
   sc.on=false; if(sc.timer){clearInterval(sc.timer);sc.timer=null;} sc.traffic=null; sc.n=0;
   const c=document.getElementById("scada-chip"); if(c)c.remove();
+  renderLegend();
   draw();
 }
-document.getElementById("scada-mode").onclick=function(){
+document.getElementById("scada-mode").onclick=async function(){
   if(S.scada.on){ scadaStop(); this.classList.remove("on"); }
-  else if(scadaStart()){ this.classList.add("on"); }
+  else if(await scadaStart()){ this.classList.add("on"); }
 };
 
 S.motors=scenario("compacta");
@@ -1789,6 +1838,7 @@ resize(); recomputeNewData();
    `...?planta=burgo#tcu/NCU-01/1/7`. */
 (function(){ try{ fiFromHash(); }catch(e){} })();
 </script>
+<script src="historical-ui.js"></script>
 <footer class="app-foot">Factiun · Tracker SCADA — <a href="https://imoriana3.github.io/proyectos/">Panel de Proyectos</a></footer>
 </body>
 </html>

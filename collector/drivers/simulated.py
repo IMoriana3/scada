@@ -45,11 +45,12 @@ class SimulatedNCUDriver(NCUDriver):
     def __init__(self, ncu_cfg, mmap, word_order="big", meter=None, max_regs=110, **_):
         super().__init__(ncu_cfg, mmap, word_order, meter)
         self.max_regs = max_regs
-        n = ncu_cfg["tcu_count"]
+        ids = ncu_cfg["tcu_ids"]
+        n = len(ids)
         rnd = random.Random(hash(ncu_cfg["id"]))
-        self.offline = set(rnd.sample(range(1, n + 1), max(1, n // 50)))
-        self.lagging = set(rnd.sample(range(1, n + 1), max(1, n // 40)))
-        self.alarmed = {rnd.randint(1, n): "axis_blocked"}
+        self.offline = set(rnd.sample(ids, max(1, n // 50)))
+        self.lagging = set(rnd.sample(ids, max(1, n // 40)))
+        self.alarmed = {rnd.choice(ids): "axis_blocked"}
 
     async def connect(self):
         self._count_connection()
@@ -66,7 +67,8 @@ class SimulatedNCUDriver(NCUDriver):
             self._count_read(n)
 
     async def read_trackers(self) -> list[dict]:
-        n = self.cfg["tcu_count"]
+        ids = self.cfg["tcu_ids"]
+        n = len(ids)
         self._count_span(n * self.mmap["tcu_compat"]["stride"])   # bloque compat
         self._count_span(n * 2)                                   # lastComm (U32/TCU)
         now = datetime.now(timezone.utc)
@@ -80,7 +82,7 @@ class SimulatedNCUDriver(NCUDriver):
         # sabe -- confundir las dos cosas dejaba el simulado incapaz de
         # reproducir el bug que este driver existe para poder probar.
         reloj = self._reloj_ncu()
-        for i in range(1, self.cfg["tcu_count"] + 1):
+        for i in ids:
             if i in self.offline:
                 lc = int(reloj) - 7200
                 edad, skew, origen = self.edad_comms(lc, ahora)

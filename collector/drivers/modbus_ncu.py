@@ -197,31 +197,35 @@ class ModbusNCUDriver(NCUDriver):
 
     async def read_trackers(self) -> list[dict]:
         tc = self.mmap["tcu_compat"]
-        n = self.cfg["tcu_count"]
+        ids = self.cfg["tcu_ids"]  # commissioned bindings; count is legacy metadata only
+        if not ids or len(ids) != len(set(ids)):
+            raise ValueError("Inventario explícito de TCU ausente o duplicado")
         stride = tc["stride"]
-        # bloque de datos contiguo: n TCUs x 22 regs
-        data = await self._read_span(tc["base"], n * stride)
-        # timestamps lastComm: n x U32
         lc_cfg = self.mmap["tcu_lastcomm"]
-        lc = await self._read_span(lc_cfg["base"], n * 2)
         now = time.time()
         out = []
-        for i in range(n):
-            regs = data[i * stride:(i + 1) * stride]
-            fields = decode_tcu_block(regs, tc["fields"], self.word_order)
-            alarms = decode_alarms(fields.get("alarms1", 0), fields.get("alarms2", 0),
-                                   self.mmap["alarm_bits"])
-            last_comm = regs_to_u32(lc[i * 2], lc[i * 2 + 1], self.word_order)
-            edad, skew, origen = self.edad_comms(last_comm, now)
-            out.append({
-                "tcu": i + 1,
-                "fields": fields,
-                "alarms": alarms,
-                "last_comm": last_comm,
-                "comms_age_s": edad,
-                "comms_age_src": origen,   # "ncu" (bueno) | "host" (fallback) | "sin_marca"
-                "skew_s": skew,
-            })
+        # Read only commissioned cache slots; adjacent slaves may share a transaction.
+        runs = []
+        for slave in sorted(ids):
+            if runs and slave == runs[-1][-1] + 1:
+                runs[-1].append(slave)
+            else:
+                runs.append([slave])
+        for run in runs:
+            data = await self._read_span(tc["base"] + (run[0] - 1) * stride,
+                                         len(run) * stride)
+            lc = await self._read_span(lc_cfg["base"] + (run[0] - 1) * 2,
+                                       len(run) * 2)
+            for i, slave in enumerate(run):
+                regs = data[i * stride:(i + 1) * stride]
+                fields = decode_tcu_block(regs, tc["fields"], self.word_order)
+                alarms = decode_alarms(fields.get("alarms1", 0), fields.get("alarms2", 0),
+                                       self.mmap["alarm_bits"])
+                last_comm = regs_to_u32(lc[i * 2], lc[i * 2 + 1], self.word_order)
+                edad, skew, origen = self.edad_comms(last_comm, now)
+                out.append({"tcu": slave, "fields": fields, "alarms": alarms,
+                            "last_comm": last_comm, "comms_age_s": edad,
+                            "comms_age_src": origen, "skew_s": skew})
         return out
 
     async def read_ncu(self) -> dict:

@@ -47,7 +47,8 @@ if not planta:
     print("plants.yml no dice de qué planta es (plant.id)")
     sys.exit(2)
 
-ruta = os.path.join(LAYOUTS, planta + "_layout.json")
+layout_slug = (cfg.get("plant") or {}).get("layout_slug", planta)
+ruta = os.path.join(LAYOUTS, layout_slug + "_layout.json")
 if not os.path.exists(ruta):
     print("· %s — no hay layout de esta planta en %s, así que no hay contra qué carear."
           % (planta, LAYOUTS))

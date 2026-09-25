@@ -61,7 +61,8 @@ async def flota(skew_s, con_reloj=True):
     NCU, la resta cae al host y el desvío entra en la edad. Es el mutante, y
     tiene que salir rojo.
     """
-    drv = SimulatedNCUDriver({"id": "NCU-01", "tcu_count": N, "hsu_count": 0,
+    drv = SimulatedNCUDriver({"id": "NCU-01", "tcu_ids": list(range(1, N + 1)),
+                              "tcu_count": N, "hsu_count": 0,
                               "ncu_skew_s": skew_s}, MMAP)
     await drv.connect()
     if con_reloj:
@@ -114,7 +115,7 @@ async def main():
     chk_true("y entonces no se inventa un skew", all(t["skew_s"] is None for t in trs_f))
 
     print("\n=== una marca que no existe no es una edad de 0 ===")
-    drv = SimulatedNCUDriver({"id": "NCU-01", "tcu_count": 1, "hsu_count": 0}, MMAP)
+    drv = SimulatedNCUDriver({"id": "NCU-01", "tcu_ids": [1], "tcu_count": 1, "hsu_count": 0}, MMAP)
     await drv.read_ncu()
     edad, skew, origen = drv.edad_comms(0, 1_000_000.0)
     chk("last_comm = 0 -> sin edad", edad, None)
