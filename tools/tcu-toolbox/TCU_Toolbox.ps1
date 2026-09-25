@@ -4998,7 +4998,7 @@ $nav.Location = New-Object System.Drawing.Point(10, 72)
 $nav.Size = New-Object System.Drawing.Size(176, 663)
 $nav.HideSelection = $false
 $nav.ShowLines = $false; $nav.ShowRootLines = $false; $nav.ShowPlusMinus = $false
-$nav.FullRowSelect = $true; $nav.ItemHeight = 17   # 38 lineas x 17 = 646 en los 663 de alto
+$nav.FullRowSelect = $true; $nav.ItemHeight = 16   # 40 lineas x 16 = 640 en los 663 de alto
 $nav.BorderStyle = 'FixedSingle'
 $form.Controls.Add($nav)
 
