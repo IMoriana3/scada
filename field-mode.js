@@ -7,6 +7,7 @@
   API.SCHEMA_VERSION = "1.0.0";
 
   API.num = function (v) {
+    if (v == null || v === "") return null;
     const n = Number(v);
     return Number.isFinite(n) ? n : null;
   };
