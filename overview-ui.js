@@ -161,9 +161,10 @@
       card("SoC medio",avgSoc==null?"—":fmt(avgSoc,0)+" %",socN+" lecturas",avgSoc!=null&&avgSoc<30?"ov-bad":"")+
       card("Viento planta",windTxt,wind&&num(wind.wd)!=null?fmt(wind.wd,0)+"° · "+(wind.n||1)+" HSU":"HSU sin dato","");
 
+    // What requires attention is decided ONLY by collector health.
+    // Mode/angle are shown as evidence, never reclassified in the UI.
     var issues=data.filter(function(d){
-      var a=num(d.tilt_angle),t=num(d.target_angle);
-      return d.health!=="ok" || !isAuto(d) || (a!=null&&t!=null&&Math.abs(a-t)>5);
+      return d.health!=="ok";
     }).sort(function(a,b){return issueRank(a)-issueRank(b);}).slice(0,50);
     document.getElementById("ov-issues-count").textContent=issues.length+(issues.length===50?"+":"")+" mostrados";
     if(!issues.length){
