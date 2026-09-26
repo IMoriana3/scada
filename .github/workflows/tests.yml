@@ -92,6 +92,17 @@ jobs:
           Write-Host '── test_device_variables.ps1 ──'
           pwsh -NoProfile -File test_device_variables.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_sequences.ps1 ──'
+          pwsh -NoProfile -File test_sequences.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_sequences_ui.ps1 ──'
+          pwsh -NoProfile -File test_sequences_ui.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── Secuencias en Windows PowerShell 5.1 ──'
+          powershell -NoProfile -File test_sequences.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_sequences_ui.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
           Write-Host '── test_toolbox.ps1 ──'
           pwsh -NoProfile -File test_toolbox.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
@@ -101,3 +112,11 @@ jobs:
 
           Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
           exit $rc
+
+      - name: Capturas de interfaz de secuencias
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: toolbox-sequences-ui
+          path: tools/tcu-toolbox/tests/sequence-ui-*.png
+          if-no-files-found: ignore

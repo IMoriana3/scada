@@ -65,6 +65,9 @@ $solapes = @()
 foreach ($padre in ($porPadre.Keys | Sort-Object)) {
     $hijos = @($porPadre[$padre])
     if ($hijos.Count -lt 2) { continue }
+    # TableLayoutPanel coloca por celdas, no por coordenadas absolutas. Su
+    # geometria real se comprueba en Windows por test_sequences.ps1.
+    if ($ctrl.ContainsKey($padre) -and $ctrl[$padre].tipo -eq 'TableLayoutPanel') { continue }
     $anchoRef = 901
     $tablas = @($hijos | Where-Object { (TipoDe $_.g.tipo) -eq 'tabla' })
     $topeAbajo = -1
