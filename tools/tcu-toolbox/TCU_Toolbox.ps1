@@ -5941,6 +5941,47 @@ $lvG.View = 'Details'; $lvG.FullRowSelect = $true; $lvG.GridLines = $true
 [void]$lvG.Columns.Add('Edad s', 60)
 [void]$lvG.Columns.Add('Alarmas / notas', 329)
 $tabG.Controls.Add($lvG)
+# Diagnostico con barras que envuelven: las acciones siguen visibles incluso
+# cuando el portatil no tiene los 1142 px del diseno original.
+$diagLayout=New-Object System.Windows.Forms.TableLayoutPanel
+$diagLayout.Name='diagResponsive';$diagLayout.Dock='Fill';$diagLayout.Padding=New-Object Windows.Forms.Padding(8)
+$diagLayout.ColumnCount=1;$diagLayout.RowCount=5
+[void]$diagLayout.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent',100)))
+for($filaDiag=0;$filaDiag -lt 4;$filaDiag++){[void]$diagLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('AutoSize')))}
+[void]$diagLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100)))
+$tabG.Controls.Add($diagLayout)
+$diagBarras=@()
+for($filaDiag=0;$filaDiag -lt 4;$filaDiag++){
+    $barraDiag=New-Object Windows.Forms.FlowLayoutPanel
+    $barraDiag.AutoSize=$true;$barraDiag.Dock='Fill';$barraDiag.Margin=New-Object Windows.Forms.Padding(0)
+    $diagLayout.Controls.Add($barraDiag);$diagBarras+=,$barraDiag
+}
+$etTcu=@($tabG.Controls|Where-Object{$_.Text -eq 'TCUs'})[0]
+$etReg=@($tabG.Controls|Where-Object{$_.Text -eq 'Registrador: cada'})[0]
+$etMin=@($tabG.Controls|Where-Object{$_.Text -eq 'min'})[0]
+$etVer=@($tabG.Controls|Where-Object{$_.Text -eq 'Ver'})[0]
+$gruposDiag=@(
+    ,@($etTcu,$txtGTcus,$btnDiag,$chkGNcu,$btnGComm,$btnGBat,$btnGCsv,$btnGJson,$lblGResumen)
+    ,@($etReg,$txtGCada,$etMin,$btnGBucle,$chkGPar,$lblGBucle)
+    ,@($etVer,$cbGVerNcu,$script:ChksSalud['OK'],$script:ChksSalud['AVISO'],$script:ChksSalud['ALARMA'],$script:ChksSalud['OFFLINE'],$btnGWa,$lblGVer)
+    ,@($btnGAcciones,$lblGObjetivo)
+)
+for($filaDiag=0;$filaDiag -lt 4;$filaDiag++){
+    foreach($c in $gruposDiag[$filaDiag]){
+        if($null -eq $c){continue}
+        $c.Anchor='Top,Left';$c.Margin=New-Object Windows.Forms.Padding(3,5,3,5)
+        if($c -is [Windows.Forms.Button]){$c.AutoSize=$true;$c.Padding=New-Object Windows.Forms.Padding(6,0,6,0)}
+        elseif($c -is [Windows.Forms.Label]){$c.AutoSize=$true}
+        $diagBarras[$filaDiag].Controls.Add($c)
+    }
+}
+$lblGVer.AutoSize=$false;$lblGVer.Width=130;$lblGVer.AutoEllipsis=$true
+$lblGObjetivo.AutoSize=$false;$lblGObjetivo.Width=450;$lblGObjetivo.AutoEllipsis=$true
+$diagBarras[3].WrapContents=$false
+$diagBarras[3].Add_SizeChanged({$lblGObjetivo.Width=[math]::Max(100,$diagBarras[3].ClientSize.Width-$btnGAcciones.Width-20)})
+$lvG.Dock='Fill';$diagLayout.Controls.Add($lvG)
+
+
 
 # ============================ TAB AUDITORIA ============================
 # Se llamaba 'Flota', que no decia nada de lo que hay dentro. Sigue llevando
@@ -6713,7 +6754,7 @@ $secLayout.ColumnCount = 1; $secLayout.RowCount = 6
 foreach ($r in @('AutoSize','Absolute','AutoSize','AutoSize','Percent','AutoSize')) {
     $style = New-Object System.Windows.Forms.RowStyle
     $style.SizeType = $r
-    if ($r -eq 'Absolute') { $style.Height = 96 }; if ($r -eq 'Percent') { $style.Height = 100 }
+    if ($r -eq 'Absolute') { $style.Height = 112 }; if ($r -eq 'Percent') { $style.Height = 100 }
     [void]$secLayout.RowStyles.Add($style)
 }
 $tabSEC.Controls.Add($secLayout)
@@ -6759,6 +6800,22 @@ $lblSECNota = New-Object System.Windows.Forms.Label
 $lblSECNota.AutoSize = $true; $lblSECNota.Dock = 'Fill'
 $lblSECNota.Text = 'Una receta por TCU. Un fallo detiene sus siguientes pasos. ENVIADO no acredita persistencia tras reiniciar.'
 $secLayout.Controls.Add($lblSECNota)
+
+function Sec-AjustarColumnas {
+    if($lvSEC.Columns.Count -eq 4){
+        $w=[math]::Max(500,$lvSEC.ClientSize.Width-22)
+        $lvSEC.Columns[0].Width=35;$lvSEC.Columns[1].Width=180;$lvSEC.Columns[3].Width=150
+        $lvSEC.Columns[2].Width=$w-365
+    }
+    if($lvSECR.Columns.Count -eq 5){
+        $w=[math]::Max(500,$lvSECR.ClientSize.Width-22)
+        $lvSECR.Columns[0].Width=55;$lvSECR.Columns[1].Width=55;$lvSECR.Columns[3].Width=116
+        $lvSECR.Columns[2].Width=[int]($w*0.30)
+        $lvSECR.Columns[4].Width=$w-226-$lvSECR.Columns[2].Width
+    }
+}
+$lvSEC.Add_SizeChanged({Sec-AjustarColumnas})
+$lvSECR.Add_SizeChanged({Sec-AjustarColumnas})
 
 # ======================= TAB LIMITES DE RECORRIDO =======================
 # 50047/50048 del bloque por TCU de la NCU (mapa R8). Pestana propia y no un
@@ -16358,7 +16415,7 @@ function Tema-Recoger($cont, $acc) {
 # boton se le queda corto el ancho fijo, se ensancha lo justo, sin llegar a
 # tocar el control que tenga a su derecha.
 function Tema-AjustarAnchos($cont) {
-    if ($cont -eq $tabSEC) { return }
+    if ($cont -eq $tabSEC -or $cont -eq $tabG) { return }
     foreach ($c in $cont.Controls) {
         if ($c.Controls.Count -gt 0) { Tema-AjustarAnchos $c }
         $ajustable = ($c -is [System.Windows.Forms.Label]) -or ($c -is [System.Windows.Forms.CheckBox]) -or
@@ -16596,7 +16653,7 @@ function Anclaje-Para([hashtable]$g) {
 # largas que su pestana. Por eso esto se hace con la ventana ya mostrada y con
 # una guarda por si algun contenedor sigue sin medir lo que deberia.
 function Anclar-Contenedor($cont, $anchoRef) {
-    if ($cont -eq $tabSEC) { return }
+    if ($cont -eq $tabSEC -or $cont -eq $tabG) { return }
     $ancho = $cont.ClientSize.Width
     $alto = $cont.ClientSize.Height
     $tablas = @($cont.Controls | Where-Object {
@@ -16634,7 +16691,7 @@ function Anclar-Contenedor($cont, $anchoRef) {
 # Red de seguridad: si algo ha acabado fuera de su contenedor, se mete dentro.
 # Mas vale un boton apretado contra el borde que un boton que no se ve.
 function Layout-Rescatar($cont) {
-    if ($cont -eq $tabSEC) { return }
+    if ($cont -eq $tabSEC -or $cont -eq $tabG) { return }
     $ancho = $cont.ClientSize.Width; $alto = $cont.ClientSize.Height
     if ($ancho -lt 40 -or $alto -lt 40) { return }
     foreach ($c in $cont.Controls) {
@@ -17382,7 +17439,7 @@ $form.Add_Shown({
         $anchoTab = $tabs.DisplayRectangle.Width - 10
         foreach ($tp in $tabs.TabPages) { Anclar-Contenedor $tp $anchoTab }
         foreach ($tp in $tabs.TabPages) {
-            if ($tp -ne $tabSEC) { $tp.AutoScroll=$true; $tp.AutoScrollMinSize=New-Object Drawing.Size(914,390) }
+            if ($tp -ne $tabSEC -and $tp -ne $tabG) { $tp.AutoScroll=$true; $tp.AutoScrollMinSize=New-Object Drawing.Size(914,390) }
         }
         $script:LayoutListo=$true
         Layout-Principal

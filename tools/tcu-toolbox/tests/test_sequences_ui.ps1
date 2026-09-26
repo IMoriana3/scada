@@ -29,6 +29,8 @@ foreach($ancho in @(1024,1142,1450)){
 }
 $script:UltimoDiag=@([pscustomobject]@{NCU='2';GW='504';TCU='18';Salud='ALARMA';Modo='AUTO';Tilt='15.5';Objetivo='22.5';Dif='7';SoC='87';Edad_s='12';Alarmas='Alarma motor enclavada'})
 Trabajos-ComboNcus;Diag-Refrescar;$tabs.SelectedTab=$tabG
+$form.PerformLayout();[Windows.Forms.Application]::DoEvents()
+if($btnGAcciones.Parent -ne $diagBarras[3] -or $lvG.Parent -ne $diagLayout){throw 'Diagnostico sin layout adaptable'}
 [Windows.Forms.Application]::DoEvents();$lvG.Items[0].Selected=$true
 if($null -eq $lvG.Items[0].Tag){throw 'La fila de diagnostico perdio su identidad'}
 $bmp=New-Object Drawing.Bitmap($form.Width,$form.Height)
