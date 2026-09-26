@@ -3700,7 +3700,7 @@ foreach ($t in @('diag','comm','lectura','auditoria','inventario','baterias')) {
     Check "trab: se guarda solo el $t" ($src.Contains("Trabajo-Guardar '$t'")) $true
 }
 # y cargar no toca la planta
-$blqCarga = $src.Substring($src.IndexOf('function Trabajo-Cargar'), 2000)
+$blqCarga = $src.Substring($src.IndexOf('function Trabajo-Cargar'), $src.IndexOf('function Trabajos-ComboNcus') - $src.IndexOf('function Trabajo-Cargar'))
 Check 'trab: cargar no lee la planta' ($blqCarga.Contains('Modbus-Conectar')) $false
 Check 'trab: y lo dice' ($blqCarga.Contains('no se ha leido nada de la planta')) $true
 Check 'trab: la carpeta esta ignorada por git' ((Get-Content (Join-Path $raizTb '.gitignore') -Raw).Contains('trabajos/')) $true

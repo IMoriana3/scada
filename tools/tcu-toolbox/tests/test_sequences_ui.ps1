@@ -14,9 +14,11 @@ $script:UltimoSec=@([pscustomobject]@{NCU='2';TCU='18';Paso='1. Escribir longitu
 Sec-PintarPasos;Sec-FiltrarResultados
 $form.Show();[Windows.Forms.Application]::DoEvents()
 $tabs.SelectedTab=$tabSEC
-foreach($ancho in @(1142,1450)){
+foreach($ancho in @(1024,1142,1450)){
     $form.Size=New-Object Drawing.Size($ancho,820)
     $form.PerformLayout();[Windows.Forms.Application]::DoEvents()
+    if($nav.Right -gt $pnlCuerpo.Left -or $nav.Right -gt $rtb.Left){throw 'El contenido tapa el menu lateral'}
+    if($btnVolverDiag.Right -gt $lblLog.Left){throw 'El pie tapa el boton de vuelta'}
     foreach($c in @($lvSEC,$lvSECR,$secEdicion,$secAcciones,$lblSECRes,$lblSECNota)){
         if($c.Bottom -gt $secLayout.ClientSize.Height -or $c.Right -gt $secLayout.ClientSize.Width){throw "Control fuera de vista: $($c.GetType().Name) $ancho"}
     }

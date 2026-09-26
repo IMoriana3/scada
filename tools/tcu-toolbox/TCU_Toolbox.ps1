@@ -4901,7 +4901,7 @@ $form.StartPosition = 'CenterScreen'
 # hacen que crezcan las listas y la consola. MinimumSize = el diseno original,
 # asi que nunca puede quedar mas pequena de lo que cabe.
 $form.FormBorderStyle = 'Sizable'; $form.MaximizeBox = $true
-$form.MinimumSize = New-Object System.Drawing.Size(1142, 820)
+$form.MinimumSize = New-Object System.Drawing.Size(1024, 760)
 
 $gbCon = New-Object System.Windows.Forms.GroupBox
 $gbCon.Text = ' Conexion '
@@ -5043,11 +5043,11 @@ $form.Controls.Add($nav)
 # borde de arriba del panel y el panel se la come. Se hace en Add_Shown, con la
 # altura de la cabecera preguntada en caliente en vez de darla por buena: cambia
 # con el tema y con la fuente.
-$btnVolverDiag = New-Object Windows.Forms.Button
+$btnVolverDiag = New-Object System.Windows.Forms.Button
 $btnVolverDiag.Text = 'Diagnostico'
-$btnVolverDiag.Location = New-Object Drawing.Point(10,741)
+$btnVolverDiag.Location = New-Object System.Drawing.Point(10, 741)
 $btnVolverDiag.Anchor = 'Bottom,Left'
-$btnVolverDiag.Size = New-Object Drawing.Size(174,30)
+$btnVolverDiag.Size = New-Object System.Drawing.Size(174, 28)
 $form.Controls.Add($btnVolverDiag)
 
 $pnlCuerpo = New-Object System.Windows.Forms.Panel
@@ -7631,21 +7631,21 @@ $form.Controls.Add($btnInforme)
 # mientras hay una operacion en curso. Se muestra al empezar y se esconde al
 # acabar, asi no crece la ventana.
 $pbProg = New-Object System.Windows.Forms.ProgressBar
-$pbProg.Location = New-Object System.Drawing.Point(10, 745)
-$pbProg.Size = New-Object System.Drawing.Size(190, 18)
+$pbProg.Location = New-Object System.Drawing.Point(192, 745)
+$pbProg.Size = New-Object System.Drawing.Size(140, 18)
 $pbProg.Minimum = 0; $pbProg.Maximum = 1000
 $pbProg.Visible = $false
 $form.Controls.Add($pbProg)
 
 $lblProg = New-Object System.Windows.Forms.Label
-$lblProg.Location = New-Object System.Drawing.Point(208, 746)
+$lblProg.Location = New-Object System.Drawing.Point(340, 746)
 $lblProg.Size = New-Object System.Drawing.Size(148, 20)
 $lblProg.Visible = $false
 $form.Controls.Add($lblProg)
 
 $lblLog = New-Object System.Windows.Forms.Label
-$lblLog.Location = New-Object System.Drawing.Point(10, 746)
-$lblLog.Size = New-Object System.Drawing.Size(346, 20)
+$lblLog.Location = New-Object System.Drawing.Point(192, 746)
+$lblLog.Size = New-Object System.Drawing.Size(340, 20)
 $lblLog.ForeColor = [System.Drawing.Color]::Gray
 $form.Controls.Add($lblLog)
 
@@ -10966,7 +10966,7 @@ function Diag-Objetivo($fila, $trabajos) {
 }
 function Diag-PrepararAccion($destino, [string]$accion) {
     if ($script:Ocupado) { return }
-    $script:DiagVolver = @{planta="$($cbPlanta.SelectedItem)"; ip=$txtIp.Text; puerto=$txtPort.Text; tcus=$txtGTcus.Text}
+    $script:DiagVolver = @{planta="$($cbPlanta.SelectedItem)"; ip=$txtIp.Text; puerto=$txtPort.Text; tcus=$txtGTcus.Text; timeout=$txtTo.Text; ncus=$txtNcus.Text; gw1=$chkGw1.Checked; gw2=$chkGw2.Checked}
     # Se conserva una entrada de la MISMA IP si existe; nunca resolver por
     # numero de esclavo a traves de todas las NCUs de planta.
     $entradas=@($PLANTAS.Keys | Where-Object { -not $PLANTAS[$_].ncus -and "$($PLANTAS[$_].ip)" -eq "$($destino.ip)" })
@@ -14411,7 +14411,7 @@ function Sec-PintarPasos {
         [void]$it.SubItems.Add($(if ($d) { $d.n } else { "?? $($p.tipo)" }))
         [void]$it.SubItems.Add("$($p.valor)")
         [void]$it.SubItems.Add($(if (Sec-Mueve @($p)) { 'requiere viento seguro' } elseif ($d -and -not $d.escribe) { 'no escribe' } else { '' }))
-        if (Sec-Mueve @($p)) { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
+        if (Sec-Mueve @($p)) { $it.ForeColor = [System.Drawing.Color]::FromArgb(142,73,0) }
         elseif (-not $d) { $it.ForeColor = [System.Drawing.Color]::Firebrick }
         [void]$lvSEC.Items.Add($it)
     }
@@ -14421,7 +14421,7 @@ function Sec-PintarPasos {
                         elseif (@($v.avisos).Count -gt 0) { "$(@($script:SecPasos).Count) pasos, con avisos" }
                         else { "$(@($script:SecPasos).Count) pasos" })
     $lblSECRes.ForeColor = $(if (@($v.errores).Count -gt 0) { [System.Drawing.Color]::Firebrick }
-                             elseif (@($v.avisos).Count -gt 0) { [System.Drawing.Color]::DarkOrange }
+                             elseif (@($v.avisos).Count -gt 0) { [System.Drawing.Color]::FromArgb(142,73,0) }
                              else { [System.Drawing.Color]::DimGray })
 }
 
@@ -14434,7 +14434,7 @@ function Sec-Fila([string]$ncu, $tcu, [string]$paso, [string]$estado, [string]$n
         'SIMULADO*' { $it.ForeColor = [System.Drawing.Color]::SteelBlue }
         'FALLA*'    { $it.ForeColor = [System.Drawing.Color]::Firebrick }
         'SALTADO*'  { $it.ForeColor = [System.Drawing.Color]::Gray }
-        default     { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
+        default     { $it.ForeColor = [System.Drawing.Color]::FromArgb(142,73,0) }
     }
     [void]$lvSECR.Items.Add($it)
     $fila = [pscustomobject]@{Ejecucion=$script:SecEjecucion; Fecha=(Get-Date -Format o); Planta=$script:SecPlanta
@@ -14719,7 +14719,7 @@ function Sec-FiltrarResultados {
         if ($filtro -eq 'Pendientes' -and $f.Estado -notin @('PENDIENTE','CANCELADO','SALTADO')) { continue }
         $it=New-Object Windows.Forms.ListViewItem("$($f.NCU)")
         foreach ($v in @($f.TCU,$f.Paso,$f.Estado,$f.Nota)) { [void]$it.SubItems.Add("$v") }
-        $it.ForeColor = switch ($f.Estado) { 'VERIFICADO' {[Drawing.Color]::DarkGreen} 'FALLA' {[Drawing.Color]::Firebrick} 'ENVIADO' {[Drawing.Color]::DarkOrange} default {[Drawing.Color]::SteelBlue} }
+        $it.ForeColor = switch ($f.Estado) { 'VERIFICADO' {[Drawing.Color]::DarkGreen} 'FALLA' {[Drawing.Color]::Firebrick} 'ENVIADO' {[Drawing.Color]::FromArgb(142,73,0)} default {[Drawing.Color]::SteelBlue} }
         [void]$lvSECR.Items.Add($it)
     }
     Lv-Reiniciar $lvSECR
@@ -14734,7 +14734,7 @@ $lvG.Add_SelectedIndexChanged({
 })
 $btnVolverDiag.Add_Click({
     if($script:Ocupado){return}
-    if($script:DiagVolver){$cbPlanta.SelectedItem=$script:DiagVolver.planta;$txtIp.Text=$script:DiagVolver.ip;$txtPort.Text=$script:DiagVolver.puerto;$txtGTcus.Text=$script:DiagVolver.tcus;$script:DiagVolver=$null}
+    if($script:DiagVolver){$cbPlanta.SelectedItem=$script:DiagVolver.planta;$txtIp.Text=$script:DiagVolver.ip;$txtPort.Text=$script:DiagVolver.puerto;$txtGTcus.Text=$script:DiagVolver.tcus;$txtTo.Text=$script:DiagVolver.timeout;$txtNcus.Text=$script:DiagVolver.ncus;$chkGw1.Checked=$script:DiagVolver.gw1;$chkGw2.Checked=$script:DiagVolver.gw2;$script:DiagVolver=$null}
     $tabs.SelectedTab=$tabG; $btnVolverDiag.Text='Diagnostico'
 })
 
@@ -17339,12 +17339,53 @@ function Nav-OcultarCabecera {
     $tabs.Height = $pnlCuerpo.ClientSize.Height + $hCab + 2
 }
 
+# Reparto explicito de la ventana: al limitar Windows el tamano a la pantalla
+# no se desplaza el contenido encima del arbol. Las vistas antiguas permiten
+# scroll; el editor de recetas se redistribuye con TableLayoutPanel.
+$script:ConexionControles = @($gbCon.Controls | Sort-Object Left)
+function Layout-Principal {
+    if ($script:LayoutEnCurso) { return }
+    $script:LayoutEnCurso=$true
+    try {
+        $ancho=$form.ClientSize.Width; $alto=$form.ClientSize.Height
+        $gbCon.SetBounds(10,8,($ancho-20),58)
+        $x=10; $y=18
+        foreach ($c in $script:ConexionControles) {
+            $c.Anchor='Top,Left'
+            if ($x+$c.Width+10 -gt $gbCon.Width) { $x=10; $y+=34 }
+            $c.Location=New-Object Drawing.Point($x,$y)
+            $x+=$c.Width+6
+        }
+        $gbCon.Height=$y+34
+        $top=$gbCon.Bottom+6; $pie=$alto-38; $disponible=$pie-$top-8
+        $hVista=[int]($disponible*0.62)
+        $nav.SetBounds(10,$top,176,$disponible)
+        $pnlCuerpo.SetBounds(192,$top,($ancho-202),$hVista)
+        $rtb.SetBounds(192,($pnlCuerpo.Bottom+8),($ancho-202),($pie-$pnlCuerpo.Bottom-16))
+        $x=$ancho-10
+        foreach($b in @($btnLog,$btnInforme,$btnUsuarios,$btnLimpiar,$btnBuscar)) {
+            $x-=$b.Width; $b.Location=New-Object Drawing.Point($x,$pie); $x-=6
+        }
+        $btnVolverDiag.SetBounds(10,$pie,174,28)
+        $libre=[math]::Max(80,$x-198)
+        $lblLog.SetBounds(192,($pie+5),$libre,20);$lblLog.AutoEllipsis=$true
+        $pbProg.SetBounds(192,($pie+5),([int]($libre*0.45)),18)
+        $lblProg.SetBounds(($pbProg.Right+6),($pie+5),([int]($libre*0.55)-6),20)
+        Nav-OcultarCabecera
+    } finally { $script:LayoutEnCurso=$false }
+}
+$form.Add_Resize({ if($script:LayoutListo){Layout-Principal} })
+
 $form.Add_Shown({
     try {
         if ($script:TemaNombre -ne 'clasico') { Tema-AjustarAnchos $form }
         $anchoTab = $tabs.DisplayRectangle.Width - 10
         foreach ($tp in $tabs.TabPages) { Anclar-Contenedor $tp $anchoTab }
-        Layout-Rescatar $form
+        foreach ($tp in $tabs.TabPages) {
+            if ($tp -ne $tabSEC) { $tp.AutoScroll=$true; $tp.AutoScrollMinSize=New-Object Drawing.Size(914,390) }
+        }
+        $script:LayoutListo=$true
+        Layout-Principal
         # lo ultimo: Layout-Rescatar mide contenedores y esto deja el TabControl
         # a proposito fuera del suyo
         Nav-OcultarCabecera
