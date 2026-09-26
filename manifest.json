@@ -1,0 +1,13 @@
+{
+  "name": "Factiun Tracker SCADA",
+  "short_name": "Factiun SCADA",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0B0F14",
+  "theme_color": "#0B0F14",
+  "description": "SCADA y modo campo offline-first para trackers Factiun.",
+  "icons": [
+    {"src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}
+  ]
+}
