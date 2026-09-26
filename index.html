@@ -1757,9 +1757,24 @@ async function publishMeteo(sc){
     const jm=await rm.json();
     const arr=Array.isArray(jm)?jm:(jm.meteo||jm.stations||jm.rows||jm.data||[]);
     let sx=0,sy=0,sws=0,nw=0;
-    for(const m of arr){ if(m&&isFinite(m.wind_speed)){ const wd=(+m.wind_direction||0)*Math.PI/180; sx+=Math.cos(wd); sy+=Math.sin(wd); sws+=+m.wind_speed; nw++; } }
-    if(nw>0){ const wd=(Math.atan2(sy,sx)*180/Math.PI+360)%360;   // media vectorial de la dirección (correcta en el cruce 0/360)
-      localStorage.setItem("factiun_meteo",JSON.stringify({ws:+(sws/nw).toFixed(2),wd:+wd.toFixed(1),n:nw,t:Date.now()})); }
+    const ghi=[],poat=[],poad=[];
+    for(const m of arr){
+      if(m&&isFinite(m.wind_speed)){ const wd=(+m.wind_direction||0)*Math.PI/180; sx+=Math.cos(wd); sy+=Math.sin(wd); sws+=+m.wind_speed; nw++; }
+      if(m&&isFinite(m.ghi)) ghi.push(+m.ghi);
+      if(m&&isFinite(m.poa_tracking)) poat.push(+m.poa_tracking);
+      if(m&&isFinite(m.poa_diffuse)) poad.push(+m.poa_diffuse);
+    }
+    if(nw>0||ghi.length||poat.length||poad.length){
+      const wd=nw?(Math.atan2(sy,sx)*180/Math.PI+360)%360:null;   // media vectorial de la dirección (correcta en el cruce 0/360)
+      const range=a=>a.length?{min:+Math.min(...a).toFixed(1),max:+Math.max(...a).toFixed(1),n:a.length}:null;
+      // Irradiancia: no se promedia entre HSU sin una política aprobada.
+      // Se publica el rango medido + nº de sensores; el Overview lo etiqueta
+      // como medida HSU, no como POA de toda la planta.
+      localStorage.setItem("factiun_meteo",JSON.stringify({
+        ws:nw?+(sws/nw).toFixed(2):null,wd:wd==null?null:+wd.toFixed(1),n:nw,
+        ghi:range(ghi),poa_tracking:range(poat),poa_diffuse:range(poad),t:Date.now()
+      }));
+    }
   }catch(e){}
 }
 function fmtBytes(b){ if(!isFinite(b))return "?"; return b<1e3?b.toFixed(0)+" B":b<1e6?(b/1e3).toFixed(1)+" kB":b<1e9?(b/1e6).toFixed(1)+" MB":(b/1e9).toFixed(2)+" GB"; }
