@@ -14,8 +14,9 @@ $script:Usuario=@{nombre='Prueba visual';usuario='test';rol='tecnico'}
 $script:SecPasos=@(@{tipo='variable';valor='41010 longitud [deg] = -1.5'},@{tipo='nvm';valor=''},@{tipo='modo';valor='AUTO'},@{tipo='comprobar';valor='ESTADO 30001 modo (OFF/MANUAL/AUTO) = AUTO'})
 $script:UltimoSec=@([pscustomobject]@{NCU='2';TCU='18';Paso='1. Escribir longitud';Estado='VERIFICADO';Nota='-1.4 -> -1.5'},[pscustomobject]@{NCU='2';TCU='18';Paso='2. Guardar NVM';Estado='ENVIADO';Nota='Persistencia tras reinicio pendiente'},[pscustomobject]@{NCU='2';TCU='19';Paso='1. Escribir longitud';Estado='FALLA';Nota='Equipo sin respuesta'})
 Sec-PintarPasos;Sec-FiltrarResultados
-# Permite probar tamaños mayores que el escritorio virtual del runner.
-$form.MaximumSize=New-Object Drawing.Size(1920,1200)
+# Contenedor no superior para renderizar anchos mayores que el escritorio del runner.
+# Los controles, eventos y layout son los reales; no se sustituye la interfaz.
+$form.TopLevel=$false
 $form.Show();[Windows.Forms.Application]::DoEvents()
 $tabs.SelectedTab=$tabSEC
 foreach($ancho in @(1024,1142,1450)){
