@@ -94,6 +94,19 @@ funciones puras y el fuente contra el simulador. Los registros son del R8, y una
 NCU con firmware anterior no los tiene: contesta excepción, se dice, y la columna
 queda **vacía** en vez de inventarse un «sin ángulo».
 
+**Mejoras de campo v11.90 — funcionalidad y presentación**
+
+- **Diagnóstico → acciones**: selecciona una fila y pulsa **Detalle y acciones** (también doble clic). Para una TCU abre Leer variables, Configurar, Copia de seguridad, Modo/alarmas/stow o Receta secuencial con su IP, gateway y esclavo, resueltos contra el alcance capturado al diagnosticar. El botón lateral vuelve al diagnóstico. Abrir una acción no la ejecuta. Los diagnósticos cargados de disco conservan el detalle, pero requieren un nuevo barrido para habilitar destinos operativos.
+- **Editor de recetas**: añadir o editar pasos mediante campos guiados; ordenar con Subir/Bajar; plantillas de comprobación, reloj, retorno a AUTO y configuración/sustitución desde el preset de referencia. El orden de la receta no puede alterarse ordenando una columna. Guardar/cargar JSON mantiene compatibilidad con recetas anteriores; las que escribían comandos, reloj o identidad por la vía genérica deben usar su paso específico o la acción individual de administrador.
+- **Comprobar valor** admite configuración y `ESTADO`; **Esperar hasta valor** consulta hasta cumplir la condición, cancelar o agotar el tiempo. Sintaxis exportada: `variable = esperado | tolerancia absoluta | segundos` (tiempo máximo 1–120 s, por TCU). El tiempo de una lectura en curso está limitado además por el timeout de conexión; no es un control de seguridad de tiempo real.
+- **Vista previa** lista las NCUs/TCUs, IP y puerto exactos. **Simular** recorre el plan sin abrir conexiones ni escribir. El plan y la receta quedan congelados al iniciar.
+- **Guardia de viento** obligatoria antes de cada paso de modo, stow, configuración o limpieza de alarmas: si no hay dato actual utilizable o hay viento, esa TCU se detiene. Tras consultar la NCU se restaura el gateway de la TCU. No sustituye las protecciones locales del controlador.
+- **Resultados claros**: VERIFICADO, ENVIADO, FALLA, CANCELADO y PENDIENTE. NVM y reloj se muestran como enviados, sin afirmar persistencia ni aplicación no comprobada. Un fallo omite los siguientes pasos de esa TCU; una cancelación deja las siguientes como pendientes.
+- **Trazabilidad y reintentos**: CSV completo, filtros de estado y diario inmediato `registro/receta_<id>.jsonl` con fecha, planta, NCU, TCU, IP, puerto, paso y resultado, además del registro de acciones. Preparar reintento muestra los destinos originales fallidos/cancelados/pendientes y exige revisar la repetición de la **receta entera**, incluidos comandos ya enviados. No reanuda automáticamente un comando de resultado incierto.
+- **Presentación adaptable**: barras de botones que se ajustan al ancho, tabla de pasos, avance por equipo/paso y resultados separados; editor modal y detalle de diagnóstico legibles. Se recuerdan el borrador de receta, la selección de TCUs y los filtros útiles al reiniciar; nunca se ejecuta automáticamente.
+
+La persistencia NVM después de un reinicio debe comprobarse en equipo real. La aplicación solicita el guardado y puede releer valores, pero eso no demuestra por sí solo que sobrevivirán a una pérdida de alimentación.
+
 **Órdenes secuenciales: la receta, no el botón (v11.85)** — sustituir una TCU
 no es *una* orden: es escribir sus parámetros, **guardarlos en NVM** y
 devolverla a AUTO, en ese orden y sin saltarse ninguno. Eso se hacía a mano,

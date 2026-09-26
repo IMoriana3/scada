@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.89'
+$VERSION_TOOLBOX = '11.90'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -1363,8 +1363,10 @@ $SEC_TIPOS = @(
     @{tipo='modo';     n='Poner modo';                  param='AUTO, MANUAL u OFF'; escribe=$true; mueve=$true; seg=3.5}
     @{tipo='clear';    n='Limpiar alarmas de motor';    param='';               escribe=$true;  mueve=$false; seg=0.7}
     @{tipo='stow';     n='Posicion segura (0 la quita)'; param='0 a 7';         escribe=$true;  mueve=$true;  seg=1.1}
-    @{tipo='reloj';    n='Sincronizar reloj UTC';       param='';               escribe=$true;  mueve=$false; seg=0.6}
+    @{tipo='reloj';    n='Sincronizar reloj del PC';       param='';               escribe=$true;  mueve=$false; seg=0.6}
     @{tipo='leer';     n='Leer variable (solo comprobar)'; param='nombre';      escribe=$false; mueve=$false; seg=0.5}
+    @{tipo='comprobar'; n='Comprobar valor'; param='variable = esperado'; escribe=$false; mueve=$false; seg=0.5}
+    @{tipo='hasta'; n='Esperar hasta valor'; param='variable = esperado | tolerancia | segundos'; escribe=$false; mueve=$false; seg=0.5}
     @{tipo='esperar';  n='Esperar';                     param='segundos';       escribe=$false; mueve=$false; seg=0}
 )
 $SEC_ESPERA_MAX = 120     # segundos por paso: mas que esto, por TCU, es una tarde
@@ -1394,14 +1396,15 @@ function Sec-Minutos($pasos, [int]$nTcus) {
         if ("$($p.tipo)" -eq 'esperar') {
             $e = 0; [void][int]::TryParse("$($p.valor)".Trim(), [ref]$e)
             $seg += $e
-        } else { $seg += [double]$d.seg }
+        } elseif ($p.tipo -eq 'hasta') { try { $seg += (Sec-Condicion $p.valor).segundos } catch { $seg += 30 } }
+        else { $seg += [double]$d.seg }
     }
     return [math]::Ceiling($seg * [math]::Max(1, $nTcus) / 60.0)
 }
 
 # Algun paso mueve seguidores (modo o stow): entonces hay guardia de viento. Pura.
 function Sec-Mueve($pasos) {
-    foreach ($p in @($pasos)) { $d = Sec-Tipo "$($p.tipo)"; if ($d -and $d.mueve) { return $true } }
+    foreach ($p in @($pasos)) { $d = Sec-Tipo "$($p.tipo)"; if ($d -and ($d.mueve -or $p.tipo -in @('variable','clear'))) { return $true } }
     return $false
 }
 # Alguno escribe: si no, la receta es de solo lectura y no pide rol ni confirmacion dura. Pura.
@@ -1413,53 +1416,68 @@ function Sec-Escribe($pasos) {
 # Lo que esta MAL en la receta (impide ejecutar) y lo que es SOSPECHOSO (deja
 # ejecutar pero se canta). El olvido clasico es escribir y no guardar en NVM:
 # la TCU queda bien hasta que se reinicia. Pura.
+# Resuelve configuracion y estado sin perder la distincion de solo lectura.
+function Sec-Def([string]$nombre, $variables = $VARIABLES) {
+    if ($variables.Contains($nombre)) { return $variables[$nombre] }
+    if ($nombre.StartsWith('ESTADO ') -and $ESTADO.Contains($nombre.Substring(7))) { return $ESTADO[$nombre.Substring(7)] }
+    throw "la variable '$nombre' no esta en el mapa"
+}
+function Sec-Condicion([string]$texto) {
+    $part = $texto -split '\|'
+    $par = $part[0] -split '\s*=\s*', 2
+    if ($par.Count -ne 2 -or -not $par[0].Trim() -or -not $par[1].Trim() -or $part.Count -gt 3) {
+        throw 'usa variable = esperado | tolerancia | segundos'
+    }
+    $tol = 0.0; $seg = 30
+    if ($part.Count -gt 1) { $tol = Parse-RealFinito $part[1] }
+    if ($part.Count -gt 2) { $seg = Entero-Estricto $part[2].Trim() }
+    if ($tol -lt 0 -or $seg -lt 1 -or $seg -gt $SEC_ESPERA_MAX) { throw "tolerancia >= 0 y tiempo entre 1 y $SEC_ESPERA_MAX s" }
+    return @{nombre=$par[0].Trim(); esperado=$par[1].Trim(); tolerancia=$tol; segundos=$seg}
+}
+function Sec-Coincide([string]$esperado, [string]$leido, [double]$tolerancia = 0) {
+    if (Aud-Igual $esperado $leido) { return $true }
+    if ($tolerancia -le 0) { return $false }
+    try { return ([math]::Abs((Parse-RealFinito $esperado) - (Parse-RealFinito $leido)) -le $tolerancia) }
+    catch { return $false }
+}
 function Sec-Validar($pasos, $variables = $null) {
-    $errores = @(); $avisos = @()
-    $l = @($pasos)
-    if ($l.Count -eq 0) { return @{errores = @('la receta no tiene ningun paso'); avisos = @()} }
-    $iVar = -1; $iNvm = -1; $iModo = -1
-    for ($i = 0; $i -lt $l.Count; $i++) {
-        $p = $l[$i]
-        $d = Sec-Tipo "$($p.tipo)"
-        $v = "$($p.valor)".Trim()
-        $etq = "paso $($i + 1)"
-        if (-not $d) { $errores += "${etq}: '$($p.tipo)' no es un paso que exista"; continue }
-        switch ("$($p.tipo)") {
-            'variable' {
-                if ($iVar -lt 0) { $iVar = $i }
-                $part = $v -split '\s*=\s*', 2
-                if ($part.Count -lt 2 -or "$($part[0])".Trim() -eq '' -or "$($part[1])".Trim() -eq '') {
-                    $errores += "${etq}: escribe 'nombre de variable = valor'"
-                } elseif ($null -ne $variables -and -not $variables.Contains("$($part[0])".Trim())) {
-                    $errores += "${etq}: la variable '$("$($part[0])".Trim())' no esta en el mapa"
+    $errores = @(); $avisos = @(); $l = @($pasos)
+    if ($l.Count -eq 0) { return @{errores=@('la receta no tiene ningun paso'); avisos=@()} }
+    $ultimaVar = -1; $ultimoNvm = -1
+    for ($i=0; $i -lt $l.Count; $i++) {
+        $p = $l[$i]; $v = "$($p.valor)".Trim(); $etq = "paso $($i+1)"
+        if (-not (Sec-Tipo "$($p.tipo)")) { $errores += "${etq}: tipo desconocido"; continue }
+        try {
+            switch ("$($p.tipo)") {
+                'variable' {
+                    $ultimaVar = $i
+                    $par = $v -split '\s*=\s*', 2
+                    if ($par.Count -ne 2 -or -not $par[0].Trim() -or -not $par[1].Trim()) { throw 'escribe nombre de variable = valor' }
+                    if ($null -ne $variables) {
+                        $def = Sec-Def $par[0].Trim() $variables
+                        if (-not $variables.Contains($par[0].Trim()) -or $def.addr -lt 40000) { throw 'variable de solo lectura' }
+                        if ($ADDR_IDENTIDAD -contains [int]$def.addr) { throw 'identidad de red: usar la accion individual de administrador' }
+                        if ($ADDR_COMANDO -contains [int]$def.addr) { throw 'comando: usa el paso especifico de modo, stow, NVM o alarmas' }
+                        if ($ADDR_TIEMPO -contains [int]$def.addr) { throw 'reloj: usa Sincronizar reloj del PC' }
+                        [void](Valor-A-Escritura $def $par[1].Trim())
+                    }
+                }
+                'nvm' { $ultimoNvm = $i }
+                'modo' { if ($v.ToUpper() -notin @('AUTO','MANUAL','OFF')) { throw 'el modo es AUTO, MANUAL u OFF' } }
+                'stow' { $n = Entero-Estricto $v; if ($n -lt 0 -or $n -gt 7) { throw 'posicion segura entre 0 y 7' } }
+                'esperar' { $n = Entero-Estricto $v; if ($n -lt 1 -or $n -gt $SEC_ESPERA_MAX) { throw "espera entre 1 y $SEC_ESPERA_MAX s" } }
+                'leer' { if (-not $v) { throw 'di que variable hay que leer' }; if ($null -ne $variables) { [void](Sec-Def $v $variables) } }
+                { $_ -in @('comprobar','hasta') } {
+                    $cond = Sec-Condicion $v
+                    if ($cond.tolerancia -gt 0) { [void](Parse-RealFinito $cond.esperado) }
+                    if ($null -ne $variables) { [void](Sec-Def $cond.nombre $variables) }
                 }
             }
-            'nvm'  { if ($iNvm -lt 0) { $iNvm = $i } }
-            'modo' {
-                if ($iModo -lt 0) { $iModo = $i }
-                if (@('AUTO','MANUAL','OFF') -notcontains $v.ToUpper()) { $errores += "${etq}: el modo es AUTO, MANUAL u OFF" }
-            }
-            'stow' {
-                $n = -1; [void][int]::TryParse($v, [ref]$n)
-                if ($n -lt 0 -or $n -gt 7) { $errores += "${etq}: la posicion segura va de 0 a 7 (0 la quita)" }
-            }
-            'esperar' {
-                $n = -1; [void][int]::TryParse($v, [ref]$n)
-                if ($n -lt 1 -or $n -gt $SEC_ESPERA_MAX) { $errores += "${etq}: la espera va de 1 a $SEC_ESPERA_MAX segundos, y es POR TCU" }
-            }
-            'leer' { if ($v -eq '') { $errores += "${etq}: di que variable hay que leer" }
-                     elseif ($null -ne $variables -and -not $variables.Contains($v)) { $errores += "${etq}: la variable '$v' no esta en el mapa" } }
-        }
+        } catch { $errores += "${etq}: $_" }
     }
-    # el olvido que cuesta una segunda visita
-    if ($iVar -ge 0 -and $iNvm -lt 0) {
-        $avisos += 'escribes variables y NO guardas en NVM: la TCU queda bien hasta que se reinicie, y entonces vuelve a lo de antes'
-    }
-    if ($iVar -ge 0 -and $iNvm -ge 0 -and $iNvm -lt $iVar) {
-        $avisos += 'guardas en NVM ANTES de escribir: ese NVM guarda lo que ya habia, no lo que vas a escribir'
-    }
-    if ($iNvm -lt 0 -and $iVar -lt 0 -and $iModo -ge 0) { }   # una receta de solo modo es legitima
-    return @{errores = @($errores); avisos = @($avisos)}
+    if ($ultimaVar -ge 0 -and $ultimoNvm -lt 0) { $avisos += 'escribes variables y NO guardas en NVM: al reiniciar vuelve a lo de antes' }
+    elseif ($ultimaVar -gt $ultimoNvm) { $avisos += 'hay escrituras DESPUES del ultimo NVM: guarda lo que ya habia, no todos los cambios' }
+    return @{errores=@($errores); avisos=@($avisos)}
 }
 
 # Lo que se le ensena al tecnico antes de lanzar. Pura.
@@ -5007,6 +5025,13 @@ $form.Controls.Add($nav)
 # borde de arriba del panel y el panel se la come. Se hace en Add_Shown, con la
 # altura de la cabecera preguntada en caliente en vez de darla por buena: cambia
 # con el tema y con la fuente.
+$btnVolverDiag = New-Object Windows.Forms.Button
+$btnVolverDiag.Text = 'Diagnostico'
+$btnVolverDiag.Location = New-Object Drawing.Point(10,741)
+$btnVolverDiag.Anchor = 'Bottom,Left'
+$btnVolverDiag.Size = New-Object Drawing.Size(174,30)
+$form.Controls.Add($btnVolverDiag)
+
 $pnlCuerpo = New-Object System.Windows.Forms.Panel
 $pnlCuerpo.Location = New-Object System.Drawing.Point(192, 72)
 $pnlCuerpo.Size = New-Object System.Drawing.Size(925, 400)
@@ -5870,9 +5895,17 @@ $lblGVer.Size = New-Object System.Drawing.Size(288, 20)
 $lblGVer.ForeColor = [System.Drawing.Color]::Gray
 $tabG.Controls.Add($lblGVer)
 
+$btnGAcciones = New-Object Windows.Forms.Button
+$btnGAcciones.Text = 'Detalle y acciones...'
+$btnGAcciones.Location = New-Object Drawing.Point(10,116)
+$btnGAcciones.Size = New-Object Drawing.Size(175,28)
+$tabG.Controls.Add($btnGAcciones)
+$lblGObjetivo = LG $tabG 'Selecciona un equipo para ver su detalle y preparar una accion.' 195 705 122
+$lblGObjetivo.AutoEllipsis = $true
+
 $lvG = New-Object System.Windows.Forms.ListView
-$lvG.Location = New-Object System.Drawing.Point(10, 116)
-$lvG.Size = New-Object System.Drawing.Size(898, 244)
+$lvG.Location = New-Object System.Drawing.Point(10, 150)
+$lvG.Size = New-Object System.Drawing.Size(898, 210)
 $lvG.View = 'Details'; $lvG.FullRowSelect = $true; $lvG.GridLines = $true
 # NCU - GW - TCU: es el orden en que se llega a un seguidor en planta. De que
 # gateway cuelga cada TCU importa aunque en modo via NCU todo se lea por el 502:
@@ -6637,98 +6670,77 @@ $tabND.Controls.Add($lvND)
 [void](LG $tabND 'Solo la NCU: lo que ella misma declara por el puerto 502 (30100-30105, version en el 50 y las peticiones de posicion segura por grupo en 40001-40007). No lee ninguna TCU. El cuadro NCUs de arriba acota cuales.' 10 890 366)
 
 # ============================ TAB ORDENES SECUENCIALES ============================
-# Una receta de pasos que se ejecuta ENTERA sobre CADA TCU. Ver el bloque de
-# logica de recetas para por que va por TCU y no paso a paso sobre la seleccion.
 $tabSEC = New-Object System.Windows.Forms.TabPage
 $tabSEC.Text = 'Ordenes secuenciales'
 $tabs.TabPages.Add($tabSEC)
-
-$btnSECAdd = New-Object System.Windows.Forms.Button
-$btnSECAdd.Text = 'ANADIR PASO'
-$btnSECAdd.Location = New-Object System.Drawing.Point(10, 18)
-$btnSECAdd.Size = New-Object System.Drawing.Size(120, 28)
-$btnSECAdd.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
-$btnSECAdd.ForeColor = [System.Drawing.Color]::White
-$tabSEC.Controls.Add($btnSECAdd)
-
-$cbSECTipo = New-Object System.Windows.Forms.ComboBox
-$cbSECTipo.Location = New-Object System.Drawing.Point(136, 20)
-$cbSECTipo.Size = New-Object System.Drawing.Size(200, 22)
-$cbSECTipo.DropDownStyle = 'DropDownList'
-foreach ($d in $SEC_TIPOS) { [void]$cbSECTipo.Items.Add($d.n) }
-$cbSECTipo.SelectedIndex = 0
-$tabSEC.Controls.Add($cbSECTipo)
-
-$txtSECValor = TG $tabSEC '' 342 20 240
-$txtSECValor.Text = ''
-
-$btnSECDel = New-Object System.Windows.Forms.Button
-$btnSECDel.Text = 'QUITAR'
-$btnSECDel.Location = New-Object System.Drawing.Point(588, 18)
-$btnSECDel.Size = New-Object System.Drawing.Size(90, 28)
-$tabSEC.Controls.Add($btnSECDel)
-
-$btnSECUp = New-Object System.Windows.Forms.Button
-$btnSECUp.Text = 'SUBIR'
-$btnSECUp.Location = New-Object System.Drawing.Point(684, 18)
-$btnSECUp.Size = New-Object System.Drawing.Size(64, 28)
-$tabSEC.Controls.Add($btnSECUp)
-
-$btnSECDown = New-Object System.Windows.Forms.Button
-$btnSECDown.Text = 'BAJAR'
-$btnSECDown.Location = New-Object System.Drawing.Point(754, 18)
-$btnSECDown.Size = New-Object System.Drawing.Size(64, 28)
-$tabSEC.Controls.Add($btnSECDown)
-
-$btnSECGuardar = New-Object System.Windows.Forms.Button
-$btnSECGuardar.Text = 'GUARDAR RECETA'
-$btnSECGuardar.Location = New-Object System.Drawing.Point(10, 52)
-$btnSECGuardar.Size = New-Object System.Drawing.Size(130, 28)
-$tabSEC.Controls.Add($btnSECGuardar)
-
-$btnSECCargar = New-Object System.Windows.Forms.Button
-$btnSECCargar.Text = 'CARGAR RECETA'
-$btnSECCargar.Location = New-Object System.Drawing.Point(146, 52)
-$btnSECCargar.Size = New-Object System.Drawing.Size(130, 28)
-$tabSEC.Controls.Add($btnSECCargar)
-
-# Simular no toca ningun equipo: dice, TCU a TCU, lo que haria cada paso. Es lo
-# que se mira antes de lanzar una receta sobre una planta entera.
-$btnSECSim = New-Object System.Windows.Forms.Button
-$btnSECSim.Text = 'SIMULAR'
-$btnSECSim.Location = New-Object System.Drawing.Point(282, 52)
-$btnSECSim.Size = New-Object System.Drawing.Size(110, 28)
-$tabSEC.Controls.Add($btnSECSim)
-
-$btnSECEjec = New-Object System.Windows.Forms.Button
-$btnSECEjec.Text = 'EJECUTAR'
-$btnSECEjec.Location = New-Object System.Drawing.Point(398, 52)
-$btnSECEjec.Size = New-Object System.Drawing.Size(140, 28)
-$btnSECEjec.BackColor = [System.Drawing.Color]::FromArgb(150,60,0)
-$btnSECEjec.ForeColor = [System.Drawing.Color]::White
-$tabSEC.Controls.Add($btnSECEjec)
-
-[void](LG $tabSEC 'TCUs:' 548 44 58)
-$txtSECTcus = TG $tabSEC '' 596 52 110
-$lblSECRes = LG $tabSEC '' 716 190 58
-$lblSECRes.ForeColor = [System.Drawing.Color]::DimGray
-
+function Sec-Barra($padre) {
+    $f = New-Object System.Windows.Forms.FlowLayoutPanel
+    $f.AutoSize = $true; $f.Dock = 'Fill'; $f.WrapContents = $true
+    $f.Margin = New-Object System.Windows.Forms.Padding(0)
+    [void]$padre.Controls.Add($f)
+    return $f
+}
+function Sec-Boton($padre, [string]$texto) {
+    $b = New-Object System.Windows.Forms.Button
+    $b.Text = $texto; $b.AutoSize = $true; $b.Height = 30
+    $b.Padding = New-Object System.Windows.Forms.Padding(8,2,8,2)
+    $b.Margin = New-Object System.Windows.Forms.Padding(3)
+    $b.AccessibleName = $texto
+    [void]$padre.Controls.Add($b); return $b
+}
+$secLayout = New-Object System.Windows.Forms.TableLayoutPanel
+$secLayout.Name = 'secResponsive'; $secLayout.Dock = 'Fill'; $secLayout.Padding = New-Object System.Windows.Forms.Padding(8)
+$secLayout.ColumnCount = 1; $secLayout.RowCount = 6
+[void]$secLayout.ColumnStyles.Add((New-Object Windows.Forms.ColumnStyle('Percent',100)))
+foreach ($r in @('AutoSize','Absolute','AutoSize','AutoSize','Percent','AutoSize')) {
+    $style = New-Object System.Windows.Forms.RowStyle
+    $style.SizeType = $r
+    if ($r -eq 'Absolute') { $style.Height = 96 }; if ($r -eq 'Percent') { $style.Height = 100 }
+    [void]$secLayout.RowStyles.Add($style)
+}
+$tabSEC.Controls.Add($secLayout)
+$secEdicion = Sec-Barra $secLayout
+$btnSECAdd = Sec-Boton $secEdicion 'Anadir paso...'
+$btnSECEditar = Sec-Boton $secEdicion 'Editar...'
+$btnSECDel = Sec-Boton $secEdicion 'Quitar'
+$btnSECUp = Sec-Boton $secEdicion 'Subir'
+$btnSECDown = Sec-Boton $secEdicion 'Bajar'
+$btnSECPlantilla = Sec-Boton $secEdicion 'Plantillas...'
+$btnSECGuardar = Sec-Boton $secEdicion 'Guardar'
+$btnSECCargar = Sec-Boton $secEdicion 'Cargar'
 $lvSEC = New-Object System.Windows.Forms.ListView
-$lvSEC.Location = New-Object System.Drawing.Point(10, 86)
-$lvSEC.Size = New-Object System.Drawing.Size(898, 110)
-$lvSEC.View = 'Details'; $lvSEC.FullRowSelect = $true; $lvSEC.GridLines = $true
-foreach ($c in @(@('#',30), @('Paso',220), @('Parametro',380), @('Nota',260))) { [void]$lvSEC.Columns.Add($c[0], $c[1]) }
-$tabSEC.Controls.Add($lvSEC)
-
+$lvSEC.Dock = 'Fill'; $lvSEC.View = 'Details'; $lvSEC.FullRowSelect = $true; $lvSEC.MultiSelect = $false; $lvSEC.HideSelection = $false
+foreach ($c in @(@('#',35), @('Paso',205), @('Parametro',390), @('Efecto',235))) { [void]$lvSEC.Columns.Add($c[0],$c[1]) }
+$secLayout.Controls.Add($lvSEC)
+$secAcciones = Sec-Barra $secLayout
+$etSEC = New-Object System.Windows.Forms.Label
+$etSEC.Text = 'TCUs:'; $etSEC.AutoSize = $true; $etSEC.Margin = New-Object System.Windows.Forms.Padding(3,10,3,3)
+$secAcciones.Controls.Add($etSEC)
+$txtSECTcus = New-Object System.Windows.Forms.TextBox
+$txtSECTcus.Width = 130; $txtSECTcus.Margin = New-Object System.Windows.Forms.Padding(3,6,3,3)
+$secAcciones.Controls.Add($txtSECTcus); $ttW.SetToolTip($txtSECTcus,$AYUDA_TCUS)
+$btnSECPrevia = Sec-Boton $secAcciones 'Vista previa'
+$btnSECSim = Sec-Boton $secAcciones 'Simular'
+$btnSECEjec = Sec-Boton $secAcciones 'Ejecutar receta'
+$btnSECEjec.BackColor = [Drawing.Color]::FromArgb(150,60,0); $btnSECEjec.ForeColor = [Drawing.Color]::White
+$btnSECRetry = Sec-Boton $secAcciones 'Preparar reintento'
+$btnSECCsv = Sec-Boton $secAcciones 'Exportar CSV'
+$cbSECResultado = New-Object System.Windows.Forms.ComboBox
+$cbSECResultado.DropDownStyle = 'DropDownList'; $cbSECResultado.Width = 150
+$cbSECResultado.Items.AddRange(@('Todos','Incidencias','Verificados','Enviados','Pendientes'))
+$cbSECResultado.SelectedIndex = 0; $secAcciones.Controls.Add($cbSECResultado)
+$lblSECRes = New-Object System.Windows.Forms.Label
+$lblSECRes.AutoSize = $true; $lblSECRes.Dock = 'Fill'; $lblSECRes.Padding = New-Object System.Windows.Forms.Padding(4)
+$lblSECRes.Text = 'Prepara una receta, revisa los destinos y simula antes de ejecutar.'
+$secLayout.Controls.Add($lblSECRes)
 $lvSECR = New-Object System.Windows.Forms.ListView
-$lvSECR.Location = New-Object System.Drawing.Point(10, 200)
-$lvSECR.Size = New-Object System.Drawing.Size(898, 144)
-$lvSECR.View = 'Details'; $lvSECR.FullRowSelect = $true; $lvSECR.GridLines = $true
-foreach ($c in @(@('NCU',45), @('TCU',45), @('Paso',260), @('Estado',80), @('Nota',450))) { [void]$lvSECR.Columns.Add($c[0], $c[1]) }
-$tabSEC.Controls.Add($lvSECR)
-
-$lblSECNota = LG $tabSEC 'Sustituir una TCU no es UNA orden: es escribir sus parametros, GUARDARLOS EN NVM y devolverla a AUTO, en ese orden. Aqui se monta esa receta una vez, se guarda y se repite. La receta se ejecuta ENTERA sobre CADA TCU: si una falla un paso, esa se para ahi y las demas siguen (al reves, escribir en todas y luego guardar NVM en todas, le guardaria el NVM a una que fallo al escribir). SIMULAR no toca ningun equipo. El cuadro TCUs de aqui manda sobre el de arriba; en blanco, todas las de la seleccion.' 10 890 350
-$lblSECNota.ForeColor = [System.Drawing.Color]::Gray
+$lvSECR.Dock = 'Fill'; $lvSECR.View = 'Details'; $lvSECR.FullRowSelect = $true; $lvSECR.HideSelection = $false
+foreach ($c in @(@('NCU',45),@('TCU',45),@('Paso',250),@('Estado',105),@('Detalle',400))) { [void]$lvSECR.Columns.Add($c[0],$c[1]) }
+$secLayout.Controls.Add($lvSECR)
+$lblSECNota = New-Object System.Windows.Forms.Label
+$lblSECNota.AutoSize = $true; $lblSECNota.Dock = 'Fill'
+$lblSECNota.Text = 'Una receta por TCU. Un fallo detiene sus siguientes pasos. ENVIADO no acredita persistencia tras reiniciar.'
+$secLayout.Controls.Add($lblSECNota)
 
 # ======================= TAB LIMITES DE RECORRIDO =======================
 # 50047/50048 del bloque por TCU de la NCU (mapa R8). Pestana propia y no un
@@ -7974,7 +7986,7 @@ function Con([string]$t, $color) {
     [System.Windows.Forms.Application]::DoEvents()
 }
 
-$BOTONES_ACCION = @($btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $btnDiag, $btnSync, $btnIdent,
+$BOTONES_ACCION = @($btnSECAdd, $btnSECEditar, $btnSECDel, $btnSECUp, $btnSECDown, $btnSECPlantilla, $btnSECGuardar, $btnSECCargar, $btnSECPrevia, $btnSECSim, $btnSECEjec, $btnSECRetry, $btnSECCsv, $btnGAcciones, $btnVolverDiag, $btnEscribir, $btnFallidas, $btnNvm, $btnLeer, $btnVolcar, $btnDiag, $btnSync, $btnIdent,
                     $btnPresetSave, $btnPresetLoad, $btnLPreset, $btnCargarBackup, $btnLCsv, $btnDCsv, $btnBackupJson,
                     $btnComparar, $btnGCsv, $btnGJson, $btnGWa, $btnGBat, $btnBVer, $btnBAud, $btnBCar, $btnBCsv, $btnBJson, $btnICsv, $btnTCargar, $btnTGuardar, $btnTBorrar,
                     $btnCsvTcu, $btnBackupNcu, $btnAud, $btnAudCsv, $btnPresetRef, $btnAudEscr, $btnInvF, $btnInvFCsv,
@@ -8005,6 +8017,7 @@ function Set-UIOcupada([bool]$ocupada) {
         $btnPCsv.Enabled       = ($script:UltimoPem.Count -gt 0)
         $btnPSeg.Enabled       = (($script:SegMotor.Count + $script:SegComis.Count + $script:SegAud.Count) -gt 0)
     }
+    if (-not $ocupada -and -not (Puede 'tecnico')) { foreach ($b in $BOTONES_TECNICO) { $b.Enabled = $false } }
     $btnCancelar.Enabled = $ocupada
     [System.Windows.Forms.Application]::DoEvents()
 }
@@ -8558,6 +8571,7 @@ $CTX_DE_BLOQUE = @{diag='diagnostico'; bat='diagnostico'; lectura='lectura'
                    aud='auditoria'; inv='inventario'; pem='pem'; comm='comm'; estab='estab'}
 function Ctx-Guardar([string]$clave, $cx, $trabajos) {
     $script:Ctx[$clave] = Ctx-Sello (Nombre-Planta) $cx $trabajos
+    $script:Ctx[$clave].trabajos = [Management.Automation.PSSerializer]::Deserialize([Management.Automation.PSSerializer]::Serialize(@($trabajos), 12))
 }
 # Si esa operacion no se ha corrido en esta sesion (datos cargados de Trabajos,
 # por ejemplo) no hay nada que congelar y se cae a lo que digan los cuadros.
@@ -10889,6 +10903,7 @@ function Diag-Refrescar {
             'ALARMA'  { $item.ForeColor = [System.Drawing.Color]::Firebrick }
             'OFFLINE' { $item.ForeColor = [System.Drawing.Color]::Gray }
         }
+        $item.Tag = $d
         $lvG.Items.Add($item) | Out-Null
         $n++
     }
@@ -10902,6 +10917,71 @@ function Diag-Refrescar {
     else { $lblGVer.Text = "$n de $tot filas  ($(Diag-NivelNombre $niv) / $fNcu / $(if ($sal.Count) { $sal -join '+' } else { 'todas' })) - el CSV/JSON exporta siempre todo" }
 }
 
+# Resolver contra el alcance capturado al diagnosticar, nunca contra la IP
+# que el operador tenga ahora en los cuadros de conexion.
+function Diag-Objetivo($fila, $trabajos) {
+    $tr = @($trabajos | Where-Object { "$($_.ncu)" -eq "$($fila.NCU)" })
+    if ($tr.Count -ne 1) { throw 'El diagnostico no conserva un destino unico para esta NCU. Repite el diagnostico.' }
+    $tipo = Fila-Tipo $fila
+    $base = @{ncu="$($fila.NCU)"; ip="$($tr[0].ip)"; to=$tr[0].cx.to; tipo=$tipo; tcu=''; puerto=$PUERTO_NCU}
+    if ($tipo -eq 'TCU') {
+        $plan = Sec-Plan $tr
+        $d = @($plan | Where-Object { $_.tcu -eq [int]$fila.TCU })
+        if ($d.Count -ne 1) { throw 'No hay un gateway unico para esta TCU en el alcance del diagnostico.' }
+        $base.tcu=$d[0].tcu; $base.puerto=$d[0].puerto
+    }
+    return $base
+}
+function Diag-PrepararAccion($destino, [string]$accion) {
+    if ($script:Ocupado) { return }
+    $script:DiagVolver = @{planta="$($cbPlanta.SelectedItem)"; ip=$txtIp.Text; puerto=$txtPort.Text; tcus=$txtGTcus.Text}
+    # Se conserva una entrada de la MISMA IP si existe; nunca resolver por
+    # numero de esclavo a traves de todas las NCUs de planta.
+    $entradas=@($PLANTAS.Keys | Where-Object { -not $PLANTAS[$_].ncus -and "$($PLANTAS[$_].ip)" -eq "$($destino.ip)" })
+    $cbPlanta.SelectedItem = $(if($entradas.Count){$entradas[0]}else{'(manual)'})
+    $txtIp.Text=$destino.ip; $txtPort.Text="$($destino.puerto)"; $txtTo.Text="$($destino.to)"
+    $txtNcus.Text=''; $chkGw1.Checked=$false; $chkGw2.Checked=$false
+    if($destino.tipo -eq 'TCU') {
+        foreach($c in @($txtWTcus,$txtLTcus,$txtPTcus,$txtGTcus,$txtSECTcus,$txtDTcu,$txtITcu,$txtVTcus,$txtSTcus)) { $c.Text="$($destino.tcu)" }
+    }
+    $btnVolverDiag.Text='Volver al diagnostico'
+    $ttW.SetToolTip($btnVolverDiag,"Origen: NCU$($destino.ncu) / TCU $($destino.tcu) / $($destino.ip):$($destino.puerto)")
+    switch($accion) {
+        'Leer variables' {$tabs.SelectedTab=$tabL}
+        'Configurar variables' {$tabs.SelectedTab=$tabW}
+        'Copia de seguridad' {$tabs.SelectedTab=$tabD}
+        'Modo / alarmas / stow' {$tabs.SelectedTab=$tabP}
+        'Receta secuencial' {$tabs.SelectedTab=$tabSEC}
+        'Diagnostico NCU' {$tabs.SelectedTab=$tabND}
+        'Estaciones meteo' {$tabs.SelectedTab=$tabH}
+    }
+    Con "Accion preparada desde diagnostico: NCU$($destino.ncu) / $($destino.tipo) $($destino.tcu) / $($destino.ip):$($destino.puerto). Revisa y ejecuta en la pantalla de destino." ([Drawing.Color]::SteelBlue)
+}
+function Diag-Acciones {
+    if($script:Ocupado -or $lvG.SelectedItems.Count -ne 1){return}
+    $fila=$lvG.SelectedItems[0].Tag
+    if(-not $fila){return}
+    $d=New-Object Windows.Forms.Form; $d.Text="Diagnostico - NCU$($fila.NCU) / $($fila.TCU)"
+    $d.Size=New-Object Drawing.Size(700,440); $d.StartPosition='CenterParent'; $d.Font=$form.Font
+    $layout=New-Object Windows.Forms.TableLayoutPanel; $layout.Dock='Fill'; $layout.RowCount=2; $layout.ColumnCount=1
+    [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100)))
+    [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('AutoSize')))
+    $d.Controls.Add($layout)
+    $detalle=New-Object Windows.Forms.TextBox; $detalle.Multiline=$true; $detalle.ReadOnly=$true; $detalle.ScrollBars='Vertical'; $detalle.Dock='Fill'
+    $detalle.Text = @($fila.PSObject.Properties | ForEach-Object {"$($_.Name): $($_.Value)"}) -join "`r`n"
+    $layout.Controls.Add($detalle); $barra=Sec-Barra $layout
+    try {
+        if(-not $script:Ctx.ContainsKey('diagnostico') -or -not $script:Ctx['diagnostico'].trabajos){throw 'Datos sin alcance de conexion capturado: repite el diagnostico para habilitar acciones.'}
+        $destino=Diag-Objetivo $fila $script:Ctx['diagnostico'].trabajos
+        $acciones=@('Diagnostico NCU','Estaciones meteo')
+        if($destino.tipo -eq 'TCU'){$acciones=@('Leer variables','Configurar variables','Copia de seguridad','Modo / alarmas / stow','Receta secuencial')}
+        foreach($a in $acciones){
+            $b=Sec-Boton $barra $a
+            $b.Add_Click({$d.Tag=$a;$d.DialogResult='OK';$d.Close()}.GetNewClosure())
+        }
+    }catch{$detalle.Text+="`r`n`r`n$_"}
+    try { if($d.ShowDialog($form) -eq 'OK'){Diag-PrepararAccion $destino "$($d.Tag)"} } finally {$d.Dispose()}
+}
 # Diagnostico SOLO de las estaciones meteo. Las HSUs viven en un bloque aparte
 # de la NCU (30200+, diez huecos): UNA lectura por NCU. Diagnosticar las diez de
 # Ayora son 16 lecturas y unos segundos.
@@ -11172,6 +11252,7 @@ function Trabajo-Cargar {
     $def = $TRABAJO_TIPOS["$($o.tipo)"]
     if (-not $def) { Con "Tipo de trabajo desconocido: $($o.tipo)" ([System.Drawing.Color]::Orange); return }
     Set-Variable -Name $def.var -Scope Script -Value $filas
+    if ($o.tipo -in @('diag','comm')) { [void]$script:Ctx.Remove('diagnostico') }
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Cargado: $($def.titulo) de $($o.fecha) - $($o.planta) - $(@($filas).Count) filas$(if ("$($o.nota)" -ne '') { "  ($($o.nota))" })" ([System.Drawing.Color]::LightGreen)
     switch ("$($o.tipo)") {
@@ -14282,6 +14363,7 @@ $btnNComm.Add_Click({ Lanzar {
 # ---------------------------------------------------------------------------
 #  Ordenes secuenciales: montar una receta y ejecutarla TCU a TCU
 # ---------------------------------------------------------------------------
+$script:SecDestinos = @(); $script:SecRecetaEjecutada = @(); $script:SecSimulada = $true
 $script:SecPasos  = @()    # la receta que se esta montando
 $script:UltimoSec = @()    # el resultado de la ultima ejecucion
 
@@ -14295,8 +14377,8 @@ function Sec-PintarPasos {
         $it = New-Object System.Windows.Forms.ListViewItem("$i")
         [void]$it.SubItems.Add($(if ($d) { $d.n } else { "?? $($p.tipo)" }))
         [void]$it.SubItems.Add("$($p.valor)")
-        [void]$it.SubItems.Add($(if ($d -and $d.mueve) { 'mueve los seguidores' } elseif ($d -and -not $d.escribe) { 'no escribe' } else { '' }))
-        if ($d -and $d.mueve) { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
+        [void]$it.SubItems.Add($(if (Sec-Mueve @($p)) { 'requiere viento seguro' } elseif ($d -and -not $d.escribe) { 'no escribe' } else { '' }))
+        if (Sec-Mueve @($p)) { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
         elseif (-not $d) { $it.ForeColor = [System.Drawing.Color]::Firebrick }
         [void]$lvSEC.Items.Add($it)
     }
@@ -14314,6 +14396,7 @@ function Sec-Fila([string]$ncu, $tcu, [string]$paso, [string]$estado, [string]$n
     $it = New-Object System.Windows.Forms.ListViewItem("$ncu")
     foreach ($c in @("$tcu", $paso, $estado, $nota)) { [void]$it.SubItems.Add("$c") }
     switch -Wildcard ($estado) {
+        'VERIFICADO' { $it.ForeColor = [System.Drawing.Color]::DarkGreen }
         'OK*'       { $it.ForeColor = [System.Drawing.Color]::DarkGreen }
         'SIMULADO*' { $it.ForeColor = [System.Drawing.Color]::SteelBlue }
         'FALLA*'    { $it.ForeColor = [System.Drawing.Color]::Firebrick }
@@ -14321,7 +14404,16 @@ function Sec-Fila([string]$ncu, $tcu, [string]$paso, [string]$estado, [string]$n
         default     { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
     }
     [void]$lvSECR.Items.Add($it)
-    $script:UltimoSec += [pscustomobject]@{NCU=$ncu; TCU="$tcu"; Paso=$paso; Estado=$estado; Nota=$nota}
+    $fila = [pscustomobject]@{Ejecucion=$script:SecEjecucion; Fecha=(Get-Date -Format o); Planta=$script:SecPlanta
+        NCU=$ncu; TCU="$tcu"; IP="$($script:SecDestinoActual.ip)"; Puerto="$($script:SecDestinoActual.puerto)"
+        Paso=$paso; Estado=$estado; Nota=$nota}
+    $script:UltimoSec += $fila
+    if (-not $script:SecSimulada) {
+        Auditar 'RECETA' $ncu $tcu ("$($script:SecEjecucion) $($script:SecPlanta) $($fila.IP):$($fila.Puerto) $paso [$estado] $nota")
+        $dir = Join-Path $PSScriptRoot 'registro'
+        if (-not (Test-Path $dir)) { [void](New-Item -ItemType Directory -Path $dir -Force) }
+        $fila | ConvertTo-Json -Compress | Add-Content (Join-Path $dir "receta_$($script:SecEjecucion).jsonl") -Encoding UTF8
+    }
     if ($estado -notlike 'OK*' -and $estado -notlike 'SIMULADO*') {
         Con ("{0}TCU {1,3}  {2}  {3}  {4}" -f $(if ($ncu) { "NCU$ncu " } else { '' }), $tcu, $paso, $estado, $nota) ([System.Drawing.Color]::Salmon)
     }
@@ -14332,6 +14424,8 @@ function Sec-Fila([string]$ncu, $tcu, [string]$paso, [string]$estado, [string]$n
 # que llama decide como contarlo, y asi esto se puede probar por partes.
 function Sec-EjecutarPaso([byte]$tcu, $p, [bool]$simular) {
     $v = "$($p.valor)".Trim()
+    $validacion = Sec-Validar @($p) $VARIABLES
+    if (@($validacion.errores).Count) { return @{ok=$false; nota=($validacion.errores -join '; ')} }
     switch ("$($p.tipo)") {
         'variable' {
             $part = $v -split '\s*=\s*', 2
@@ -14349,14 +14443,14 @@ function Sec-EjecutarPaso([byte]$tcu, $p, [bool]$simular) {
             if ($ADDR_COMANDO -contains [int]$def.addr) { return @{ok = $true; nota = "$val escrito (registro de comando: no se relee)"} }
             $leido = ''
             try { $leido = Leer-Decodificado $tcu $def } catch { return @{ok = $false; nota = "escrito, pero no se ha podido releer: $_"} }
-            if ("$leido" -eq "$val") { return @{ok = $true; nota = "$previo -> $leido"} }
+            if ((Comparar-Escritura $tcu $esc).ok) { return @{ok = $true; nota = "$previo -> $leido"} }
             return @{ok = $false; nota = "escrito $val y la TCU devuelve $leido"}
         }
         'nvm' {
             if ($simular) { return @{ok = $true; nota = 'guardaria la configuracion en NVM (40007 bit 15)'} }
             FC22-Mascara $tcu 40007 0x7FFF 0x8000
             Start-Sleep -Milliseconds 500
-            return @{ok = $true; nota = 'NVM solicitado (el bit no se relee: es de comando)'}
+            return @{ok = $true; estado='ENVIADO'; nota = 'NVM solicitado; persistencia tras reinicio pendiente de comprobar'}
         }
         'modo' {
             $m = @{'OFF'=0; 'MANUAL'=1; 'AUTO'=2}[$v.ToUpper()]
@@ -14391,149 +14485,296 @@ function Sec-EjecutarPaso([byte]$tcu, $p, [bool]$simular) {
             FC16-Escribir $tcu 40001 @($ahora.Second, $ahora.Minute, $ahora.Hour, $ahora.Day, $ahora.Month, $ahora.Year)
             FC22-Mascara $tcu 40007 0xFFFD 0x0002
             FC22-Mascara $tcu 40007 0xFFFC 0x0000
-            return @{ok = $true; nota = $ahora.ToString('yyyy-MM-dd HH:mm:ss')}
+            return @{ok = $true; estado='ENVIADO'; nota = ('Reloj enviado: ' + $ahora.ToString('yyyy-MM-dd HH:mm:ss') + ' (hora del PC)')}
         }
         'leer' {
-            if (-not $VARIABLES.Contains($v)) { return @{ok = $false; nota = "la variable '$v' no esta en el mapa"} }
+            $def = Sec-Def $v
             if ($simular) { return @{ok = $true; nota = "leeria $v"} }
-            $l = Leer-Decodificado $tcu $VARIABLES[$v]
+            $l = Leer-Decodificado $tcu $def
             return @{ok = $true; nota = "$v = $l"}
+        }
+        { $_ -in @('comprobar','hasta') } {
+            $cond = Sec-Condicion $v; $def = Sec-Def $cond.nombre
+            if ($simular) { return @{ok=$true; nota="comprobaria $v"} }
+            $reloj = [Diagnostics.Stopwatch]::StartNew()
+            do {
+                if ($script:Cancelar) { return @{ok=$false; estado='CANCELADO'; nota='cancelado por el usuario'} }
+                $leido = Leer-Decodificado $tcu $def
+                if (Sec-Coincide $cond.esperado "$leido" $cond.tolerancia) { return @{ok=$true; nota="$($cond.nombre) = $leido (condicion cumplida)"} }
+                if ($p.tipo -eq 'comprobar' -or $reloj.Elapsed.TotalSeconds -ge $cond.segundos) { break }
+                if (-not (Sec-Esperar 0.5)) { return @{ok=$false; estado='CANCELADO'; nota='espera cancelada'} }
+                if ($reloj.Elapsed.TotalSeconds -ge $cond.segundos) { break }
+            } while ($true)
+            return @{ok=$false; nota="condicion no cumplida: esperado $($cond.esperado), leido $leido"}
         }
         'esperar' {
             $n = [int]$v
             if ($simular) { return @{ok = $true; nota = "esperaria $n s"} }
-            Start-Sleep -Seconds $n
+            if (-not (Sec-Esperar $n)) { return @{ok=$false; estado='CANCELADO'; nota='espera cancelada'} }
             return @{ok = $true; nota = "$n s"}
         }
     }
     return @{ok = $false; nota = "paso desconocido: $($p.tipo)"}
 }
 
-function Sec-Correr([bool]$simular) {
-    $pasos = @($script:SecPasos)
-    $val = Sec-Validar $pasos $VARIABLES
-    if (@($val.errores).Count -gt 0) {
-        Con 'La receta tiene errores y no se lanza:' ([System.Drawing.Color]::Salmon)
-        foreach ($e in @($val.errores)) { Con "  - $e" ([System.Drawing.Color]::Salmon) }
-        return
+# Esperas interrumpibles: la cancelacion se atiende tambien entre lecturas.
+function Sec-Esperar([double]$segundos) {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while ($sw.Elapsed.TotalSeconds -lt $segundos) {
+        [System.Windows.Forms.Application]::DoEvents()
+        if ($script:Cancelar) { return $false }
+        Start-Sleep -Milliseconds 100
     }
-    if (-not $simular -and (Sec-Escribe $pasos) -and -not (Puede 'tecnico')) {
-        Con 'Rol de solo lectura: esta receta escribe en los equipos. Puedes SIMULARLA.' ([System.Drawing.Color]::Orange)
-        return
-    }
-    $cx = Params-Conexion
-    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtSECTcus.Text 'Secuencia') (Gw-Sel))
-    $nTcus = Cuantas-Tcus $trabajos
-    if ($nTcus -eq 0) { Con 'La seleccion no deja ninguna TCU (mira los cuadros de arriba y el TCUs de esta pestana).' ([System.Drawing.Color]::Orange); return }
-    $donde = $(if ($cx.multi) { "$($trabajos.Count) NCUs de la PLANTA COMPLETA" } else { "$($cx.ip):$($cx.etiqueta)" })
-    if (-not $simular) {
-        $r = [System.Windows.Forms.MessageBox]::Show((Sec-Resumen $pasos $nTcus $donde $val), 'Ejecutar receta', 'YesNo', 'Warning')
-        if ($r -ne 'Yes') { return }
-    }
-    $lvSECR.Items.Clear(); $script:UltimoSec = @(); Sellar 'secuencia'
-    Ctx-Guardar 'secuencia' $cx $trabajos
-    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
-    Con ("{0}: {1} paso(s) sobre {2} TCU(s) de {3}  (~{4} min)" -f $(if ($simular) { 'SIMULACION de receta' } else { 'RECETA' }),
-         $pasos.Count, $nTcus, $donde, (Sec-Minutos $pasos $nTcus)) ([System.Drawing.Color]::SteelBlue)
-    foreach ($a in @($val.avisos)) { Con "AVISO: $a" ([System.Drawing.Color]::Orange) }
-    $c = @{ok = 0; falla = 0}
-    $antesNcu = $null
-    if (-not $simular -and (Sec-Mueve $pasos)) {
-        $antesNcu = {
-            param($tr, $ncu)
-            if (Guardia-Viento $tr.cx) { return $true }
-            foreach ($tcu in @($tr.tcus)) { Sec-Fila $ncu $tcu '(toda la receta)' 'SALTADO' 'guardia de viento de esta NCU'; $c.falla++ }
-            return $false
-        }.GetNewClosure()
-    }
-    Pem-PorTcu $trabajos {
-        param($tcu, $ncu, $tr, $seg)
-        $nPaso = 0
-        foreach ($p in $pasos) {
-            if ($script:Cancelar) { break }
-            $nPaso++
-            $etq = "$nPaso. $(Sec-Texto $p)"
-            $res = $null
-            try { $res = Sec-EjecutarPaso $tcu $p $simular }
-            catch {
-                $res = @{ok = $false; nota = "$_"}
-                if (-not (Es-ExcepcionModbus $_.Exception.Message)) { Modbus-Reconectar }
-            }
-            if ($res.ok) {
-                Sec-Fila $ncu $tcu $etq $(if ($simular) { 'SIMULADO' } else { 'OK' }) $res.nota
-            } else {
-                Sec-Fila $ncu $tcu $etq 'FALLA' $res.nota
-                # esta TCU se para aqui: no se le guarda NVM ni se la suelta a
-                # AUTO despues de un paso que no ha salido
-                if ($nPaso -lt $pasos.Count) {
-                    Sec-Fila $ncu $tcu '(resto de la receta)' 'SALTADO' "se para en el paso $nPaso"
-                }
-                $c.falla++
-                return
+    return (-not $script:Cancelar)
+}
+function Sec-Plan($trabajos) {
+    $plan = @()
+    foreach ($tr in @($trabajos)) {
+        foreach ($seg in @(Plan-Segmentos @($tr.tcus) $tr.cx)) {
+            foreach ($tcu in @($seg.tcus)) {
+                $plan += ,@{ncu="$($tr.ncu)"; tcu=[int]$tcu; ip="$($tr.ip)"; puerto=[int]$seg.puerto; to=[int]$tr.cx.to}
             }
         }
-        $c.ok++
-    }.GetNewClosure() $antesNcu
-    Lv-Reiniciar $lvSECR
-    $lblSECRes.Text = "TCUs completas: $($c.ok)   |   con fallo: $($c.falla)"
-    $lblSECRes.ForeColor = $(if ($c.falla -gt 0) { [System.Drawing.Color]::Firebrick } else { [System.Drawing.Color]::DimGray })
-    Con ("{0}: {1} TCU(s) completas, {2} con fallo." -f $(if ($simular) { 'Simulacion' } else { 'Receta' }), $c.ok, $c.falla) ([System.Drawing.Color]::SteelBlue)
-    Prog-Fin
+    }
+    return ,$plan
+}
+# Se bloquea si no hay evidencia actual de viento seguro. La consulta cambia
+# de socket al 502; restaurar SIEMPRE el gateway antes del siguiente paso TCU.
+function Sec-PrepararPaso($destino, $paso, [bool]$simular) {
+    if ($simular -or -not (Sec-Mueve @($paso))) { return }
+    $v = Viento-Seguro $destino.ip $destino.to
+    if ($null -eq $v -or $v.alarma -or $v.nivel -gt 0) { throw 'movimiento bloqueado: viento activo o sin datos actuales de HSU' }
+    Modbus-Conectar $destino.ip $destino.puerto $destino.to
+}
+# Retorna el estado de la TCU. Una orden enviada no implica persistencia NVM.
+function Sec-RecetaTcu($destino, $pasos, [bool]$simular) {
+    $enviado = $false
+    for ($i=0; $i -lt $pasos.Count; $i++) {
+        if ($script:Cancelar) { return 'CANCELADO' }
+        $p = $pasos[$i]; $etq = "$($i+1). $(Sec-Texto $p)"
+        if ($null -ne $lblSECRes) { $lblSECRes.Text = "NCU$($destino.ncu) / TCU $($destino.tcu) - paso $($i+1)/$($pasos.Count): $(Sec-Texto $p)" }
+        try {
+            Sec-PrepararPaso $destino $p $simular
+            if ($script:Cancelar) { return 'CANCELADO' }
+            $res = Sec-EjecutarPaso ([byte]$destino.tcu) $p $simular
+        } catch { $res = @{ok=$false; nota="$_"} }
+        $estado = 'FALLA'
+        if ($res.estado -eq 'CANCELADO') { $estado = 'CANCELADO' }
+        elseif ($res.ok) {
+            $estado = $(if ($simular) { 'SIMULADO' } elseif ($res.estado) { $res.estado } else { 'VERIFICADO' })
+            if ($estado -eq 'ENVIADO') { $enviado = $true }
+        }
+        Sec-Fila $destino.ncu $destino.tcu $etq $estado $res.nota
+        if (-not $res.ok) {
+            if ($i+1 -lt $pasos.Count) { Sec-Fila $destino.ncu $destino.tcu '(resto de la receta)' 'SALTADO' "detenida en el paso $($i+1)" }
+            return $estado
+        }
+    }
+    if ($simular) { return 'SIMULADO' }
+    if ($enviado) { return 'ENVIADO' }
+    return 'VERIFICADO'
+}
+function Sec-Correr([bool]$simular, $planReintento = $null) {
+    $pasos = @($script:SecPasos | ForEach-Object { @{tipo="$($_.tipo)"; valor="$($_.valor)"} })
+    $val = Sec-Validar $pasos $VARIABLES
+    if (@($val.errores).Count -gt 0) { throw ('La receta tiene errores y no se lanza: ' + ($val.errores -join '; ')) }
+    if (-not $simular -and (Sec-Escribe $pasos) -and -not (Puede 'tecnico')) { throw 'Rol de solo lectura. Puedes SIMULARLA.' }
+    $planta = Nombre-Planta
+    if ($null -ne $planReintento) {
+        $plan = @($planReintento); $planta = $script:SecPlanta
+    } else {
+        $cx = Params-Conexion
+        $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtSECTcus.Text 'Secuencia') (Gw-Sel))
+        $plan = Sec-Plan $trabajos
+    }
+    if ($plan.Count -eq 0) { throw 'La seleccion no deja ninguna TCU.' }
+    $detalle = @($plan | ForEach-Object { "NCU$($_.ncu) / TCU $($_.tcu) / $($_.ip):$($_.puerto)" }) -join "`r`n"
+    $donde = "$($plan.Count) destinos (ver VISTA PREVIA)"
+    if (-not $simular) {
+        if ([System.Windows.Forms.MessageBox]::Show((Sec-Resumen $pasos $plan.Count $donde $val), 'Ejecutar receta', 'YesNo', 'Warning') -ne 'Yes') { return }
+    }
+    $script:UltimoSec = @(); $script:SecDestinos = @(); $script:SecRecetaEjecutada = $pasos
+    $script:SecEjecucion = [guid]::NewGuid().ToString(); $script:SecSimulada = $simular
+    $script:SecPlanta = $planta
+    $lvSECR.Items.Clear(); Sellar 'secuencia'
+    if ($null -eq $planReintento) { Ctx-Guardar 'secuencia' $cx $trabajos }
+    Prog-Iniciar $plan.Count
+    try {
+        foreach ($destino in $plan) {
+            $script:SecDestinoActual = $destino
+            $estado = 'PENDIENTE'
+            if (-not $script:Cancelar) {
+                try {
+                    if (-not $simular) { Modbus-Conectar $destino.ip $destino.puerto $destino.to }
+                    $estado = Sec-RecetaTcu $destino $pasos $simular
+                } catch { $estado = 'FALLA'; Sec-Fila $destino.ncu $destino.tcu '(conexion)' $estado "$_" }
+                finally { if (-not $simular) { Modbus-Cerrar } }
+            }
+            Sec-Fila $destino.ncu $destino.tcu '(resultado TCU)' $estado $(if ($estado -eq 'PENDIENTE') { 'no iniciada por cancelacion' } elseif ($estado -eq 'ENVIADO') { 'receta terminada; hay comandos sin verificacion de persistencia' } else { $estado })
+            $script:SecDestinos += ,@{destino=$destino; estado=$estado}
+            Prog-Paso
+        }
+    } finally {
+        $script:SecDestinoActual = $null
+        Modbus-Cerrar; Prog-Fin; Sec-FiltrarResultados
+        $gr = @($script:SecDestinos | Group-Object estado | ForEach-Object { "$($_.Name): $($_.Count)" })
+        $lblSECRes.Text = $gr -join ' | '
+        Con ("Receta: " + $lblSECRes.Text) ([System.Drawing.Color]::SteelBlue)
+    }
 }
 
-$btnSECAdd.Add_Click({
-    $d = @($SEC_TIPOS | Where-Object { $_.n -eq "$($cbSECTipo.SelectedItem)" })[0]
-    if (-not $d) { return }
-    $script:SecPasos += ,@{tipo = "$($d.tipo)"; valor = "$($txtSECValor.Text)".Trim()}
-    $txtSECValor.Text = ''
-    Sec-PintarPasos
+# Editor modal: elegir variable, valor y tolerancia sin escribir la sintaxis.
+function Sec-EditarPaso($paso = $null) {
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text = 'Paso de la receta'; $dlg.Size = New-Object Drawing.Size(650,350)
+    $dlg.StartPosition = 'CenterParent'; $dlg.Font = $form.Font; $dlg.MinimizeBox=$false; $dlg.MaximizeBox=$false
+    $dlg.FormBorderStyle = 'FixedDialog'
+    $tipo = New-Object Windows.Forms.ComboBox
+    $tipo.DropDownStyle='DropDownList'; $tipo.Location=New-Object Drawing.Point(16,28); $tipo.Width=600
+    foreach ($d in $SEC_TIPOS) { [void]$tipo.Items.Add($d.n) }; $dlg.Controls.Add($tipo)
+    [void](LG $dlg 'Tipo de paso' 16 600 8)
+    $var = New-Object Windows.Forms.ComboBox
+    $var.Location=New-Object Drawing.Point(16,82); $var.Width=600
+    $var.AutoCompleteMode='SuggestAppend'; $var.AutoCompleteSource='ListItems'
+    $dlg.Controls.Add($var); [void](LG $dlg 'Variable (configuracion o ESTADO)' 16 600 60)
+    $valor = TG $dlg '' 16 138 290
+    $lv = LG $dlg 'Valor esperado / segundos / modo / posicion segura' 16 610 116
+    $tol = TG $dlg '0' 16 193 180; [void](LG $dlg 'Tolerancia absoluta' 16 190 171)
+    $tiempo = TG $dlg '30' 220 193 180; [void](LG $dlg 'Tiempo maximo (1-120 s)' 220 240 171)
+    $ayuda = LG $dlg '' 16 610 225; $ayuda.Height=34
+    $ok = New-Object Windows.Forms.Button; $ok.Text='Guardar paso'; $ok.Location=New-Object Drawing.Point(440,270); $ok.Width=175
+    $dlg.Controls.Add($ok); $dlg.AcceptButton=$ok
+    $cambio = {
+        $t=$SEC_TIPOS[$tipo.SelectedIndex].tipo
+        $nom="$($var.Text)"; $var.Items.Clear()
+        $nombres=@($VARIABLES.Keys)
+        if ($t -in @('leer','comprobar','hasta')) { $nombres += @($ESTADO.Keys | ForEach-Object { "ESTADO $_" }) }
+        foreach ($n in $nombres) { [void]$var.Items.Add($n) }; $var.Text=$nom
+        $var.Enabled=($t -in @('variable','leer','comprobar','hasta'))
+        $valor.Enabled=($t -in @('variable','comprobar','hasta','modo','stow','esperar'))
+        $tol.Enabled=($t -in @('comprobar','hasta')); $tiempo.Enabled=($t -eq 'hasta')
+        $ayuda.Text="Formato: $($SEC_TIPOS[$tipo.SelectedIndex].param). Los pasos de movimiento comprueban el viento antes de actuar."
+    }.GetNewClosure()
+    $tipo.Add_SelectedIndexChanged($cambio); $tipo.SelectedIndex=0
+    if ($paso) {
+        for ($i=0;$i -lt $SEC_TIPOS.Count;$i++) { if ($SEC_TIPOS[$i].tipo -eq $paso.tipo) { $tipo.SelectedIndex=$i; break } }
+        if ($paso.tipo -in @('comprobar','hasta')) { $c=Sec-Condicion $paso.valor; $var.Text=$c.nombre; $valor.Text=$c.esperado; $tol.Text="$($c.tolerancia)"; $tiempo.Text="$($c.segundos)" }
+        elseif ($paso.tipo -eq 'variable') { $a=$paso.valor -split '\s*=\s*',2; $var.Text=$a[0]; $valor.Text=$a[1] }
+        elseif ($paso.tipo -eq 'leer') { $var.Text=$paso.valor }
+        else { $valor.Text=$paso.valor }
+    }
+    $ok.Add_Click({
+        $t=$SEC_TIPOS[$tipo.SelectedIndex].tipo; $v=$valor.Text.Trim()
+        if ($t -in @('variable','comprobar','hasta')) { $v="$($var.Text.Trim()) = $v" }
+        if ($t -in @('comprobar','hasta')) { $v += " | $($tol.Text) | $($tiempo.Text)" }
+        if ($t -eq 'leer') { $v=$var.Text.Trim() }
+        if ($t -in @('nvm','clear','reloj')) { $v='' }
+        $p=@{tipo=$t;valor=$v}; $val=Sec-Validar @($p) $VARIABLES
+        if (@($val.errores).Count) { [void][Windows.Forms.MessageBox]::Show(($val.errores -join "`r`n"),'Revisa el paso'); return }
+        $dlg.Tag=$p; $dlg.DialogResult='OK'; $dlg.Close()
+    }.GetNewClosure())
+    try { if ($dlg.ShowDialog($form) -eq 'OK') { return $dlg.Tag } } finally { $dlg.Dispose() }
+    return $null
+}
+function Sec-FiltrarResultados {
+    $lvSECR.Items.Clear()
+    foreach ($f in @($script:UltimoSec)) {
+        $filtro="$($cbSECResultado.SelectedItem)"
+        if ($filtro -eq 'Incidencias' -and $f.Estado -notin @('FALLA','CANCELADO','SALTADO')) { continue }
+        if ($filtro -eq 'Verificados' -and $f.Estado -ne 'VERIFICADO') { continue }
+        if ($filtro -eq 'Enviados' -and $f.Estado -ne 'ENVIADO') { continue }
+        if ($filtro -eq 'Pendientes' -and $f.Estado -notin @('PENDIENTE','CANCELADO','SALTADO')) { continue }
+        $it=New-Object Windows.Forms.ListViewItem("$($f.NCU)")
+        foreach ($v in @($f.TCU,$f.Paso,$f.Estado,$f.Nota)) { [void]$it.SubItems.Add("$v") }
+        $it.ForeColor = switch ($f.Estado) { 'VERIFICADO' {[Drawing.Color]::DarkGreen} 'FALLA' {[Drawing.Color]::Firebrick} 'ENVIADO' {[Drawing.Color]::DarkOrange} default {[Drawing.Color]::SteelBlue} }
+        [void]$lvSECR.Items.Add($it)
+    }
+    Lv-Reiniciar $lvSECR
+}
+$btnGAcciones.Add_Click({Diag-Acciones})
+$lvG.Add_DoubleClick({Diag-Acciones})
+$lvG.Add_SelectedIndexChanged({
+    if($lvG.SelectedItems.Count -eq 1 -and $lvG.SelectedItems[0].Tag){
+        $d=$lvG.SelectedItems[0].Tag
+        $lblGObjetivo.Text="NCU$($d.NCU) / $($d.TCU) - $($d.Salud) - $($d.Alarmas)"
+    }else{$lblGObjetivo.Text='Selecciona un equipo para ver su detalle y preparar una accion.'}
 })
-$btnSECDel.Add_Click({
-    if ($lvSEC.SelectedIndices.Count -eq 0) { return }
-    $i = $lvSEC.SelectedIndices[0]
-    $l = @($script:SecPasos); $nuevo = @()
-    for ($k = 0; $k -lt $l.Count; $k++) { if ($k -ne $i) { $nuevo += ,$l[$k] } }
-    $script:SecPasos = @($nuevo)
-    Sec-PintarPasos
+$btnVolverDiag.Add_Click({
+    if($script:Ocupado){return}
+    if($script:DiagVolver){$cbPlanta.SelectedItem=$script:DiagVolver.planta;$txtIp.Text=$script:DiagVolver.ip;$txtPort.Text=$script:DiagVolver.puerto;$txtGTcus.Text=$script:DiagVolver.tcus;$script:DiagVolver=$null}
+    $tabs.SelectedTab=$tabG; $btnVolverDiag.Text='Diagnostico'
 })
-$btnSECUp.Add_Click({
-    if ($lvSEC.SelectedIndices.Count -eq 0) { return }
-    $i = $lvSEC.SelectedIndices[0]
-    if ($i -le 0) { return }
-    $l = @($script:SecPasos); $t = $l[$i - 1]; $l[$i - 1] = $l[$i]; $l[$i] = $t
-    $script:SecPasos = @($l); Sec-PintarPasos
-    if ($lvSEC.Items.Count -gt ($i - 1)) { $lvSEC.Items[$i - 1].Selected = $true }
-})
-$btnSECDown.Add_Click({
-    if ($lvSEC.SelectedIndices.Count -eq 0) { return }
-    $i = $lvSEC.SelectedIndices[0]
-    $l = @($script:SecPasos)
-    if ($i -ge ($l.Count - 1)) { return }
-    $t = $l[$i + 1]; $l[$i + 1] = $l[$i]; $l[$i] = $t
-    $script:SecPasos = @($l); Sec-PintarPasos
-    if ($lvSEC.Items.Count -gt ($i + 1)) { $lvSEC.Items[$i + 1].Selected = $true }
-})
-$btnSECGuardar.Add_Click({
-    if (@($script:SecPasos).Count -eq 0) { Con 'No hay receta que guardar.' ([System.Drawing.Color]::Orange); return }
-    $nom = "$($cbPlanta.SelectedItem)"
-    [void](Exportar-Json (Sec-AObjeto $nom $script:SecPasos) 'receta' 'Receta' 4 -bloque 'secuencia')
-})
+
+$btnSECAdd.Add_Click({ if ($script:Ocupado) { return }; $p=Sec-EditarPaso; if ($p) { $script:SecPasos += ,$p; Sec-PintarPasos } })
+$editarSEC={ if ($script:Ocupado -or $lvSEC.SelectedIndices.Count -ne 1) { return }; $i=$lvSEC.SelectedIndices[0]; $p=Sec-EditarPaso $script:SecPasos[$i]; if ($p) { $script:SecPasos[$i]=$p; Sec-PintarPasos } }
+$btnSECEditar.Add_Click($editarSEC); $lvSEC.Add_DoubleClick($editarSEC)
+$btnSECDel.Add_Click({ if ($script:Ocupado -or $lvSEC.SelectedIndices.Count -ne 1) { return }; $i=$lvSEC.SelectedIndices[0]; $script:SecPasos=@(for($k=0;$k -lt $script:SecPasos.Count;$k++){if($k -ne $i){$script:SecPasos[$k]}}); Sec-PintarPasos })
+foreach ($b in @($btnSECUp,$btnSECDown)) {
+    $dir=$(if($b -eq $btnSECUp){-1}else{1})
+    $b.Add_Click({
+        if ($script:Ocupado -or $lvSEC.SelectedIndices.Count -ne 1) { return }
+        $i=$lvSEC.SelectedIndices[0]; $j=$i+$dir
+        if($j -lt 0 -or $j -ge $script:SecPasos.Count){return}
+        $p=$script:SecPasos[$i]; $script:SecPasos[$i]=$script:SecPasos[$j]; $script:SecPasos[$j]=$p
+        Sec-PintarPasos; $lvSEC.Items[$j].Selected=$true
+    }.GetNewClosure())
+}
+$btnSECGuardar.Add_Click({ if($script:Ocupado){return}; [void](Exportar-Json (Sec-AObjeto 'Receta de campo' $script:SecPasos) 'receta' 'Receta' 4 -bloque 'secuencia') })
 $btnSECCargar.Add_Click({
-    $dlg = New-Object System.Windows.Forms.OpenFileDialog
-    $dlg.Filter = 'Recetas (*.json)|*.json|Todos (*.*)|*.*'
-    $dlg.InitialDirectory = $PSScriptRoot
-    if ($dlg.ShowDialog() -ne 'OK') { return }
+    if($script:Ocupado){return}; $dlg=New-Object Windows.Forms.OpenFileDialog; $dlg.Filter='Recetas (*.json)|*.json'
     try {
-        $obj = Get-Content $dlg.FileName -Raw | ConvertFrom-Json
-        $r = Sec-DeObjeto $obj
-        $script:SecPasos = @($r.pasos)
-        Sec-PintarPasos
-        Con "Receta cargada: $($r.nombre) - $(@($r.pasos).Count) pasos ($($dlg.FileName))" ([System.Drawing.Color]::LightGreen)
-        $v = Sec-Validar $script:SecPasos $VARIABLES
-        foreach ($e in @($v.errores)) { Con "  ERROR: $e" ([System.Drawing.Color]::Salmon) }
-        foreach ($a in @($v.avisos)) { Con "  AVISO: $a" ([System.Drawing.Color]::Orange) }
-    } catch { Con "No se ha podido cargar la receta: $_" ([System.Drawing.Color]::Salmon) }
+        if($dlg.ShowDialog() -ne 'OK'){return}
+        $r=Sec-DeObjeto (Get-Content $dlg.FileName -Raw | ConvertFrom-Json)
+        $v=Sec-Validar $r.pasos $VARIABLES
+        if(@($v.errores).Count){throw ($v.errores -join '; ')}
+        $script:SecPasos=@($r.pasos); Sec-PintarPasos
+    } catch { [void][Windows.Forms.MessageBox]::Show("$_",'Receta no valida') } finally { $dlg.Dispose() }
 })
+$btnSECPlantilla.Add_Click({
+    if($script:Ocupado){return}
+    $m=New-Object Windows.Forms.ContextMenuStrip
+    foreach($nombre in @('Comprobar AUTO','Volver a AUTO','Sincronizar reloj','Configurar desde preset de referencia','Sustituir TCU desde preset de referencia')){
+        $item=$m.Items.Add($nombre)
+        $item.Add_Click({
+            $l=@()
+            if($nombre -like '*preset*'){
+                if(-not $script:PresetRef){[void][Windows.Forms.MessageBox]::Show('Carga el preset de referencia en Flota / Auditoria.','Falta el preset');return}
+                foreach($v in $script:PresetRef){$l+=,@{tipo='variable';valor="$($v.nombre) = $($v.texto)"}}
+                $l+=,@{tipo='nvm';valor=''}
+                if($nombre -like 'Sustituir*'){$l+=,@{tipo='modo';valor='AUTO'}}
+            } elseif($nombre -eq 'Volver a AUTO'){$l=@(@{tipo='modo';valor='AUTO'})}
+            elseif($nombre -eq 'Sincronizar reloj'){$l=@(@{tipo='reloj';valor=''})}
+            else{$l=@(@{tipo='comprobar';valor='ESTADO 30001 modo (OFF/MANUAL/AUTO) = AUTO'})}
+            if($script:SecPasos.Count -and [Windows.Forms.MessageBox]::Show('Sustituir la receta actual por esta plantilla?','Plantilla','YesNo') -ne 'Yes'){return}
+            $script:SecPasos=$l; Sec-PintarPasos
+        }.GetNewClosure())
+    }
+    $m.Show($btnSECPlantilla,0,$btnSECPlantilla.Height)
+})
+$btnSECPrevia.Add_Click({
+    if($script:Ocupado){return}
+    try{
+        $cx=Params-Conexion; $trabajos=@(Trabajos-Planta $cx $null (Ncus-Filtro) (Parse-Seleccion $txtSECTcus.Text 'Secuencia') (Gw-Sel)); $plan=Sec-Plan $trabajos
+        $texto=@($plan | ForEach-Object {"NCU$($_.ncu) / TCU $($_.tcu) / $($_.ip):$($_.puerto)"}) -join "`r`n"
+        Sec-VerTexto 'Destinos de la receta' "$($plan.Count) TCUs. Cada linea es un destino real.`r`n`r`n$texto"
+    }catch{[void][Windows.Forms.MessageBox]::Show("$_",'Seleccion no valida')}
+})
+function Sec-VerTexto([string]$titulo,[string]$texto){
+    $d=New-Object Windows.Forms.Form; $d.Text=$titulo; $d.Size=New-Object Drawing.Size(720,500); $d.StartPosition='CenterParent'
+    $t=New-Object Windows.Forms.TextBox; $t.Multiline=$true; $t.ReadOnly=$true; $t.ScrollBars='Both'; $t.Dock='Fill'; $t.Text=$texto; $d.Controls.Add($t)
+    try{[void]$d.ShowDialog($form)}finally{$d.Dispose()}
+}
+$btnSECRetry.Add_Click({
+    if($script:Ocupado -or $script:SecSimulada){return}
+    $plan=@($script:SecDestinos | Where-Object {$_.estado -in @('FALLA','CANCELADO','PENDIENTE')} | ForEach-Object {$_.destino})
+    if(-not $plan.Count){[void][Windows.Forms.MessageBox]::Show('No hay destinos fallidos o pendientes.','Reintento');return}
+    Sec-VerTexto 'Revisar reintento' ("Se repetira la receta ENTERA, incluidos comandos ya enviados. Revisa antes el estado del equipo.`r`n`r`n" + (@($plan|ForEach-Object {"NCU$($_.ncu) / TCU $($_.tcu) / $($_.ip):$($_.puerto)"}) -join "`r`n"))
+    if([Windows.Forms.MessageBox]::Show('Repetir la receta original completa en estos destinos?','Reintento','YesNo','Warning') -ne 'Yes'){return}
+    $script:SecPasos=@($script:SecRecetaEjecutada); Sec-PintarPasos
+    Lanzar ({ Sec-Correr $false $plan }.GetNewClosure())
+})
+$btnSECCsv.Add_Click({ if($script:Ocupado -or -not $script:UltimoSec.Count){return}; [void](Exportar-Csv $script:UltimoSec 'receta_resultados' 'Resultados completos' -bloque 'secuencia') })
+$cbSECResultado.Add_SelectedIndexChanged({ if(-not $script:Ocupado){Sec-FiltrarResultados} })
 $btnSECSim.Add_Click({ Lanzar { Sec-Correr $true } })
 $btnSECEjec.Add_Click({ Lanzar { Sec-Correr $false } })
 
@@ -15958,6 +16199,8 @@ function Config-Guardar {
             planta = "$($cbPlanta.SelectedItem)"; ip = $txtIp.Text.Trim(); puerto = $txtPort.Text.Trim()
             timeout = $txtTo.Text.Trim(); reintentos = $txtRet.Text.Trim(); hsu = $txtHSlave.Text.Trim()
             tema = $script:TemaNombre; rollback = $chkRoll.Checked
+            secuencia = @{tcus=$txtSECTcus.Text; receta=(Sec-AObjeto 'Borrador' $script:SecPasos); filtro="$($cbSECResultado.SelectedItem)"}
+            salud = @($script:ChksSalud.Keys | Where-Object { $script:ChksSalud[$_].Checked })
             sat = @{tol=$txtSatTol.Text; dtcu=$txtSatDTcu.Text; drsu=$txtSatDRsu.Text; ctcu=$txtSatCTcu.Text; crsu=$txtSatCRsu.Text
                     vent=$txtSatVent.Text; cronint=$txtCronInt.Text; cronmax=$txtCronMax.Text; dur=$txtSatDur.Text; unid="$($cbSatUnid.SelectedItem)"
                     muestreo=$txtSatInt.Text; comms=$txtSatCom.Text
@@ -15965,7 +16208,7 @@ function Config-Guardar {
                     paslado=$txtSatPasLado.Text; pasmin=$txtSatPasMin.Text
                     pasambos=$chkSatPasAmbos.Checked}
         }
-        ConvertTo-Json $cfg | Set-Content $script:FichConfigLocal -Encoding UTF8
+        ConvertTo-Json $cfg -Depth 7 | Set-Content $script:FichConfigLocal -Encoding UTF8
     } catch {}
 }
 function Config-Restaurar {
@@ -15983,6 +16226,13 @@ function Config-Restaurar {
         if ("$($cfg.reintentos)") { $txtRet.Text = "$($cfg.reintentos)" }
         if ("$($cfg.hsu)") { $txtHSlave.Text = "$($cfg.hsu)" }
         if ($null -ne $cfg.rollback) { $chkRoll.Checked = [bool]$cfg.rollback }
+        if ($cfg.secuencia) {
+            $r = Sec-DeObjeto $cfg.secuencia.receta
+            $script:SecPasos = @($r.pasos); $txtSECTcus.Text = "$($cfg.secuencia.tcus)"
+            if ($cbSECResultado.Items.Contains("$($cfg.secuencia.filtro)")) { $cbSECResultado.SelectedItem = "$($cfg.secuencia.filtro)" }
+            Sec-PintarPasos
+        }
+        foreach ($k in $script:ChksSalud.Keys) { $script:ChksSalud[$k].Checked = (@($cfg.salud) -contains $k) }
         if ($cfg.sat) {
             if ("$($cfg.sat.tol)")  { $txtSatTol.Text  = "$($cfg.sat.tol)" }
             if ("$($cfg.sat.dtcu)") { $txtSatDTcu.Text = "$($cfg.sat.dtcu)" }
@@ -16075,6 +16325,7 @@ function Tema-Recoger($cont, $acc) {
 # boton se le queda corto el ancho fijo, se ensancha lo justo, sin llegar a
 # tocar el control que tenga a su derecha.
 function Tema-AjustarAnchos($cont) {
+    if ($cont -eq $tabSEC) { return }
     foreach ($c in $cont.Controls) {
         if ($c.Controls.Count -gt 0) { Tema-AjustarAnchos $c }
         $ajustable = ($c -is [System.Windows.Forms.Label]) -or ($c -is [System.Windows.Forms.CheckBox]) -or
@@ -16312,6 +16563,7 @@ function Anclaje-Para([hashtable]$g) {
 # largas que su pestana. Por eso esto se hace con la ventana ya mostrada y con
 # una guarda por si algun contenedor sigue sin medir lo que deberia.
 function Anclar-Contenedor($cont, $anchoRef) {
+    if ($cont -eq $tabSEC) { return }
     $ancho = $cont.ClientSize.Width
     $alto = $cont.ClientSize.Height
     $tablas = @($cont.Controls | Where-Object {
@@ -16349,6 +16601,7 @@ function Anclar-Contenedor($cont, $anchoRef) {
 # Red de seguridad: si algo ha acabado fuera de su contenedor, se mete dentro.
 # Mas vale un boton apretado contra el borde que un boton que no se ve.
 function Layout-Rescatar($cont) {
+    if ($cont -eq $tabSEC) { return }
     $ancho = $cont.ClientSize.Width; $alto = $cont.ClientSize.Height
     if ($ancho -lt 40 -or $alto -lt 40) { return }
     foreach ($c in $cont.Controls) {
@@ -17053,7 +17306,7 @@ if ($nav.Nodes.Count -gt 0 -and $nav.Nodes[0].Nodes.Count -gt 0) { $nav.Selected
 
 # Todas las tablas de resultados filtran y ordenan al pulsar su cabecera.
 foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvFWd, $lvSat, $lvND, $lvH, $lvN, $lvE, $lvI, $lvC, $lvB, $lvT,
-                     $lvAN, $lvFN, $lvAH, $lvFH, $lvRA, $lvRF, $lvRB, $lvIG, $lvBA, $lvGR, $lvSEC, $lvSECR, $lvLIM)) { Lv-Filtrable $tabla }
+                     $lvAN, $lvFN, $lvAH, $lvFH, $lvRA, $lvRF, $lvRB, $lvIG, $lvBA, $lvGR, $lvSECR, $lvLIM)) { Lv-Filtrable $tabla }
 
 # La cabecera de pestanas no se puede ocultar con una propiedad: no existe. Lo
 # que si se puede es sacarla fuera del panel, que recorta lo que se sale. La

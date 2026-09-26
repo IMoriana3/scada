@@ -2424,7 +2424,7 @@ $lvsCreadas = @([regex]::Matches($src, '\$(lv[A-Z][A-Za-z0-9]*) = New-Object Sys
 $iReg = $src.IndexOf('{ Lv-Filtrable $tabla }')
 $blqReg = $src.Substring([math]::Max(0, $iReg - 400), 400)
 # $lvX se registra por su cuenta: es la tabla de una ventana que se crea al vuelo
-$noReg = @($lvsCreadas | Where-Object { $_ -ne 'lvX' -and -not ($blqReg -match ('\$' + $_ + '[,)]')) })
+$noReg = @($lvsCreadas | Where-Object { $_ -notin @('lvX','lvSEC') -and -not ($blqReg -match ('\$' + $_ + '[,)]')) })
 Check 'tabla: hay tablas que registrar' ($lvsCreadas.Count -ge 20) $true
 Check 'tabla: todas filtrables, ninguna suelta' ($noReg -join ',') ''
 Check 'tabla: y la que se crea al vuelo tambien' ($src.Contains('Lv-Filtrable $lvX')) $true
@@ -3874,7 +3874,7 @@ foreach ($op in @('NVM', 'Sincronizar', 'Backup NCU', 'Modo', 'Clear', 'Stow', '
 Check 'pem: Pem-PorTcu existe' ($src.Contains('function Pem-PorTcu(')) $true
 # modo, clear, stow, quitar stow, test de motor y las recetas de la pestana
 # Ordenes secuenciales: todas recorren TCUs por el mismo sitio
-Check 'pem: y lo usan todas las acciones que recorren TCUs' ([regex]::Matches($src, [regex]::Escape('Pem-PorTcu $trabajos')).Count) 6
+Check 'pem: cinco acciones conservan el recorrido comun; recetas usan plan congelado' ([regex]::Matches($src, [regex]::Escape('Pem-PorTcu $trabajos')).Count) 5
 Check 'pem: la guardia de viento va por NCU' ($src.Contains('Guardia-Viento $tr.cx')) $true
 Check 'pem: los contadores del test viven en un hashtable' ($src.Contains('$c = @{pasa=0; falla=0; salta=0; lim=0}')) $true
 # los backups de planta llevan la NCU en el nombre: si no, la TCU 12 de la NCU3
@@ -4778,7 +4778,7 @@ Check 'sp: y por Zigbee directo' ($src.Contains('$nSp = Sp-Nota $r1[0]')) $true
 
 Write-Host ''
 Write-Host '== ordenes secuenciales: una receta que se ejecuta entera por TCU =='
-$pasoVar  = @{tipo='variable'; valor='40001 input_time_segundos = 30'}
+$pasoVar  = @{tipo='variable'; valor='41010 longitud [deg] = 30'}
 $pasoNvm  = @{tipo='nvm';      valor=''}
 $pasoAuto = @{tipo='modo';     valor='AUTO'}
 $receta   = @($pasoVar, $pasoNvm, $pasoAuto)
@@ -4789,7 +4789,7 @@ Check 'receta: un tipo que no existe no se inventa' ($null -eq (Sec-Tipo 'apagar
 Check 'receta: minutos sobre 10 TCUs' (Sec-Minutos $receta 10) 2
 Check 'receta: y una espera de 30 s por TCU se nota' (Sec-Minutos (@($pasoVar) + @(@{tipo='esperar'; valor='30'})) 10) 6
 # guardia de viento solo si algun paso mueve
-Check 'receta: escribir y guardar NVM no mueve nada' (Sec-Mueve @($pasoVar, $pasoNvm)) $false
+Check 'receta: escribir configuracion exige guardia de viento' (Sec-Mueve @($pasoVar, $pasoNvm)) $true
 Check 'receta: poner AUTO si mueve' (Sec-Mueve $receta) $true
 Check 'receta: un stow tambien' (Sec-Mueve @(@{tipo='stow'; valor='1'})) $true
 Check 'receta: solo leer no escribe' (Sec-Escribe @(@{tipo='leer'; valor='40001 input_time_segundos'})) $false
@@ -4828,14 +4828,14 @@ $eR = ''; try { [void](Sec-DeObjeto ([pscustomobject]@{tipo='inventario_tcu'})) 
 Check 'cargar: un JSON que no es receta se rechaza' $eR 'rechazado'
 # el fuente: como se ejecuta y quien puede
 $blqSec = $src.Substring($src.IndexOf('function Sec-Correr'), 3600)
-Check 'receta: se recorre TCU a TCU con el recorredor comun' ($blqSec.Contains('Pem-PorTcu $trabajos {')) $true
-Check 'receta: y una TCU que falla se para ahi' ($blqSec.Contains("Sec-Fila `$ncu `$tcu '(resto de la receta)' 'SALTADO'")) $true
-Check 'receta: guardia de viento solo si mueve' ($blqSec.Contains('(Sec-Mueve $pasos)')) $true
+Check 'receta: ejecuta destinos capturados' ($blqSec.Contains('Sec-RecetaTcu $destino $pasos $simular')) $true
+Check 'receta: ejecucion por TCU comprobada en test_sequences' ($src.Contains('function Sec-RecetaTcu')) $true
+Check 'receta: guardia antes de cada paso' ($src.Contains('Sec-PrepararPaso $destino $p $simular')) $true
 Check 'receta: con errores no se lanza' ($blqSec.Contains('La receta tiene errores y no se lanza')) $true
 Check 'receta: el boton que ejecuta es de tecnico' ($src.Contains('$btnGRAplicar, $btnSECEjec,')) $true
 Check 'receta: y el rol de lectura puede simularla' ($blqSec.Contains('Puedes SIMULARLA')) $true
 # SIMULAR no escribe: cada paso sale antes de tocar el equipo
-$blqPaso = $src.Substring($src.IndexOf('function Sec-EjecutarPaso'), 4200)
+$blqPaso = $src.Substring($src.IndexOf('function Sec-EjecutarPaso'), $src.IndexOf('function Sec-Esperar') - $src.IndexOf('function Sec-EjecutarPaso'))
 Check 'simular: todos los pasos salen antes de escribir' (([regex]::Matches($blqPaso, 'if \(\$simular\)')).Count -ge 7) $true
 Check 'gw diag: y la fila NCU ensena la nota con los gateways' (([regex]::Matches($src, '\(Diag-NotaNcu \$dnP?\)')).Count) 2
 $fI = Gw-FilaInventario '1' 1 '10.100.1.53' $lectT
