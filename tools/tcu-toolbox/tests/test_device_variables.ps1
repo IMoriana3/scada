@@ -25,8 +25,8 @@ $grid = [pscustomobject]@{Rows=@((Fila '30101 MainStatus' '1'))}
 if (@(Disp-Filas $grid $map.NCU $false).Count -ne 1) { throw 'La lectura no selecciona variables' }
 try { [void](Disp-Filas $grid $map.NCU $true); throw 'Permitio escribir solo lectura' }
 catch { if ("$_" -notmatch 'solo lectura') { throw } }
-$grid.Rows = @((Fila '40080 custom_position_timeout' '60'),(Fila '40080 custom_position_timeout' '60'))
-try { [void](Disp-Filas $grid $map.NCU $true); throw 'Permitio duplicados' }
+$grid.Rows = @((Fila '41017 WindLowTime_s' '60'),(Fila '41017 WindLowTime_s' '60'))
+try { [void](Disp-Filas $grid $map.HSU $true); throw 'Permitio duplicados' }
 catch { if ("$_" -notmatch 'repetida') { throw } }
 $grid.Rows = @((Fila '40004 force_sp_4' '1'))
 try { [void](Disp-Filas $grid $map.NCU $true); throw 'Permitio escribir un grupo por palabra completa' }
