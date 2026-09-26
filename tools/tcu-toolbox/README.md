@@ -94,6 +94,15 @@ funciones puras y el fuente contra el simulador. Los registros son del R8, y una
 NCU con firmware anterior no los tiene: contesta excepción, se dice, y la columna
 queda **vacía** en vez de inventarse un «sin ángulo».
 
+**Espacio de trabajo v11.91**
+
+- Consola plegada inicialmente: más altura para tablas y recetas. La última actividad permanece visible; el registro completo se conserva y se despliega con un botón. Se recuerda la preferencia.
+- Navegación por equipos con grupos plegables y filtro por nombre; conserva todas las pantallas y Ctrl+K.
+- Título visible de la pantalla actual y menú con filas más cómodas.
+- Diagnóstico con detalle y acciones al lado de la tabla en pantallas amplias. En portátiles se conserva el diálogo «Detalle y acciones» para dar prioridad a los resultados.
+- Las acciones conservan la identidad y conexión del equipo; preparar una acción no la ejecuta. Los datos importados sin alcance de conexión no habilitan acciones.
+- Sin dependencias nuevas, servicios en segundo plano ni consultas adicionales a equipos. Sigue siendo PowerShell/WinForms compatible con Windows PowerShell 5.1.
+
 **Mejoras de campo v11.90 — funcionalidad y presentación**
 
 - **Diagnóstico → acciones**: selecciona una fila y pulsa **Detalle y acciones** (también doble clic). Para una TCU abre Leer variables, Configurar, Copia de seguridad, Modo/alarmas/stow o Receta secuencial con su IP, gateway y esclavo, resueltos contra el alcance capturado al diagnosticar. El botón lateral vuelve al diagnóstico. Abrir una acción no la ejecuta. Los diagnósticos cargados de disco conservan el detalle, pero requieren un nuevo barrido para habilitar destinos operativos.
