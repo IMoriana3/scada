@@ -14,9 +14,6 @@ $script:Usuario=@{nombre='Prueba visual';usuario='test';rol='tecnico'}
 $script:SecPasos=@(@{tipo='variable';valor='41010 longitud [deg] = -1.5'},@{tipo='nvm';valor=''},@{tipo='modo';valor='AUTO'},@{tipo='comprobar';valor='ESTADO 30001 modo (OFF/MANUAL/AUTO) = AUTO'})
 $script:UltimoSec=@([pscustomobject]@{NCU='2';TCU='18';Paso='1. Escribir longitud';Estado='VERIFICADO';Nota='-1.4 -> -1.5'},[pscustomobject]@{NCU='2';TCU='18';Paso='2. Guardar NVM';Estado='ENVIADO';Nota='Persistencia tras reinicio pendiente'},[pscustomobject]@{NCU='2';TCU='19';Paso='1. Escribir longitud';Estado='FALLA';Nota='Equipo sin respuesta'})
 Sec-PintarPasos;Sec-FiltrarResultados
-# Contenedor no superior para renderizar anchos mayores que el escritorio del runner.
-# Los controles, eventos y layout son los reales; no se sustituye la interfaz.
-$form.TopLevel=$false
 $form.Show();[Windows.Forms.Application]::DoEvents()
 $tabs.SelectedTab=$tabSEC
 foreach($ancho in @(1024,1142,1450)){
@@ -57,17 +54,28 @@ if($filtradas -ne 4){throw "Filtro de navegación: $filtradas"}
 $txtNav.Text='';[Windows.Forms.Application]::DoEvents()
 if(@($nav.Nodes|ForEach-Object{$_.Nodes}).Count -ne $hojas){throw 'Se perdió una función'}
 if($diagSplit.Panel2Collapsed -ne ($diagSplit.Width -lt 980)){throw 'Panel de equipo no responde al ancho real'}
-if($form.Width -lt 1400){throw 'El runner ha limitado la prueba de pantalla amplia'}
+# Windows limita la ventana al escritorio de CI. El panel nativo se prueba
+# además en un contenedor fuera de pantalla, con ancho real de 1200 px.
+$hostDiag=New-Object Windows.Forms.Panel
+$hostDiag.Size=New-Object Drawing.Size(1200,650)
+$hostDiag.Controls.Add($diagLayout);$hostDiag.CreateControl();$diagLayout.PerformLayout()
+[Windows.Forms.Application]::DoEvents()
+$lvG.Items[0].Selected=$true;Diag-Detalle
+if($diagSplit.Width -lt 1100 -or $diagSplit.Panel2Collapsed){throw 'No se despliega el panel amplio'}
 if($txtDetalle.Text -notmatch 'Alarma motor'){throw 'Detalle no sigue la fila seleccionada'}
 if(@($script:BotonesDetalle|Where-Object{$_.Visible}).Count){throw 'Acciones habilitadas en datos sin conexión'}
 # Un destino capturado habilita acciones que preparan la pantalla sin leer red.
 $ipPrevia=$txtIp.Text;$puertoPrevio=$txtPort.Text
 $lvG.SelectedItems[0].Tag.trabajos=@(@{ncu='2';ip='10.20.30.40';cx=@{puerto=504;to=1500};tcus=@(18)})
 Diag-Detalle
+$bmp=New-Object Drawing.Bitmap($hostDiag.Width,$hostDiag.Height)
+$hostDiag.DrawToBitmap($bmp,(New-Object Drawing.Rectangle(0,0,$hostDiag.Width,$hostDiag.Height)))
+$bmp.Save((Join-Path $PSScriptRoot 'sequence-ui-diagnostico-amplio.png'));$bmp.Dispose()
 if(@($script:BotonesDetalle|Where-Object{$_.Visible}).Count -ne 5){throw 'Faltan acciones de TCU'}
 ($script:BotonesDetalle|Where-Object{$_.Tag -eq 'Leer variables'}).PerformClick()
 if($tabs.SelectedTab -ne $tabL -or $txtIp.Text -ne '10.20.30.40' -or $txtLTcus.Text -ne '18' -or $txtPort.Text -ne '504'){throw 'La acción perdió el destino capturado'}
 $btnVolverDiag.PerformClick()
 if($tabs.SelectedTab -ne $tabG -or $txtIp.Text -ne $ipPrevia -or $txtPort.Text -ne $puertoPrevio){throw 'Volver no restaura el contexto'}
+$tabG.Controls.Add($diagLayout);$hostDiag.Dispose()
 $form.Close();$form.Dispose()
 Write-Host 'Interfaz completa: arranque, geometria y contexto de diagnostico OK'
