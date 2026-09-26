@@ -50,7 +50,7 @@
       ".ov-card .v{font:700 25px/1.1 'Space Grotesk',sans-serif;margin-top:7px}",
       ".ov-card .s{font:11px/1.35 'IBM Plex Mono',monospace;color:#8093A4;margin-top:4px}",
       ".ov-good{color:#7be0a8}.ov-warn{color:#ffd35c}.ov-bad{color:#ff8a80}.ov-off{color:#aab6c2}",
-      ".ov-grid{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(300px,.75fr);gap:12px}",
+      ".ov-map-panel{background:#111922;border:1px solid #23303D;border-radius:12px;overflow:hidden;margin-bottom:12px}.ov-map-img{display:block;width:100%;height:260px;object-fit:contain;background:#081018;cursor:pointer}",\n      ".ov-grid{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(300px,.75fr);gap:12px}",
       ".ov-panel{background:#111922;border:1px solid #23303D;border-radius:12px;overflow:hidden}",
       ".ov-panel-h{display:flex;align-items:center;justify-content:space-between;padding:11px 13px;border-bottom:1px solid #23303D}",
       ".ov-panel-h b{font:700 13px 'Space Grotesk',sans-serif}.ov-panel-h span{font:11px 'IBM Plex Mono',monospace;color:#8093A4}",
@@ -73,6 +73,7 @@
     el.innerHTML =
       '<div class="ov-head"><div><div class="ov-title">Power Plant Overview</div><div class="ov-sub" id="ov-plant">Factiun · misma identidad y telemetría del SCADA</div></div><div class="ov-live"><i class="ov-dot" id="ov-dot"></i><span id="ov-live">SCADA desconectado</span></div></div>'+
       '<div class="ov-kpis" id="ov-kpis"></div>'+
+      '<div class="ov-map-panel"><div class="ov-panel-h"><b>Planta · mismo canvas SCADA</b><span>clic para operar</span></div><img id="ov-map-img" class="ov-map-img" alt="Vista del plano operativo"></div>'+
       '<div class="ov-grid"><div class="ov-panel"><div class="ov-panel-h"><b>Activos que requieren atención</b><span id="ov-issues-count">—</span></div><div id="ov-issues"></div></div>'+
       '<div class="ov-panel"><div class="ov-panel-h"><b>Estado de planta</b><span>live</span></div><div class="ov-bars" id="ov-bars"></div></div></div>'+
       '<div class="ov-actions"><button class="ov-btn" id="ov-map">Abrir plano de planta</button><button class="ov-btn" id="ov-connect">Conectar / reconectar SCADA</button><button class="ov-btn" id="ov-field">Modo campo</button></div>';
@@ -89,6 +90,7 @@
       b.onclick = function () { setActive(!active); };
     }
     document.getElementById("ov-map").onclick = function () { setActive(false); };
+    document.getElementById("ov-map-img").onclick = function () { setActive(false); };
     document.getElementById("ov-connect").onclick = async function () {
       try { if (typeof scadaStart === "function") await scadaStart(); }
       finally { render(); }
@@ -130,6 +132,14 @@
       "SCADA desconectado";
     var tag = document.querySelector(".header .tag");
     document.getElementById("ov-plant").textContent = (tag ? tag.textContent : (S.sc || "Planta"))+" · Overview operacional";
+    // Snapshot of the canonical SCADA canvas: no second plant renderer.
+    try {
+      if (typeof draw === "function") draw();
+      var srcCanvas = document.getElementById("cv");
+      if (srcCanvas && srcCanvas.width && srcCanvas.height) {
+        document.getElementById("ov-map-img").src = srcCanvas.toDataURL("image/png");
+      }
+    } catch(e) {}
 
     if (!data.length) {
       document.getElementById("ov-kpis").innerHTML =
