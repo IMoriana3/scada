@@ -17363,7 +17363,6 @@ $nav.Add_AfterSelect({
     } finally { $script:NavAplicando = $false }
 })
 
-# El arbol es un menu, no un explorador: siempre abierto.
 # Los grupos se pueden plegar; ninguna función se elimina.
 
 # Y al reves: cuando el codigo salta de pestana por su cuenta, que el arbol lo
@@ -17373,7 +17372,7 @@ $tabs.Add_SelectedIndexChanged({
     $t = $tabs.SelectedTab
     if ($null -eq $t -or -not $script:NavDe.ContainsKey($t)) { return }
     $script:NavAplicando = $true
-    try { $nav.SelectedNode = $script:NavDe[$t] } finally { $script:NavAplicando = $false }
+    try { $nav.SelectedNode = $script:NavDe[$t];$nav.SelectedNode.EnsureVisible() } finally { $script:NavAplicando = $false }
 })
 
 $nav.CollapseAll()
@@ -17412,6 +17411,8 @@ $lblActividad=New-Object Windows.Forms.Label
 $lblActividad.Text='Listo. Las operaciones y avisos aparecen aquí.';$lblActividad.AutoEllipsis=$true
 $lblActividad.TextAlign='MiddleLeft';$form.Controls.Add($lblActividad)
 $btnConsola.Add_Click({$script:ConsolaAbierta=-not $script:ConsolaAbierta;Layout-Principal})
+$lblNav=New-Object Windows.Forms.Label
+$lblNav.Text='Filtrar funciones';$lblNav.AutoSize=$false;$form.Controls.Add($lblNav)
 $txtNav=New-Object Windows.Forms.TextBox
 $form.Controls.Add($txtNav);$ttW.SetToolTip($txtNav,'Filtrar funciones por nombre o equipo. Vacía el campo para ver todas.')
 $lblVista=New-Object Windows.Forms.Label
@@ -17518,8 +17519,9 @@ function Layout-Principal {
         }
         $gbCon.Height=$y+34
         $top=$gbCon.Bottom+8;$pie=$alto-38;$izq=220;$anchoVista=$ancho-$izq-10
-        $txtNav.SetBounds(10,($top+4),198,24)
-        $nav.SetBounds(10,($top+38),198,($pie-$top-46))
+        $lblNav.SetBounds(10,$top,198,18)
+        $txtNav.SetBounds(10,($top+20),198,24)
+        $nav.SetBounds(10,($top+52),198,($pie-$top-60))
         $lblVista.SetBounds($izq,$top,$anchoVista,32)
         $hCon=0;if($script:ConsolaAbierta){$hCon=[math]::Min(190,[int](($pie-$top)*0.28))}
         $barraY=$pie-36-$hCon

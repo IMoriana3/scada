@@ -12,6 +12,8 @@ $script:Usuario=@{nombre='Prueba visual';usuario='test';rol='tecnico'}
 $script:SecPasos=@(@{tipo='variable';valor='41010 longitud [deg] = -1.5'},@{tipo='nvm';valor=''},@{tipo='modo';valor='AUTO'},@{tipo='comprobar';valor='ESTADO 30001 modo (OFF/MANUAL/AUTO) = AUTO'})
 $script:UltimoSec=@([pscustomobject]@{NCU='2';TCU='18';Paso='1. Escribir longitud';Estado='VERIFICADO';Nota='-1.4 -> -1.5'},[pscustomobject]@{NCU='2';TCU='18';Paso='2. Guardar NVM';Estado='ENVIADO';Nota='Persistencia tras reinicio pendiente'},[pscustomobject]@{NCU='2';TCU='19';Paso='1. Escribir longitud';Estado='FALLA';Nota='Equipo sin respuesta'})
 Sec-PintarPasos;Sec-FiltrarResultados
+# Permite probar tamaños mayores que el escritorio virtual del runner.
+$form.MaximumSize=New-Object Drawing.Size(1920,1200)
 $form.Show();[Windows.Forms.Application]::DoEvents()
 $tabs.SelectedTab=$tabSEC
 foreach($ancho in @(1024,1142,1450)){
@@ -49,7 +51,8 @@ $filtradas=@($nav.Nodes|ForEach-Object{$_.Nodes}).Count
 if($filtradas -ne 4){throw "Filtro de navegación: $filtradas"}
 $txtNav.Text='';[Windows.Forms.Application]::DoEvents()
 if(@($nav.Nodes|ForEach-Object{$_.Nodes}).Count -ne $hojas){throw 'Se perdió una función'}
-if($diagSplit.Panel2Collapsed){throw 'Falta panel de equipo en pantalla amplia'}
+if($diagSplit.Panel2Collapsed -ne ($diagSplit.Width -lt 980)){throw 'Panel de equipo no responde al ancho real'}
+if($form.Width -lt 1400){throw 'El runner ha limitado la prueba de pantalla amplia'}
 if($txtDetalle.Text -notmatch 'Alarma motor'){throw 'Detalle no sigue la fila seleccionada'}
 if(@($script:BotonesDetalle|Where-Object{$_.Visible}).Count){throw 'Acciones habilitadas en datos sin conexión'}
 $form.Close();$form.Dispose()
