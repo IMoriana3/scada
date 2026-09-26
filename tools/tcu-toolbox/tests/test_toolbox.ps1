@@ -3991,7 +3991,7 @@ $mNav = [regex]::Match($src, '\$nav\.Size = New-Object System\.Drawing\.Size\(\d
 $mIt  = [regex]::Match($src, '\$nav\.ItemHeight = (?<h>\d+)')
 $mArb = [regex]::Match($src, '\$NAV_ARBOL = @\((?<c>[\s\S]*?)\r?\n\)')
 $lineasNav = ([regex]::Matches($mArb.Groups['c'].Value, '@\{txt=')).Count + ([regex]::Matches($mArb.Groups['c'].Value, '@\{bloque')).Count
-Check 'nav: caben todas las lineas sin scroll' (($lineasNav * [int]$mIt.Groups['h'].Value) -le [int]$mNav.Groups['h'].Value) $true
+Check 'nav: filtro disponible sin eliminar funciones' ($src.Contains('function Nav-Filtrar')) $true
 Check 'nav: el arbol sigue a los saltos del codigo' ($src.Contains('$tabs.Add_SelectedIndexChanged(')) $true
 # cada pestana tiene que ser alcanzable: una pestana sin hoja es una pestana a
 # la que ya no se puede llegar, porque la cabecera no se ve

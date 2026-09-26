@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.90'
+$VERSION_TOOLBOX = '11.91'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -8048,6 +8048,7 @@ function Con([string]$t, $color) {
     # Si el usuario tiene texto seleccionado no se le quita ni se le mueve la
     # vista: en una operacion larga la consola escribe cada pocos segundos y
     # antes era imposible copiar nada sin que la siguiente linea se lo llevara.
+    if($lblActividad -and -not [string]::IsNullOrWhiteSpace($t)){$lblActividad.Text=$t.Trim();$ttW.SetToolTip($lblActividad,$t)}
     $selIni = $rtb.SelectionStart; $selLen = $rtb.SelectionLength
     $rtb.SelectionStart = $rtb.TextLength; $rtb.SelectionLength = 0
     $rtb.SelectionColor = $color
@@ -16288,6 +16289,7 @@ function Config-Guardar {
         $cfg = [ordered]@{
             planta = "$($cbPlanta.SelectedItem)"; ip = $txtIp.Text.Trim(); puerto = $txtPort.Text.Trim()
             timeout = $txtTo.Text.Trim(); reintentos = $txtRet.Text.Trim(); hsu = $txtHSlave.Text.Trim()
+            consola = $script:ConsolaAbierta
             tema = $script:TemaNombre; rollback = $chkRoll.Checked
             secuencia = @{tcus=$txtSECTcus.Text; receta=(Sec-AObjeto 'Borrador' $script:SecPasos); filtro="$($cbSECResultado.SelectedItem)"}
             salud = @($script:ChksSalud.Keys | Where-Object { $script:ChksSalud[$_].Checked })
@@ -16305,6 +16307,7 @@ function Config-Restaurar {
     if (-not (Test-Path $script:FichConfigLocal)) { return }
     try {
         $cfg = Get-Content $script:FichConfigLocal -Raw | ConvertFrom-Json
+        if($null -ne $cfg.consola){$script:ConsolaAbierta=[bool]$cfg.consola}
         if ($cfg.planta -and $cbPlanta.Items.Contains("$($cfg.planta)")) {
             $cbPlanta.SelectedItem = "$($cfg.planta)"   # autorrellena rangos/IP via SelectedIndexChanged
         }
@@ -17361,7 +17364,7 @@ $nav.Add_AfterSelect({
 })
 
 # El arbol es un menu, no un explorador: siempre abierto.
-$nav.Add_BeforeCollapse({ param($s, $e) $e.Cancel = $true })
+# Los grupos se pueden plegar; ninguna función se elimina.
 
 # Y al reves: cuando el codigo salta de pestana por su cuenta, que el arbol lo
 # refleje en vez de quedarse marcando otra cosa.
@@ -17373,7 +17376,8 @@ $tabs.Add_SelectedIndexChanged({
     try { $nav.SelectedNode = $script:NavDe[$t] } finally { $script:NavAplicando = $false }
 })
 
-$nav.ExpandAll()
+$nav.CollapseAll()
+$nav.Nodes[0].Expand()
 if ($nav.Nodes.Count -gt 0 -and $nav.Nodes[0].Nodes.Count -gt 0) { $nav.SelectedNode = $nav.Nodes[0].Nodes[0] }
 
 # Todas las tablas de resultados filtran y ordenan al pulsar su cabecera.
@@ -17399,37 +17403,141 @@ function Nav-OcultarCabecera {
 # Reparto explicito de la ventana: al limitar Windows el tamano a la pantalla
 # no se desplaza el contenido encima del arbol. Las vistas antiguas permiten
 # scroll; el editor de recetas se redistribuye con TableLayoutPanel.
+# Espacio de trabajo ligero: controles nativos, sin timers ni lecturas extra.
+$script:ConsolaAbierta=$false
+$btnConsola=New-Object Windows.Forms.Button
+$btnConsola.Text='Mostrar consola';$btnConsola.FlatStyle='Flat'
+$form.Controls.Add($btnConsola)
+$lblActividad=New-Object Windows.Forms.Label
+$lblActividad.Text='Listo. Las operaciones y avisos aparecen aquí.';$lblActividad.AutoEllipsis=$true
+$lblActividad.TextAlign='MiddleLeft';$form.Controls.Add($lblActividad)
+$btnConsola.Add_Click({$script:ConsolaAbierta=-not $script:ConsolaAbierta;Layout-Principal})
+$txtNav=New-Object Windows.Forms.TextBox
+$form.Controls.Add($txtNav);$ttW.SetToolTip($txtNav,'Filtrar funciones por nombre o equipo. Vacía el campo para ver todas.')
+$lblVista=New-Object Windows.Forms.Label
+$lblVista.Font=New-Object Drawing.Font('Segoe UI',12,[Drawing.FontStyle]::Bold)
+$lblVista.AutoEllipsis=$true;$lblVista.TextAlign='MiddleLeft';$form.Controls.Add($lblVista)
+$nav.ItemHeight=24;$nav.ShowPlusMinus=$true;$nav.BorderStyle='None'
+$txtNav.Add_TextChanged({Nav-Filtrar})
+function Nav-Filtrar {
+    $consulta=Buscar-Norm $txtNav.Text
+    $actual=$tabs.SelectedTab
+    $script:NavAplicando=$true;$nav.BeginUpdate()
+    try {
+        $nav.Nodes.Clear();$script:NavDe=@{}
+        foreach($b in $NAV_ARBOL){
+            $nb=New-Object Windows.Forms.TreeNode($b.bloque);$nb.NodeFont=$script:FuenteNeg
+            foreach($h in $b.hojas){
+                if($consulta -and (Buscar-Norm ($b.bloque+' '+$h.txt)).IndexOf($consulta) -lt 0){continue}
+                $nh=New-Object Windows.Forms.TreeNode($h.txt);$nh.Tag=$h;[void]$nb.Nodes.Add($nh)
+                if(-not $script:NavDe.ContainsKey($h.tab)){$script:NavDe[$h.tab]=$nh}
+            }
+            if($nb.Nodes.Count){[void]$nav.Nodes.Add($nb)}
+        }
+        if($consulta){$nav.ExpandAll()}
+        elseif($nav.Nodes.Count){$nav.Nodes[0].Expand()}
+        if($script:NavDe.ContainsKey($actual)){$nav.SelectedNode=$script:NavDe[$actual];$nav.SelectedNode.EnsureVisible()}
+    }finally{$nav.EndUpdate();$script:NavAplicando=$false}
+}
+function Vista-Titulo {
+    $t=$tabs.SelectedTab
+    if($t){$lblVista.Text=$t.Text}
+    if($nav.SelectedNode -and $nav.SelectedNode.Tag -and $nav.SelectedNode.Tag.tab -eq $t){$lblVista.Text=$nav.SelectedNode.Parent.Text+' / '+$nav.SelectedNode.Text}
+}
+$tabs.Add_SelectedIndexChanged({Vista-Titulo})
+$nav.Add_AfterSelect({Vista-Titulo})
+
+# El detalle comparte el mismo objeto de fila y alcance que el diálogo completo.
+$diagSplit=New-Object Windows.Forms.SplitContainer
+$diagSplit.Size=New-Object Drawing.Size(900,400)
+$diagSplit.Dock='Fill';$diagSplit.FixedPanel='Panel2';$diagSplit.Panel1MinSize=200
+$diagSplit.Panel2MinSize=220
+$diagSplit.SplitterDistance=650
+$diagLayout.Controls.Remove($lvG);$diagLayout.Controls.Add($diagSplit,0,4)
+$diagSplit.Panel1.Controls.Add($lvG)
+$detalleLayout=New-Object Windows.Forms.TableLayoutPanel
+$detalleLayout.Dock='Fill';$detalleLayout.Padding=New-Object Windows.Forms.Padding(8)
+$detalleLayout.ColumnCount=1;$detalleLayout.RowCount=3
+[void]$detalleLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('AutoSize')))
+[void]$detalleLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100)))
+[void]$detalleLayout.RowStyles.Add((New-Object Windows.Forms.RowStyle('AutoSize')))
+$diagSplit.Panel2.Controls.Add($detalleLayout)
+$lblDetalle=New-Object Windows.Forms.Label;$lblDetalle.Text='Equipo seleccionado';$lblDetalle.AutoSize=$true;$lblDetalle.Font=$script:FuenteNeg
+$detalleLayout.Controls.Add($lblDetalle)
+$txtDetalle=New-Object Windows.Forms.TextBox
+$txtDetalle.Multiline=$true;$txtDetalle.ReadOnly=$true;$txtDetalle.ScrollBars='Vertical';$txtDetalle.Dock='Fill';$txtDetalle.BorderStyle='None'
+$detalleLayout.Controls.Add($txtDetalle)
+$accionesDetalle=New-Object Windows.Forms.FlowLayoutPanel
+$accionesDetalle.AutoSize=$true;$accionesDetalle.Dock='Fill';$accionesDetalle.FlowDirection='TopDown';$accionesDetalle.WrapContents=$false
+$detalleLayout.Controls.Add($accionesDetalle)
+$script:BotonesDetalle=@()
+foreach($accion in @('Leer variables','Configurar variables','Copia de seguridad','Modo / alarmas / stow','Receta secuencial','Diagnostico NCU','Estaciones meteo')){
+    $b=New-Object Windows.Forms.Button;$b.Text=$accion;$b.Tag=$accion;$b.Width=216;$b.Height=28;$b.FlatStyle='Flat'
+    $b.Add_Click({param($s,$e)
+        if($script:Ocupado -or $lvG.SelectedItems.Count -ne 1){return}
+        $tag=$lvG.SelectedItems[0].Tag
+        try{if(-not $tag.trabajos){throw 'Repite el diagnóstico para recuperar el alcance de conexión.'};$destino=Diag-Objetivo $tag.fila $tag.trabajos;Diag-PrepararAccion $destino $s.Tag}
+        catch{$txtDetalle.AppendText("`r`n$_")}
+    })
+    $accionesDetalle.Controls.Add($b);$script:BotonesDetalle+=,$b
+}
+function Diag-Detalle {
+    if($null -eq $txtDetalle){return}
+    foreach($b in $script:BotonesDetalle){$b.Visible=$false}
+    $txtDetalle.Text='Selecciona una fila para consultar el equipo y sus acciones. Doble clic abre el detalle completo.'
+    $lblDetalle.Text='Equipo seleccionado'
+    if($lvG.SelectedItems.Count -ne 1 -or -not $lvG.SelectedItems[0].Tag){return}
+    $tag=$lvG.SelectedItems[0].Tag;$fila=$tag.fila
+    $lblDetalle.Text="NCU$($fila.NCU) · $($fila.TCU) · $($fila.Salud)"
+    $txtDetalle.Text=@($fila.PSObject.Properties|ForEach-Object{"$($_.Name): $($_.Value)"}) -join "`r`n"
+    try{
+        if(-not $tag.trabajos){throw 'Datos sin conexión capturada. Repite el diagnóstico para habilitar acciones.'}
+        $destino=Diag-Objetivo $fila $tag.trabajos
+        $acciones=@('Diagnostico NCU','Estaciones meteo')
+        if($destino.tipo -eq 'TCU'){$acciones=@('Leer variables','Configurar variables','Copia de seguridad','Modo / alarmas / stow','Receta secuencial')}
+        foreach($b in $script:BotonesDetalle){$b.Visible=$acciones -contains $b.Tag}
+    }catch{$txtDetalle.AppendText("`r`n`r`n$_")}
+}
+$lvG.Add_SelectedIndexChanged({Diag-Detalle})
+# En portátiles pequeños el diálogo conserva todo el detalle; la tabla tiene prioridad.
+$diagSplit.Add_SizeChanged({$diagSplit.Panel2Collapsed=($diagSplit.Width -lt 980)})
+$btnGAcciones.Text='Detalle y acciones'
+Diag-Detalle
 $script:ConexionControles = @($gbCon.Controls | Sort-Object Left)
 function Layout-Principal {
     if ($script:LayoutEnCurso) { return }
     $script:LayoutEnCurso=$true
     try {
-        $ancho=$form.ClientSize.Width; $alto=$form.ClientSize.Height
+        $ancho=$form.ClientSize.Width;$alto=$form.ClientSize.Height
         $gbCon.SetBounds(10,8,($ancho-20),58)
-        $x=10; $y=18
-        foreach ($c in $script:ConexionControles) {
+        $x=10;$y=18
+        foreach($c in $script:ConexionControles){
             $c.Anchor='Top,Left'
-            if ($x+$c.Width+10 -gt $gbCon.Width) { $x=10; $y+=34 }
-            $c.Location=New-Object Drawing.Point($x,$y)
-            $x+=$c.Width+6
+            if($x+$c.Width+10 -gt $gbCon.Width){$x=10;$y+=34}
+            $c.Location=New-Object Drawing.Point($x,$y);$x+=$c.Width+6
         }
         $gbCon.Height=$y+34
-        $top=$gbCon.Bottom+6; $pie=$alto-38; $disponible=$pie-$top-8
-        $hVista=[int]($disponible*0.62)
-        $nav.SetBounds(10,$top,176,$disponible)
-        $pnlCuerpo.SetBounds(192,$top,($ancho-202),$hVista)
-        $rtb.SetBounds(192,($pnlCuerpo.Bottom+8),($ancho-202),($pie-$pnlCuerpo.Bottom-16))
+        $top=$gbCon.Bottom+8;$pie=$alto-38;$izq=220;$anchoVista=$ancho-$izq-10
+        $txtNav.SetBounds(10,($top+4),198,24)
+        $nav.SetBounds(10,($top+38),198,($pie-$top-46))
+        $lblVista.SetBounds($izq,$top,$anchoVista,32)
+        $hCon=0;if($script:ConsolaAbierta){$hCon=[math]::Min(190,[int](($pie-$top)*0.28))}
+        $barraY=$pie-36-$hCon
+        $pnlCuerpo.SetBounds($izq,($top+38),$anchoVista,($barraY-$top-44))
+        $btnConsola.SetBounds($izq,$barraY,132,28)
+        $btnConsola.Text=$(if($script:ConsolaAbierta){'Ocultar consola'}else{'Mostrar consola'})
+        $lblActividad.SetBounds(($izq+140),$barraY,($anchoVista-140),28)
+        $rtb.Visible=$script:ConsolaAbierta
+        $rtb.SetBounds($izq,($barraY+32),$anchoVista,([math]::Max(1,$hCon-4)))
         $x=$ancho-10
-        foreach($b in @($btnLog,$btnInforme,$btnUsuarios,$btnLimpiar,$btnBuscar)) {
-            $x-=$b.Width; $b.Location=New-Object Drawing.Point($x,$pie); $x-=6
-        }
-        $btnVolverDiag.SetBounds(10,$pie,174,28)
-        $libre=[math]::Max(80,$x-198)
-        $lblLog.SetBounds(192,($pie+5),$libre,20);$lblLog.AutoEllipsis=$true
-        $pbProg.SetBounds(192,($pie+5),([int]($libre*0.45)),18)
-        $lblProg.SetBounds(($pbProg.Right+6),($pie+5),([int]($libre*0.55)-6),20)
+        foreach($b in @($btnLog,$btnInforme,$btnUsuarios,$btnLimpiar,$btnBuscar)){$x-=$b.Width;$b.Location=New-Object Drawing.Point($x,$pie);$x-=6}
+        $btnVolverDiag.SetBounds(10,$pie,198,28)
+        $libre=[math]::Max(40,$x-$izq-6)
+        $lblLog.SetBounds($izq,($pie+5),$libre,20);$lblLog.AutoEllipsis=$true
+        $pbProg.SetBounds($izq,($pie+5),([int]($libre*0.45)),18)
+        $lblProg.SetBounds(($pbProg.Right+6),($pie+5),([math]::Max(1,[int]($libre*0.55)-6)),20)
         Nav-OcultarCabecera
-    } finally { $script:LayoutEnCurso=$false }
+    }finally{$script:LayoutEnCurso=$false}
 }
 $form.Add_Resize({ if($script:LayoutListo){Layout-Principal} })
 
@@ -17441,6 +17549,7 @@ $form.Add_Shown({
         foreach ($tp in $tabs.TabPages) {
             if ($tp -ne $tabSEC -and $tp -ne $tabG) { $tp.AutoScroll=$true; $tp.AutoScrollMinSize=New-Object Drawing.Size(914,390) }
         }
+        Nav-Filtrar;Vista-Titulo
         $script:LayoutListo=$true
         Layout-Principal
         # lo ultimo: Layout-Rescatar mide contenedores y esto deja el TabControl

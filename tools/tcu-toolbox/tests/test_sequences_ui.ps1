@@ -1,4 +1,4 @@
-# Vista real WinForms, sin login ni llamadas a equipos. Incluye el layout final.
+﻿# Vista real WinForms, sin login ni llamadas a equipos. Incluye el layout final.
 $ErrorActionPreference='Stop'
 $raiz=Split-Path $PSScriptRoot -Parent
 $source=Join-Path $raiz 'TCU_Toolbox.ps1'
@@ -30,11 +30,27 @@ foreach($ancho in @(1024,1142,1450)){
 $script:UltimoDiag=@([pscustomobject]@{NCU='2';GW='504';TCU='18';Salud='ALARMA';Modo='AUTO';Tilt='15.5';Objetivo='22.5';Dif='7';SoC='87';Edad_s='12';Alarmas='Alarma motor enclavada'})
 Trabajos-ComboNcus;Diag-Refrescar;$tabs.SelectedTab=$tabG
 $form.PerformLayout();[Windows.Forms.Application]::DoEvents()
-if($btnGAcciones.Parent -ne $diagBarras[3] -or $lvG.Parent -ne $diagLayout){throw 'Diagnostico sin layout adaptable'}
+if($btnGAcciones.Parent -ne $diagBarras[3] -or $lvG.Parent -ne $diagSplit.Panel1){throw 'Diagnostico sin layout adaptable'}
 [Windows.Forms.Application]::DoEvents();$lvG.Items[0].Selected=$true
 if($null -eq $lvG.Items[0].Tag){throw 'La fila de diagnostico perdio su identidad'}
 $bmp=New-Object Drawing.Bitmap($form.Width,$form.Height)
 $form.DrawToBitmap($bmp,(New-Object Drawing.Rectangle(0,0,$form.Width,$form.Height)))
 $bmp.Save((Join-Path $PSScriptRoot 'sequence-ui-diagnostico.png'));$bmp.Dispose()
+# La consola conserva su texto al plegar y libera espacio real para trabajar.
+$antes=$pnlCuerpo.Height;$rtb.Text='registro conservado';$btnConsola.PerformClick()
+[Windows.Forms.Application]::DoEvents()
+if(-not $rtb.Visible -or $pnlCuerpo.Height -ge $antes){throw 'Consola no se despliega'}
+$btnConsola.PerformClick()
+if($rtb.Text -ne 'registro conservado' -or $rtb.Visible){throw 'Consola pierde contenido'}
+# Filtrar no ejecuta ni pierde pantallas; borrar recupera todas las hojas.
+$hojas=@($NAV_ARBOL|ForEach-Object{$_.hojas}).Count
+$txtNav.Text='firmware';[Windows.Forms.Application]::DoEvents()
+$filtradas=@($nav.Nodes|ForEach-Object{$_.Nodes}).Count
+if($filtradas -ne 4){throw "Filtro de navegación: $filtradas"}
+$txtNav.Text='';[Windows.Forms.Application]::DoEvents()
+if(@($nav.Nodes|ForEach-Object{$_.Nodes}).Count -ne $hojas){throw 'Se perdió una función'}
+if($diagSplit.Panel2Collapsed){throw 'Falta panel de equipo en pantalla amplia'}
+if($txtDetalle.Text -notmatch 'Alarma motor'){throw 'Detalle no sigue la fila seleccionada'}
+if(@($script:BotonesDetalle|Where-Object{$_.Visible}).Count){throw 'Acciones habilitadas en datos sin conexión'}
 $form.Close();$form.Dispose()
 Write-Host 'Interfaz completa: arranque, geometria y contexto de diagnostico OK'
