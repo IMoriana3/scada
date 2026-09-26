@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.88'
+$VERSION_TOOLBOX = '11.89'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -5028,16 +5028,16 @@ $DISP_MAP['NCU']['30002 HsuGlobal'] = @{addr=30002; tipo='u16hex'; acc='R'}
 $DISP_MAP['NCU']['30100 DIGITAL_INPUT'] = @{addr=30100; tipo='u16hex'; acc='R'}
 $DISP_MAP['NCU']['30101 MainStatus'] = @{addr=30101; tipo='u16hex'; acc='R'}
 $DISP_MAP['NCU']['30104 DATE_TIME'] = @{addr=30104; tipo='u32'; acc='R'}
-$DISP_MAP['NCU']['40001 force_sp_1'] = @{addr=40001; tipo='u16hex'; acc='RW'}
-$DISP_MAP['NCU']['40002 force_sp_2'] = @{addr=40002; tipo='u16hex'; acc='RW'}
-$DISP_MAP['NCU']['40003 force_sp_3'] = @{addr=40003; tipo='u16hex'; acc='RW'}
-$DISP_MAP['NCU']['40004 force_sp_4'] = @{addr=40004; tipo='u16hex'; acc='RW'}
-$DISP_MAP['NCU']['40005 force_sp_5'] = @{addr=40005; tipo='u16hex'; acc='RW'}
-$DISP_MAP['NCU']['40006 force_sp_6'] = @{addr=40006; tipo='u16hex'; acc='RW'}
-$DISP_MAP['NCU']['40007 force_sp_7'] = @{addr=40007; tipo='u16hex'; acc='RW'}
-$DISP_MAP['NCU']['40070 auto_mode'] = @{addr=40070; tipo='u16hex'; acc='W'}
-$DISP_MAP['NCU']['40071 manual_mode'] = @{addr=40071; tipo='u16hex'; acc='W'}
-$DISP_MAP['NCU']['40080 custom_position_timeout'] = @{addr=40080; tipo='u16'; acc='RW'}
+# Las ordenes de grupo y su timeout solo se escriben desde Grupos NCU:
+# alli se conservan los otros bits, se aplica la guardia de viento y se relee.
+$DISP_MAP['NCU']['40001 force_sp_1'] = @{addr=40001; tipo='u16hex'; acc='R'}
+$DISP_MAP['NCU']['40002 force_sp_2'] = @{addr=40002; tipo='u16hex'; acc='R'}
+$DISP_MAP['NCU']['40003 force_sp_3'] = @{addr=40003; tipo='u16hex'; acc='R'}
+$DISP_MAP['NCU']['40004 force_sp_4'] = @{addr=40004; tipo='u16hex'; acc='R'}
+$DISP_MAP['NCU']['40005 force_sp_5'] = @{addr=40005; tipo='u16hex'; acc='R'}
+$DISP_MAP['NCU']['40006 force_sp_6'] = @{addr=40006; tipo='u16hex'; acc='R'}
+$DISP_MAP['NCU']['40007 force_sp_7'] = @{addr=40007; tipo='u16hex'; acc='R'}
+$DISP_MAP['NCU']['40080 custom_position_timeout'] = @{addr=40080; tipo='u16'; acc='R'}
 $DISP_MAP['HSU']['30000 ProductId'] = @{addr=30000; tipo='u16'; acc='R'}
 $DISP_MAP['HSU']['30002 Alarms1'] = @{addr=30002; tipo='u16'; acc='R'}
 $DISP_MAP['HSU']['30003 WindSpeed_mps'] = @{addr=30003; tipo='f32'; acc='R'}
@@ -5181,6 +5181,7 @@ function Disp-Puertos($o, [string]$equipo) {
 }
 
 function Disp-Ejecutar([string]$equipo, [bool]$escritura, $grid, $salida) {
+    if ($escritura -and -not (Puede 'tecnico')) { throw 'Escribir variables requiere rol tecnico o admin.' }
     $defs = Disp-Filas $grid $DISP_MAP[$equipo] $escritura
     if ($defs.Count -eq 0) { throw 'Elige al menos una variable en la tabla.' }
     $alcance = Disp-Objetivos $equipo
@@ -5190,7 +5191,8 @@ function Disp-Ejecutar([string]$equipo, [bool]$escritura, $grid, $salida) {
     if ($escritura) {
         $detalle = @($defs | ForEach-Object { "$($_.nombre) = $($_.valor)  (reg $($_.def.addr), $($_.def.tipo))" }) -join "`r`n"
         $destinos = @($objs | ForEach-Object { "$($_.etiqueta) $($_.ip):$($_.puerto) esclavo $($_.unit)" }) -join "`r`n"
-        $r = [System.Windows.Forms.MessageBox]::Show("Destinos ($($objs.Count)):`r`n$destinos`r`n`r`nVariables:`r`n$detalle`r`n`r`n¿Confirmas la escritura?", "Escribir variables $equipo", 'YesNo', 'Warning')
+        $aviso = $(if ($equipo -eq 'HSU') { "`r`n`r`nATENCION: los limites funcionales HSU no estan validados en esta tabla. Los umbrales de viento pueden afectar la proteccion de los seguidores. Comprueba el valor contra el mapa aprobado antes de confirmar." } else { '' })
+        $r = [System.Windows.Forms.MessageBox]::Show("Destinos ($($objs.Count)):`r`n$destinos`r`n`r`nVariables:`r`n$detalle$aviso`r`n`r`n¿Confirmas la escritura?", "Escribir variables $equipo", 'YesNo', 'Warning')
         if ($r -ne 'Yes') { return }
     }
     $salida.Items.Clear(); $salida.Columns.Clear()
@@ -5215,26 +5217,33 @@ function Disp-Ejecutar([string]$equipo, [bool]$escritura, $grid, $salida) {
         }
         foreach ($d in $defs) {
             if (Chequear-Cancelado) { break }
-            $resultado = ''
+            $resultado = ''; $previo = ''; $via = ''
             try {
                 if (-not $pt) { throw "sin conexion o respuesta: $err" }
                 if ($escritura) {
-                    try { FC16-Escribir ([byte]$o.unit) $d.esc.addr ([int[]]$d.esc.palabras) }
+                    if ($d.def.acc -ne 'W') { $previo = Leer-Decodificado ([byte]$o.unit) $d.def }
+                    try { FC16-Escribir ([byte]$o.unit) $d.esc.addr ([int[]]$d.esc.palabras); $via = 'FC16' }
                     catch {
                         # Solo la excepcion explicita IllegalFunction permite
                         # probar FC06: ante timeout no se repite la escritura.
                         if ($d.esc.palabras.Count -ne 1 -or "$_" -notmatch 'IllegalFunction') { throw }
                         FC06-Escribir ([byte]$o.unit) $d.esc.addr ([int]$d.esc.palabras[0])
+                        $via = 'FC06 (FC16: IllegalFunction)'
                     }
-                    if ($d.def.acc -eq 'W') { $resultado = 'Enviado (solo escritura; sin verificacion)' }
+                    if ($d.def.acc -eq 'W') { $resultado = "Enviado por $via; sin verificacion posible (solo escritura)" }
                     else {
                         $actual = FC03-Leer ([byte]$o.unit) (Dir-Trama $d.def.addr) $d.esc.palabras.Count
                         $ok = $true
                         for ($i=0; $i -lt $actual.Count; $i++) { if ($actual[$i] -ne $d.esc.esperado[$i]) { $ok = $false } }
-                        $resultado = $(if ($ok) { 'Verificado: ' + (Leer-Decodificado ([byte]$o.unit) $d.def) } else { 'ERROR: lectura posterior no coincide' })
+                        $resultado = $(if ($ok) { "Verificado por ${via}: " + (Leer-Decodificado ([byte]$o.unit) $d.def) } else { "ERROR: lectura posterior no coincide ($via)" })
                     }
                 } else { $resultado = Leer-Decodificado ([byte]$o.unit) $d.def }
             } catch { $resultado = "ERROR: $_"; Con "$($o.etiqueta) $($d.nombre): $resultado" ([System.Drawing.Color]::Salmon) }
+            if ($escritura) {
+                Auditar $(if ($resultado -like 'ERROR:*') { 'VARIABLE_DISPOSITIVO_FALLO' } else { 'VARIABLE_DISPOSITIVO' }) `
+                    "$($o.etiqueta) [$($o.ip):$pt]" "$($o.unit)" `
+                    "$equipo $($d.nombre): $previo -> $($d.valor); $resultado"
+            }
             $it = New-Object System.Windows.Forms.ListViewItem("$($o.etiqueta) [$($o.ip):$pt]")
             foreach ($x in @($d.nombre,"$($d.def.addr) / $($d.def.tipo)",$resultado)) { [void]$it.SubItems.Add("$x") }
             if ($resultado -like 'ERROR:*') { $it.ForeColor = [System.Drawing.Color]::Firebrick }
@@ -5246,6 +5255,7 @@ function Disp-Ejecutar([string]$equipo, [bool]$escritura, $grid, $salida) {
     }
 }
 
+$script:BotonesDispEscribir = @()
 function Disp-NuevaPestana([string]$equipo, [bool]$escritura) {
     $page = New-Object System.Windows.Forms.TabPage
     $page.Text = $(if ($escritura) { 'Escribir variable' } else { 'Leer variable' })
@@ -5265,6 +5275,7 @@ function Disp-NuevaPestana([string]$equipo, [bool]$escritura) {
     $accion.BackColor = $(if ($escritura) { [System.Drawing.Color]::FromArgb(0,120,60) } else { [System.Drawing.Color]::FromArgb(0,90,160) })
     $accion.ForeColor = [System.Drawing.Color]::White
     [void]$page.Controls.Add($accion)
+    if ($escritura) { $script:BotonesDispEscribir += $accion }
     $grid = New-Object System.Windows.Forms.DataGridView
     $grid.Location = New-Object System.Drawing.Point(10,45); $grid.Size = New-Object System.Drawing.Size(898,150)
     $grid.AllowUserToAddRows = $true; $grid.RowHeadersVisible = $true; $grid.RowHeadersWidth = 24
@@ -17154,7 +17165,7 @@ function Dialogo-Login($usuarios) {
 # Botones que cada rol NO puede usar. Todo lo que escriba en un equipo es de
 # tecnico para arriba; lo que toca identidad de red, firmware o topologia, solo
 # de administrador.
-$BOTONES_TECNICO = @($btnEscribir, $btnNvm, $btnCsvTcu, $btnFallidas, $btnSync, $btnFwPrep, $btnGRAplicar, $btnSECEjec,
+$BOTONES_TECNICO = @($script:BotonesDispEscribir) + @($btnEscribir, $btnNvm, $btnCsvTcu, $btnFallidas, $btnSync, $btnFwPrep, $btnGRAplicar, $btnSECEjec,
                      $btnLIMAplicar, $btnLIMQuitar,
                      $btnPMotor, $btnPModo, $btnPClear, $btnPStow, $btnPUnstow, $btnPComisSet,
                      $btnHUmb, $btnHReloj, $btnHNieve, $btnHNvm)
