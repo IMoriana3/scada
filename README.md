@@ -41,6 +41,10 @@ La NCU actúa como **gateway Modbus** de todos sus TCU en un único espacio de d
 - `simulated` — genera ángulos solares reales con pvlib (backtracking incluido), SoC con ciclo día/noche, TCU offline y uno con eje bloqueado. Permite desarrollar el frontend y validar todo el pipeline **sin hardware**.
 - `modbus` — driver real con pymodbus async; mapa de registros configurable en YAML.
 
+## Field Mode móvil
+
+`field.html` es la superficie PWA/offline para inspección de campo. Consume `/assets/live` por `asset_id`, captura ángulo físico/checklist/Voc-Isc/strings/fotos y guarda el bundle de inspección localmente en IndexedDB. **No contiene física solar ni un segundo modelo de planta.** La sincronización servidor queda bloqueada hasta aprobar un contrato de almacenamiento de inspecciones; ver [docs/FIELD_MODE.md](docs/FIELD_MODE.md).
+
 ## Funcionalidades
 
 ### Histórico y disponibilidad medida (El Burgo 23003)
