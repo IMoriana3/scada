@@ -34,7 +34,7 @@ $i12 = $src.IndexOf('function Lv-Pasa'); $f12 = $src.IndexOf('function Lv-Filtra
 $i16 = $src.IndexOf('function Prog-Texto'); $f16 = $src.IndexOf('$script:ProgTotal = 0;')
 $i15 = $src.IndexOf('function Hsu-EsclavoDe'); $f15 = $src.IndexOf('#  Cierre post-actualizacion (interfaz)')
 $i13 = $src.IndexOf('function Esclavos-Barrido'); $f13 = $src.IndexOf('function Params-Hsu')
-$i14 = $src.IndexOf('function Buscar-Norm'); $f14 = $src.IndexOf('function Buscador-Abrir')
+$i14 = $src.IndexOf('function Acciones-Inventario'); $f14 = $src.IndexOf('function Buscador-Abrir')
 # el modo de una TCU: leerlo antes de escribirlo es lo que evita tocar las que ya estan
 $i18 = $src.IndexOf('function Modo-Actual'); $f18 = $src.IndexOf('function Guardia-Viento')
 $logica += "`n" + $src.Substring($i18, $f18 - $i18)

@@ -5,7 +5,7 @@ $t=$null;$e=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile($source,[ref]$t,[ref]$e)
 if($e.Count){throw ($e|Out-String)}
 $names=@('Sec-Tipo','Sec-Texto','Sec-Minutos','Sec-Mueve','Sec-Escribe','Sec-Def','Sec-Condicion','Sec-Coincide','Sec-Validar','Sec-AObjeto','Sec-DeObjeto',
- 'Sec-Plan','Sec-RecetaTcu','Sec-PrepararPaso','Sec-EjecutarPaso','Diag-Objetivo','Fila-Tipo','Plan-Segmentos',
+ 'Diag-OrigenFila','Sec-Plan','Sec-RecetaTcu','Sec-PrepararPaso','Sec-EjecutarPaso','Diag-Objetivo','Fila-Tipo','Plan-Segmentos',
  'Aud-Igual','Aud-Hex','Valor-A-Escritura','Dir-Trama','Entero-Estricto','Parse-RealFinito','Normalizar-Decimal','F32-A-Palabras','Comparar-Escritura')
 foreach($name in $names){$f=$ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true); . ([scriptblock]::Create($f[0].Extent.Text))}
 $a=$src.IndexOf('$SEC_TIPOS =');$b=$src.IndexOf('function Sec-Tipo',$a)
@@ -37,6 +37,15 @@ $dest=Diag-Objetivo ([pscustomobject]@{NCU='2';TCU='1'}) $trabajos
 Check 'diagnostico conserva IP' $dest.ip '10.0.0.2'
 Check 'diagnostico conserva gateway' $dest.puerto 504
 try{[void](Diag-Objetivo ([pscustomobject]@{NCU='9';TCU='1'}) $trabajos);throw 'acepto NCU ausente'}catch{if("$_" -notmatch 'destino unico'){throw}}
+# Barridos parciales no reasignan el destino de filas anteriores.
+$script:DiagOrigen=New-Object 'System.Collections.Generic.Dictionary[object,object]'
+$script:DiagPrevias=@();$script:Ctx=@{diagnostico=@{trabajos=$trabajos}}
+$vieja=[pscustomobject]@{NCU='2';TCU='1'}
+[void](Diag-OrigenFila $vieja)
+$script:DiagPrevias=@($vieja);$script:Ctx.diagnostico.trabajos=@(@{ncu='2';ip='10.99.99.99';cx=@{puerto=504};tcus=@(1)})
+Check 'fila anterior conserva su alcance' ((Diag-Objetivo $vieja (Diag-OrigenFila $vieja)).ip) '10.0.0.2'
+$script:DiagOrigen.Clear();[void]$script:Ctx.Remove('diagnostico')
+Check 'copia de disco sin destino operativo' ($null -eq (Diag-OrigenFila $vieja)) True
 # Comparacion real tras escribir: no depende del formateo del decimal.
 $script:words=@();$script:writes=0
 function FC16-Escribir($unit,$addr,$words){$script:words=@($words);$script:writes++}

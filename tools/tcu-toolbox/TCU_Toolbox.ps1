@@ -1357,6 +1357,24 @@ $NCU_RW = @(
 # no se le guarda el NVM ni se la pone en AUTO: se para su secuencia y las
 # demas siguen. Al reves -escribir en las 100 y luego guardar NVM en las 100-
 # una TCU que fallo al escribir se llevaria un NVM de lo que ya tenia.
+function Buscar-Norm([string]$t) {
+    $x = "$t".ToLower()
+    foreach ($par in @(@('á','a'), @('é','e'), @('í','i'), @('ó','o'), @('ú','u'), @('ü','u'), @('ñ','n'))) {
+        $x = $x.Replace($par[0], $par[1])
+    }
+    return $x
+}
+
+# Casan todas las palabras del filtro, en cualquier orden y en cualquier parte
+# del texto: "csv flota" encuentra "Flota / INVENTARIO -> CSV". Pura.
+function Buscar-Casa([string]$texto, [string]$filtro) {
+    $f = (Buscar-Norm $filtro).Trim()
+    if ($f -eq '') { return $true }
+    $t = Buscar-Norm $texto
+    foreach ($w in @($f -split '\s+')) { if ($w -ne '' -and -not $t.Contains($w)) { return $false } }
+    return $true
+}
+
 $SEC_TIPOS = @(
     @{tipo='variable'; n='Escribir variable';           param='nombre = valor'; escribe=$true;  mueve=$false; seg=1.2}
     @{tipo='nvm';      n='Guardar en NVM';              param='';               escribe=$true;  mueve=$false; seg=1.5}
@@ -8565,6 +8583,8 @@ function Ctx-Sello([string]$planta, $cx, $trabajos) {
 }
 
 $script:Ctx = @{}
+$script:DiagOrigen = New-Object 'System.Collections.Generic.Dictionary[object,object]'
+$script:DiagPrevias = @()
 # el informe habla de "bloques" y el sello va por operacion: aqui se cruzan.
 # 'bat' sale del diagnostico, no de una lectura propia.
 $CTX_DE_BLOQUE = @{diag='diagnostico'; bat='diagnostico'; lectura='lectura'
@@ -8572,6 +8592,7 @@ $CTX_DE_BLOQUE = @{diag='diagnostico'; bat='diagnostico'; lectura='lectura'
 function Ctx-Guardar([string]$clave, $cx, $trabajos) {
     $script:Ctx[$clave] = Ctx-Sello (Nombre-Planta) $cx $trabajos
     $script:Ctx[$clave].trabajos = [Management.Automation.PSSerializer]::Deserialize([Management.Automation.PSSerializer]::Serialize(@($trabajos), 12))
+    if ($clave -eq 'diagnostico') { $script:DiagPrevias = @($script:UltimoDiag) }
 }
 # Si esa operacion no se ha corrido en esta sesion (datos cargados de Trabajos,
 # por ejemplo) no hay nada que congelar y se cae a lo que digan los cuadros.
@@ -10882,6 +10903,17 @@ $script:DiagNivel = 'todo'
 # Repinta la lista del diagnostico desde el ultimo resultado aplicando los
 # filtros de vista (nivel de equipo, NCU y salud) - no relanza ninguna lectura.
 # Los exports CSV/JSON siempre llevan el diagnostico completo, sin estos filtros.
+# Un barrido solo de HSU puede convivir con TCUs del barrido anterior.
+# Cada objeto de resultado conserva SU alcance, aunque cambie la seleccion.
+function Diag-OrigenFila($fila) {
+    if ($script:DiagOrigen.ContainsKey($fila)) { return $script:DiagOrigen[$fila] }
+    if (-not $script:Ctx.ContainsKey('diagnostico')) { return $null }
+    foreach ($previa in $script:DiagPrevias) { if ([object]::ReferenceEquals($previa,$fila)) { return $null } }
+    $origen=$script:Ctx['diagnostico'].trabajos
+    if ($origen) { $script:DiagOrigen[$fila]=$origen }
+    return $origen
+}
+
 function Diag-Refrescar {
     $fNcu = "$($cbGVerNcu.SelectedItem)"
     $niv = "$($script:DiagNivel)"
@@ -10903,7 +10935,7 @@ function Diag-Refrescar {
             'ALARMA'  { $item.ForeColor = [System.Drawing.Color]::Firebrick }
             'OFFLINE' { $item.ForeColor = [System.Drawing.Color]::Gray }
         }
-        $item.Tag = $d
+        $item.Tag = @{fila=$d; trabajos=(Diag-OrigenFila $d)}
         $lvG.Items.Add($item) | Out-Null
         $n++
     }
@@ -10959,8 +10991,9 @@ function Diag-PrepararAccion($destino, [string]$accion) {
 }
 function Diag-Acciones {
     if($script:Ocupado -or $lvG.SelectedItems.Count -ne 1){return}
-    $fila=$lvG.SelectedItems[0].Tag
-    if(-not $fila){return}
+    $tag=$lvG.SelectedItems[0].Tag
+    if(-not $tag){return}
+    $fila=$tag.fila
     $d=New-Object Windows.Forms.Form; $d.Text="Diagnostico - NCU$($fila.NCU) / $($fila.TCU)"
     $d.Size=New-Object Drawing.Size(700,440); $d.StartPosition='CenterParent'; $d.Font=$form.Font
     $layout=New-Object Windows.Forms.TableLayoutPanel; $layout.Dock='Fill'; $layout.RowCount=2; $layout.ColumnCount=1
@@ -10971,8 +11004,8 @@ function Diag-Acciones {
     $detalle.Text = @($fila.PSObject.Properties | ForEach-Object {"$($_.Name): $($_.Value)"}) -join "`r`n"
     $layout.Controls.Add($detalle); $barra=Sec-Barra $layout
     try {
-        if(-not $script:Ctx.ContainsKey('diagnostico') -or -not $script:Ctx['diagnostico'].trabajos){throw 'Datos sin alcance de conexion capturado: repite el diagnostico para habilitar acciones.'}
-        $destino=Diag-Objetivo $fila $script:Ctx['diagnostico'].trabajos
+        if(-not $tag.trabajos){throw 'Datos sin alcance de conexion capturado: repite el diagnostico para habilitar acciones.'}
+        $destino=Diag-Objetivo $fila $tag.trabajos
         $acciones=@('Diagnostico NCU','Estaciones meteo')
         if($destino.tipo -eq 'TCU'){$acciones=@('Leer variables','Configurar variables','Copia de seguridad','Modo / alarmas / stow','Receta secuencial')}
         foreach($a in $acciones){
@@ -11252,7 +11285,7 @@ function Trabajo-Cargar {
     $def = $TRABAJO_TIPOS["$($o.tipo)"]
     if (-not $def) { Con "Tipo de trabajo desconocido: $($o.tipo)" ([System.Drawing.Color]::Orange); return }
     Set-Variable -Name $def.var -Scope Script -Value $filas
-    if ($o.tipo -in @('diag','comm')) { [void]$script:Ctx.Remove('diagnostico') }
+    if ($o.tipo -in @('diag','comm')) { [void]$script:Ctx.Remove('diagnostico'); $script:DiagOrigen.Clear(); $script:DiagPrevias=@($filas) }
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Cargado: $($def.titulo) de $($o.fecha) - $($o.planta) - $(@($filas).Count) filas$(if ("$($o.nota)" -ne '') { "  ($($o.nota))" })" ([System.Drawing.Color]::LightGreen)
     switch ("$($o.tipo)") {
@@ -14695,7 +14728,7 @@ $btnGAcciones.Add_Click({Diag-Acciones})
 $lvG.Add_DoubleClick({Diag-Acciones})
 $lvG.Add_SelectedIndexChanged({
     if($lvG.SelectedItems.Count -eq 1 -and $lvG.SelectedItems[0].Tag){
-        $d=$lvG.SelectedItems[0].Tag
+        $d=$lvG.SelectedItems[0].Tag.fila
         $lblGObjetivo.Text="NCU$($d.NCU) / $($d.TCU) - $($d.Salud) - $($d.Alarmas)"
     }else{$lblGObjetivo.Text='Selecciona un equipo para ver su detalle y preparar una accion.'}
 })
@@ -16626,24 +16659,6 @@ function Layout-Rescatar($cont) {
 # tenerlo. Lleva a la pestana y deja el boton marcado para que lo pulses tu.
 
 # Normaliza para buscar sin acentos ni mayusculas. Pura: se prueba sin ventana.
-function Buscar-Norm([string]$t) {
-    $x = "$t".ToLower()
-    foreach ($par in @(@('á','a'), @('é','e'), @('í','i'), @('ó','o'), @('ú','u'), @('ü','u'), @('ñ','n'))) {
-        $x = $x.Replace($par[0], $par[1])
-    }
-    return $x
-}
-
-# Casan todas las palabras del filtro, en cualquier orden y en cualquier parte
-# del texto: "csv flota" encuentra "Flota / INVENTARIO -> CSV". Pura.
-function Buscar-Casa([string]$texto, [string]$filtro) {
-    $f = (Buscar-Norm $filtro).Trim()
-    if ($f -eq '') { return $true }
-    $t = Buscar-Norm $texto
-    foreach ($w in @($f -split '\s+')) { if ($w -ne '' -and -not $t.Contains($w)) { return $false } }
-    return $true
-}
-
 # Recorre la ventana y saca una entrada por cada boton y casilla con texto,
 # anotando de que pestana y de que grupo cuelga.
 function Acciones-Inventario($cont, [string]$ruta = '') {
