@@ -206,9 +206,17 @@ from(bucket: "{BUCKET}")
     for table in tables:
         for rec in table.records:
             v = rec.values
+            # Live meteo must expose the physical fields the collector
+            # ALREADY stores. Hiding the extended-HSU irradiance here made the
+            # API poorer than its own Influx source and forced UIs to pretend
+            # the measurement did not exist.
             out.append({k: v.get(k) for k in
                         ("ncu", "hsu", "wind_speed", "wind_direction",
-                         "snow_level", "wind_level", "alarm_wind", "alarm_snow")})
+                         "snow_level", "wind_level", "alarm_wind", "alarm_snow",
+                         "ghi", "poa_tracking", "poa_diffuse",
+                         "go_to_diffuse", "irradiance_mismatch",
+                         "diffuse_algorithm_error", "panel_voltage",
+                         "battery_voltage")})
     return {"hsus": out}
 
 
