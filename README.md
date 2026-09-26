@@ -41,6 +41,18 @@ La NCU actúa como **gateway Modbus** de todos sus TCU en un único espacio de d
 - `simulated` — genera ángulos solares reales con pvlib (backtracking incluido), SoC con ciclo día/noche, TCU offline y uno con eje bloqueado. Permite desarrollar el frontend y validar todo el pipeline **sin hardware**.
 - `modbus` — driver real con pymodbus async; mapa de registros configurable en YAML.
 
+## Superficies operativas
+
+La UI queda separada en **Overview → Planta → Activo**, siempre sobre la misma
+identidad y la misma telemetría. `overview-ui.js` resume `/assets/live` sin
+recalcular `health` y reutiliza el mismo canvas de planta. `field-mode.js`
+añade inspección offline ligada por `asset_id`, con checklist, notas, fotos
+en IndexedDB, snapshot live y export JSON. Hasta definir un backend Operations,
+las inspecciones declaran `sync_status=LOCAL_ONLY`.
+
+El contrato y los UNKNOWN deliberados están en
+[`docs/SCADA-OVERVIEW-FIELD-MODE.md`](docs/SCADA-OVERVIEW-FIELD-MODE.md).
+
 ## Funcionalidades
 
 ### Histórico y disponibilidad medida (El Burgo 23003)
