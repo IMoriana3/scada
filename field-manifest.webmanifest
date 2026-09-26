@@ -1,0 +1,12 @@
+{
+  "name": "Factiun Field Mode",
+  "short_name": "Factiun Field",
+  "start_url": "./field.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#07111d",
+  "theme_color": "#07111d",
+  "icons": [
+    {"src":"favicon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}
+  ]
+}

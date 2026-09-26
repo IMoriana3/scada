@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07111d">
+<link rel="manifest" href="field-manifest.webmanifest">
+<link rel="icon" href="favicon.svg">
+<title>Factiun · Field Mode</title>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#e8eef5;background:#07111d}
+*{box-sizing:border-box} body{margin:0;background:#07111d;color:#e8eef5}
+header{position:sticky;top:0;z-index:5;background:#07111dee;backdrop-filter:blur(10px);border-bottom:1px solid #233247;padding:12px 16px}
+h1{font-size:18px;margin:0} small,.muted{color:#91a2b7}.wrap{max-width:980px;margin:auto;padding:14px}
+.card{background:#0d1a28;border:1px solid #233247;border-radius:14px;padding:14px;margin-bottom:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px}
+.tile{background:#091522;border:1px solid #223145;border-radius:12px;padding:10px}.tile b{display:block;font-size:20px;margin-top:3px}
+label{display:block;font-size:12px;color:#b7c5d5;margin:8px 0 4px}
+input,select,textarea,button{font:inherit} input,select,textarea{width:100%;background:#08131f;color:#e8eef5;border:1px solid #30445f;border-radius:9px;padding:10px}
+textarea{min-height:90px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button,.btn{border:1px solid #31506e;background:#10283c;color:#eff8ff;border-radius:10px;padding:10px 13px;font-weight:650;cursor:pointer}
+button.primary{background:#0a6b77;border-color:#1591a1}.danger{background:#4a2023;border-color:#7c3438}
+.ok{color:#55d98b}.warn{color:#ffd166}.alarm{color:#ff7474}.offline{color:#a8b0ba}.badge{display:inline-block;padding:3px 7px;border-radius:999px;border:1px solid #40546b;font-size:11px}
+hr{border:0;border-top:1px solid #223145;margin:14px 0}.check{display:grid;grid-template-columns:1fr auto;gap:8px;padding:8px 0;border-bottom:1px solid #17283a}
+.photo{width:110px;height:90px;object-fit:cover;border-radius:8px;border:1px solid #30445f}.photos{display:flex;gap:8px;flex-wrap:wrap}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;border-bottom:1px solid #223145;padding:7px 5px}
+footer{padding:24px 14px 40px;text-align:center;color:#71849a;font-size:12px}
+#net.offline{color:#ffca5c}#net.online{color:#55d98b}
+@media(max-width:600px){.wrap{padding:9px}.card{border-radius:10px;padding:11px}button{flex:1}}
+</style>
+</head>
+<body>
+<header>
+  <div class="row" style="justify-content:space-between">
+    <div><h1>🛠️ Factiun Field Mode</h1><small>asset_id · offline-first · solo lectura SCADA</small></div>
+    <span id="net" class="badge">—</span>
+  </div>
+</header>
+<div class="wrap">
+  <section class="card">
+    <div class="row"><b>1 · Conexión e identidad</b><span id="sourceBadge" class="badge">sin datos</span></div>
+    <label>API SCADA</label>
+    <div class="row"><input id="apiUrl" style="flex:1" placeholder="http://localhost:8000"><button id="loadAssets" class="primary">Cargar activos</button></div>
+    <label>Tracker / TCU</label>
+    <select id="assetSelect"><option value="">— carga activos —</option></select>
+    <div id="identity" class="muted" style="font-size:12px;margin-top:7px"></div>
+  </section>
+
+  <section class="card">
+    <b>2 · Foto viva del activo</b>
+    <div id="liveTiles" class="grid" style="margin-top:10px"></div>
+    <div class="row" style="margin-top:10px"><button id="refreshLive">↻ Refrescar</button><small id="liveTime"></small></div>
+  </section>
+
+  <section class="card">
+    <b>3 · Ángulo físico / inclinómetro</b>
+    <p class="muted">El sensor mide magnitud. El signo lo confirma el técnico para no mezclar la convención física con la de la TCU.</p>
+    <div class="grid">
+      <div><label>Ángulo físico firmado (°)</label><input id="physicalTilt" type="number" step="0.1"></div>
+      <div><label>Última magnitud sensor (°)</label><input id="sensorMag" readonly></div>
+      <div><label>Δ físico − encoder (°)</label><input id="deltaEncoder" readonly></div>
+      <div><label>Δ físico − objetivo (°)</label><input id="deltaTarget" readonly></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="measureTilt" class="primary">📐 Medir inclinación</button>
+      <button id="sensorPlus">Usar +magnitud</button>
+      <button id="sensorMinus">Usar −magnitud</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <b>4 · Checklist tracker</b>
+    <div id="checklist"></div>
+  </section>
+
+  <section class="card">
+    <b>5 · Medidas eléctricas de campo</b>
+    <p class="muted">Se registran como evidencia. Aquí NO se reimplementa el modelo solar de SolarGPT.</p>
+    <div class="grid">
+      <div><label>Voc string (V)</label><input id="voc" type="number" step="0.1"></div>
+      <div><label>Isc string (A)</label><input id="isc" type="number" step="0.01"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <b>6 · Comparador relativo de strings / MPPT</b>
+    <p class="muted">Comparación estadística simultánea contra la mediana. No calcula irradiancia esperada.</p>
+    <div class="row">
+      <select id="stringUnit" style="width:auto"><option value="A">Corriente (A)</option><option value="kW">Potencia (kW, normaliza W/módulo)</option></select>
+      <button id="addString">+ string</button><button id="compareStrings">Comparar</button>
+    </div>
+    <div id="stringInputs"></div><div id="stringResults"></div>
+  </section>
+
+  <section class="card">
+    <b>7 · Evidencias</b>
+    <label>Notas</label><textarea id="notes" placeholder="Defecto, acción realizada, pieza sustituida…"></textarea>
+    <label>Fotos</label><input id="photos" type="file" accept="image/*" capture="environment" multiple>
+    <div id="photoList" class="photos" style="margin-top:9px"></div>
+  </section>
+
+  <section class="card">
+    <b>8 · Cierre</b>
+    <p class="muted">Las inspecciones quedan en IndexedDB del dispositivo. La subida al servidor está deliberadamente deshabilitada hasta aprobar un almacén/contrato de inspecciones.</p>
+    <div class="row">
+      <button id="saveDraft">💾 Guardar borrador</button>
+      <button id="finish" class="primary">✅ Cerrar inspección</button>
+      <button id="exportJson">⬇️ Exportar JSON</button>
+      <button id="newInspection">Nueva</button>
+    </div>
+    <div id="saveState" class="muted" style="margin-top:8px"></div>
+  </section>
+</div>
+<footer>Factiun Field Mode v1 · SCADA de solo lectura · inspección local por asset_id</footer>
+<script src="field-mode.js"></script>
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const CHECKS=[
+ ["visual_general","Inspección visual general"],
+ ["module_fixing","Módulos / fijaciones"],
+ ["torque_tube","Viga de torsión / alineación"],
+ ["piles_support","Hincas / soportes / coronas"],
+ ["motor_drive","Motor / reductora / slew"],
+ ["dampers","Amortiguadores / rodamientos"],
+ ["tcu","TCU / carcasa / fijación"],
+ ["cabling","Cableado / MC4 / sujeciones"],
+ ["dc_switch","Seccionador / alimentación"],
+ ["obstructions","Obstáculos / vegetación / suciedad"],
+ ["corrosion","Corrosión / daño mecánico"],
+ ["safety","Condición segura para devolver a servicio"]
+];
+let assets=[], selected=null, telemetry=null, inspection=null, sensorMagnitude=null;
+
+const DBP=new Promise((resolve,reject)=>{
+  const q=indexedDB.open("factiun-field-v1",1);
+  q.onupgradeneeded=()=>q.result.createObjectStore("inspections",{keyPath:"inspection_id"});
+  q.onsuccess=()=>resolve(q.result); q.onerror=()=>reject(q.error);
+});
+async function dbPut(x){const db=await DBP;return new Promise((res,rej)=>{const t=db.transaction("inspections","readwrite");t.objectStore("inspections").put(x);t.oncomplete=()=>res();t.onerror=()=>rej(t.error)})}
+
+function net(){ $("net").textContent=navigator.onLine?"● online":"● offline"; $("net").className="badge "+(navigator.onLine?"online":"offline") }
+addEventListener("online",net);addEventListener("offline",net);net();
+
+function api(){return $("apiUrl").value.trim().replace(/\/$/,"")}
+function cacheAssets(v){localStorage.setItem("field_last_assets",JSON.stringify({t:Date.now(),assets:v}))}
+function cachedAssets(){try{return JSON.parse(localStorage.getItem("field_last_assets")||"null")}catch{return null}}
+
+async function loadAssets(){
+  const u=api(); if(u)localStorage.setItem("scadaApiUrl",u);
+  try{
+    const r=await fetch(u+"/assets/live",{cache:"no-store"});if(!r.ok)throw Error("HTTP "+r.status);
+    const j=await r.json();assets=j.trackers||[];cacheAssets(assets);$("sourceBadge").textContent="SCADA live";
+  }catch(e){
+    const c=cachedAssets(); if(!c) return alert("Sin SCADA ni caché local: "+e.message);
+    assets=c.assets||[];$("sourceBadge").textContent="caché offline";
+  }
+  assets.sort((a,b)=>String(a.layout_key||a.asset_id).localeCompare(String(b.layout_key||b.asset_id)));
+  $("assetSelect").innerHTML='<option value="">— seleccionar —</option>'+assets.map(a=>'<option value="'+a.asset_id+'">'+escapeHtml(a.layout_key||a.asset_id)+'</option>').join("");
+}
+function escapeHtml(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+
+function selectAsset(id){
+  selected=assets.find(a=>a.asset_id===id)||null; telemetry=selected;
+  if(!selected){$("identity").textContent="";return}
+  $("identity").textContent="asset_id: "+selected.asset_id+" · layout: "+(selected.layout_key||"—")+" · NCU "+(selected.ncu||"—")+" · TCU "+(selected.tcu||"—");
+  inspection=FactiunField.newInspection(selected, telemetry);
+  renderLive();renderInspection();updateDeltas();
+}
+function tile(label,v,unit=""){return '<div class="tile"><small>'+label+'</small><b>'+escapeHtml(v??"—")+(unit?'<span style="font-size:11px"> '+unit+'</span>':"")+'</b></div>'}
+function renderLive(){
+  if(!telemetry){$("liveTiles").innerHTML="";return}
+  $("liveTiles").innerHTML=
+    tile("Health",telemetry.health)+tile("Encoder",telemetry.tilt_angle,"°")+
+    tile("Objetivo",telemetry.target_angle,"°")+tile("SoC",telemetry.soc,"%")+
+    tile("Motor",telemetry.motor_current,"A")+tile("Panel",telemetry.panel_voltage,"V")+
+    tile("Comms",telemetry.comms_age_s,"s")+tile("Estado",telemetry.main_state);
+  $("liveTime").textContent="snapshot "+new Date().toLocaleTimeString();
+}
+async function refreshLive(){
+  if(!selected)return;
+  try{const r=await fetch(api()+"/assets/live",{cache:"no-store"});const j=await r.json();assets=j.trackers||[];cacheAssets(assets);
+    telemetry=assets.find(a=>a.asset_id===selected.asset_id)||telemetry;selected=telemetry||selected;
+    if(inspection)inspection.telemetry_snapshot=telemetry;renderLive();updateDeltas();$("sourceBadge").textContent="SCADA live";
+  }catch(e){$("sourceBadge").textContent="sin red · snapshot local"}
+}
+
+function renderChecklist(){
+ $("checklist").innerHTML=CHECKS.map(([k,l])=>'<div class="check"><span>'+l+'</span><select data-check="'+k+'" style="width:auto"><option value="">—</option><option value="ok">OK</option><option value="defect">DEFECTO</option><option value="na">N/A</option></select></div>').join("");
+ document.querySelectorAll("[data-check]").forEach(el=>el.onchange=()=>{if(inspection){inspection.checklist[el.dataset.check]=el.value;autosave()}});
+}
+function renderInspection(){
+ $("physicalTilt").value=inspection?.measurements?.physical_tilt_deg??"";
+ $("voc").value=inspection?.measurements?.voc_v??"";$("isc").value=inspection?.measurements?.isc_a??"";
+ $("notes").value=inspection?.notes||"";
+ document.querySelectorAll("[data-check]").forEach(el=>el.value=inspection?.checklist?.[el.dataset.check]||"");
+ renderPhotos();
+}
+function updateDeltas(){
+ const p=FactiunField.num($("physicalTilt").value);
+ $("deltaEncoder").value=FactiunField.angleDeviation(p,telemetry?.tilt_angle)?.toFixed(2)??"";
+ $("deltaTarget").value=FactiunField.angleDeviation(p,telemetry?.target_angle)?.toFixed(2)??"";
+ if(inspection)inspection.measurements.physical_tilt_deg=p;
+}
+async function requestMotion(){
+ if(typeof DeviceMotionEvent!=="undefined"&&typeof DeviceMotionEvent.requestPermission==="function"){
+   const p=await DeviceMotionEvent.requestPermission();if(p!=="granted")throw Error("Permiso de movimiento denegado");
+ }
+ return new Promise((resolve,reject)=>{
+   const timeout=setTimeout(()=>{removeEventListener("devicemotion",handler);reject(Error("Sin lectura del sensor"))},5000);
+   function handler(e){
+    const g=e.accelerationIncludingGravity;if(!g||g.x==null||g.y==null||g.z==null)return;
+    clearTimeout(timeout);removeEventListener("devicemotion",handler);
+    const mag=Math.atan2(Math.hypot(g.x,g.y),Math.abs(g.z))*180/Math.PI;resolve(mag);
+   } addEventListener("devicemotion",handler);
+ });
+}
+async function measureTilt(){try{sensorMagnitude=await requestMotion();$("sensorMag").value=sensorMagnitude.toFixed(2)}catch(e){alert(e.message)}}
+function useSensor(sign){if(sensorMagnitude==null)return;$("physicalTilt").value=(sign*sensorMagnitude).toFixed(2);updateDeltas();autosave()}
+
+let stringRows=[];
+function addStringRow(){stringRows.push({label:"S"+(stringRows.length+1),value:null,modules:null});renderStringInputs()}
+function renderStringInputs(){
+ $("stringInputs").innerHTML=stringRows.map((r,i)=>'<div class="row" style="margin-top:7px"><input data-slabel="'+i+'" value="'+escapeHtml(r.label)+'" style="width:90px"><input data-sval="'+i+'" type="number" step="0.01" placeholder="valor" style="flex:1"><input data-smods="'+i+'" type="number" step="1" placeholder="módulos" style="width:100px"><button data-sdel="'+i+'">×</button></div>').join("");
+ document.querySelectorAll("[data-slabel]").forEach(x=>x.oninput=()=>stringRows[+x.dataset.slabel].label=x.value);
+ document.querySelectorAll("[data-sval]").forEach(x=>x.oninput=()=>stringRows[+x.dataset.sval].value=FactiunField.num(x.value));
+ document.querySelectorAll("[data-smods]").forEach(x=>x.oninput=()=>stringRows[+x.dataset.smods].modules=FactiunField.num(x.value));
+ document.querySelectorAll("[data-sdel]").forEach(x=>x.onclick=()=>{stringRows.splice(+x.dataset.sdel,1);renderStringInputs()});
+}
+function compareStrings(){
+ const out=FactiunField.compareStrings(stringRows,$("stringUnit").value);
+ if(inspection)inspection.strings=out;
+ $("stringResults").innerHTML='<table><tr><th>String</th><th>Valor norm.</th><th>Δ mediana</th><th>Estado</th></tr>'+out.map(r=>'<tr><td>'+escapeHtml(r.label)+'</td><td>'+Number(r.normalized).toFixed(2)+'</td><td>'+(r.deviation==null?"—":(r.deviation*100).toFixed(1)+" %")+'</td><td class="'+r.status+'">'+r.status.toUpperCase()+'</td></tr>').join("")+'</table>';
+ autosave();
+}
+
+async function fileToDataUrl(file){
+ const img=await createImageBitmap(file);const max=1280,s=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement("canvas");c.width=Math.round(img.width*s);c.height=Math.round(img.height*s);
+ c.getContext("2d").drawImage(img,0,0,c.width,c.height);return c.toDataURL("image/jpeg",0.78);
+}
+async function addPhotos(files){
+ if(!inspection)return;
+ for(const f of files){const data=await fileToDataUrl(f);inspection.photos.push({name:f.name,type:"image/jpeg",captured_at:new Date().toISOString(),data_url:data})}
+ renderPhotos();autosave();
+}
+function renderPhotos(){
+ $("photoList").innerHTML=(inspection?.photos||[]).map((p,i)=>'<div><img class="photo" src="'+p.data_url+'"><br><button data-pdel="'+i+'">quitar</button></div>').join("");
+ document.querySelectorAll("[data-pdel]").forEach(b=>b.onclick=()=>{inspection.photos.splice(+b.dataset.pdel,1);renderPhotos();autosave()});
+}
+async function syncForm(){
+ if(!inspection)return;
+ inspection.measurements.physical_tilt_deg=FactiunField.num($("physicalTilt").value);
+ inspection.measurements.voc_v=FactiunField.num($("voc").value);
+ inspection.measurements.isc_a=FactiunField.num($("isc").value);
+ inspection.notes=$("notes").value;
+}
+let saveTimer=null;
+function autosave(){clearTimeout(saveTimer);saveTimer=setTimeout(saveDraft,350)}
+async function saveDraft(){if(!inspection)return;await syncForm();await dbPut(inspection);$("saveState").textContent="Guardado local · "+new Date().toLocaleTimeString()}
+async function finish(){if(!inspection)return;await syncForm();inspection=FactiunField.finishInspection(inspection);await dbPut(inspection);$("saveState").textContent="Inspección cerrada localmente · "+inspection.completed_at}
+function exportJson(){if(!inspection)return;syncForm().then(()=>{const b=new Blob([JSON.stringify(inspection,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="inspection_"+inspection.asset_id+"_"+inspection.inspection_id+".json";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)})}
+function newInspection(){if(!selected)return;inspection=FactiunField.newInspection(selected,telemetry);stringRows=[];renderStringInputs();$("stringResults").innerHTML="";renderInspection();updateDeltas()}
+
+$("loadAssets").onclick=loadAssets;$("assetSelect").onchange=e=>selectAsset(e.target.value);
+$("refreshLive").onclick=refreshLive;$("measureTilt").onclick=measureTilt;$("sensorPlus").onclick=()=>useSensor(1);$("sensorMinus").onclick=()=>useSensor(-1);
+$("physicalTilt").oninput=()=>{updateDeltas();autosave()};$("voc").oninput=autosave;$("isc").oninput=autosave;$("notes").oninput=autosave;
+$("addString").onclick=addStringRow;$("compareStrings").onclick=compareStrings;$("photos").onchange=e=>addPhotos(e.target.files);
+$("saveDraft").onclick=saveDraft;$("finish").onclick=finish;$("exportJson").onclick=exportJson;$("newInspection").onclick=newInspection;
+renderChecklist();addStringRow();$("apiUrl").value=localStorage.getItem("scadaApiUrl")||"http://localhost:8000";
+if("serviceWorker" in navigator)navigator.serviceWorker.register("field-sw.js").catch(()=>{});
+if(cachedAssets())loadAssets();
+</script>
+</body></html>
