@@ -32,7 +32,7 @@ param(
   [string]$Cookie = $env:SUNNER_AUTH,
   [string]$Usuario = "admin", [string]$Password,
   [string]$Destino = "logs-ncu",
-  [string]$Topologia, [string]$Planta
+  [string]$Topologia, [string]$Planta, [switch]$Actualizar
 )
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"   # en PowerShell 5.1 la barra de progreso ralentiza x10 las descargas
@@ -110,14 +110,26 @@ function DescargaDia($ip,$ncu,$fecha,$tok){
   # (el nombre conserva el prefijo NCU: el importador lee de ahi la etiqueta)
   $dir=Join-Path $Destino ("NCU{0}" -f $ncu)
   if(-not (Test-Path $dir)){ New-Item -ItemType Directory -Path $dir | Out-Null }
+  $dir=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($dir)
   $zpath=Join-Path $dir "$etq.zip"
   foreach($suf in @(".zip",".indice.json")){    # lo bajado ANTES en plano se recoloca solo
     $viejo=Join-Path $Destino "$etq$suf"
     if((Test-Path $viejo) -and -not (Test-Path (Join-Path $dir "$etq$suf"))){
       Move-Item $viejo (Join-Path $dir "$etq$suf"); Log ("ORDENADO {0}{1} -> NCU{2}\" -f $etq,$suf,$ncu) }
   }
-  if((Test-Path $zpath) -and ((Get-Item $zpath).Length -gt 0)){
-    Log ("YA {0} (existe, {1} bytes) - no se re-descarga" -f $etq,(Get-Item $zpath).Length); return $true }
+  # Solo se reutiliza un ZIP descargado con el dia ya cerrado. Un fichero
+  # antiguo puede ser una copia parcial obtenida cuando ese dia seguia abierto.
+  $marca="$zpath.descarga.json"
+  if(-not $Actualizar -and (Test-Path $zpath) -and (Test-Path $marca)){
+    try{
+      $m=Get-Content -LiteralPath $marca -Raw | ConvertFrom-Json
+      if($m.cerrado -eq $true -and $m.fecha -eq $fecha -and $m.ip -eq $ip -and
+         $m.sha256 -eq (Get-FileHash -LiteralPath $zpath -Algorithm SHA256).Hash){
+        Log ("YA {0} (dia cerrado, copia verificada)" -f $etq); return $true
+      }
+    }catch{ Log ("AVISO {0}: se renovara la copia sin marca valida" -f $etq) }
+  }
+  $inicioDescarga=Get-Date
   $ses=SesionWeb $ip $tok
   $indice=$null
   try{ $indice=(Invoke-WebRequest -Uri $base -WebSession $ses -TimeoutSec 30 -UseBasicParsing).Content }
@@ -131,12 +143,19 @@ function DescargaDia($ip,$ncu,$fecha,$tok){
     Log ("AVISO {0}: indice no disponible ({1})" -f $etq,$_.Exception.Message)
   }
   for($intento=1;$intento -le 3;$intento++){
-    $tmp="$zpath.parte"
+    $tmp="$zpath.$([guid]::NewGuid().ToString('N')).parte"
     try{
       Invoke-WebRequest -Uri "$base/download" -WebSession $ses -TimeoutSec 600 -OutFile $tmp -UseBasicParsing
       $z=[System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $tmp)); $n=$z.Entries.Count; $z.Dispose()
       if($n -eq 0){ throw "ZIP vacio" }
-      Move-Item -Force $tmp $zpath
+      # Replace conserva la copia anterior hasta que el nuevo ZIP es valido.
+      if(Test-Path -LiteralPath $zpath){[IO.File]::Replace($tmp,$zpath,[NullString]::Value)}
+      else{[IO.File]::Move($tmp,$zpath)}
+      $dia=[datetime]::ParseExact($fecha,'yyyy-MM-dd',[Globalization.CultureInfo]::InvariantCulture)
+      @{fecha=$fecha;ip=$ip;ncu=$ncu;descargado=(Get-Date).ToString('o');
+        cerrado=($dia -lt $inicioDescarga.Date.AddDays(-1));
+        sha256=(Get-FileHash -LiteralPath $zpath -Algorithm SHA256).Hash} |
+        ConvertTo-Json | Set-Content -LiteralPath $marca -Encoding UTF8
       if($indice){ Set-Content -Path (Join-Path $dir "$etq.indice.json") -Value $indice -NoNewline }
       Log ("OK {0}: {1} ficheros, {2:N1} MB" -f $etq,$n,((Get-Item $zpath).Length/1MB))
       return $true

@@ -4,6 +4,27 @@
 
 Es el complemento de **escritura** del SCADA de este repo: el SCADA es solo-lectura a propósito; cuando hay que *cambiar* algo en un TCU (configuración, reloj, NVM) se usa esta toolbox desde el portátil conectado a la LAN de planta.
 
+## Histórico CSV de NCU (v11.93)
+
+Desde **Operación → ficha del equipo → Histórico CSV**, o desde el detalle del
+**Diagnóstico**, elige el día y pulsa **Descargar / actualizar**. Se abre el
+mismo descargador de NCU en una consola independiente; al terminar, pulsa
+**Leer copia local**. Descarga el ZIP de toda la NCU y preselecciona el CSV del
+equipo si su nombre permite identificarlo exactamente. También puedes elegir
+otro CSV del ZIP, abrir su carpeta o acceder al importador web existente.
+
+El origen procede del diagnóstico capturado: planta, IP y NCU. Cambiar la
+selección principal no redirige la descarga. Las copias se separan por ese
+origen en `logs-ncu/`, con un `origen.json` legible. Los diagnósticos importados
+sin conexión verificada requieren una nueva lectura para habilitarlo.
+
+La tabla conserva los valores y horas originales, sin asumir zona horaria ni
+presentarlos como estado actual. Omite duplicados exactos en la vista y avisa
+si hay filas distintas con la misma hora, conservándolas. Muestra las últimas
+2.000 muestras del CSV; el ZIP permanece completo. El visor admite CSV de
+hasta 32 MB; para análisis mayores se ofrece el importador web, sin subir nada
+automáticamente. No añade dependencias ni modifica las órdenes de control.
+
 ## Arranque
 
 1. Copia la carpeta `tcu-toolbox/` al portátil de campo (los JSON de plantas van dentro, en `plantas/`).

@@ -55,7 +55,7 @@ Organizado por NCU; el nombre conserva el prefijo `NCU<nn>`, que es de donde el 
 ## Notas de campo (medidas, no supuestas)
 
 - Los días que la NCU **ya no guarda** responden **500** (no 404): se anotan como «NO ESTA» y no se reintentan. Lo que no se baja a tiempo, se pierde: por eso la tarea nocturna.
-- Un ZIP ya bajado (y no vacío) **no se vuelve a pedir**; se puede relanzar las veces que haga falta. Lo bajado antes «en plano» se recoloca solo en su carpeta de NCU.
+- Los ZIP de hoy y ayer se renuevan para no congelar un día todavía abierto. Solo se reutiliza una copia descargada con el día ya cerrado (anterior a ayer), con marca `.descarga.json` e integridad SHA-256 comprobada. Una copia parcial antigua o sin marca se renueva una vez. `-Actualizar` fuerza la renovación incluso de días cerrados. Si falla la descarga, se conserva el ZIP anterior. Lo bajado antes «en plano» se recoloca en su carpeta de NCU.
 - Un 401/403 relanza el login una vez; si aun así rechaza, lo dice.
 - La descarga va con `$ProgressPreference = SilentlyContinue`: en PowerShell 5.1 la barra de progreso hacía las descargas ×10 más lentas.
 - La tarea nocturna (00:30) corre con tu usuario: el PC tiene que estar encendido y con sesión iniciada (bloqueado vale). Si la programaste desde otra carpeta, vuelve a programarla desde esta para que use este script.
