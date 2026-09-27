@@ -55,6 +55,9 @@ try{
  $c=[pscustomobject]@{NCU='2';GW='504';TCU='18';Salud='OK';Alarmas='';Edad_s='1'}
  $script:OpLectura=$m;$script:UltimoEsComm=$true;$script:UltimoDiag=@($c);$script:DiagPrevias=@();Op-Actualizar
  Check 'comunicaciones no resuelve alarma' $script:OpIncidencias[$k].activa True
+ $vieja=[pscustomobject]@{NCU='2';GW='504';TCU='18';Salud='OK';Alarmas='';Edad_s='900'}
+ $script:UltimoEsComm=$false;$script:UltimoDiag=@($vieja);Op-Actualizar
+ Check 'dato antiguo OK no resuelve alarma' $script:OpIncidencias[$k].activa True
  Op-Importar @($c) 'Copia' '2020-01-01'
  Check 'importación conserva origen de disco' $script:OpMeta[$c].origen 'importado'
 }finally{Remove-Item $script:OpFichero -Force -ErrorAction SilentlyContinue}

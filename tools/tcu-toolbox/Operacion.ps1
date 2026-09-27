@@ -82,7 +82,8 @@ function Op-Actualizar {
             # Un test de comunicaciones no confirma la desaparición de una alarma de equipo.
             if($m.modo -eq 'diagnóstico'){
                 $clave=Op-Clave $f $m $tr
-                $ep=Op-Episodio $script:OpIncidencias[$clave] $f $m
+                $ep=$script:OpIncidencias[$clave]
+                if("$($f.Salud)" -ne 'OK' -or (Op-Calidad $f $m (Get-Date) $script:OpUmbral) -eq 'LECTURA RECIENTE'){$ep=Op-Episodio $ep $f $m}
                 if($ep){$script:OpIncidencias[$clave]=$ep;$cambios=$true}
             }
         }else{$script:OpMeta[$f]=@{origen='importado';fecha='';planta='Origen no identificado';modo='copia'}}
@@ -126,11 +127,11 @@ function Op-Pintar {
         $script:OpLista.BeginUpdate();$script:OpLista.Items.Clear()
         foreach($r in @($filas|Sort-Object prioridad,@{Expression={$_.fila.NCU}},@{Expression={$_.fila.TCU}})){
             if($script:OpFiltro.SelectedIndex -eq 0 -and $r.prioridad -eq 5){continue}
-            if($script:OpFiltro.SelectedIndex -eq 2 -and ($r.prioridad -eq 5 -or $r.episodio.reconocida)){continue}
+            if($script:OpFiltro.SelectedIndex -eq 2 -and (-not $r.episodio -or -not $r.episodio.activa -or $r.episodio.reconocida)){continue}
             $it=New-Object Windows.Forms.ListViewItem("$($r.prioridad)")
             $ack='';if($r.episodio.reconocida){$ack='Vista por '+$r.episodio.usuario}
             $edad="$($r.fila.Edad_s)";if(-not $edad){$edad='No disponible'}
-            foreach($v in @($r.meta.planta,$r.fila.NCU,$r.fila.TCU,$r.fila.Salud,$r.calidad,$r.meta.modo,$edad,$r.fila.Alarmas,$ack)){[void]$it.SubItems.Add("$v")}
+            foreach($v in @($r.fila.NCU,$r.fila.TCU,$r.fila.Salud,$r.fila.Alarmas,$r.calidad,$ack,$r.meta.planta,$r.meta.modo,$edad)){[void]$it.SubItems.Add("$v")}
             $it.Tag=$r
             if($r.prioridad -eq 1){$it.ForeColor=[Drawing.Color]::Firebrick}
             elseif($r.prioridad -le 3){$it.ForeColor=[Drawing.Color]::FromArgb(142,73,0)}
@@ -146,7 +147,7 @@ function Op-Seleccion {
     $script:OpVer.Enabled=$false;$script:OpReconocer.Enabled=$false;$script:OpNota.Enabled=$false
     if($script:OpLista.SelectedItems.Count -ne 1){return}
     $r=$script:OpLista.SelectedItems[0].Tag
-    $script:OpDetalle.Text="NCU$($r.fila.NCU) / $($r.fila.TCU) | $($r.meta.planta) | $($r.calidad)`r`nAdquisición: $($r.meta.fecha) | $($r.meta.modo)`r`nPrimera detección: $($r.episodio.primera) | Última detección: $($r.episodio.ultima)`r`nReconocimiento: $($r.episodio.reconocida) $($r.episodio.usuario)`r`nNota: $($r.episodio.nota)"
+    $script:OpDetalle.Text="NCU$($r.fila.NCU) / $($r.fila.TCU) | $($r.meta.planta) | $($r.calidad)`r`nAdquisición: $($r.meta.fecha) | $($r.meta.modo)`r`nÚltima incidencia registrada: $($r.episodio.firma) | Activa al observarse: $($r.episodio.activa)`r`nPrimera detección: $($r.episodio.primera) | Última detección: $($r.episodio.ultima)`r`nReconocimiento: $($r.episodio.reconocida) $($r.episodio.usuario)`r`nNota: $($r.episodio.nota)"
     $script:OpVer.Enabled=-not $script:Ocupado
     $editable=$r.episodio -and $r.episodio.activa -and $r.meta.origen -eq 'lectura' -and -not $script:Ocupado
     $script:OpReconocer.Enabled=$editable -and -not $r.episodio.reconocida
@@ -190,7 +191,7 @@ function Op-Crear($pagina) {
     [void]$script:OpFiltro.Items.AddRange(@('Incidencias y datos dudosos','Todos los equipos','Pendientes de reconocer'));$script:OpFiltro.SelectedIndex=0;$barra.Controls.Add($script:OpFiltro)
     $b=Sec-Boton $barra 'Preparar diagnóstico';$b.Add_Click({if($script:Ocupado){return};$script:DiagNivel='todo';$tabs.SelectedTab=$tabG;Diag-Refrescar})
     $script:OpLista=New-Object Windows.Forms.ListView;$script:OpLista.Dock='Fill';$script:OpLista.View='Details';$script:OpLista.FullRowSelect=$true;$script:OpLista.MultiSelect=$false;$script:OpLista.HideSelection=$false
-    foreach($c in @(@('P',30),@('Origen / planta',150),@('NCU',48),@('Equipo',62),@('Estado',90),@('Calidad del dato',158),@('Lectura',100),@('Edad origen s',95),@('Alarma / motivo',250),@('Reconocimiento',150))){[void]$script:OpLista.Columns.Add($c[0],[int]$c[1])}
+    foreach($c in @(@('P',30),@('NCU',48),@('Equipo',62),@('Estado',90),@('Alarma / motivo',230),@('Calidad del dato',158),@('Reconocimiento',150),@('Origen / planta',150),@('Lectura',100),@('Edad origen s',95))){[void]$script:OpLista.Columns.Add($c[0],[int]$c[1])}
     $layout.Controls.Add($script:OpLista)
     $script:OpDetalle=New-Object Windows.Forms.TextBox;$script:OpDetalle.Dock='Fill';$script:OpDetalle.Multiline=$true;$script:OpDetalle.ReadOnly=$true;$script:OpDetalle.ScrollBars='Vertical';$layout.Controls.Add($script:OpDetalle)
     $acciones=New-Object Windows.Forms.FlowLayoutPanel;$acciones.Dock='Fill';$layout.Controls.Add($acciones)
