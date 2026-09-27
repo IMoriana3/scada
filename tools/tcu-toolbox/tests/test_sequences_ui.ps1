@@ -97,6 +97,7 @@ if($script:OpLista.Items.Count -ne 3){throw 'Falta un equipo en la vista complet
 foreach($anchoOp in @(1024,1142)){
  $form.Size=New-Object Drawing.Size($anchoOp,820);Layout-Principal;[Windows.Forms.Application]::DoEvents()
  if($script:OpLista.Height -lt 80){throw 'Operación sin espacio para la tabla'}
+ foreach($controlOp in @($script:OpVer,$script:OpReconocer,$script:OpNota)){if($controlOp.Bottom -gt $controlOp.Parent.ClientSize.Height){throw 'Botón de operación recortado'}}
  $bmp=New-Object Drawing.Bitmap($form.Width,$form.Height)
  $form.DrawToBitmap($bmp,(New-Object Drawing.Rectangle(0,0,$form.Width,$form.Height)))
  $bmp.Save((Join-Path $PSScriptRoot "sequence-ui-operacion-$anchoOp.png"));$bmp.Dispose()

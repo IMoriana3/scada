@@ -142,12 +142,17 @@ function Op-Pintar {
         $script:OpLista.EndUpdate();Op-Seleccion
     }finally{$script:OpPintando=$false}
 }
+function Op-Fecha([string]$valor) {
+    $d=[datetime]::MinValue
+    if([datetime]::TryParse($valor,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind,[ref]$d)){return $d.ToLocalTime().ToString('dd/MM/yyyy HH:mm:ss')}
+    return 'Sin fecha fiable'
+}
 function Op-Seleccion {
     $script:OpDetalle.Text='Selecciona una incidencia para consultar su origen y abrir el equipo. Reconocerla no borra la alarma ni ejecuta órdenes.'
     $script:OpVer.Enabled=$false;$script:OpReconocer.Enabled=$false;$script:OpNota.Enabled=$false
     if($script:OpLista.SelectedItems.Count -ne 1){return}
     $r=$script:OpLista.SelectedItems[0].Tag
-    $script:OpDetalle.Text="NCU$($r.fila.NCU) / $($r.fila.TCU) | $($r.meta.planta) | $($r.calidad)`r`nAdquisición: $($r.meta.fecha) | $($r.meta.modo)`r`nÚltima incidencia registrada: $($r.episodio.firma) | Activa al observarse: $($r.episodio.activa)`r`nPrimera detección: $($r.episodio.primera) | Última detección: $($r.episodio.ultima)`r`nReconocimiento: $($r.episodio.reconocida) $($r.episodio.usuario)`r`nNota: $($r.episodio.nota)"
+    $script:OpDetalle.Text="NCU$($r.fila.NCU) / $($r.fila.TCU) | $($r.meta.planta) | $($r.calidad)`r`nAdquisición: $(Op-Fecha $r.meta.fecha) | $($r.meta.modo)`r`nÚltima incidencia registrada: $($r.episodio.firma) | Activa al observarse: $($r.episodio.activa)`r`nPrimera detección: $(Op-Fecha $r.episodio.primera) | Última detección: $(Op-Fecha $r.episodio.ultima)`r`nReconocimiento: $(if($r.episodio.reconocida){Op-Fecha $r.episodio.reconocida}else{'Pendiente'}) $($r.episodio.usuario)`r`nNota: $($r.episodio.nota)"
     $script:OpVer.Enabled=-not $script:Ocupado
     $editable=$r.episodio -and $r.episodio.activa -and $r.meta.origen -eq 'lectura' -and -not $script:Ocupado
     $script:OpReconocer.Enabled=$editable -and -not $r.episodio.reconocida
@@ -181,7 +186,7 @@ function Op-Crear($pagina) {
     foreach($h in @(48,64,44)){[void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',$h)))}
     [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100)))
     [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',102)))
-    [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',36)))
+    [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',48)))
     $pagina.Controls.Add($layout)
     $script:OpResumen=New-Object Windows.Forms.Label;$script:OpResumen.Dock='Fill';$script:OpResumen.Font=$script:FuenteNeg;$script:OpResumen.TextAlign='MiddleLeft';$layout.Controls.Add($script:OpResumen)
     $script:OpContexto=New-Object Windows.Forms.Label;$script:OpContexto.Dock='Fill';$layout.Controls.Add($script:OpContexto)
