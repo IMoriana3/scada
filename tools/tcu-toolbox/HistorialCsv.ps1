@@ -59,7 +59,7 @@ function Hist-Abrir($tag){
     $d.Size=New-Object Drawing.Size(950,700);$d.MinimumSize=New-Object Drawing.Size(750,550);$d.StartPosition='CenterParent';$d.Font=$form.Font
     $l=New-Object Windows.Forms.TableLayoutPanel;$l.Dock='Fill';$l.ColumnCount=1;$l.RowCount=5
     foreach($h in @(58,42,38)){[void]$l.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',$h)))}
-    [void]$l.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100)));[void]$l.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',56)));$d.Controls.Add($l)
+    [void]$l.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100)));[void]$l.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',76)));$d.Controls.Add($l)
     $aviso=New-Object Windows.Forms.Label;$aviso.Dock='Fill';$aviso.Padding=New-Object Windows.Forms.Padding(8)
     $aviso.Text="HISTORICO: no representa el estado actual. Origen: $($ctx.planta) / $($ctx.ip) / NCU$($ctx.ncu).`r`nHoras tal como las registra la NCU; si el CSV no indica zona horaria, no se presupone ninguna.";$l.Controls.Add($aviso)
     $barra=Sec-Barra $l
@@ -98,7 +98,7 @@ function Hist-Abrir($tag){
                 $row=$tabla.NewRow();foreach($p in $f.PSObject.Properties){$row[$p.Name]="$($p.Value)"};$tabla.Rows.Add($row)
             }
             $grid.DataSource=$tabla
-            $estado.Text="$($csv.SelectedItem) | $($r.filas.Count) muestras unicas; se muestran las ultimas $($tabla.Rows.Count).`r`nDuplicados exactos omitidos: $($r.duplicadas). Filas distintas con la misma hora: $($r.conflictos), conservadas. ZIP original intacto."
+            $estado.Text="$($csv.SelectedItem) | $($r.filas.Count) muestras unicas; se muestran las ultimas $($tabla.Rows.Count).`r`nCopia local: $((Get-Item -LiteralPath $st.ruta).LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')). Ultima muestra registrada: $($r.filas[-1].datetime).`r`nDuplicados exactos omitidos: $($r.duplicadas). Filas distintas con la misma hora: $($r.conflictos), conservadas. ZIP original intacto."
         }catch{$grid.DataSource=$null;$estado.Text="$_"}finally{$d.UseWaitCursor=$false}
     }.GetNewClosure())
     $ref.Add_Click($cargar)
