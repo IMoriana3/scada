@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.91'
+$VERSION_TOOLBOX = '11.92'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -8650,7 +8650,7 @@ $CTX_DE_BLOQUE = @{diag='diagnostico'; bat='diagnostico'; lectura='lectura'
 function Ctx-Guardar([string]$clave, $cx, $trabajos) {
     $script:Ctx[$clave] = Ctx-Sello (Nombre-Planta) $cx $trabajos
     $script:Ctx[$clave].trabajos = [Management.Automation.PSSerializer]::Deserialize([Management.Automation.PSSerializer]::Serialize(@($trabajos), 12))
-    if ($clave -eq 'diagnostico') { $script:DiagPrevias = @($script:UltimoDiag) }
+    if ($clave -eq 'diagnostico') { $script:DiagPrevias = @($script:UltimoDiag); Op-IniciarLectura }
 }
 # Si esa operacion no se ha corrido en esta sesion (datos cargados de Trabajos,
 # por ejemplo) no hay nada que congelar y se cae a lo que digan los cuadros.
@@ -11005,6 +11005,7 @@ function Diag-Refrescar {
     $tot = @($script:UltimoDiag).Count
     if ($niv -eq 'todo' -and $fNcu -eq 'NCU - todas' -and $sal.Count -eq 0) { $lblGVer.Text = "$tot filas" }
     else { $lblGVer.Text = "$n de $tot filas  ($(Diag-NivelNombre $niv) / $fNcu / $(if ($sal.Count) { $sal -join '+' } else { 'todas' })) - el CSV/JSON exporta siempre todo" }
+    Op-Actualizar
 }
 
 # Resolver contra el alcance capturado al diagnosticar, nunca contra la IP
@@ -11024,6 +11025,7 @@ function Diag-Objetivo($fila, $trabajos) {
 }
 function Diag-PrepararAccion($destino, [string]$accion) {
     if ($script:Ocupado) { return }
+    $script:DiagRetornoTab=$tabs.SelectedTab
     $script:DiagVolver = @{planta="$($cbPlanta.SelectedItem)"; ip=$txtIp.Text; puerto=$txtPort.Text; tcus=$txtGTcus.Text; timeout=$txtTo.Text; ncus=$txtNcus.Text; gw1=$chkGw1.Checked; gw2=$chkGw2.Checked}
     # Se conserva una entrada de la MISMA IP si existe; nunca resolver por
     # numero de esclavo a traves de todas las NCUs de planta.
@@ -11034,7 +11036,7 @@ function Diag-PrepararAccion($destino, [string]$accion) {
     if($destino.tipo -eq 'TCU') {
         foreach($c in @($txtWTcus,$txtLTcus,$txtPTcus,$txtGTcus,$txtSECTcus,$txtDTcu,$txtITcu,$txtVTcus,$txtSTcus)) { $c.Text="$($destino.tcu)" }
     }
-    $btnVolverDiag.Text='Volver al diagnostico'
+    $btnVolverDiag.Text=$(if($script:DiagRetornoTab -eq $tabOP){'Volver a operación'}else{'Volver al diagnostico'})
     $ttW.SetToolTip($btnVolverDiag,"Origen: NCU$($destino.ncu) / TCU $($destino.tcu) / $($destino.ip):$($destino.puerto)")
     switch($accion) {
         'Leer variables' {$tabs.SelectedTab=$tabL}
@@ -11047,9 +11049,9 @@ function Diag-PrepararAccion($destino, [string]$accion) {
     }
     Con "Accion preparada desde diagnostico: NCU$($destino.ncu) / $($destino.tipo) $($destino.tcu) / $($destino.ip):$($destino.puerto). Revisa y ejecuta en la pantalla de destino." ([Drawing.Color]::SteelBlue)
 }
-function Diag-Acciones {
-    if($script:Ocupado -or $lvG.SelectedItems.Count -ne 1){return}
-    $tag=$lvG.SelectedItems[0].Tag
+function Diag-Acciones($tag=$null) {
+    if($script:Ocupado){return}
+    if(-not $tag){if($lvG.SelectedItems.Count -ne 1){return};$tag=$lvG.SelectedItems[0].Tag}
     if(-not $tag){return}
     $fila=$tag.fila
     $d=New-Object Windows.Forms.Form; $d.Text="Diagnostico - NCU$($fila.NCU) / $($fila.TCU)"
@@ -11343,7 +11345,7 @@ function Trabajo-Cargar {
     $def = $TRABAJO_TIPOS["$($o.tipo)"]
     if (-not $def) { Con "Tipo de trabajo desconocido: $($o.tipo)" ([System.Drawing.Color]::Orange); return }
     Set-Variable -Name $def.var -Scope Script -Value $filas
-    if ($o.tipo -in @('diag','comm')) { [void]$script:Ctx.Remove('diagnostico'); $script:DiagOrigen.Clear(); $script:DiagPrevias=@($filas) }
+    if ($o.tipo -in @('diag','comm')) { [void]$script:Ctx.Remove('diagnostico'); $script:DiagOrigen.Clear(); $script:DiagPrevias=@($filas);Op-Importar $filas "$($o.planta)" "$($o.fecha)" }
     Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
     Con "Cargado: $($def.titulo) de $($o.fecha) - $($o.planta) - $(@($filas).Count) filas$(if ("$($o.nota)" -ne '') { "  ($($o.nota))" })" ([System.Drawing.Color]::LightGreen)
     switch ("$($o.tipo)") {
@@ -14793,7 +14795,7 @@ $lvG.Add_SelectedIndexChanged({
 $btnVolverDiag.Add_Click({
     if($script:Ocupado){return}
     if($script:DiagVolver){$cbPlanta.SelectedItem=$script:DiagVolver.planta;$txtIp.Text=$script:DiagVolver.ip;$txtPort.Text=$script:DiagVolver.puerto;$txtGTcus.Text=$script:DiagVolver.tcus;$txtTo.Text=$script:DiagVolver.timeout;$txtNcus.Text=$script:DiagVolver.ncus;$chkGw1.Checked=$script:DiagVolver.gw1;$chkGw2.Checked=$script:DiagVolver.gw2;$script:DiagVolver=$null}
-    $tabs.SelectedTab=$tabG; $btnVolverDiag.Text='Diagnostico'
+    $tabs.SelectedTab=$(if($script:DiagRetornoTab){$script:DiagRetornoTab}else{$tabG});$script:DiagRetornoTab=$null; $btnVolverDiag.Text='Diagnostico'
 })
 
 $btnSECAdd.Add_Click({ if ($script:Ocupado) { return }; $p=Sec-EditarPaso; if ($p) { $script:SecPasos += ,$p; Sec-PintarPasos } })
@@ -16418,7 +16420,7 @@ function Tema-Recoger($cont, $acc) {
 # boton se le queda corto el ancho fijo, se ensancha lo justo, sin llegar a
 # tocar el control que tenga a su derecha.
 function Tema-AjustarAnchos($cont) {
-    if ($cont -eq $tabSEC -or $cont -eq $tabG) { return }
+    if ($cont -eq $tabSEC -or $cont -eq $tabG -or $cont -eq $tabOP) { return }
     foreach ($c in $cont.Controls) {
         if ($c.Controls.Count -gt 0) { Tema-AjustarAnchos $c }
         $ajustable = ($c -is [System.Windows.Forms.Label]) -or ($c -is [System.Windows.Forms.CheckBox]) -or
@@ -16656,7 +16658,7 @@ function Anclaje-Para([hashtable]$g) {
 # largas que su pestana. Por eso esto se hace con la ventana ya mostrada y con
 # una guarda por si algun contenedor sigue sin medir lo que deberia.
 function Anclar-Contenedor($cont, $anchoRef) {
-    if ($cont -eq $tabSEC -or $cont -eq $tabG) { return }
+    if ($cont -eq $tabSEC -or $cont -eq $tabG -or $cont -eq $tabOP) { return }
     $ancho = $cont.ClientSize.Width
     $alto = $cont.ClientSize.Height
     $tablas = @($cont.Controls | Where-Object {
@@ -16694,7 +16696,7 @@ function Anclar-Contenedor($cont, $anchoRef) {
 # Red de seguridad: si algo ha acabado fuera de su contenedor, se mete dentro.
 # Mas vale un boton apretado contra el borde que un boton que no se ve.
 function Layout-Rescatar($cont) {
-    if ($cont -eq $tabSEC -or $cont -eq $tabG) { return }
+    if ($cont -eq $tabSEC -or $cont -eq $tabG -or $cont -eq $tabOP) { return }
     $ancho = $cont.ClientSize.Width; $alto = $cont.ClientSize.Height
     if ($ancho -lt 40 -or $alto -lt 40) { return }
     foreach ($c in $cont.Controls) {
@@ -17264,7 +17266,14 @@ $btnRBBuscar.Add_Click({ Lanzar {
 # sus estaciones meteo, luego los repetidores de los que cuelga media planta, y
 # al final los seguidores. Antes se abria en Escribir, que es la unica pestana
 # capaz de dejar una TCU peor de como estaba.
+$tabOP = New-Object System.Windows.Forms.TabPage
+[void]$tabs.TabPages.Add($tabOP)
+. (Join-Path $PSScriptRoot 'Operacion.ps1')
+Op-Crear $tabOP
+
 $NAV_ARBOL = @(
+    @{bloque = 'OPERACIÓN'; hojas = @(
+        @{txt='Resumen e incidencias'; tab=$tabOP})}
     # El fichero va sin tildes por costumbre, pero esto es lo UNICO que se lee en
     # pantalla: aqui van bien escritas. El .ps1 esta en UTF-8 con BOM, asi que
     # PowerShell 5.1 las lee sin mezclarlas.
@@ -17549,7 +17558,7 @@ $form.Add_Shown({
         $anchoTab = $tabs.DisplayRectangle.Width - 10
         foreach ($tp in $tabs.TabPages) { Anclar-Contenedor $tp $anchoTab }
         foreach ($tp in $tabs.TabPages) {
-            if ($tp -ne $tabSEC -and $tp -ne $tabG) { $tp.AutoScroll=$true; $tp.AutoScrollMinSize=New-Object Drawing.Size(914,390) }
+            if ($tp -ne $tabSEC -and $tp -ne $tabG -and $tp -ne $tabOP) { $tp.AutoScroll=$true; $tp.AutoScrollMinSize=New-Object Drawing.Size(914,390) }
         }
         Nav-Filtrar;Vista-Titulo
         $script:LayoutListo=$true

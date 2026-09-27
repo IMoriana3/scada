@@ -42,6 +42,8 @@ $logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f
 # los bloques anadidos tambien usan $PSScriptRoot (usuarios.json, registro/)
 $logica = $logica.Replace('$PSScriptRoot', '$PSScriptRootFake')
 Invoke-Expression $logica
+. (Join-Path $raizTb 'Operacion.ps1')
+$script:OpFichero=Join-Path $PSScriptRootFake 'operacion.json'
 
 $fallos = 0
 function Check([string]$nombre, $real, $esperado) {

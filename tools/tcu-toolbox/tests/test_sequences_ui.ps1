@@ -77,5 +77,35 @@ if($tabs.SelectedTab -ne $tabL -or $txtIp.Text -ne '10.20.30.40' -or $txtLTcus.T
 $btnVolverDiag.PerformClick()
 if($tabs.SelectedTab -ne $tabG -or $txtIp.Text -ne $ipPrevia -or $txtPort.Text -ne $puertoPrevio){throw 'Volver no restaura el contexto'}
 $tabG.Controls.Add($diagLayout);$hostDiag.Dispose()
+# Espacio de operación con tres estados y procedencia capturada.
+$script:OpFichero=Join-Path ([IO.Path]::GetTempPath()) ('op-ui-'+[guid]::NewGuid()+'.json')
+$script:OpIncidencias=@{};$script:OpMeta.Clear();$script:DiagOrigen.Clear();$script:DiagPrevias=@()
+$script:Ctx.diagnostico=@{trabajos=@(@{ncu='2';ip='10.20.30.40';cx=@{puerto=504;to=1500};tcus=@(18,19,20)})}
+$script:OpLectura=@{fecha=(Get-Date).ToString('o');planta='Planta de prueba'};$script:UltimoEsComm=$false
+$script:UltimoDiag=@(
+ [pscustomobject]@{NCU='2';GW='504';TCU='18';Salud='ALARMA';Alarmas='Motor enclavado';Edad_s='12'},
+ [pscustomobject]@{NCU='2';GW='504';TCU='19';Salud='OFFLINE';Alarmas='Sin respuesta';Edad_s='900'},
+ [pscustomobject]@{NCU='2';GW='504';TCU='20';Salud='OK';Alarmas='';Edad_s='8'})
+Op-Actualizar;$tabs.SelectedTab=$tabOP;[Windows.Forms.Application]::DoEvents()
+if($script:OpLista.Items.Count -ne 2){throw 'Operación no prioriza las incidencias'}
+$script:OpLista.Items[0].Selected=$true;Op-Seleccion
+$script:OpReconocer.PerformClick()
+if(-not $script:OpLista.Items[0].Tag.episodio.reconocida){throw 'No persiste el reconocimiento'}
+if($script:UltimoDiag[0].Salud -ne 'ALARMA'){throw 'Reconocer borró la alarma'}
+$script:OpFiltro.SelectedIndex=1
+if($script:OpLista.Items.Count -ne 3){throw 'Falta un equipo en la vista completa'}
+foreach($anchoOp in @(1024,1142)){
+ $form.Size=New-Object Drawing.Size($anchoOp,820);Layout-Principal;[Windows.Forms.Application]::DoEvents()
+ if($script:OpLista.Height -lt 80){throw 'Operación sin espacio para la tabla'}
+ foreach($controlOp in @($script:OpVer,$script:OpReconocer,$script:OpNota)){if($controlOp.Bottom -gt $controlOp.Parent.ClientSize.Height){throw 'Botón de operación recortado'}}
+ $bmp=New-Object Drawing.Bitmap($form.Width,$form.Height)
+ $form.DrawToBitmap($bmp,(New-Object Drawing.Rectangle(0,0,$form.Width,$form.Height)))
+ $bmp.Save((Join-Path $PSScriptRoot "sequence-ui-operacion-$anchoOp.png"));$bmp.Dispose()
+}
+$destinoOp=Diag-Objetivo $script:UltimoDiag[0] $script:Ctx.diagnostico.trabajos
+Diag-PrepararAccion $destinoOp 'Leer variables'
+$btnVolverDiag.PerformClick()
+if($tabs.SelectedTab -ne $tabOP){throw 'La vuelta pierde el espacio de operación'}
+Remove-Item $script:OpFichero -Force -ErrorAction SilentlyContinue
 $form.Close();$form.Dispose()
 Write-Host 'Interfaz completa: arranque, geometria y contexto de diagnostico OK'
