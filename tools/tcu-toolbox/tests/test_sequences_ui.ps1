@@ -71,7 +71,7 @@ Diag-Detalle
 $bmp=New-Object Drawing.Bitmap($hostDiag.Width,$hostDiag.Height)
 $hostDiag.DrawToBitmap($bmp,(New-Object Drawing.Rectangle(0,0,$hostDiag.Width,$hostDiag.Height)))
 $bmp.Save((Join-Path $PSScriptRoot 'sequence-ui-diagnostico-amplio.png'));$bmp.Dispose()
-if(@($script:BotonesDetalle|Where-Object{$_.Visible}).Count -ne 5){throw 'Faltan acciones de TCU'}
+if(@($script:BotonesDetalle|Where-Object{$_.Visible}).Count -ne 6){throw 'Faltan acciones de TCU'}
 ($script:BotonesDetalle|Where-Object{$_.Tag -eq 'Leer variables'}).PerformClick()
 if($tabs.SelectedTab -ne $tabL -or $txtIp.Text -ne '10.20.30.40' -or $txtLTcus.Text -ne '18' -or $txtPort.Text -ne '504'){throw 'La acción perdió el destino capturado'}
 $btnVolverDiag.PerformClick()
@@ -106,6 +106,40 @@ $destinoOp=Diag-Objetivo $script:UltimoDiag[0] $script:Ctx.diagnostico.trabajos
 Diag-PrepararAccion $destinoOp 'Leer variables'
 $btnVolverDiag.PerformClick()
 if($tabs.SelectedTab -ne $tabOP){throw 'La vuelta pierde el espacio de operación'}
+# Historico real: apertura modal y consulta de ZIP local sin llamadas HTTP.
+$histTag=@{fila=$script:UltimoDiag[0];trabajos=$script:Ctx.diagnostico.trabajos}
+$histRootAnterior=$script:HistRaiz
+$script:HistRaiz=Join-Path ([IO.Path]::GetTempPath()) ('hist-ui-'+[guid]::NewGuid())
+$histCtx=Hist-Contexto $histTag
+$histDir=Join-Path $histCtx.carpeta 'NCU2';[void][IO.Directory]::CreateDirectory($histDir)
+$histFecha=(Get-Date).AddDays(-1).ToString('yyyy-MM-dd')
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$histZip=[IO.Compression.ZipFile]::Open((Join-Path $histDir "NCU2_$histFecha.zip"),'Create')
+$histEntry=$histZip.CreateEntry("TCU_018_$histFecha.csv")
+$histWriter=New-Object IO.StreamWriter($histEntry.Open())
+$histWriter.Write("datetime;angle;target_angle;soc`n$histFecha 10:00:00;15.5;22.5;87`n$histFecha 10:00:10;16.0;22.5;87`n")
+$histWriter.Dispose();$histZip.Dispose()
+$script:histUiError=$null;$script:histUiVisitada=$false
+$histTimer=New-Object Windows.Forms.Timer;$histTimer.Interval=250
+$histTimer.Add_Tick({
+ $ventana=@([Windows.Forms.Application]::OpenForms | Where-Object {$_.Name -eq 'histCSV'}) | Select-Object -First 1
+ if(-not $ventana){return}
+ $histTimer.Stop()
+ try{
+  $script:histUiVisitada=$true
+  $boton=$ventana.Controls.Find('histLeer',$true)[0];$boton.PerformClick()
+  $tabla=$ventana.Controls.Find('histTabla',$true)[0]
+  if($tabla.Rows.Count -ne 2){throw "Historico no muestra las dos muestras: $($tabla.Rows.Count)"}
+  $bmp=New-Object Drawing.Bitmap($ventana.Width,$ventana.Height)
+  $ventana.DrawToBitmap($bmp,(New-Object Drawing.Rectangle(0,0,$ventana.Width,$ventana.Height)))
+  $bmp.Save((Join-Path $PSScriptRoot 'sequence-ui-historico.png'));$bmp.Dispose()
+ }catch{$script:histUiError="$_"}finally{$ventana.Close()}
+})
+try{$histTimer.Start();Hist-Abrir $histTag}finally{
+ $histTimer.Stop();$histTimer.Dispose();Remove-Item $script:HistRaiz -Recurse -Force;$script:HistRaiz=$histRootAnterior
+}
+if($script:histUiError){throw $script:histUiError}
+if(-not $script:histUiVisitada){throw 'No se abrio el historico'}
 Remove-Item $script:OpFichero -Force -ErrorAction SilentlyContinue
 $form.Close();$form.Dispose()
 Write-Host 'Interfaz completa: arranque, geometria y contexto de diagnostico OK'

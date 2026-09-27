@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.92'
+$VERSION_TOOLBOX = '11.93'
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -11068,12 +11068,13 @@ function Diag-Acciones($tag=$null) {
         $destino=Diag-Objetivo $fila $tag.trabajos
         $acciones=@('Diagnostico NCU','Estaciones meteo')
         if($destino.tipo -eq 'TCU'){$acciones=@('Leer variables','Configurar variables','Copia de seguridad','Modo / alarmas / stow','Receta secuencial')}
+        $acciones+=@('Historico CSV')
         foreach($a in $acciones){
             $b=Sec-Boton $barra $a
             $b.Add_Click({$d.Tag=$a;$d.DialogResult='OK';$d.Close()}.GetNewClosure())
         }
     }catch{$detalle.Text+="`r`n`r`n$_"}
-    try { if($d.ShowDialog($form) -eq 'OK'){Diag-PrepararAccion $destino "$($d.Tag)"} } finally {$d.Dispose()}
+    try { if($d.ShowDialog($form) -eq 'OK'){if($d.Tag -eq 'Historico CSV'){Hist-Abrir $tag}else{Diag-PrepararAccion $destino "$($d.Tag)"}} } finally {$d.Dispose()}
 }
 # Diagnostico SOLO de las estaciones meteo. Las HSUs viven en un bloque aparte
 # de la NCU (30200+, diez huecos): UNA lectura por NCU. Diagnosticar las diez de
@@ -17269,6 +17270,7 @@ $btnRBBuscar.Add_Click({ Lanzar {
 $tabOP = New-Object System.Windows.Forms.TabPage
 [void]$tabs.TabPages.Add($tabOP)
 . (Join-Path $PSScriptRoot 'Operacion.ps1')
+. (Join-Path $PSScriptRoot 'HistorialCsv.ps1')
 Op-Crear $tabOP
 
 $NAV_ARBOL = @(
@@ -17481,12 +17483,12 @@ $accionesDetalle=New-Object Windows.Forms.FlowLayoutPanel
 $accionesDetalle.AutoSize=$true;$accionesDetalle.Dock='Fill';$accionesDetalle.FlowDirection='TopDown';$accionesDetalle.WrapContents=$false
 $detalleLayout.Controls.Add($accionesDetalle)
 $script:BotonesDetalle=@()
-foreach($accion in @('Leer variables','Configurar variables','Copia de seguridad','Modo / alarmas / stow','Receta secuencial','Diagnostico NCU','Estaciones meteo')){
+foreach($accion in @('Leer variables','Configurar variables','Copia de seguridad','Modo / alarmas / stow','Receta secuencial','Diagnostico NCU','Estaciones meteo','Historico CSV')){
     $b=New-Object Windows.Forms.Button;$b.Text=$accion;$b.Tag=$accion;$b.Width=216;$b.Height=28;$b.FlatStyle='Flat'
     $b.Add_Click({param($s,$e)
         if($script:Ocupado -or $lvG.SelectedItems.Count -ne 1){return}
         $tag=$lvG.SelectedItems[0].Tag
-        try{if(-not $tag.trabajos){throw 'Repite el diagnóstico para recuperar el alcance de conexión.'};$destino=Diag-Objetivo $tag.fila $tag.trabajos;Diag-PrepararAccion $destino $s.Tag}
+        try{if(-not $tag.trabajos){throw 'Repite el diagnóstico para recuperar el alcance de conexión.'};$destino=Diag-Objetivo $tag.fila $tag.trabajos;if($s.Tag -eq 'Historico CSV'){Hist-Abrir $tag}else{Diag-PrepararAccion $destino $s.Tag}}
         catch{$txtDetalle.AppendText("`r`n$_")}
     })
     $accionesDetalle.Controls.Add($b);$script:BotonesDetalle+=,$b
@@ -17505,6 +17507,7 @@ function Diag-Detalle {
         $destino=Diag-Objetivo $fila $tag.trabajos
         $acciones=@('Diagnostico NCU','Estaciones meteo')
         if($destino.tipo -eq 'TCU'){$acciones=@('Leer variables','Configurar variables','Copia de seguridad','Modo / alarmas / stow','Receta secuencial')}
+        $acciones+=@('Historico CSV')
         foreach($b in $script:BotonesDetalle){$b.Visible=$acciones -contains $b.Tag}
     }catch{$txtDetalle.AppendText("`r`n`r`n$_")}
 }
