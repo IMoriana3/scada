@@ -100,6 +100,10 @@ jobs:
           Write-Host '── test_device_variables.ps1 ──'
           pwsh -NoProfile -File test_device_variables.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          pwsh -NoProfile -File test_operations.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_operations.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
           Write-Host '── test_sequences.ps1 ──'
           pwsh -NoProfile -File test_sequences.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }

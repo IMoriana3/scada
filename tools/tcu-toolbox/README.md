@@ -94,6 +94,16 @@ funciones puras y el fuente contra el simulador. Los registros son del R8, y una
 NCU con firmware anterior no los tiene: contesta excepción, se dice, y la columna
 queda **vacía** en vez de inventarse un «sin ángulo».
 
+**Operación v11.92 — primera pantalla de trabajo**
+
+- Inicio en «Operación / Resumen e incidencias». Conserva todas las pantallas técnicas.
+- Resumen del alcance cargado y bandeja priorizada: alarma, sin respuesta, aviso y calidad del dato. No afirma que el barrido cubra toda la planta.
+- Filtro por planta de origen y por incidencias, todos los equipos o pendientes. Detalle con fecha de adquisición, primera/última detección y notas.
+- Cada fila conserva su planta, conexión y fecha incluso en barridos parciales. Los datos importados se identifican y no habilitan órdenes. La antigüedad se actualiza visualmente cada 30 s sin consultas de red; 5 min es un umbral de presentación, no de seguridad.
+- Reconocimiento local y notas persistentes en `registro/operacion.json`, independientes del borrado de alarmas. Una alarma nueva o que reaparece requiere un nuevo reconocimiento. Un test de comunicaciones no confirma la desaparición de una alarma de equipo.
+- «Equipo y acciones» abre la misma ficha utilizada en diagnóstico; las acciones preparadas conservan destino y permiten volver a Operación.
+- Es supervisión del último barrido: no incluye adquisición continua, sinóptico geográfico ni un histórico de tendencias. Las protecciones del controlador siguen siendo independientes de la ventana.
+
 **Espacio de trabajo v11.91**
 
 - Consola plegada inicialmente: más altura para tablas y recetas. La última actividad permanece visible; el registro completo se conserva y se despliega con un botón. Se recuerda la preferencia.
