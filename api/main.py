@@ -2,6 +2,7 @@
 
 GET /live                 -> último estado de todos los trackers de la planta
 GET /live?ncu=NCU-01      -> filtrado por NCU
+GET /assets/actual-vs-expected -> snapshot medido + expected SolarGPT por asset_id
 GET /history/{ncu}/{tcu}  -> series del tracker (por defecto últimas 24h)
 GET /meteo                -> última lectura de cada HSU
 GET /traffic              -> tráfico medido: LAN de planta y subida a la nube
