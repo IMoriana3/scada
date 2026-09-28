@@ -312,7 +312,7 @@ try {
     $c0 = Pedir '/config'
     Check 'config: se puede consultar' ($null -ne $c0.planta) $true
     Check 'config: dice lo que esta corriendo AHORA' ($null -ne $c0._en_curso.intervalo_vigilancia_min) $true
-    Check 'config: y su version' ($c0._en_curso.version_agente) '4.2'
+    Check 'config: y su version' ($c0._en_curso.version_agente) '4.3'
     # LOS SECRETOS NO SE DEVUELVEN: quien pregunta ya tiene el token, y
     # devolverlo solo lo deja en el historial del navegador y en el tunel
     Check 'config: el token no se devuelve' ($c0.token) '(puesto)'
