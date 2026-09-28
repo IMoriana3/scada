@@ -86,6 +86,33 @@ class PlantIdentity:
             raise IdentityUnavailable(f"Binding {kind}={value}: {len(found)} coincidencias")
         return next(iter(found))
 
+    def capability_available(self, name):
+        capability = self.manifest.get("capabilities", {}).get(name, {})
+        return capability.get("available") is True
+
+    def electrical_assets(self):
+        """Canonical electrical assets only when Plant Package declares topology available."""
+        if not self.capability_available("electrical.topology"):
+            return []
+        allowed = {"inverter", "mppt", "string"}
+        return sorted(
+            [asset for asset in self.assets.values()
+             if asset.get("asset_type") in allowed],
+            key=lambda asset: (
+                asset.get("asset_type") or "",
+                asset.get("typed_id") or "",
+                asset["asset_id"],
+            ),
+        )
+
+    def require_electrical_asset(self, asset_id):
+        matches = [asset for asset in self.electrical_assets()
+                   if asset["asset_id"] == str(asset_id)]
+        if len(matches) != 1:
+            raise IdentityUnavailable(
+                "Asset eléctrico ausente o electrical.topology no disponible")
+        return matches[0]
+
     def controlled_trackers(self, tcu_asset_id, at=None):
         """Tracker assets explicitly linked by tracker --controlled_by--> TCU.
 
