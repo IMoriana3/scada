@@ -66,7 +66,8 @@ footer{padding:24px 14px 40px;text-align:center;color:#71849a;font-size:12px}
       <div><label>Ángulo físico firmado (°)</label><input id="physicalTilt" type="number" step="0.1"></div>
       <div><label>Última magnitud sensor (°)</label><input id="sensorMag" readonly></div>
       <div><label>Δ físico − encoder (°)</label><input id="deltaEncoder" readonly></div>
-      <div><label>Δ físico − objetivo (°)</label><input id="deltaTarget" readonly></div>
+      <div><label>Δ físico − objetivo TCU (°)</label><input id="deltaTarget" readonly></div>
+      <div><label>Δ físico − expected SolarGPT (°)</label><input id="deltaExpected" readonly></div>
     </div>
     <div class="row" style="margin-top:10px">
       <button id="measureTilt" class="primary">📐 Medir inclinación</button>
@@ -228,7 +229,7 @@ async function refreshExpected(){
       renderLive();updateDeltas();
     }
     if(inspection)inspection.expected_snapshot=c;
-    renderExpected();
+    renderExpected();updateDeltas();
   }catch(e){
     expectedComparison=null;
     if(inspection)inspection.expected_snapshot={
@@ -261,8 +262,10 @@ function renderInspection(){
 }
 function updateDeltas(){
  const p=FactiunField.num($("physicalTilt").value);
+ const expected=expectedComparison?.expected?.expected_tracking_angle_deg;
  $("deltaEncoder").value=FactiunField.angleDeviation(p,telemetry?.tilt_angle)?.toFixed(2)??"";
  $("deltaTarget").value=FactiunField.angleDeviation(p,telemetry?.target_angle)?.toFixed(2)??"";
+ $("deltaExpected").value=FactiunField.angleDeviation(p,expected)?.toFixed(2)??"";
  if(inspection)inspection.measurements.physical_tilt_deg=p;
 }
 async function requestMotion(){
