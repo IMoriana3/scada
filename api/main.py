@@ -15,6 +15,11 @@ from uuid import UUID
 import yaml
 from scada_identity import configured_identity, IdentityUnavailable
 from historical import CHART_FIELDS, history_for_assets, measured_day
+from expected import (
+    ExpectedUnavailable,
+    compare_actual_expected,
+    fetch_expected,
+)
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,6 +32,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"],
 URL = os.environ.get("INFLUXDB_URL", "http://influxdb:8086")
 ORG = os.environ.get("INFLUXDB_ORG", "factiun")
 BUCKET = os.environ.get("INFLUXDB_BUCKET", "trackers")
+SOLARGPT_EXPECTED_URL = os.environ.get("SOLARGPT_EXPECTED_URL", "").strip()
 client = InfluxDBClient(url=URL, token=os.environ["INFLUXDB_TOKEN"], org=ORG)
 
 
@@ -74,10 +80,62 @@ def asset_live(ncu_asset_id: str | None = None):
             v = rec.values
             row = binding.get((v.get("ncu"), str(v.get("tcu"))))
             if row:
-                out.append({"asset_id": row["asset_id"], "layout_key": row["layout_key"],
-                            "source": v.get("source"), **{k: v.get(k) for k in _LIVE_KEYS}})
+                observed = rec.get_time()
+                out.append({
+                    "asset_id": row["asset_id"],
+                    "layout_key": row["layout_key"],
+                    "source": v.get("source"),
+                    "observed_at": (
+                        observed.isoformat() if observed is not None else None),
+                    **{k: v.get(k) for k in _LIVE_KEYS},
+                })
     return {"count": len(out), "trackers": out, "read_only": True,
             "operationally_usable": identity.operationally_usable}
+
+
+@app.get("/assets/actual-vs-expected")
+def asset_actual_vs_expected(asset_id: str,
+                             max_age_s: float = Query(120.0, gt=0, le=3600)):
+    """Join one exact SCADA snapshot with SolarGPT expected tracking.
+
+    SCADA stays read-only and owns no tracker physics. A missing/unreachable
+    SolarGPT service degrades to ACTUAL_ONLY; missing/stale actual evidence
+    fails closed and no residual is manufactured.
+    """
+    try:
+        UUID(asset_id)
+    except ValueError as exc:
+        raise HTTPException(400, "asset_id inválido") from exc
+
+    live = asset_live()
+    matches = [row for row in live["trackers"]
+               if row.get("asset_id") == asset_id]
+    if len(matches) != 1:
+        raise HTTPException(
+            404 if not matches else 409,
+            f"asset_id con {len(matches)} snapshots live")
+
+    actual = matches[0]
+    pre = compare_actual_expected(actual, None, max_age_s=max_age_s)
+    if pre["status"] in (
+            "ACTUAL_TIMESTAMP_UNKNOWN", "ACTUAL_FRESHNESS_UNKNOWN",
+            "STALE_ACTUAL"):
+        return pre
+
+    expected = None
+    error = None
+    try:
+        expected = fetch_expected(
+            SOLARGPT_EXPECTED_URL,
+            asset_id=asset_id,
+            ts=actual["observed_at"],
+            soc=actual.get("soc"),
+        )
+    except ExpectedUnavailable as exc:
+        error = str(exc)
+
+    return compare_actual_expected(
+        actual, expected, max_age_s=max_age_s, expected_error=error)
 
 
 @app.get("/assets/history")
