@@ -21,12 +21,15 @@
 #  Lanzar con TCU_Toolbox.bat (PowerShell 5.1+, sin instalar nada).
 # =============================================================================
 
+param([switch]$Demo)
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.93'
+$VERSION_TOOLBOX = '11.94'
+$script:ModoDemo = [bool]$Demo
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
@@ -3932,6 +3935,7 @@ $script:Desfases = 0        # respuestas atrasadas descartadas (se avisa en cons
 $script:AvisosDesfase = 0
 
 function Modbus-Conectar([string]$ip, [int]$puerto, [int]$timeoutMs) {
+    if($script:ModoDemo){throw 'DEMOSTRACION: conexiones a equipos bloqueadas.'}
     Modbus-Cerrar
     $c = New-Object System.Net.Sockets.TcpClient
     $ar = $c.BeginConnect($ip, $puerto, $null, $null)
@@ -3996,6 +4000,9 @@ function Modbus-Vaciar {
 }
 
 function Modbus-Transaccion([byte]$unit, [byte[]]$pdu) {
+    if($script:ModoDemo){throw 'DEMOSTRACION: conexiones a equipos bloqueadas.'}
+    if($pdu.Length -eq 0){throw 'Peticion Modbus vacia.'}
+    if($pdu[0] -notin @(3,4) -and -not (Puede 'tecnico')){throw 'Escritura bloqueada: se requiere una sesion de tecnico o administrador.'}
     if (-not $script:Stream) { throw "Sin conexion" }
     # Resincronizacion tras un fallo. La NCU sella la respuesta tardia de un TCU
     # con el ID de transaccion de la peticion que tenga en curso, asi que
@@ -4031,6 +4038,8 @@ function Modbus-Transaccion([byte]$unit, [byte[]]$pdu) {
     # (0x0A/0x0B) las da la NCU porque el TCU no ha llegado a tiempo: puede
     # contestar despues, y esa trama hay que darla por perdida reconectando.
     $delEquipo = $false
+    $comando=''
+    if($pdu[0] -notin @(3,4)){$comando=[guid]::NewGuid().ToString();Registro-Comando $comando 'PREPARADO' $unit $pdu}
     try {
         $script:Stream.Write($adu, 0, $adu.Length)
         while ($true) {
@@ -4049,10 +4058,12 @@ function Modbus-Transaccion([byte]$unit, [byte[]]$pdu) {
                 if ([int]$cuerpo[0] -ne [int]$pdu[0]) {
                     throw ("Respuesta descolocada: se pidio FC{0} y llego FC{1}" -f [int]$pdu[0], [int]$cuerpo[0])
                 }
+                if($comando){Registro-Comando $comando 'RESPUESTA_MODBUS_NO_VERIFICA_EFECTO_FISICO' $unit $pdu}
                 return $cuerpo
             }
         }
     } catch {
+        if($comando){try{Registro-Comando $comando 'FALLO_RESULTADO_NO_CONFIRMADO' $unit $pdu}catch{}}
         if (-not $delEquipo) { $script:Sucio = $true }
         throw
     }
@@ -4861,7 +4872,12 @@ function Usuario-Validar($usuarios, [string]$usuario, [string]$pass) {
 }
 function Usuarios-Cargar {
     if (-not (Test-Path $FICH_USUARIOS)) { return @() }
-    try { return @(Get-Content $FICH_USUARIOS -Raw | ConvertFrom-Json) } catch { return @() }
+    try {
+        $lista=@(Get-Content $FICH_USUARIOS -Raw | ConvertFrom-Json)
+        if($lista.Count -eq 0 -or @($lista|Where-Object{$_.rol -eq 'admin'}).Count -eq 0){throw 'No hay administrador valido.'}
+        foreach($u in $lista){if(-not $u.usuario -or $u.rol -notin $ROLES -or -not $u.hash -or -not $u.sal -or $u.iteraciones -lt 100000){throw 'Registro de usuario invalido.'}}
+        return $lista
+    } catch { throw "usuarios.json no es valido. Conserva el fichero y recupera una copia de seguridad: $_" }
 }
 function Usuarios-Guardar($lista) {
     ConvertTo-Json @($lista) -Depth 4 | Set-Content $FICH_USUARIOS -Encoding UTF8
@@ -4870,7 +4886,17 @@ function Usuarios-Guardar($lista) {
 function Puede([string]$minimo) {
     if (-not $script:Usuario) { return $false }
     $orden = @{lectura=0; tecnico=1; admin=2}
+    if(-not $orden.ContainsKey($minimo) -or -not $orden.ContainsKey("$($script:Usuario.rol)")){return $false}
+    if($script:ModoDemo -and $minimo -ne 'lectura'){return $false}
     return ([int]$orden["$($script:Usuario.rol)"] -ge [int]$orden[$minimo])
+}
+
+# Registro previo a TODA escritura Modbus: si no se puede registrar, no se envia.
+function Registro-Comando([string]$id,[string]$fase,[byte]$unit,[byte[]]$pdu){
+    $dir=Join-Path $PSScriptRoot 'registro';[void][IO.Directory]::CreateDirectory($dir)
+    $addr=if($pdu.Length -ge 3){([int]$pdu[1] -shl 8) -bor [int]$pdu[2]}else{$null}
+    $r=@{id=$id;fecha_utc=[datetime]::UtcNow.ToString('o');usuario="$($script:Usuario.usuario)";rol="$($script:Usuario.rol)";ip=$script:ConIp;puerto=$script:ConPuerto;unit=$unit;funcion=[int]$pdu[0];registro=$addr;fase=$fase}
+    $r|ConvertTo-Json -Compress|Add-Content -LiteralPath (Join-Path $dir ('comandos_'+(Get-Date -Format 'yyyyMM')+'.jsonl')) -Encoding UTF8 -ErrorAction Stop
 }
 
 # Registro de acciones: una linea por escritura, se acumula en el PC de planta.
@@ -8547,12 +8573,14 @@ function Topologia-Avisos($entradas) {
             }
         }
         # lo que la topologia dice que hay contra lo que su rango deja leer
-        $decl = 0; $hay = 0
+        $declarados = @{}; $hay = 0
         foreach ($e in $gs) {
             $hu = @(@($e.huecos) | Where-Object { "$_" -match '^\d+$' }).Count
             $hay += ([int]$e.tcu_fin - [int]$e.tcu_ini + 1) - $hu
-            if ("$($e.trackers)" -match '^\d+$') { $decl += [int]$e.trackers }
+            if ("$($e.trackers)" -match '^\d+$') { $declarados[[int]$e.trackers] = $true }
         }
+        if($declarados.Count -gt 1){$av += "$eti : totales de trackers incompatibles entre gateways"}
+        $decl = 0; if($declarados.Count -eq 1){$decl = [int]@($declarados.Keys)[0]}
         if ($decl -gt 0 -and $decl -ne $hay) {
             $av += "$eti : la topologia declara $decl trackers y su rango deja $hay. Revisa el campo de esclavos (admite varios tramos: '1-13 15-23')"
         }
@@ -10079,6 +10107,7 @@ function Logica-Propia([string]$ruta = '') {
 # su tarea como argumento. Sin eso, EndInvoke en orden bloquea hasta el final y
 # la barra de avance se queda en 0 todo el barrido, que es como se vio.
 function Paralelo-Ejecutar($tareas, [scriptblock]$cuerpo, [int]$hilos = 8, [string]$ruta = '', [scriptblock]$alTerminar = $null) {
+    if($script:ModoDemo){throw 'DEMOSTRACION: barridos de equipos bloqueados.'}
     $lista = @($tareas)
     if ($lista.Count -eq 0) { return @() }
     $logica = Logica-Propia $ruta
@@ -16421,7 +16450,7 @@ function Tema-Recoger($cont, $acc) {
 # boton se le queda corto el ancho fijo, se ensancha lo justo, sin llegar a
 # tocar el control que tenga a su derecha.
 function Tema-AjustarAnchos($cont) {
-    if ($cont -eq $tabSEC -or $cont -eq $tabG -or $cont -eq $tabOP) { return }
+    if ($cont -eq $tabSEC -or $cont -eq $tabG -or $cont -eq $tabOP -or $cont -eq $tabCLI) { return }
     foreach ($c in $cont.Controls) {
         if ($c.Controls.Count -gt 0) { Tema-AjustarAnchos $c }
         $ajustable = ($c -is [System.Windows.Forms.Label]) -or ($c -is [System.Windows.Forms.CheckBox]) -or
@@ -16659,7 +16688,7 @@ function Anclaje-Para([hashtable]$g) {
 # largas que su pestana. Por eso esto se hace con la ventana ya mostrada y con
 # una guarda por si algun contenedor sigue sin medir lo que deberia.
 function Anclar-Contenedor($cont, $anchoRef) {
-    if ($cont -eq $tabSEC -or $cont -eq $tabG -or $cont -eq $tabOP) { return }
+    if ($cont -eq $tabSEC -or $cont -eq $tabG -or $cont -eq $tabOP -or $cont -eq $tabCLI) { return }
     $ancho = $cont.ClientSize.Width
     $alto = $cont.ClientSize.Height
     $tablas = @($cont.Controls | Where-Object {
@@ -16697,7 +16726,7 @@ function Anclar-Contenedor($cont, $anchoRef) {
 # Red de seguridad: si algo ha acabado fuera de su contenedor, se mete dentro.
 # Mas vale un boton apretado contra el borde que un boton que no se ve.
 function Layout-Rescatar($cont) {
-    if ($cont -eq $tabSEC -or $cont -eq $tabG -or $cont -eq $tabOP) { return }
+    if ($cont -eq $tabSEC -or $cont -eq $tabG -or $cont -eq $tabOP -or $cont -eq $tabCLI) { return }
     $ancho = $cont.ClientSize.Width; $alto = $cont.ClientSize.Height
     if ($ancho -lt 40 -or $alto -lt 40) { return }
     foreach ($c in $cont.Controls) {
@@ -17271,11 +17300,16 @@ $tabOP = New-Object System.Windows.Forms.TabPage
 [void]$tabs.TabPages.Add($tabOP)
 . (Join-Path $PSScriptRoot 'Operacion.ps1')
 . (Join-Path $PSScriptRoot 'HistorialCsv.ps1')
+. (Join-Path $PSScriptRoot 'Cliente.ps1')
 Op-Crear $tabOP
+$tabCLI = New-Object System.Windows.Forms.TabPage
+[void]$tabs.TabPages.Add($tabCLI)
+Cliente-Crear $tabCLI
 
 $NAV_ARBOL = @(
     @{bloque = 'OPERACIÓN'; hojas = @(
-        @{txt='Resumen e incidencias'; tab=$tabOP})}
+        @{txt='Resumen e incidencias'; tab=$tabOP}
+        @{txt='Inicio, planta y soporte'; tab=$tabCLI})}
     # El fichero va sin tildes por costumbre, pero esto es lo UNICO que se lee en
     # pantalla: aqui van bien escritas. El .ps1 esta en UTF-8 con BOM, asi que
     # PowerShell 5.1 las lee sin mezclarlas.
@@ -17561,7 +17595,7 @@ $form.Add_Shown({
         $anchoTab = $tabs.DisplayRectangle.Width - 10
         foreach ($tp in $tabs.TabPages) { Anclar-Contenedor $tp $anchoTab }
         foreach ($tp in $tabs.TabPages) {
-            if ($tp -ne $tabSEC -and $tp -ne $tabG -and $tp -ne $tabOP) { $tp.AutoScroll=$true; $tp.AutoScrollMinSize=New-Object Drawing.Size(914,390) }
+            if ($tp -ne $tabSEC -and $tp -ne $tabG -and $tp -ne $tabOP -and $tp -ne $tabCLI) { $tp.AutoScroll=$true; $tp.AutoScrollMinSize=New-Object Drawing.Size(914,390) }
         }
         Nav-Filtrar;Vista-Titulo
         $script:LayoutListo=$true
@@ -17614,7 +17648,7 @@ function Dialogo-Usuario([string]$titulo, [string]$rolFijo) {
     $bOk.Add_Click({
         $u = $tU.Text.Trim()
         if ($u -eq '') { [void][System.Windows.Forms.MessageBox]::Show('El usuario no puede estar vacío.','Aviso'); return }
-        if ($tP.Text.Length -lt 4) { [void][System.Windows.Forms.MessageBox]::Show('La contraseña necesita al menos 4 caracteres.','Aviso'); return }
+        if ($tP.Text.Length -lt 12) { [void][System.Windows.Forms.MessageBox]::Show('La contraseña necesita al menos 12 caracteres.','Aviso'); return }
         if ($tP.Text -ne $tP2.Text) { [void][System.Windows.Forms.MessageBox]::Show('Las dos contraseñas no coinciden.','Aviso'); return }
         $sal.usuario = Usuario-Nuevo $u $(if ($tN.Text.Trim()) { $tN.Text.Trim() } else { $u }) "$($cbR.SelectedItem)" $tP.Text
         $d.DialogResult = 'OK'; $d.Close()
@@ -17751,7 +17785,8 @@ $btnUsuarios.Add_Click({
     [void]$d.ShowDialog($form)
 })
 
-$usuarios = @(Usuarios-Cargar)
+try{$usuarios = @(Usuarios-Cargar)}catch{[void][Windows.Forms.MessageBox]::Show("$_",'No se puede iniciar');return}
+if($script:ModoDemo){$usuarios=@(@{usuario='demo';nombre='Demostracion';rol='lectura'})}
 if ($usuarios.Count -eq 0) {
     [void][System.Windows.Forms.MessageBox]::Show(
         "Primer arranque: no hay usuarios dados de alta.`r`n`r`nVas a crear el ADMINISTRADOR. Guarda bien la contraseña: si se pierde, hay que borrar usuarios.json a mano.",
@@ -17777,9 +17812,10 @@ if ($usuarios.Count -eq 0) {
         "Administrador '$($nuevo.usuario)' creado y guardado.`r`n`r`nAhora entra con ese usuario y su contraseña.",
         'Usuario creado', 'OK', 'Information')
 }
-$script:Usuario = Dialogo-Login $usuarios
+if($script:ModoDemo){$script:Usuario=$usuarios[0]}else{$script:Usuario = Dialogo-Login $usuarios}
 if (-not $script:Usuario) { return }
 
+if(-not (Cliente-Bloqueo)){return}
 Config-Restaurar
 Aplicar-Rol
 Con "Sesion iniciada: $($script:Usuario.nombre) ($($script:Usuario.usuario)), rol $($script:Usuario.rol). $($ROL_DESC["$($script:Usuario.rol)"])" ([System.Drawing.Color]::LightGreen)
@@ -17789,5 +17825,6 @@ Cierre-Cargar (Nombre-Planta)
 Cierre-Pintar
 Cierre-Avisar
 Trabajos-Pintar
+if($script:ModoDemo){Cliente-Demo}
 [void]$form.ShowDialog()
 Modbus-Cerrar

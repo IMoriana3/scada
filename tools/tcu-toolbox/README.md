@@ -4,6 +4,23 @@
 
 Es el complemento de **escritura** del SCADA de este repo: el SCADA es solo-lectura a propósito; cuando hay que *cambiar* algo en un TCU (configuración, reloj, NVM) se usa esta toolbox desde el portátil conectado a la LAN de planta.
 
+## Edición piloto 11.94
+
+Nueva hoja **Inicio, planta y soporte**: alta de topología validada, informe HTML,
+paquete técnico sin datos de planta, demostración aislada e instalación por
+versiones. **Histórico CSV → Tendencias** representa los valores originales y
+compara ángulo/consigna. **Operación → Gestionar** añade responsable y estado de
+intervención; el cierre exige nota y diagnóstico reciente OK.
+
+El paquete `Factiun_Toolbox_Cliente_v11.94.zip` contiene solo programa y guía,
+sin topologías de nuestras plantas. La distribución habitual conserva todas
+las funciones. Consultar `Guia-cliente.html`, `COMPATIBILIDAD.md` y `PILOTO.md`.
+La firma corporativa y la aceptación en planta siguen pendientes de evidencia.
+
+La regla de mejoras en ambos productos y sus diferencias pendientes están en
+[`PARIDAD_PRODUCTO.md`](../../PARIDAD_PRODUCTO.md). Los registros de incidencias
+locales y online todavía no se sincronizan automáticamente.
+
 ## Histórico CSV de NCU (v11.93)
 
 Desde **Operación → ficha del equipo → Histórico CSV**, o desde el detalle del

@@ -58,6 +58,12 @@ jobs:
           cd ..
           unzip -l "TCU_Toolbox_v${VER}.zip"
 
+      - name: Paquete de cliente sin topologias ni datos internos
+        shell: pwsh
+        run: |
+          ./tools/tcu-toolbox/Empaquetar-cliente.ps1 -Destino "$env:RUNNER_TEMP/cliente"
+          Copy-Item "$env:RUNNER_TEMP/cliente/Factiun_Toolbox_Cliente_v*.zip" .
+
       # Las fichas son un extra: si fallan, la Release con el ZIP tiene que salir
       # igual. Antes un fallo aqui dejaba la version sin publicar.
       #
@@ -121,7 +127,7 @@ jobs:
               --latest
           fi
           # las fichas pueden no estar (el paso de arriba no corta la release)
-          gh release upload "$TAG" "TCU_Toolbox_v${VER}.zip" TCU_Agente_v*.zip --clobber
+          gh release upload "$TAG" "TCU_Toolbox_v${VER}.zip" TCU_Agente_v*.zip Factiun_Toolbox_Cliente_v*.zip --clobber
           # Un solo ZIP de agente por Release. La etiqueta la marca la version de
           # la TOOLBOX, asi que si el agente sube de version y la toolbox no, el
           # ZIP nuevo entra en la misma Release con OTRO nombre: --clobber solo

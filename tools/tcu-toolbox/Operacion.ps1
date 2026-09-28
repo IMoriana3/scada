@@ -13,6 +13,7 @@ function Op-Clave($fila,$meta,$trabajos) {
     return (@("$($meta.planta)",$ip,"$($fila.NCU)",$puerto,(Fila-Tipo $fila),"$($fila.TCU)")|ForEach-Object{[uri]::EscapeDataString($_)}) -join '|'
 }
 function Op-Calidad($fila,$meta,[datetime]$ahora,[int]$umbral=300) {
+    if($meta -and $meta.origen -eq 'demo'){return 'DEMOSTRACION / SINTETICO'}
     if(-not $meta -or $meta.origen -ne 'lectura'){return 'IMPORTADO / SIN ORIGEN'}
     $edadLectura=[math]::Max(0,($ahora-[datetime]$meta.fecha).TotalSeconds)
     if($edadLectura -gt $umbral){return 'LECTURA ANTIGUA'}
@@ -38,7 +39,8 @@ function Op-Episodio($anterior,$fila,$meta) {
         return $anterior
     }
     if(-not $anterior -or -not $anterior.activa -or $anterior.firma -ne $firma){
-        return @{firma=$firma;activa=$true;primera="$($meta.fecha)";ultima="$($meta.fecha)";reconocida='';usuario='';nota=''}
+        $archivo=@();if($anterior){$archivo=@($anterior.historial)+@(@{firma=$anterior.firma;primera=$anterior.primera;ultima=$anterior.ultima;responsable=$anterior.responsable;estado=$anterior.estado;nota=$anterior.nota;cierre=$anterior.cierre})}
+        return @{historial=$archivo;estado='abierto';responsable='';cierre='';firma=$firma;activa=$true;primera="$($meta.fecha)";ultima="$($meta.fecha)";reconocida='';usuario='';nota=''}
     }
     $anterior.ultima="$($meta.fecha)"
     return $anterior
@@ -57,9 +59,10 @@ function Op-Guardar {
     try{
         $dir=Split-Path $script:OpFichero -Parent
         if(-not (Test-Path $dir)){[void](New-Item -ItemType Directory -Path $dir -Force)}
-        $temporal=$script:OpFichero+'.tmp'
-        ConvertTo-Json -InputObject $script:OpIncidencias -Depth 6|Set-Content $temporal -Encoding UTF8
-        Move-Item $temporal $script:OpFichero -Force
+        $ruta=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($script:OpFichero)
+        $temporal=$ruta+'.'+[guid]::NewGuid().ToString('N')+'.tmp'
+        ConvertTo-Json -InputObject $script:OpIncidencias -Depth 10|Set-Content $temporal -Encoding UTF8
+        if(Test-Path -LiteralPath $ruta){[IO.File]::Replace($temporal,$ruta,[NullString]::Value)}else{[IO.File]::Move($temporal,$ruta)}
         $script:OpError='';return $true
     }catch{$script:OpError="No se guardaron las incidencias: $_";return $false}
 }
@@ -128,10 +131,11 @@ function Op-Pintar {
         foreach($r in @($filas|Sort-Object prioridad,@{Expression={$_.fila.NCU}},@{Expression={$_.fila.TCU}})){
             if($script:OpFiltro.SelectedIndex -eq 0 -and $r.prioridad -eq 5){continue}
             if($script:OpFiltro.SelectedIndex -eq 2 -and (-not $r.episodio -or -not $r.episodio.activa -or $r.episodio.reconocida)){continue}
+            if($script:OpFiltro.SelectedIndex -eq 3 -and (-not $r.episodio -or $r.episodio.estado -eq 'cerrado')){continue}
             $it=New-Object Windows.Forms.ListViewItem("$($r.prioridad)")
             $ack='';if($r.episodio.reconocida){$ack='Vista por '+$r.episodio.usuario}
             $edad="$($r.fila.Edad_s)";if(-not $edad){$edad='No disponible'}
-            foreach($v in @($r.fila.NCU,$r.fila.TCU,$r.fila.Salud,$r.fila.Alarmas,$r.calidad,$ack,$r.meta.planta,$r.meta.modo,$edad)){[void]$it.SubItems.Add("$v")}
+            foreach($v in @($r.fila.NCU,$r.fila.TCU,$r.fila.Salud,$r.fila.Alarmas,$r.calidad,$ack,$r.meta.planta,$r.meta.modo,$edad,$r.episodio.estado,$r.episodio.responsable)){[void]$it.SubItems.Add("$v")}
             $it.Tag=$r
             if($r.prioridad -eq 1){$it.ForeColor=[Drawing.Color]::Firebrick}
             elseif($r.prioridad -le 3){$it.ForeColor=[Drawing.Color]::FromArgb(142,73,0)}
@@ -149,7 +153,7 @@ function Op-Fecha([string]$valor) {
 }
 function Op-Seleccion {
     $script:OpDetalle.Text='Selecciona una incidencia para consultar su origen y abrir el equipo. Reconocerla no borra la alarma ni ejecuta órdenes.'
-    $script:OpVer.Enabled=$false;$script:OpReconocer.Enabled=$false;$script:OpNota.Enabled=$false
+    $script:OpVer.Enabled=$false;$script:OpReconocer.Enabled=$false;$script:OpNota.Enabled=$false;if($script:OpGestion){$script:OpGestion.Enabled=$false}
     if($script:OpLista.SelectedItems.Count -ne 1){return}
     $r=$script:OpLista.SelectedItems[0].Tag
     $script:OpDetalle.Text="NCU$($r.fila.NCU) / $($r.fila.TCU) | $($r.meta.planta) | $($r.calidad)`r`nAdquisición: $(Op-Fecha $r.meta.fecha) | $($r.meta.modo)`r`nÚltima incidencia registrada: $($r.episodio.firma) | Activa al observarse: $($r.episodio.activa)`r`nPrimera detección: $(Op-Fecha $r.episodio.primera) | Última detección: $(Op-Fecha $r.episodio.ultima)`r`nReconocimiento: $(if($r.episodio.reconocida){Op-Fecha $r.episodio.reconocida}else{'Pendiente'}) $($r.episodio.usuario)`r`nNota: $($r.episodio.nota)"
@@ -157,6 +161,7 @@ function Op-Seleccion {
     $editable=$r.episodio -and $r.episodio.activa -and $r.meta.origen -eq 'lectura' -and -not $script:Ocupado
     $script:OpReconocer.Enabled=$editable -and -not $r.episodio.reconocida
     $script:OpNota.Enabled=[bool]$editable
+    if($script:OpGestion){$script:OpGestion.Enabled=[bool]($r.episodio -and $r.meta.origen -eq 'lectura' -and -not $script:Ocupado)}
 }
 function Op-VerEquipo {
     if($script:Ocupado -or $script:OpLista.SelectedItems.Count -ne 1){return}
@@ -193,14 +198,15 @@ function Op-Crear($pagina) {
     $barra=New-Object Windows.Forms.FlowLayoutPanel;$barra.Dock='Fill';$layout.Controls.Add($barra)
     $script:OpPlanta=New-Object Windows.Forms.ComboBox;$script:OpPlanta.Width=190;$script:OpPlanta.DropDownStyle='DropDownList';$barra.Controls.Add($script:OpPlanta)
     $script:OpFiltro=New-Object Windows.Forms.ComboBox;$script:OpFiltro.Width=190;$script:OpFiltro.DropDownStyle='DropDownList'
-    [void]$script:OpFiltro.Items.AddRange(@('Incidencias y datos dudosos','Todos los equipos','Pendientes de reconocer'));$script:OpFiltro.SelectedIndex=0;$barra.Controls.Add($script:OpFiltro)
+    [void]$script:OpFiltro.Items.AddRange(@('Incidencias y datos dudosos','Todos los equipos','Pendientes de reconocer','Intervenciones pendientes'));$script:OpFiltro.SelectedIndex=0;$barra.Controls.Add($script:OpFiltro)
     $b=Sec-Boton $barra 'Preparar diagnóstico';$b.Add_Click({if($script:Ocupado){return};$script:DiagNivel='todo';$tabs.SelectedTab=$tabG;Diag-Refrescar})
     $script:OpLista=New-Object Windows.Forms.ListView;$script:OpLista.Dock='Fill';$script:OpLista.View='Details';$script:OpLista.FullRowSelect=$true;$script:OpLista.MultiSelect=$false;$script:OpLista.HideSelection=$false
-    foreach($c in @(@('P',30),@('NCU',48),@('Equipo',62),@('Estado',90),@('Alarma / motivo',230),@('Calidad del dato',158),@('Reconocimiento',150),@('Origen / planta',150),@('Lectura',100),@('Edad origen s',95))){[void]$script:OpLista.Columns.Add($c[0],[int]$c[1])}
+    foreach($c in @(@('P',30),@('NCU',48),@('Equipo',62),@('Estado',90),@('Alarma / motivo',230),@('Calidad del dato',158),@('Reconocimiento',150),@('Origen / planta',150),@('Lectura',100),@('Edad origen s',95),@('Gestion',105),@('Responsable',130))){[void]$script:OpLista.Columns.Add($c[0],[int]$c[1])}
     $layout.Controls.Add($script:OpLista)
     $script:OpDetalle=New-Object Windows.Forms.TextBox;$script:OpDetalle.Dock='Fill';$script:OpDetalle.Multiline=$true;$script:OpDetalle.ReadOnly=$true;$script:OpDetalle.ScrollBars='Vertical';$layout.Controls.Add($script:OpDetalle)
     $acciones=New-Object Windows.Forms.FlowLayoutPanel;$acciones.Dock='Fill';$layout.Controls.Add($acciones)
     $script:OpVer=Sec-Boton $acciones 'Equipo y acciones';$script:OpReconocer=Sec-Boton $acciones 'Reconocer incidencia';$script:OpNota=Sec-Boton $acciones 'Añadir / editar nota'
+    $script:OpGestion=Sec-Boton $acciones 'Gestionar';$script:OpGestion.Add_Click({Op-DialogoGestion})
     $script:OpVer.Add_Click({Op-VerEquipo});$script:OpReconocer.Add_Click({Op-Anotar $true});$script:OpNota.Add_Click({Op-Anotar $false})
     $script:OpLista.Add_DoubleClick({Op-VerEquipo});$script:OpLista.Add_SelectedIndexChanged({if(-not $script:OpPintando){Op-Seleccion}})
     $script:OpPlanta.Add_SelectedIndexChanged({if(-not $script:OpPintando){Op-Pintar}});$script:OpFiltro.Add_SelectedIndexChanged({Op-Pintar})
@@ -210,4 +216,50 @@ function Op-Crear($pagina) {
     $form.Add_FormClosed({$script:OpReloj.Stop();$script:OpReloj.Dispose()})
     $tabs.Add_SelectedIndexChanged({if($tabs.SelectedTab -eq $tabOP -and -not $script:Ocupado){Op-Actualizar}})
     Op-Cargar;Op-Pintar
+}
+
+function Op-PuedeCerrar($e){
+    if($null -eq $e){return $false}
+    if($e.nota -isnot [string]){return $false}
+    foreach($v in @($e.adquisicion_s,$e.edad_origen_s)){
+        if($null -eq $v -or $v -is [bool] -or $v -is [array] -or $v -is [System.Collections.IDictionary]){return $false}
+    }
+    $a=0.0;$o=0.0
+    $okA=[double]::TryParse("$($e.adquisicion_s)",[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$a)
+    $okO=[double]::TryParse("$($e.edad_origen_s)",[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$o)
+    return ($e.origen_verificado -is [bool] -and $e.origen_verificado -eq $true -and $e.diagnostico -is [bool] -and $e.diagnostico -eq $true -and $e.historico -is [bool] -and $e.historico -eq $false -and $e.salud -ceq 'OK' -and "$($e.nota)".Trim().Length -gt 0 -and $okA -and $okO -and $a -ge 0 -and $o -ge 0 -and $a -le 300 -and $a+$o -le 300)
+}
+function Op-Gestionar($r,[string]$responsable,[string]$estado,[string]$nota){
+    if(-not (Puede 'lectura')){throw 'Se requiere una sesion identificada.'}
+    if(-not $r.episodio -or $r.meta.origen -ne 'lectura'){throw 'La incidencia no tiene origen de lectura verificado.'}
+    if($estado -notin @('abierto','en curso','cerrado')){throw 'Estado de gestion no valido.'}
+    if($responsable.Length -gt 120 -or $nota.Length -gt 2000){throw 'Responsable o nota demasiado largos.'}
+    if($estado -eq 'cerrado'){
+        if(-not $nota.Trim()){throw 'Describe la actuacion y la evidencia de verificacion antes de cerrar.'}
+        $fecha=[datetime]::MinValue;$edad=$null
+        if([datetime]::TryParse("$($r.meta.fecha)",[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind,[ref]$fecha)){$edad=((Get-Date)-$fecha).TotalSeconds}
+        $e=@{origen_verificado=($r.meta.origen -eq 'lectura');diagnostico=($r.meta.modo -eq 'diagnóstico');historico=$false;salud=$r.fila.Salud;adquisicion_s=$edad;edad_origen_s=$r.fila.Edad_s;nota=$nota}
+        if(-not (Op-PuedeCerrar $e)){throw 'Para cerrar, repite el diagnostico: se requiere OK con edad de origen conocida y reciente.'}
+    }
+    $antes=@{};foreach($k in $r.episodio.Keys){$antes[$k]=$r.episodio[$k]}
+    $r.episodio.responsable=$responsable.Trim();$r.episodio.estado=$estado;$r.episodio.nota=$nota
+    $r.episodio.editada=(Get-Date).ToString('o');$r.episodio.autor="$($script:Usuario.usuario)"
+    if($estado -eq 'cerrado'){$r.episodio.cierre=$r.episodio.editada;$r.episodio.verificacion=@{contrato=1;adquisicion=$r.meta.fecha;edad_origen_s=$r.fila.Edad_s;salud=$r.fila.Salud;origen=$r.meta.origen;clave=$r.clave}}else{$r.episodio.cierre='';$r.episodio.verificacion=$null}
+    if(-not (Op-Guardar)){$script:OpIncidencias[$r.clave]=$antes;$r.episodio=$antes;throw $script:OpError}
+    Auditar 'INCIDENCIA_GESTION' "$($r.fila.NCU)" "$($r.fila.TCU)" "$($r.clave) | $estado | $responsable | $nota"
+}
+function Op-DialogoGestion {
+    if($script:Ocupado -or $script:OpLista.SelectedItems.Count -ne 1){return}
+    $r=$script:OpLista.SelectedItems[0].Tag
+    $d=New-Object Windows.Forms.Form;$d.Text='Gestion de la incidencia';$d.Size=New-Object Drawing.Size(600,410);$d.StartPosition='CenterParent';$d.Font=$form.Font
+    $l=New-Object Windows.Forms.TableLayoutPanel;$l.Dock='Fill';$l.Padding=New-Object Windows.Forms.Padding(12);$l.ColumnCount=1;$l.RowCount=6;$d.Controls.Add($l)
+    foreach($h in @(38,30,32)){[void]$l.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',$h)))}
+    [void]$l.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100)));[void]$l.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',44)));[void]$l.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',36)))
+    $t=New-Object Windows.Forms.Label;$t.Dock='Fill';$t.Text='Responsable, estado de gestion y evidencia de la intervencion. Cerrar exige un nuevo diagnostico OK reciente.';$l.Controls.Add($t)
+    $resp=New-Object Windows.Forms.TextBox;$resp.Dock='Fill';$resp.Text=$r.episodio.responsable;$resp.MaxLength=120;$l.Controls.Add($resp)
+    $estado=New-Object Windows.Forms.ComboBox;$estado.Dock='Fill';$estado.DropDownStyle='DropDownList';[void]$estado.Items.AddRange(@('abierto','en curso','cerrado'));$estado.SelectedItem=$r.episodio.estado;if($estado.SelectedIndex -lt 0){$estado.SelectedIndex=0};$l.Controls.Add($estado)
+    $nota=New-Object Windows.Forms.TextBox;$nota.Dock='Fill';$nota.Multiline=$true;$nota.ScrollBars='Vertical';$nota.Text=$r.episodio.nota;$nota.MaxLength=2000;$l.Controls.Add($nota)
+    $err=New-Object Windows.Forms.Label;$err.Dock='Fill';$err.ForeColor='Firebrick';$l.Controls.Add($err)
+    $b=Sec-Boton $l 'Guardar intervencion';$b.Add_Click({try{Op-Gestionar $r $resp.Text "$($estado.SelectedItem)" $nota.Text;$d.Close()}catch{$err.Text="$_"}}.GetNewClosure())
+    try{[void]$d.ShowDialog($form)}finally{$d.Dispose();Op-Pintar}
 }

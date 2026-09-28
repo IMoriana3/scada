@@ -1,0 +1,268 @@
+{
+  "version": 1,
+  "states": [
+    "abierto",
+    "en curso",
+    "cerrado"
+  ],
+  "close_observation_max_age_s": 300,
+  "rules": [
+    "Acknowledge and work-order closure never clear an equipment alarm or send a command.",
+    "Imported snapshots and historical CSV are not a live acquisition channel.",
+    "Plant plus NCU plus exact slave is an operational locator, not a persistent hardware identity.",
+    "Diagnostic incident closure requires an unambiguous, time-anchored, recent OK observation and an intervention note.",
+    "Missing data, ambiguous timestamps or conflicting locators must remain unknown.",
+    "Operational changes require an applicability review and paired implementation/evidence in SCADA online and Toolbox."
+  ],
+  "close_cases": [
+    {
+      "id": "fresh_ok",
+      "input": {
+        "origen_verificado": true,
+        "diagnostico": true,
+        "historico": false,
+        "salud": "OK",
+        "adquisicion_s": 10,
+        "edad_origen_s": 5,
+        "nota": "Verificado tras ajuste"
+      },
+      "allowed": true
+    },
+    {
+      "id": "active_alarm",
+      "input": {
+        "origen_verificado": true,
+        "diagnostico": true,
+        "historico": false,
+        "salud": "ALARMA",
+        "adquisicion_s": 10,
+        "edad_origen_s": 5,
+        "nota": "Ajustado"
+      },
+      "allowed": false
+    },
+    {
+      "id": "stale_sample",
+      "input": {
+        "origen_verificado": true,
+        "diagnostico": true,
+        "historico": false,
+        "salud": "OK",
+        "adquisicion_s": 10,
+        "edad_origen_s": 295,
+        "nota": "Ajustado"
+      },
+      "allowed": false
+    },
+    {
+      "id": "unknown_age",
+      "input": {
+        "origen_verificado": true,
+        "diagnostico": true,
+        "historico": false,
+        "salud": "OK",
+        "adquisicion_s": 10,
+        "edad_origen_s": null,
+        "nota": "Ajustado"
+      },
+      "allowed": false
+    },
+    {
+      "id": "unknown_source",
+      "input": {
+        "origen_verificado": false,
+        "diagnostico": true,
+        "historico": false,
+        "salud": "OK",
+        "adquisicion_s": 10,
+        "edad_origen_s": 1,
+        "nota": "Ajustado"
+      },
+      "allowed": false
+    },
+    {
+      "id": "comms_only",
+      "input": {
+        "origen_verificado": true,
+        "diagnostico": false,
+        "historico": false,
+        "salud": "OK",
+        "adquisicion_s": 10,
+        "edad_origen_s": 1,
+        "nota": "Ajustado"
+      },
+      "allowed": false
+    },
+    {
+      "id": "historical_view",
+      "input": {
+        "origen_verificado": true,
+        "diagnostico": true,
+        "historico": true,
+        "salud": "OK",
+        "adquisicion_s": 10,
+        "edad_origen_s": 1,
+        "nota": "Ajustado"
+      },
+      "allowed": false
+    },
+    {
+      "id": "missing_note",
+      "input": {
+        "origen_verificado": true,
+        "diagnostico": true,
+        "historico": false,
+        "salud": "OK",
+        "adquisicion_s": 10,
+        "edad_origen_s": 1,
+        "nota": "  "
+      },
+      "allowed": false
+    },
+    {
+      "id": "future_time",
+      "input": {
+        "origen_verificado": true,
+        "diagnostico": true,
+        "historico": false,
+        "salud": "OK",
+        "adquisicion_s": -10,
+        "edad_origen_s": 1,
+        "nota": "Ajustado"
+      },
+      "allowed": false
+    },
+    {
+      "id": "boundary",
+      "input": {
+        "origen_verificado": true,
+        "diagnostico": true,
+        "historico": false,
+        "salud": "OK",
+        "adquisicion_s": 295,
+        "edad_origen_s": 5,
+        "nota": "Ajustado"
+      },
+      "allowed": true
+    },
+    {
+      "id": "flag_string",
+      "input": {
+        "origen_verificado": "true",
+        "diagnostico": true,
+        "historico": false,
+        "salud": "OK",
+        "adquisicion_s": 10,
+        "edad_origen_s": 5,
+        "nota": "Verificado tras ajuste"
+      },
+      "allowed": false
+    },
+    {
+      "id": "age_boolean",
+      "input": {
+        "origen_verificado": true,
+        "diagnostico": true,
+        "historico": false,
+        "salud": "OK",
+        "adquisicion_s": true,
+        "edad_origen_s": 5,
+        "nota": "Verificado tras ajuste"
+      },
+      "allowed": false
+    },
+    {
+      "id": "age_array",
+      "input": {
+        "origen_verificado": true,
+        "diagnostico": true,
+        "historico": false,
+        "salud": "OK",
+        "adquisicion_s": [
+          10
+        ],
+        "edad_origen_s": 5,
+        "nota": "Verificado tras ajuste"
+      },
+      "allowed": false
+    },
+    {
+      "id": "history_missing",
+      "input": {
+        "origen_verificado": true,
+        "diagnostico": true,
+        "historico": null,
+        "salud": "OK",
+        "adquisicion_s": 10,
+        "edad_origen_s": 5,
+        "nota": "Verificado tras ajuste"
+      },
+      "allowed": false
+    },
+    {
+      "id": "blank_age",
+      "input": {
+        "origen_verificado": true,
+        "diagnostico": true,
+        "historico": false,
+        "salud": "OK",
+        "adquisicion_s": "  ",
+        "edad_origen_s": 5,
+        "nota": "Verificado tras ajuste"
+      },
+      "allowed": false
+    },
+    {
+      "id": "unknown_health",
+      "input": {
+        "origen_verificado": true,
+        "diagnostico": true,
+        "historico": false,
+        "salud": null,
+        "adquisicion_s": 10,
+        "edad_origen_s": 5,
+        "nota": "Verificado tras ajuste"
+      },
+      "allowed": false
+    },
+    {
+      "id": "hex_age",
+      "input": {
+        "origen_verificado": true,
+        "diagnostico": true,
+        "historico": false,
+        "salud": "OK",
+        "adquisicion_s": "0x10",
+        "edad_origen_s": 5,
+        "nota": "Verificado tras ajuste"
+      },
+      "allowed": false
+    },
+    {
+      "id": "numeric_note",
+      "input": {
+        "origen_verificado": true,
+        "diagnostico": true,
+        "historico": false,
+        "salud": "OK",
+        "adquisicion_s": 10,
+        "edad_origen_s": 5,
+        "nota": 42
+      },
+      "allowed": false
+    },
+    {
+      "id": "decimal_age",
+      "input": {
+        "origen_verificado": true,
+        "diagnostico": true,
+        "historico": false,
+        "salud": "OK",
+        "adquisicion_s": "1.5",
+        "edad_origen_s": "2.5",
+        "nota": "Verificado tras ajuste"
+      },
+      "allowed": true
+    }
+  ]
+}

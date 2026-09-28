@@ -1,0 +1,56 @@
+# SCADA online y Factiun Toolbox
+
+Requisito del producto: toda mejora se evalúa e implementa en ambos entornos
+cuando resuelve la misma necesidad. Un cambio común no se considera terminado
+con una sola interfaz actualizada. Las diferencias justificadas se registran aquí.
+
+SCADA online: `IMoriana3/factiun-cartera`, `seguimiento-pem.html`.
+Toolbox: `IMoriana3/scada`, `tools/tcu-toolbox`. El visor `scada/index.html`
+es otra superficie; no sustituye la revisión de la aplicación online.
+
+## Entrega 11.94 / operations-v1
+
+| Capacidad | Toolbox | Online | Estado y siguiente cierre |
+|---|---|---|---|
+| Calidad y procedencia | Conserva origen capturado, adquisición y edad del dato | Distingue diagnóstico importado, histórico y hora anclada | Criterio común: desconocido no equivale a OK ni a tiempo real |
+| Gestión de intervención | Responsable, nota, abierto/en curso/cerrado; evidencia persistida al cerrar | Estados existentes; cierre de alarma usa la misma política y guarda diagnóstico y locator | Contrato y casos comunes; la inspección manual online se documenta como manual |
+| Cierre verificado | Diagnóstico OK y adquisición + edad de origen <= 300 s | Misma regla; rechaza histórico, origen ambiguo y modificación concurrente del estado | Implementado; guardas de aplicación, no autorización de servidor ni prueba física |
+| Acuse | Reconocimiento independiente | Acuse independiente | Un acuse no resuelve la avería |
+| Histórico y tendencias | CSV original, ángulo/consigna, envolvente que conserva picos, huecos y PNG | Consulta CSV, varios días y comparación de equipos existentes | Parcial: faltan varios días y segunda TCU en Toolbox; no declarar paridad completa |
+| Alta y topología | Importación guiada, IP/NCU/GW, solapes, cliente único y totales | Editor/exportador de topología existente | Falta validar ida y vuelta con todos los campos/plantas de un piloto |
+| Identidad/ubicación | Locator capturado con planta, IP, NCU y equipo | Locator explícito por planta/NCU/equipo | No se crea asset_id a partir de nombres; vinculación con ubicación pendiente |
+| Informes | HTML con calidad, alcance, responsable, estado y notas | Partes e informes existentes | Falta plantilla de entrega común y aprobación con cliente |
+| Incidencias entre dispositivos | Registro local persistente | Registro compartido en servicio online | No existe aún sincronización bidireccional de los registros |
+| Distribución y recuperación | Paquete de cliente sin plantas internas, manifiesto, instalación por versiones y retorno | Despliegue web del servicio existente | Diferencia de entorno; firma del editor y aceptación Windows/cliente pendientes |
+| Demostración y soporte | Carpeta aislada, datos sintéticos, transporte bloqueado y paquete técnico sin datos de planta | Sin demostración aislada equivalente validada | Pendiente online; no confundir demo con ensayo de campo |
+| Órdenes físicas | Control de rol y registro antes de enviar Modbus | No se habilitan órdenes remotas en esta entrega | Diferencia de seguridad y entorno; no copiar botones de movimiento sin arquitectura autorizada |
+
+## Cómo mantenerlo
+
+1. Incluir en cada PR el recorrido afectado, la contraparte y su PR/commit.
+2. Cambiar el contrato y sus casos antes de divergir en estados, edades,
+   unidades, alarmas, permisos o identidad. El original está en `scada/contracts`;
+   `factiun-cartera/contracts` conserva la copia exacta revisada.
+3. Ejecutar `node tests/test_operations_contract.js` en ambos repositorios y
+   `test_client.ps1` en Toolbox. Comprobar las copias con
+   `node tools/check_operations_parity.js /ruta/al/otro/repositorio`.
+   Falta de contraparte o discrepancia devuelve error; no se descarga código ni
+   se usan credenciales desde este control.
+4. Revisar el recorrido real en Windows y navegador. Los vectores compartidos
+   comprueban la política, no garantizan paridad de todas las pantallas.
+5. Publicar ambos cambios comunes como una entrega coordinada. Una diferencia
+   temporal debe tener motivo, impacto visible y tarea de cierre en esta tabla.
+
+No se activa CI de pago en el repositorio privado. Sus pruebas se ejecutan
+localmente y se adjunta el resultado a la PR. El control entre repositorios
+necesita ambas copias disponibles; no se presenta como una protección de GitHub.
+
+## Aceptación comercial aún pendiente
+
+La edición es candidata a piloto acompañado. Requiere pruebas Windows/WinForms,
+ensayo con firmware/equipos reales y operador externo, firma corporativa,
+revisión de distribución/licencias y acuerdo de instalación/formación/soporte.
+La matriz de firmware no constituye una certificación. Los logs locales no son
+inmutables; falta completar valores previos/posteriores y verificación física
+por operación. La política de cierre del navegador no sustituye las reglas de
+autorización, concurrencia y auditoría del servidor.

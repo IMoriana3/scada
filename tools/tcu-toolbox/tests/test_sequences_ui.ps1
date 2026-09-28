@@ -133,6 +133,16 @@ $histTimer.Add_Tick({
   $bmp=New-Object Drawing.Bitmap($ventana.Width,$ventana.Height)
   $ventana.DrawToBitmap($bmp,(New-Object Drawing.Rectangle(0,0,$ventana.Width,$ventana.Height)))
   $bmp.Save((Join-Path $PSScriptRoot 'sequence-ui-historico.png'));$bmp.Dispose()
+  $trendTimer=New-Object Windows.Forms.Timer;$trendTimer.Interval=300
+  $trendTimer.Add_Tick({
+   $tv=@([Windows.Forms.Application]::OpenForms|Where-Object{$_.Name -eq 'clienteTendencia'})|Select-Object -First 1
+   if(-not $tv){return};$trendTimer.Stop()
+   try{
+    $bmp=New-Object Drawing.Bitmap($tv.Width,$tv.Height);$tv.DrawToBitmap($bmp,(New-Object Drawing.Rectangle(0,0,$tv.Width,$tv.Height)))
+    $bmp.Save((Join-Path $PSScriptRoot 'sequence-ui-tendencias.png'));$bmp.Dispose()
+   }catch{$script:histUiError="$_"}finally{$tv.Close()}
+  })
+  try{$trendTimer.Start();$ventana.Controls.Find('histTrend',$true)[0].PerformClick()}finally{$trendTimer.Stop();$trendTimer.Dispose()}
  }catch{$script:histUiError="$_"}finally{$ventana.Close()}
 })
 try{$histTimer.Start();Hist-Abrir $histTag}finally{
@@ -140,6 +150,21 @@ try{$histTimer.Start();Hist-Abrir $histTag}finally{
 }
 if($script:histUiError){throw $script:histUiError}
 if(-not $script:histUiVisitada){throw 'No se abrio el historico'}
+# Hoja de inicio: acciones accesibles sin ocultar herramientas existentes.
+$tabs.SelectedTab=$tabCLI;[Windows.Forms.Application]::DoEvents()
+$bmp=New-Object Drawing.Bitmap($form.Width,$form.Height);$form.DrawToBitmap($bmp,(New-Object Drawing.Rectangle(0,0,$form.Width,$form.Height)))
+$bmp.Save((Join-Path $PSScriptRoot 'sequence-ui-cliente.png'));$bmp.Dispose()
+# Demostracion: datos sinteticos y bloqueo real del transporte.
+$demoRaiz=Join-Path ([IO.Path]::GetTempPath()) ('demo-ui-'+[guid]::NewGuid())
+$histAntes=$script:HistRaiz;$script:HistRaiz=$demoRaiz;$script:ModoDemo=$true
+try{
+ Cliente-Demo;[Windows.Forms.Application]::DoEvents()
+ if($form.Text -notmatch 'DEMOSTRACION' -or $script:OpLista.Items.Count -ne 3){throw 'La demo no se identifica o no carga sus tres equipos'}
+ $errorDemo='';try{Modbus-Conectar '127.0.0.1' 502 100}catch{$errorDemo="$_"}
+ if($errorDemo -notmatch 'DEMOSTRACION'){throw 'La demo no bloquea el transporte'}
+ $bmp=New-Object Drawing.Bitmap($form.Width,$form.Height);$form.DrawToBitmap($bmp,(New-Object Drawing.Rectangle(0,0,$form.Width,$form.Height)))
+ $bmp.Save((Join-Path $PSScriptRoot 'sequence-ui-demo.png'));$bmp.Dispose()
+}finally{$script:ModoDemo=$false;$script:HistRaiz=$histAntes;if(Test-Path $demoRaiz){Remove-Item $demoRaiz -Recurse -Force}}
 Remove-Item $script:OpFichero -Force -ErrorAction SilentlyContinue
 $form.Close();$form.Dispose()
 Write-Host 'Interfaz completa: arranque, geometria y contexto de diagnostico OK'
