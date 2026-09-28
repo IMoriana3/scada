@@ -53,6 +53,13 @@ footer{padding:24px 14px 40px;text-align:center;color:#71849a;font-size:12px}
   </section>
 
   <section class="card">
+    <b>2b · Actual vs Expected · SolarGPT canónico</b>
+    <p class="muted">SCADA aporta la medida; SolarGPT aporta el expected. Esta pantalla no calcula física ni sustituye la consigna de control.</p>
+    <div id="expectedTiles" class="grid" style="margin-top:10px"></div>
+    <div id="expectedState" class="muted" style="font-size:12px;margin-top:8px">Selecciona un activo.</div>
+  </section>
+
+  <section class="card">
     <b>3 · Ángulo físico / inclinómetro</b>
     <p class="muted">El sensor mide magnitud. El signo lo confirma el técnico para no mezclar la convención física con la de la TCU.</p>
     <div class="grid">
@@ -131,6 +138,7 @@ const CHECKS=[
  ["safety","Condición segura para devolver a servicio"]
 ];
 let assets=[], selected=null, telemetry=null, inspection=null, sensorMagnitude=null;
+let expectedComparison=null;
 
 const DBP=new Promise((resolve,reject)=>{
   const q=indexedDB.open("factiun-field-v1",1);
@@ -162,27 +170,82 @@ function escapeHtml(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;",
 
 function selectAsset(id){
   selected=assets.find(a=>a.asset_id===id)||null; telemetry=selected;
-  if(!selected){$("identity").textContent="";return}
+  expectedComparison=null;
+  if(!selected){
+    $("identity").textContent="";renderExpected();return;
+  }
   $("identity").textContent="asset_id: "+selected.asset_id+" · layout: "+(selected.layout_key||"—")+" · NCU "+(selected.ncu||"—")+" · TCU "+(selected.tcu||"—");
   inspection=FactiunField.newInspection(selected, telemetry);
-  renderLive();renderInspection();updateDeltas();
+  renderLive();renderInspection();updateDeltas();renderExpected();
+  refreshExpected();
 }
 function tile(label,v,unit=""){return '<div class="tile"><small>'+label+'</small><b>'+escapeHtml(v??"—")+(unit?'<span style="font-size:11px"> '+unit+'</span>':"")+'</b></div>'}
 function renderLive(){
-  if(!telemetry){$("liveTiles").innerHTML="";return}
+  if(!telemetry){$("liveTiles").innerHTML="";$("liveTime").textContent="";return}
   $("liveTiles").innerHTML=
     tile("Health",telemetry.health)+tile("Encoder",telemetry.tilt_angle,"°")+
     tile("Objetivo",telemetry.target_angle,"°")+tile("SoC",telemetry.soc,"%")+
     tile("Motor",telemetry.motor_current,"A")+tile("Panel",telemetry.panel_voltage,"V")+
     tile("Comms",telemetry.comms_age_s,"s")+tile("Estado",telemetry.main_state);
-  $("liveTime").textContent="snapshot "+new Date().toLocaleTimeString();
+  $("liveTime").textContent=telemetry.observed_at
+    ? "medido "+new Date(telemetry.observed_at).toLocaleString()
+    : "timestamp de medida no disponible";
+}
+function deg(v){const n=FactiunField.num(v);return n==null?"—":n.toFixed(2)}
+function renderExpected(){
+  if(!selected){$("expectedTiles").innerHTML="";$("expectedState").textContent="Selecciona un activo.";return}
+  const c=expectedComparison;
+  if(!c){$("expectedTiles").innerHTML="";$("expectedState").textContent="Expected no disponible todavía.";return}
+  const e=c.expected||{}, r=c.residuals||{}, p=c.power||{};
+  $("expectedTiles").innerHTML=
+    tile("Expected tracking",deg(e.expected_tracking_angle_deg),e.expected_tracking_angle_deg==null?"":"°")+
+    tile("Δ encoder − expected",deg(r.encoder_minus_expected_tracking_deg),r.encoder_minus_expected_tracking_deg==null?"":"°")+
+    tile("Δ target − expected",deg(r.target_minus_expected_tracking_deg),r.target_minus_expected_tracking_deg==null?"":"°")+
+    tile("Expected operacional",deg(e.expected_operational_angle_deg),e.expected_operational_angle_deg==null?"":"°")+
+    tile("Estado comparación",c.status||"—")+
+    tile("Potencia real vs expected",p.status==="UNKNOWN_NO_MEASURED_POWER_CHANNEL"?"NO DISP.":(p.status||"—"));
+  const bits=[];
+  if(c.expected_error)bits.push("SolarGPT: "+c.expected_error);
+  if(e.operational_status&&e.operational_status!=="OK")bits.push("operacional: "+e.operational_status);
+  if(e.missing_safety_inputs?.length)bits.push("faltan inputs seguridad: "+e.missing_safety_inputs.join(", "));
+  if(c.freshness?.status)bits.push("actual: "+c.freshness.status);
+  if(p.status==="UNKNOWN_NO_MEASURED_POWER_CHANNEL")bits.push("SCADA aún no publica potencia inverter/MPPT/string comparable");
+  $("expectedState").textContent=bits.join(" · ")||"Actual y expected comparables por asset_id.";
+}
+async function refreshExpected(){
+  if(!selected)return;
+  const assetId=selected.asset_id;
+  try{
+    const r=await fetch(api()+"/assets/actual-vs-expected?asset_id="+encodeURIComponent(assetId),{cache:"no-store"});
+    if(!r.ok)throw Error("HTTP "+r.status);
+    const c=await r.json();
+    if(c.asset_id!==assetId)throw Error("asset_id discrepante");
+    expectedComparison=c;
+    if(c.actual&&c.actual.asset_id===assetId){
+      telemetry=c.actual;
+      selected={...selected,...c.actual};
+      if(inspection)inspection.telemetry_snapshot=telemetry;
+      renderLive();updateDeltas();
+    }
+    if(inspection)inspection.expected_snapshot=c;
+    renderExpected();
+  }catch(e){
+    expectedComparison=null;
+    if(inspection)inspection.expected_snapshot={
+      status:"UNAVAILABLE",asset_id:assetId,error:String(e.message||e),
+      captured_at:new Date().toISOString()
+    };
+    $("expectedTiles").innerHTML="";
+    $("expectedState").textContent="Expected no disponible: "+String(e.message||e);
+  }
 }
 async function refreshLive(){
   if(!selected)return;
   try{const r=await fetch(api()+"/assets/live",{cache:"no-store"});const j=await r.json();assets=j.trackers||[];cacheAssets(assets);
     telemetry=assets.find(a=>a.asset_id===selected.asset_id)||telemetry;selected=telemetry||selected;
     if(inspection)inspection.telemetry_snapshot=telemetry;renderLive();updateDeltas();$("sourceBadge").textContent="SCADA live";
-  }catch(e){$("sourceBadge").textContent="sin red · snapshot local"}
+    await refreshExpected();
+  }catch(e){$("sourceBadge").textContent="sin red · snapshot local";$("expectedState").textContent="Expected no disponible sin red."}
 }
 
 function renderChecklist(){
@@ -259,7 +322,7 @@ function autosave(){clearTimeout(saveTimer);saveTimer=setTimeout(saveDraft,350)}
 async function saveDraft(){if(!inspection)return;await syncForm();await dbPut(inspection);$("saveState").textContent="Guardado local · "+new Date().toLocaleTimeString()}
 async function finish(){if(!inspection)return;await syncForm();inspection=FactiunField.finishInspection(inspection);await dbPut(inspection);$("saveState").textContent="Inspección cerrada localmente · "+inspection.completed_at}
 function exportJson(){if(!inspection)return;syncForm().then(()=>{const b=new Blob([JSON.stringify(inspection,null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="inspection_"+inspection.asset_id+"_"+inspection.inspection_id+".json";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)})}
-function newInspection(){if(!selected)return;inspection=FactiunField.newInspection(selected,telemetry);stringRows=[];renderStringInputs();$("stringResults").innerHTML="";renderInspection();updateDeltas()}
+function newInspection(){if(!selected)return;inspection=FactiunField.newInspection(selected,telemetry);inspection.expected_snapshot=expectedComparison;stringRows=[];renderStringInputs();$("stringResults").innerHTML="";renderInspection();updateDeltas();renderExpected()}
 
 $("loadAssets").onclick=loadAssets;$("assetSelect").onchange=e=>selectAsset(e.target.value);
 $("refreshLive").onclick=refreshLive;$("measureTilt").onclick=measureTilt;$("sensorPlus").onclick=()=>useSensor(1);$("sensorMinus").onclick=()=>useSensor(-1);
