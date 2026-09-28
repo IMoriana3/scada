@@ -16,13 +16,14 @@ from expected import (  # noqa: E402
 )
 
 
-ASSET = "11111111-1111-4111-8111-111111111111"
+TCU_ASSET = "11111111-1111-4111-8111-111111111111"
+TRACKER_ASSET = "33333333-3333-4333-8333-333333333333"
 TS = "2026-09-28T08:00:00+00:00"
 
 
 def _actual(**overrides):
     base = {
-        "asset_id": ASSET,
+        "asset_id": TCU_ASSET,
         "observed_at": TS,
         "tilt_angle": 10.0,
         "target_angle": 11.0,
@@ -35,7 +36,7 @@ def _actual(**overrides):
 
 def _expected(**overrides):
     base = {
-        "asset_id": ASSET,
+        "asset_id": TRACKER_ASSET,
         "status": "PARTIAL",
         "expected_tracking_angle_deg": 12.0,
         "expected_operational_angle_deg": None,
@@ -55,19 +56,19 @@ def test_fetch_uses_exact_asset_timestamp_and_only_owned_safety_evidence():
 
     out = fetch_expected(
         "http://solar.local/",
-        asset_id=ASSET,
+        asset_id=TRACKER_ASSET,
         ts=TS,
         soc=82,
         transport=transport,
     )
     q = parse_qs(urlparse(seen["url"]).query)
-    assert q["asset_id"] == [ASSET]
+    assert q["asset_id"] == [TRACKER_ASSET]
     assert q["ts"] == [TS]
     assert q["soc"] == ["82.0"]
     assert "wind_ms" not in q
     assert "hail" not in q
     assert "snow_coverage" not in q
-    assert out["asset_id"] == ASSET
+    assert out["asset_id"] == TRACKER_ASSET
 
 
 def test_fetch_rejects_mismatched_identity():
@@ -75,7 +76,7 @@ def test_fetch_rejects_mismatched_identity():
         return _expected(asset_id="22222222-2222-4222-8222-222222222222")
 
     try:
-        fetch_expected("http://solar", asset_id=ASSET, ts=TS,
+        fetch_expected("http://solar", asset_id=TRACKER_ASSET, ts=TS,
                        transport=transport)
     except ExpectedUnavailable as exc:
         assert str(exc) == "SOLARGPT_ASSET_ID_MISMATCH"
@@ -92,6 +93,7 @@ def test_residuals_are_actual_minus_expected_and_power_is_unknown():
     assert out["power"]["status"] == POWER_UNAVAILABLE
     assert out["power"]["actual_kw"] is None
     assert out["provenance"]["physics_in_scada"] is False
+    assert out["provenance"]["identity_bridge"] == "tracker controlled_by tcu"
 
 
 def test_stale_actual_blocks_all_residuals():
