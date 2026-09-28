@@ -4,7 +4,7 @@
 
   const API = {};
 
-  API.SCHEMA_VERSION = "1.0.0";
+  API.SCHEMA_VERSION = "1.1.0";
 
   API.num = function (v) {
     if (v == null || v === "") return null;
@@ -63,6 +63,7 @@
       started_at: new Date().toISOString(),
       completed_at: null,
       telemetry_snapshot: telemetry || null,
+      expected_snapshot: null,
       measurements: {
         physical_tilt_deg: null,
         voc_v: null,
