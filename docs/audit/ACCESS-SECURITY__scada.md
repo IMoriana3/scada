@@ -52,28 +52,80 @@ conoce SHA1: el instalador rechaza ese retorno conservando ambas carpetas.
 Usuarios, marcador y contador de acceso se preservan al actualizar. La versión
 11.94 ya descargada sigue teniendo las limitaciones anteriores.
 
+## Requisito obligatorio: Toolbox sin Internet
+
+Confirmado por el usuario el 2026-09-28: la Toolbox debe poder funcionar offline.
+El alta local, inicio de sesión, cambio de contraseña, administración autorizada,
+recuperación y operaciones permitidas no exigirán Supabase, una cuenta web,
+activación online ni renovar periódicamente un permiso emitido en la nube.
+La comunicación con equipos sigue requiriendo su enlace local de planta.
+
+Este requisito corrige la propuesta anterior de hacer depender la Toolbox de
+cuentas web y permisos offline de duración limitada. Online mantiene su
+proveedor existente; cualquier vinculación o sincronización futura será
+opcional y no copiará contraseñas. Una baja remota no puede garantizarse en un
+PC desconectado; debe existir revocación por un administrador local autorizado.
+
+### Diseño propuesto, todavía no implementado
+
+- Un servicio en el propio PC verifica la contraseña y los permisos por
+  operación. La interfaz se ejecuta con un usuario estándar de Windows y no
+  decide la autorización efectiva mediante su JSON, su script ni un rol enviado
+  por el cliente. Se conservan cuentas nominales locales de la aplicación.
+- El servicio administra hashes, roles, sesiones, intentos y registro de
+  acciones en almacenamiento protegido con permisos de Windows. Su código,
+  configuración, canal local de comunicación y servicio también requieren
+  permisos explícitos. El instalador requerirá elevación; el uso habitual no.
+  Cifrar o cambiar de extensión usuarios.json no proporciona esta separación.
+- La modificación, sustitución o borrado de archivos de la interfaz no puede
+  conceder acceso, restablecer los intentos ni reabrir el alta del administrador.
+  La recuperación exige un administrador local autorizado y deja registro.
+- Las operaciones sobre los equipos pasan por el servicio con validación de
+  alcance de planta y operación. Debe impedirse también el acceso directo
+  alternativo a Modbus y a los demás transportes de control mediante los
+  controles de Windows/red adecuados al despliegue. Un servicio de login
+  aislado no protege un canal de órdenes que siga abierto al operador.
+- Las credenciales de equipos se mantienen fuera de la interfaz. La migración
+  desde usuarios.json requiere que el administrador autorizado valide los
+  roles: el archivo anterior es modificable y no acredita por sí solo permisos.
+- El servicio deniega nuevas operaciones sin autorización válida; se definirá
+  con CONTROL cómo terminar de forma segura las secuencias ya iniciadas.
+  El funcionamiento offline no desactiva controles de seguridad de equipos.
+- El administrador de Windows forma parte del entorno de confianza. No se
+  promete resistencia frente a quien controla el sistema operativo; esa
+  garantía exigiría una frontera adicional fuera de ese PC. Los registros
+  locales tampoco son inmutables frente a dicho administrador.
+
+Aceptación pendiente: probar en Windows con Internet bloqueado y transporte
+de planta simulado, incluyendo primer uso, reinicio, contraseñas, recuperación,
+cambio/baja de roles, manipulación del JSON/script, reinicio del limitador y
+envío directo de órdenes por un cliente alternativo. Verificar que un usuario
+estándar no puede modificar el servicio ni su almacenamiento. No se han
+ejecutado estos ensayos ni instalado un servicio con este cambio documental.
+
 ## PROPUESTA para cerrar la seguridad comercial
 
-1. Un proveedor de identidad para las cuentas nominales; MFA obligatorio para
-   administrar, escribir y consultar secretos. Recuperación con identidad
-   verificada, revocación y auditoría. No copiar contraseñas entre productos.
-2. RLS y API con pertenencia explícita de usuario a cliente/plant_id y roles de
+1. Toolbox: implementar el servicio local y los criterios offline anteriores.
+   Online: mantener Supabase con identidad individual, recuperación verificada,
+   revocación y MFA para acciones sensibles. Si se añade un segundo factor a la
+   Toolbox, debe funcionar también sin Internet y disponer de recuperación
+   local protegida; el bloqueo de Windows no se presenta como MFA.
+2. RLS y API online con pertenencia explícita a cliente/plant_id y roles de
    lectura/técnico/administrador. Probar con dos clientes, roles y API directa.
-   No deducir plant_id desde nombres o posiciones.
+   Aplicar el mismo alcance de permisos en el servicio local; no deducir
+   plant_id desde nombres o posiciones.
 3. Sacar credenciales de VPN/NCU/GW de respuestas generales y exportaciones.
-   Usar un almacén de secretos con permisos, rotación y registro de acceso.
-4. Agente/servicio protegido que verifique identidad y autorización por orden,
-   con credenciales de servicio propias, revocables y limitadas. El script
-   editable y el token común no deben ser la frontera comercial.
-5. Para operación sin conexión: permisos offline firmados, de alcance y duración
-   acotados. Acordar el comportamiento al caducar durante una secuencia; no
-   interrumpir a ciegas una maniobra ni presentar el bloqueo Windows como MFA.
+   Usar almacenes protegidos con permisos, rotación y registro de acceso.
+4. El agente online debe verificar identidad individual y permisos por orden,
+   con credenciales de servicio propias, revocables y limitadas. El token
+   común y X-Usuario declarado por el cliente siguen pendientes de sustituir.
 
-DECISIÓN de entrega: mantener etiqueta de piloto. Elevar a MASTER la identidad
-compartida, el alcance por planta y el servicio de autorización (06_PLANT,
-05_CONTROL, 07_SCADA). No se han rotado credenciales reales, cambiado roles de
-producción ni enviado órdenes físicas. Las propuestas anteriores no constan
-como activadas.
+DECISIÓN de entrega: mantener etiqueta de piloto. El requisito offline queda
+fijado; el servicio local, el alcance por planta y la protección de los
+transportes requieren implementación y revisión transversal (06_PLANT,
+05_CONTROL, 07_SCADA). PR relacionadas: scada #278 y factiun-cartera #275.
+No se han rotado credenciales reales, cambiado roles de producción ni enviado
+órdenes físicas. Las propuestas anteriores no constan como activadas.
 
 ## Validación
 
@@ -90,6 +142,8 @@ Consultar la PR para los resultados del commit exacto y las limitaciones.
 
 Referencias primarias revisadas:
 - https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
+- https://learn.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights
+- https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights
 - https://supabase.com/docs/guides/auth/password-security
 - https://supabase.com/docs/guides/database/postgres/row-level-security
 - https://supabase.com/docs/reference/javascript/auth-signout
