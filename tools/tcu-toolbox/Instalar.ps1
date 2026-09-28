@@ -21,12 +21,20 @@ function Instalacion-Extraer([string]$zip,[string]$destino){
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $z=[IO.Compression.ZipFile]::OpenRead($zip)
     try{
-        $total=0L
+        $total=0L;$rutas=@{}
         foreach($e in $z.Entries){
-            if($e.FullName -notmatch '^tcu-toolbox/' -or $e.FullName -match '(^|/)\.\.(/|$)|[:\\]'){throw 'El ZIP contiene rutas no permitidas.'}
+            # .NET Framework puede generar ZIP con separadores Windows.
+            $nombre=$e.FullName.Replace('\','/')
+            if($nombre -notmatch '^tcu-toolbox/' -or $nombre -match '(^|/)\.\.(/|$)|:'){throw 'El ZIP contiene rutas no permitidas.'}
+            if($rutas.ContainsKey($nombre)){throw 'El ZIP contiene rutas duplicadas.'};$rutas[$nombre]=$true
             $total+=$e.Length;if($total -gt 100MB){throw 'Paquete descomprimido mayor de 100 MB.'}
         }
-        [IO.Compression.ZipFile]::ExtractToDirectory($zip,$destino)
+        foreach($e in $z.Entries){
+            $nombre=$e.FullName.Replace('\','/');$ruta=Join-Path $destino $nombre
+            if($nombre.EndsWith('/')){[void][IO.Directory]::CreateDirectory($ruta);continue}
+            [void][IO.Directory]::CreateDirectory((Split-Path $ruta -Parent))
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($e,$ruta,$false)
+        }
     }finally{$z.Dispose()}
     return Join-Path $destino 'tcu-toolbox'
 }

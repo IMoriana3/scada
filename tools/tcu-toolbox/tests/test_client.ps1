@@ -72,6 +72,10 @@ try{
     $soporte=Join-Path $dir 'soporte.zip';Cliente-Soporte $soporte
     $z=[IO.Compression.ZipFile]::OpenRead($soporte);try{Check ($z.Entries.Count -eq 2 -and 'usuarios.json' -notin $z.Entries.Name) 'Soporte con lista positiva sin datos privados'}finally{$z.Dispose()}
     # Paquetes de prueba pequenos: rutas, hash, conservacion y vuelta.
+    $escape=Join-Path $dir 'escape.zip';$z=[IO.Compression.ZipFile]::Open($escape,'Create')
+    try{$e=$z.CreateEntry('tcu-toolbox\..\escape.txt');$w=New-Object IO.StreamWriter($e.Open());try{$w.Write('no salir')}finally{$w.Dispose()}}finally{$z.Dispose()}
+    Rechaza {Instalacion-Extraer $escape (Join-Path $dir 'extraida')} 'rutas no permitidas'
+    Check (-not (Test-Path (Join-Path $dir 'escape.txt'))) 'Separadores Windows no permiten salir del paquete'
     $raizInst=Join-Path $dir 'instalado'
     foreach($ver in @('1.0','1.1')){
         $base=Join-Path $dir "paquete$ver";$carpeta=Join-Path $base 'tcu-toolbox';[void][IO.Directory]::CreateDirectory($carpeta)

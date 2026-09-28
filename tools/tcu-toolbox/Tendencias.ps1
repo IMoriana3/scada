@@ -40,8 +40,12 @@ function Tendencia-Dibujar($g,$rect,$series){
     try{
         $todos=@($series|ForEach-Object{$_.segmentos}|ForEach-Object{$_}|Where-Object{$null -ne $_.t})
         if($todos.Count -eq 0){$g.DrawString('Sin muestras numericas validas en el intervalo.',$fuente,[Drawing.Brushes]::DimGray,20,20);return}
-        $xmin=($todos|Measure-Object t -Minimum).Minimum;$xmax=($todos|Measure-Object t -Maximum).Maximum
-        $ymin=($todos|Measure-Object y -Minimum).Minimum;$ymax=($todos|Measure-Object y -Maximum).Maximum
+        # Windows PowerShell 5.1 no resuelve claves de hashtable en Measure-Object.
+        $xmin=$todos[0].t;$xmax=$xmin;$ymin=$todos[0].y;$ymax=$ymin
+        foreach($v in $todos){
+            if($v.t -lt $xmin){$xmin=$v.t};if($v.t -gt $xmax){$xmax=$v.t}
+            if($v.y -lt $ymin){$ymin=$v.y};if($v.y -gt $ymax){$ymax=$v.y}
+        }
         if($xmax -eq $xmin){$xmax=$xmin+[timespan]::TicksPerSecond};if($ymax -eq $ymin){$ymax++;$ymin--}
         $iz=65;$top=40;$w=[math]::Max(50,$rect.Width-90);$h=[math]::Max(40,$rect.Height-85)
         for($i=0;$i -le 4;$i++){$y=$top+$i*$h/4;$g.DrawLine($pen,[single]$iz,[single]$y,[single]($iz+$w),[single]$y);$g.DrawString(('{0:0.##}' -f ($ymax-$i*($ymax-$ymin)/4)),$fuente,[Drawing.Brushes]::DimGray,2,[single]($y-7))}
