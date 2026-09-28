@@ -14,7 +14,7 @@ from electrical_contract import (  # noqa: E402
 )
 from electrical import electrical_point  # noqa: E402
 
-ASSET = "11111111-1111-4111-8111-111111111111"
+ASSET = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 TS = "2026-09-28T12:00:00+00:00"
 
 
