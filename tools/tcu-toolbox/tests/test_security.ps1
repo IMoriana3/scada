@@ -43,6 +43,10 @@ try{
     $login=Acceso-Iniciar 'legado' $pass
     Check ($login.algoritmo -ceq 'PBKDF2-SHA256') 'Migra SHA1 solo despues de validar'
     Check ((Usuarios-Cargar)[0].algoritmo -ceq 'PBKDF2-SHA256') 'La migracion queda persistida'
+    $larga='x'*150
+    $legacy.hash=Pwd-Hash $larga $legacy.sal 100000
+    Usuarios-Guardar @($legacy)
+    Check ((Acceso-Iniciar 'legado' $larga).usuario -eq 'legado') 'Cuenta antigua larga se verifica para renovar sin perder acceso'
     Remove-Item -LiteralPath $FICH_USUARIOS
     Rechaza {Usuarios-Cargar} 'Borrar usuarios no inicia otro administrador'
     Usuarios-Guardar @($u)

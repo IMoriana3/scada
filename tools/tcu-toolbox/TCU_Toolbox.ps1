@@ -4880,7 +4880,8 @@ function Usuario-Nuevo([string]$usuario,[string]$nombre,[string]$rol,[string]$pa
     return Usuario-Rehash @{usuario=$usuario.Trim();nombre=$nombre;rol=$rol} $pass
 }
 function Usuario-Validar($usuarios,[string]$usuario,[string]$pass){
-    if($pass.Length -gt 128){return $null}
+    # Accept the old TextBox limit for legacy verification; new keys remain 15-128.
+    if($pass.Length -gt 32767){return $null}
     foreach($u in @($usuarios)){
         if("$($u.usuario)".ToLowerInvariant() -ne $usuario.Trim().ToLowerInvariant()){continue}
         $alg=if($u.algoritmo){[string]$u.algoritmo}else{'PBKDF2-SHA1'}

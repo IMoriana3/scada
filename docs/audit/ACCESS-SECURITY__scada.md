@@ -26,6 +26,8 @@ Online: base PR factiun-cartera #274, 755712c11cbeba392746c095596b9b5686a6c384.
 
 `contracts/access-v1.json` fija contraseñas nuevas de 15–128 caracteres,
 comparación exacta, verificación de la actual y ausencia de tokens persistentes.
+Diferencia INTENCIONAL: Supabase limita las claves a 72 bytes UTF-8; la web
+rechaza el exceso antes de enviarlo, sin truncarlo. Se mantiene el proveedor.
 Las dos copias y sus casos se comprueban con el control de paridad existente.
 No se crea otro proveedor de identidad: online conserva Supabase Auth; Toolbox
 mantiene su autenticación local existente como transición para el piloto.
@@ -91,3 +93,5 @@ Referencias primarias revisadas:
 - https://supabase.com/docs/guides/auth/password-security
 - https://supabase.com/docs/guides/database/postgres/row-level-security
 - https://supabase.com/docs/reference/javascript/auth-signout
+
+Límite del proveedor verificado en https://github.com/supabase/auth/blob/master/internal/api/password.go (MaxPasswordLength=72, len de Go en bytes).

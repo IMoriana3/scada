@@ -66,5 +66,11 @@
     "salt_b64": "AAECAwQFBgcICQoLDA0ODw==",
     "iterations": 600000,
     "hash_b64": "5zr+h2qG4Xf+Tp83ibp8eZuDu2RCs5amQTTrcTmz+5A="
+  },
+  "online_provider": {
+    "provider": "Supabase Auth",
+    "password_max_utf8_bytes": 72,
+    "classification": "INTENCIONAL",
+    "reason": "Provider bcrypt limit; reject, never truncate"
   }
 }
