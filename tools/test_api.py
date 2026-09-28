@@ -88,7 +88,9 @@ fila = {"ncu": "NCU1", "tcu": "62", "health": "warn", "alarms": "axis_blocked",
         "panel_voltage": 31200.0, "main_state": 2.0, "bt_active": 0.0,
         "safe_position": 0.0, "system_ok": 1.0, "alarms1": 256.0,
         "alarms2": 0.0, "comms_age_s": 41.0}
-QS.tablas = [TableStub([RecStub(fila)])]
+_dt_live = __import__("datetime").datetime(
+    2026, 9, 28, 8, 0, tzinfo=__import__("datetime").timezone.utc)
+QS.tablas = [TableStub([RecStub(fila, t=_dt_live)])]
 j = cli.get("/live").json()
 chk("cuenta los trackers", j["count"], 1)
 t = j["trackers"][0]
@@ -103,6 +105,8 @@ chk("y no se ha perdido nada de lo de antes",
                          "target_angle", "soc", "battery_voltage",
                          "temp_battery", "main_state", "bt_active",
                          "safe_position", "comms_age_s", "system_ok")), True)
+chk("live publica timestamp exacto para el careo expected",
+    t["observed_at"], "2026-09-28T08:00:00+00:00")
 # Un TCU legacy: la NCU pre-R7 no publica el bloque, así que el pivot no trae
 # esos campos. Tienen que salir como null, NO faltar: la ficha distingue
 # "no expuesto por este firmware" de "no ha llegado la respuesta".
