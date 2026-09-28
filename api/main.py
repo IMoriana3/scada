@@ -85,6 +85,8 @@ def asset_live(ncu_asset_id: str | None = None):
                 out.append({
                     "asset_id": row["asset_id"],
                     "layout_key": row["layout_key"],
+                    "controlled_tracker_asset_ids": row.get(
+                        "controlled_tracker_asset_ids", []),
                     "source": v.get("source"),
                     "observed_at": (
                         observed.isoformat() if observed is not None else None),
@@ -97,16 +99,16 @@ def asset_live(ncu_asset_id: str | None = None):
 @app.get("/assets/actual-vs-expected")
 def asset_actual_vs_expected(asset_id: str,
                              max_age_s: float = Query(120.0, gt=0, le=3600)):
-    """Join one exact SCADA snapshot with SolarGPT expected tracking.
+    """Compare TCU telemetry with the expected geometry of its tracker.
 
-    SCADA stays read-only and owns no tracker physics. A missing/unreachable
-    SolarGPT service degrades to ACTUAL_ONLY; missing/stale actual evidence
-    fails closed and no residual is manufactured.
+    Identity bridge is explicit: tracker --controlled_by--> TCU. If one TCU
+    controls several trackers but telemetry is not channel-specific, the
+    comparison is ambiguous and fails closed.
     """
     try:
         UUID(asset_id)
     except ValueError as exc:
-        raise HTTPException(400, "asset_id inválido") from exc
+        raise HTTPException(400, "asset_id TCU inválido") from exc
 
     live = asset_live()
     matches = [row for row in live["trackers"]
@@ -114,30 +116,49 @@ def asset_actual_vs_expected(asset_id: str,
     if len(matches) != 1:
         raise HTTPException(
             404 if not matches else 409,
-            f"asset_id con {len(matches)} snapshots live")
+            f"asset_id TCU con {len(matches)} snapshots live")
 
     actual = matches[0]
-    pre = compare_actual_expected(actual, None, max_age_s=max_age_s)
-    if pre["status"] in (
+    tracker_ids = list(actual.get("controlled_tracker_asset_ids") or [])
+    base = compare_actual_expected(actual, None, max_age_s=max_age_s)
+    base["tcu_asset_id"] = asset_id
+    base["controlled_tracker_asset_ids"] = tracker_ids
+    base["tracker_asset_id"] = tracker_ids[0] if len(tracker_ids) == 1 else None
+
+    if len(tracker_ids) == 0:
+        base["status"] = "TRACKER_BINDING_MISSING"
+        base["expected_error"] = "TRACKER_CONTROL_RELATION_MISSING"
+        return base
+    if len(tracker_ids) > 1:
+        base["status"] = "MULTIPOINT_TELEMETRY_AMBIGUOUS"
+        base["expected_error"] = (
+            "TCU_TELEMETRY_NOT_BOUND_TO_CONTROLLED_TRACKER_CHANNEL")
+        return base
+
+    if base["status"] in (
             "ACTUAL_TIMESTAMP_UNKNOWN", "ACTUAL_FRESHNESS_UNKNOWN",
             "STALE_ACTUAL"):
-        return pre
+        return base
 
+    tracker_asset_id = tracker_ids[0]
     expected = None
     error = None
     try:
         expected = fetch_expected(
             SOLARGPT_EXPECTED_URL,
-            asset_id=asset_id,
+            asset_id=tracker_asset_id,
             ts=actual["observed_at"],
             soc=actual.get("soc"),
         )
     except ExpectedUnavailable as exc:
         error = str(exc)
 
-    return compare_actual_expected(
+    result = compare_actual_expected(
         actual, expected, max_age_s=max_age_s, expected_error=error)
-
+    result["tcu_asset_id"] = asset_id
+    result["tracker_asset_id"] = tracker_asset_id
+    result["controlled_tracker_asset_ids"] = tracker_ids
+    return result
 
 @app.get("/assets/history")
 def asset_history(asset_id: str, from_: datetime = Query(alias="from"),
