@@ -3,6 +3,7 @@
 GET /live                 -> último estado de todos los trackers de la planta
 GET /live?ncu=NCU-01      -> filtrado por NCU
 GET /assets/actual-vs-expected -> snapshot medido + expected SolarGPT por asset_id
+GET /assets/electrical/live -> telemetría eléctrica medida por asset_id canónico
 GET /history/{ncu}/{tcu}  -> series del tracker (por defecto últimas 24h)
 GET /meteo                -> última lectura de cada HSU
 GET /traffic              -> tráfico medido: LAN de planta y subida a la nube
@@ -10,12 +11,18 @@ GET /meteo/history        -> series de las HSU (viento, dirección, nieve…)
 """
 import os
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from uuid import UUID
 
 import yaml
 from scada_identity import configured_identity, IdentityUnavailable
 from historical import CHART_FIELDS, history_for_assets, measured_day
+from electrical_contract import (
+    ALL_FIELDS,
+    ElectricalTelemetryError,
+    canonical_uuid4,
+    validate_electrical_sample,
+)
 from expected import (
     ExpectedUnavailable,
     compare_actual_expected,
@@ -94,6 +101,101 @@ def asset_live(ncu_asset_id: str | None = None):
                 })
     return {"count": len(out), "trackers": out, "read_only": True,
             "operationally_usable": identity.operationally_usable}
+
+
+@app.get("/assets/electrical/live")
+def electrical_asset_live(asset_id: str | None = None,
+                          max_age_s: float = Query(120.0, gt=0, le=3600)):
+    """Latest measured electrical telemetry, joined only by canonical asset_id."""
+    identity = _identity()
+    if not identity.capability_available("electrical.topology"):
+        return {
+            "schema_version": "1.0.0",
+            "status": "UNAVAILABLE_NO_ELECTRICAL_TOPOLOGY",
+            "count": 0,
+            "assets": [],
+            "read_only": True,
+        }
+
+    known = {row["asset_id"]: row for row in identity.electrical_assets()}
+    if not known:
+        raise HTTPException(
+            503, "electrical.topology disponible pero sin activos eléctricos")
+
+    selected = None
+    if asset_id is not None:
+        try:
+            selected = canonical_uuid4(asset_id)
+        except ElectricalTelemetryError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if selected not in known:
+            raise HTTPException(404, "asset_id eléctrico fuera del Plant Package")
+
+    plant = identity.registry["plant_id"]
+    flt = f' and r.asset_id == "{selected}"' if selected else ""
+    q = f"""
+from(bucket: "{BUCKET}")
+  |> range(start: -10m)
+  |> filter(fn: (r) => r._measurement == "electrical_status"
+       and r.plant == "{plant}"{flt})
+  |> last()
+  |> pivot(rowKey: ["asset_id","asset_type"], columnKey: ["_field"], valueColumn: "_value")
+"""
+    rows = []
+    now = datetime.now(timezone.utc)
+    for table in client.query_api().query(q):
+        for rec in table.records:
+            values = rec.values
+            aid = values.get("asset_id")
+            asset = known.get(aid)
+            if asset is None:
+                raise HTTPException(
+                    409, f"telemetría eléctrica referencia asset desconocido {aid!r}")
+            asset_type = values.get("asset_type")
+            if asset_type != asset.get("asset_type"):
+                raise HTTPException(
+                    409, f"asset_type de telemetría discrepante para {aid}")
+
+            observed = rec.get_time()
+            sample = {
+                "asset_id": aid,
+                "asset_type": asset_type,
+                "observed_at": observed.isoformat() if observed is not None else None,
+                "source": values.get("source"),
+                "source_channel": values.get("source_channel"),
+                "quality": values.get("quality") or "UNKNOWN",
+                "metrics": {
+                    field: values.get(field)
+                    for field in ALL_FIELDS
+                    if values.get(field) is not None
+                },
+            }
+            try:
+                normalized = validate_electrical_sample(sample)
+            except ElectricalTelemetryError as exc:
+                raise HTTPException(
+                    409, f"muestra eléctrica inválida para {aid}: {exc}") from exc
+
+            age_s = None
+            freshness = "UNKNOWN"
+            if observed is not None and observed.tzinfo is not None:
+                age_s = max(0.0, (now - observed.astimezone(timezone.utc)).total_seconds())
+                freshness = "FRESH" if age_s <= max_age_s else "STALE"
+            rows.append({
+                **normalized,
+                "freshness": freshness,
+                "age_s": age_s,
+                "max_age_s": float(max_age_s),
+            })
+
+    return {
+        "schema_version": "1.0.0",
+        "status": "OK" if rows else "NO_MEASURED_ELECTRICAL_TELEMETRY",
+        "count": len(rows),
+        "assets": sorted(rows, key=lambda row: (
+            row["asset_type"], row["asset_id"])),
+        "read_only": True,
+    }
 
 
 @app.get("/assets/actual-vs-expected")

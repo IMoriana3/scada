@@ -23,6 +23,8 @@ jobs:
           python tools/test_comms_age.py
           python tools/test_expected.py
           python tools/test_expected_api.py
+          python tools/test_electrical_contract.py
+          python tools/test_electrical_api.py
 
   node:
     runs-on: ubuntu-latest
