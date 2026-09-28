@@ -68,6 +68,7 @@ class PlantIdentity:
         ZoneInfo(self.timezone)
         self.assets = {a["asset_id"]: a for a in self.registry["assets"]}
         self.bindings = self.registry["bindings"]
+        self.relations = self.registry.get("relations", [])
 
     @property
     def operationally_usable(self):
@@ -84,6 +85,27 @@ class PlantIdentity:
         if len(found) != 1:
             raise IdentityUnavailable(f"Binding {kind}={value}: {len(found)} coincidencias")
         return next(iter(found))
+
+    def controlled_trackers(self, tcu_asset_id, at=None):
+        """Tracker assets explicitly linked by tracker --controlled_by--> TCU.
+
+        This is the only allowed TCU→tracker bridge. Names, layout keys,
+        addresses, ordering and proximity are never interpreted as identity.
+        """
+        at = at or datetime.now(timezone.utc)
+        if self.assets.get(tcu_asset_id, {}).get("asset_type") != "tcu":
+            raise IdentityUnavailable("controlled_trackers requiere asset TCU")
+        accepted = {"provisional", "accepted", "authoritative", "verified"}
+        found = {
+            rel["source_asset_id"]
+            for rel in self.relations
+            if rel.get("relation_type") == "controlled_by"
+            and rel.get("target_asset_id") == tcu_asset_id
+            and rel.get("status") in accepted
+            and _active(rel, at)
+            and self.assets.get(rel.get("source_asset_id"), {}).get("asset_type") == "tracker"
+        }
+        return sorted(found)
 
     def inventory(self, at=None):
         """Each configured NCU is bound explicitly to a scope; slaves come from registry."""
@@ -120,8 +142,15 @@ class PlantIdentity:
                         and v["status"] in ("provisional", "accepted") and _active(v, at)]
                 if len(keys) != 1:
                     raise IdentityUnavailable(f"TCU {asset_id} sin locator de escena único")
-                rows.append({"asset_id": asset_id, "ncu": ncu["id"],
-                             "ncu_asset_id": scope, "tcu": slave, "layout_key": keys[0]["value"]})
+                rows.append({
+                    "asset_id": asset_id,
+                    "ncu": ncu["id"],
+                    "ncu_asset_id": scope,
+                    "tcu": slave,
+                    "layout_key": keys[0]["value"],
+                    "controlled_tracker_asset_ids": self.controlled_trackers(
+                        asset_id, at),
+                })
         if len({r["layout_key"] for r in rows}) != len(rows):
             raise IdentityUnavailable("Locator de escena duplicado")
         return sorted(rows, key=lambda r: (r["ncu"], r["tcu"]))

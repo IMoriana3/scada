@@ -10,6 +10,13 @@ The asset key is always the canonical \`asset_id\` served by \`/assets/live\`.
 ## What v1 does
 
 - Loads canonical tracker identity and live SCADA telemetry.
+- Loads `/assets/actual-vs-expected`: SCADA owns the measured snapshot and
+  SolarGPT owns expected tracking. TCU telemetry is bridged to tracker geometry
+  only through the canonical `tracker --controlled_by--> TCU` relation.
+- Shows encoder−expected and target−expected residuals only when the actual
+  snapshot has an exact timestamp and fresh communication evidence.
+- Stores the returned Actual-vs-Expected snapshot in the inspection bundle so
+  exported evidence keeps the model state/provenance used at inspection time.
 - Caches the last asset snapshot for offline use.
 - Captures a signed physical tracker angle; the phone sensor supplies only the
   magnitude and the technician confirms sign to avoid mixing angle conventions.
@@ -28,8 +35,11 @@ The asset key is always the canonical \`asset_id\` served by \`/assets/live\`.
 ### No duplicated solar physics
 
 Field Mode contains no solar position, clear-sky model, transposition, tracker
-or backtracking equation. Expected production / expected Voc/Isc must later be
-served by an approved canonical SolarGPT endpoint if that workflow is added.
+or backtracking equation. Expected tracker angle is now served by the canonical SolarGPT
+`/expected/tracker` contract and consumed through SCADA. Expected production
+remains unavailable because SCADA currently exposes no canonical measured
+inverter/MPPT/string power channel. Field Mode therefore displays
+`UNKNOWN_NO_MEASURED_POWER_CHANNEL` instead of inventing a power residual.
 
 ### No invented inspection backend
 
@@ -54,6 +64,7 @@ Fields:
 - layout_key
 - started_at / completed_at
 - telemetry_snapshot
+- expected_snapshot (optional/read-only SolarGPT diagnostic snapshot)
 - measurements
 - strings
 - checklist
@@ -68,3 +79,19 @@ The bundle never resolves identity from name similarity, position or list index.
 A future write path requires a MASTER decision for the operational inspection
 store and API. Once approved, the PWA can sync the exact same bundle without
 changing field semantics.
+
+
+### Multipoint TCU
+
+`/assets/live` retains the TCU `asset_id` and publishes
+`controlled_tracker_asset_ids` from IdentityRegistry relations.
+
+- exactly one controlled tracker: Actual-vs-Expected may be evaluated;
+- zero controlled trackers: `TRACKER_BINDING_MISSING`;
+- more than one controlled tracker with one TCU-level tilt/target sample:
+  `MULTIPOINT_TELEMETRY_AMBIGUOUS`.
+
+Field Mode does not ask the technician to pick one of several trackers, because
+that would assign a TCU-level encoder sample to a tracker without channel
+evidence. A future multipoint telemetry contract must identify the controlled
+tracker/channel explicitly.

@@ -6,6 +6,8 @@ const Field = require("../field-mode.js");
   const x = Field.newInspection({asset_id:"11111111-1111-1111-1111-111111111111", layout_key:"TK-1"}, {health:"ok"});
   assert.equal(x.asset_id, "11111111-1111-1111-1111-111111111111");
   assert.equal(x.layout_key, "TK-1");
+  assert.equal(x.schema_version, "1.1.0");
+  assert.equal(x.expected_snapshot, null);
   assert.equal(x.provenance.persistence, "device-local");
   assert.equal(x.provenance.server_sync, "UNAVAILABLE_UNTIL_CONTRACT_APPROVED");
 })();
@@ -49,3 +51,20 @@ const Field = require("../field-mode.js");
 })();
 
 console.log("field-mode tests OK");
+
+(function testFieldCoreStillContainsNoSolarPhysics(){
+  const fs = require("fs");
+  const src = fs.readFileSync(require("path").join(__dirname,"..","field-mode.js"),"utf8");
+  for (const forbidden of ["pvlib","solarposition","singleaxis","backtracking"]) {
+    assert(!src.toLowerCase().includes(forbidden), "Field Mode physics leak: "+forbidden);
+  }
+})();
+
+(function testFieldUiConsumesServerActualVsExpected(){
+  const fs = require("fs");
+  const html = fs.readFileSync(require("path").join(__dirname,"..","field.html"),"utf8");
+  assert(html.includes("/assets/actual-vs-expected?asset_id="));
+  assert(html.includes("UNKNOWN_NO_MEASURED_POWER_CHANNEL"));
+  assert(html.includes("expected_snapshot"));
+  assert(html.includes('id="deltaExpected"'));
+})();
