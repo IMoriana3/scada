@@ -11,7 +11,8 @@ The asset key is always the canonical \`asset_id\` served by \`/assets/live\`.
 
 - Loads canonical tracker identity and live SCADA telemetry.
 - Loads `/assets/actual-vs-expected`: SCADA owns the measured snapshot and
-  SolarGPT owns expected tracking. The join key is the canonical `asset_id`.
+  SolarGPT owns expected tracking. TCU telemetry is bridged to tracker geometry
+  only through the canonical `tracker --controlled_by--> TCU` relation.
 - Shows encoder−expected and target−expected residuals only when the actual
   snapshot has an exact timestamp and fresh communication evidence.
 - Stores the returned Actual-vs-Expected snapshot in the inspection bundle so
@@ -78,3 +79,19 @@ The bundle never resolves identity from name similarity, position or list index.
 A future write path requires a MASTER decision for the operational inspection
 store and API. Once approved, the PWA can sync the exact same bundle without
 changing field semantics.
+
+
+### Multipoint TCU
+
+`/assets/live` retains the TCU `asset_id` and publishes
+`controlled_tracker_asset_ids` from IdentityRegistry relations.
+
+- exactly one controlled tracker: Actual-vs-Expected may be evaluated;
+- zero controlled trackers: `TRACKER_BINDING_MISSING`;
+- more than one controlled tracker with one TCU-level tilt/target sample:
+  `MULTIPOINT_TELEMETRY_AMBIGUOUS`.
+
+Field Mode does not ask the technician to pick one of several trackers, because
+that would assign a TCU-level encoder sample to a tracker without channel
+evidence. A future multipoint telemetry contract must identify the controlled
+tracker/channel explicitly.
