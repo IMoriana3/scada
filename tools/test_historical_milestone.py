@@ -29,6 +29,8 @@ NCU1 = "06ee64ea-bb8d-47b4-8597-9b35c8ffc0b3"
 NCU2 = "2b48971f-113c-4adb-8dc4-247cd7b44239"
 TCU1 = "2b3b5a10-dc18-4d05-a3e5-50c9fe086b86"
 TCU2 = "ae4a02f2-d0a2-4fe0-93cd-f3c51b336bcb"
+TRACKER1 = "95cbb45f-61ac-45a0-8ee1-7ee230c1084e"
+TRACKER2 = "d7dc722c-0654-42fa-8d57-8bd6bfbd0f54"
 
 
 class Record:
@@ -103,6 +105,38 @@ class Milestone(unittest.TestCase):
         (self.directory / "identity/registry-r1.json").write_text("{}")
         with self.assertRaisesRegex(IdentityUnavailable, "Hash"):
             PlantIdentity(self.directory, self.config, development=True)
+
+    def test_controlled_tracker_relation_is_the_only_tcu_to_tracker_bridge(self):
+        self.registry["assets"].extend([
+            {"asset_id": TRACKER1, "asset_type": "tracker"},
+            {"asset_id": TRACKER2, "asset_type": "tracker"},
+        ])
+        self.registry["relations"] = [{
+            "source_asset_id": TRACKER1,
+            "relation_type": "controlled_by",
+            "target_asset_id": TCU1,
+            "valid_from": "2026-01-01T00:00:00+00:00",
+            "valid_to": None,
+            "status": "provisional",
+        }]
+        self.save()
+        identity = PlantIdentity(self.directory, self.config, development=True)
+        first = next(r for r in identity.inventory() if r["asset_id"] == TCU1)
+        self.assertEqual(first["controlled_tracker_asset_ids"], [TRACKER1])
+
+        self.registry["relations"].append({
+            "source_asset_id": TRACKER2,
+            "relation_type": "controlled_by",
+            "target_asset_id": TCU1,
+            "valid_from": "2026-01-01T00:00:00+00:00",
+            "valid_to": None,
+            "status": "provisional",
+        })
+        self.save()
+        identity = PlantIdentity(self.directory, self.config, development=True)
+        first = next(r for r in identity.inventory() if r["asset_id"] == TCU1)
+        self.assertEqual(first["controlled_tracker_asset_ids"],
+                         sorted([TRACKER1, TRACKER2]))
 
     def test_modbus_reads_only_explicit_cache_slots(self):
         mmap = yaml.safe_load((ROOT / "config/modbus_map.yml").read_text())
