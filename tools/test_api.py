@@ -105,8 +105,6 @@ chk("y no se ha perdido nada de lo de antes",
                          "target_angle", "soc", "battery_voltage",
                          "temp_battery", "main_state", "bt_active",
                          "safe_position", "comms_age_s", "system_ok")), True)
-chk("live publica timestamp exacto para el careo expected",
-    t["observed_at"], "2026-09-28T08:00:00+00:00")
 # Un TCU legacy: la NCU pre-R7 no publica el bloque, así que el pivot no trae
 # esos campos. Tienen que salir como null, NO faltar: la ficha distingue
 # "no expuesto por este firmware" de "no ha llegado la respuesta".
@@ -114,6 +112,30 @@ QS.tablas = [TableStub([RecStub({"ncu": "NCU2", "tcu": "7", "health": "offline"}
 t2 = cli.get("/live").json()["trackers"][0]
 chk("legacy: la clave existe", "tilt_angle" in t2, True)
 chk("legacy: y vale null", t2["tilt_angle"], None)
+
+# /assets/live es la superficie canónica por asset_id y DEBE publicar el
+# timestamp exacto que luego se carea contra SolarGPT.
+class _IdentityAssetStub:
+    registry = {"plant_id": "PLANT-TEST"}
+    operationally_usable = True
+    def inventory(self):
+        return [{
+            "asset_id": "11111111-1111-4111-8111-111111111111",
+            "layout_key": "TK-1",
+            "ncu_asset_id": "22222222-2222-4222-8222-222222222222",
+            "ncu": "NCU1",
+            "tcu": 62,
+        }]
+
+_old_identity = api._identity
+try:
+    api._identity = lambda: _IdentityAssetStub()
+    QS.tablas = [TableStub([RecStub(fila, t=_dt_live)])]
+    _asset_live = cli.get("/assets/live").json()["trackers"][0]
+    chk("assets/live publica timestamp exacto para expected",
+        _asset_live["observed_at"], "2026-09-28T08:00:00+00:00")
+finally:
+    api._identity = _old_identity
 
 # ── /live: la NCU no entra en crudo en la consulta ──────────────────────────
 print()
