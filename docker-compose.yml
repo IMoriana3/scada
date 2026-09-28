@@ -50,6 +50,9 @@ services:
       SCADA_PLANT_PACKAGE: ${SCADA_PLANT_PACKAGE:-}
       SCADA_PACKAGE_REPO: ${SCADA_PACKAGE_REPO:-}
       SCADA_PACKAGE_PUBLISHED_COMMIT: ${SCADA_PACKAGE_PUBLISHED_COMMIT:-}
+      # Optional read-only SolarGPT diagnostics. If absent, SCADA remains
+      # fully operational and Actual-vs-Expected reports ACTUAL_ONLY.
+      SOLARGPT_EXPECTED_URL: ${SOLARGPT_EXPECTED_URL:-}
 
 volumes:
   influxdb-data:
