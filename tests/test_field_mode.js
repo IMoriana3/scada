@@ -66,4 +66,5 @@ console.log("field-mode tests OK");
   assert(html.includes("/assets/actual-vs-expected?asset_id="));
   assert(html.includes("UNKNOWN_NO_MEASURED_POWER_CHANNEL"));
   assert(html.includes("expected_snapshot"));
+  assert(html.includes('id="deltaExpected"'));
 })();
