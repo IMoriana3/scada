@@ -99,6 +99,15 @@ try{
     Check ((Get-Content (Join-Path $raizInst 'instalacion.json') -Raw) -eq $antesEstado) 'Toolbox abierta impide cambio de version'
     $ret=Instalacion-Volver $raizInst;Check ((Get-Content (Join-Path $ret 'registro/nota.txt')) -eq 'despues') 'Retorno conserva datos recientes'
     Check ((Get-Content (Join-Path $anterior 'registro/nota.txt')) -eq 'antes') 'Retorno exitoso conserva copia anterior intacta'
+    $FICH_USUARIOS=Join-Path $ret 'usuarios.json'
+    Usuarios-Guardar @((Usuario-Nuevo 'admin' 'Prueba' 'admin' 'Frase segura para prueba'))
+    Acceso-GuardarJson ($FICH_USUARIOS+'.acceso.json') @{fallos=3;bloqueado_hasta=0}
+    $estadoSeguro=Get-Content (Join-Path $raizInst 'instalacion.json') -Raw
+    Rechaza {Instalacion-Volver $raizInst} 'no admite las contrasenas v2'
+    Check ((Get-Content (Join-Path $raizInst 'instalacion.json') -Raw) -eq $estadoSeguro) 'Retorno incompatible no cambia activacion'
+    $copiaSegura=Join-Path $dir 'copia-segura';[void][IO.Directory]::CreateDirectory($copiaSegura)
+    Instalacion-CopiarDatos $ret $copiaSegura
+    Check ((Test-Path (Join-Path $copiaSegura 'usuarios.json.inicializados')) -and (Get-Content (Join-Path $copiaSegura 'usuarios.json.acceso.json') -Raw|ConvertFrom-Json).fallos -eq 3) 'Actualizacion conserva marca y limite de acceso'
     $mal=Join-Path $dir 'paquete1.1/tcu-toolbox';Add-Content (Join-Path $mal 'TCU_Toolbox.ps1') 'alterado';Rechaza {Instalacion-Verificar $mal} 'Integridad incorrecta'
 }finally{Remove-Item $dir -Recurse -Force}
 Write-Host 'Cliente: permisos, topologia, gestion, graficas, informe, soporte e instalacion OK'

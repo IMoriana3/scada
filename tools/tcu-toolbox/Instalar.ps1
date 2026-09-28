@@ -40,7 +40,7 @@ function Instalacion-Extraer([string]$zip,[string]$destino){
 }
 function Instalacion-CopiarDatos([string]$origen,[string]$destino){
     # Lista positiva; nunca sobrescribir scripts ni descargar datos de otro cliente.
-    foreach($n in @('usuarios.json','config_local.json','plantas.json','plantas.csv','plantas','registro','logs','backups','informes','logs-ncu','historial','trabajos','cierre','correcciones')){
+    foreach($n in @('usuarios.json','usuarios.json.inicializados','usuarios.json.acceso.json','config_local.json','plantas.json','plantas.csv','plantas','registro','logs','backups','informes','logs-ncu','historial','trabajos','cierre','correcciones')){
         $f=Join-Path $origen $n
         if(Test-Path -LiteralPath $f){
             $d=Join-Path $destino $n
@@ -97,6 +97,14 @@ function Instalacion-Volver([string]$raiz){
         $e=Get-Content (Join-Path $raiz 'instalacion.json') -Raw|ConvertFrom-Json
         if(-not $e.anterior -or -not (Test-Path (Join-Path $e.anterior 'TCU_Toolbox.ps1'))){throw 'No hay version anterior disponible.'}
         $uno=Instalacion-Bloquear $e.actual;$dos=Instalacion-Bloquear $e.anterior
+        $usuariosRuta=Join-Path $e.actual 'usuarios.json'
+        if(Test-Path -LiteralPath $usuariosRuta){
+            $usuariosActuales=@(Get-Content -LiteralPath $usuariosRuta -Raw|ConvertFrom-Json)
+            $codigoAnterior=Get-Content (Join-Path $e.anterior 'TCU_Toolbox.ps1') -Raw
+            if(@($usuariosActuales|Where-Object{$_.algoritmo -ceq 'PBKDF2-SHA256'}).Count -gt 0 -and -not $codigoAnterior.Contains('function Usuario-Rehash')){
+                throw 'La version anterior no admite las contrasenas v2. Usa una version de recuperacion compatible; no se degradan credenciales.'
+            }
+        }
         # Preparar otra carpeta: ni la activa ni la anterior se modifican.
         $nueva=Join-Path $raiz ('versiones/retorno-'+[guid]::NewGuid().ToString('N'))
         [void][IO.Directory]::CreateDirectory($nueva)

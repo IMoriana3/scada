@@ -1,4 +1,4 @@
-# Prueba del TCU Agente de punta a punta: lo arranca de verdad contra
+﻿# Prueba del TCU Agente de punta a punta: lo arranca de verdad contra
 # mb_server.py y le pide TODAS las rutas. Es la unica forma de saber que el
 # agente sigue funcionando despues de tocar la toolbox, porque no tiene copia de
 # la logica: la extrae de TCU_Toolbox.ps1 por nombre de funcion.
@@ -58,6 +58,11 @@ try {
     }
     if (-not $vivo) { throw "el agente no arranca. Log:`r`n" + (Get-Content (Join-Path $tmp 'agente.log') -Raw) + (Get-Content (Join-Path $tmp 'agente.err') -Raw) }
 
+    foreach($cab in @(@{'X-Token'=$TOKEN.ToUpperInvariant()},@{'X-Token'=$TOKEN;'Origin'='https://untrusted.example'})){
+        $rechazado=$false
+        try{Invoke-RestMethod -Uri "http://localhost:$PUERTO/ping" -Headers $cab -NoProxy -TimeoutSec 10|Out-Null}catch{$rechazado=$_.Exception.Response.StatusCode.value__ -in @(401,403)}
+        Check 'seguridad: token alterado u origen ajeno rechazado' $rechazado $true
+    }
     $ping = Pedir '/ping'
     Check 'ping: responde' $ping.ok 'True'
     Check 'ping: dice la planta' $ping.planta 'Sim'
@@ -307,7 +312,7 @@ try {
     $c0 = Pedir '/config'
     Check 'config: se puede consultar' ($null -ne $c0.planta) $true
     Check 'config: dice lo que esta corriendo AHORA' ($null -ne $c0._en_curso.intervalo_vigilancia_min) $true
-    Check 'config: y su version' ($c0._en_curso.version_agente) '4.2'
+    Check 'config: y su version' ($c0._en_curso.version_agente) '4.3'
     # LOS SECRETOS NO SE DEVUELVEN: quien pregunta ya tiene el token, y
     # devolverlo solo lo deja en el historial del navegador y en el tunel
     Check 'config: el token no se devuelve' ($c0.token) '(puesto)'
