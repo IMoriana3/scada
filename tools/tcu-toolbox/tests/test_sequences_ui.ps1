@@ -138,8 +138,10 @@ $histTimer.Add_Tick({
    $tv=@([Windows.Forms.Application]::OpenForms|Where-Object{$_.Name -eq 'clienteTendencia'})|Select-Object -First 1
    if(-not $tv){return};$trendTimer.Stop()
    try{
+    $trendPanel=$tv.Controls.Find('trendPanel',$true)[0]
     $bmp=New-Object Drawing.Bitmap($tv.Width,$tv.Height);$tv.DrawToBitmap($bmp,(New-Object Drawing.Rectangle(0,0,$tv.Width,$tv.Height)))
     $bmp.Save((Join-Path $PSScriptRoot 'sequence-ui-tendencias.png'));$bmp.Dispose()
+    if($trendPanel.Tag.error){throw $trendPanel.Tag.error}
    }catch{$script:histUiError="$_"}finally{$tv.Close()}
   })
   try{$trendTimer.Start();$ventana.Controls.Find('histTrend',$true)[0].PerformClick()}finally{$trendTimer.Stop();$trendTimer.Dispose()}

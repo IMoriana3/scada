@@ -73,7 +73,7 @@ function Tendencia-Abrir($lectura,[string]$origen){
     $export=Sec-Boton $barra 'Guardar grafica PNG'
     $panel=New-Object Windows.Forms.Panel;$panel.Name='trendPanel';$panel.Dock='Fill';$panel.BackColor='White';$l.Controls.Add($panel)
     $nota=New-Object Windows.Forms.Label;$nota.Dock='Fill';$nota.Padding=New-Object Windows.Forms.Padding(8);$l.Controls.Add($nota)
-    $st=@{series=@()}
+    $st=@{series=@();error=''};$panel.Tag=$st
     $pintar={
         if($cam.SelectedIndex -lt 0){return};$campo="$($cam.SelectedItem)"
         $objetivo.Enabled=$campo -eq 'angle' -and $null -ne $lectura.filas[0].PSObject.Properties['target_angle']
@@ -84,7 +84,10 @@ function Tendencia-Abrir($lectura,[string]$origen){
         $nota.Text="HISTORICO · $origen · $unidad. Horas registradas por la NCU; no se infiere zona horaria.`r`nHuecos: valores invalidos, horas en conflicto o salto > 3 cadencias medianas observadas. No equivalen a disponibilidad RF.`r`nEnvolvente visual min/max si hay muchas muestras; consignas y estados a escalones. Los datos originales se conservan."
         $panel.Invalidate()
     }.GetNewClosure()
-    $panel.Add_Paint({param($s,$e) Tendencia-Dibujar $e.Graphics $s.ClientRectangle $st.series}.GetNewClosure())
+    $panel.Add_Paint({param($s,$e)
+        try{Tendencia-Dibujar $e.Graphics $s.ClientRectangle $st.series;$st.error=''}
+        catch{$st.error=($_|Out-String);$nota.Text='No se pudo representar la grafica. Los CSV originales siguen disponibles. '+$_.Exception.Message}
+    }.GetNewClosure())
     $panel.Add_Resize({$panel.Invalidate()}.GetNewClosure());$cam.Add_SelectedIndexChanged($pintar);$objetivo.Add_CheckedChanged($pintar)
     $export.Add_Click({
         $dlg=New-Object Windows.Forms.SaveFileDialog;$dlg.Filter='Grafica PNG (*.png)|*.png';$dlg.FileName='tendencia.png'

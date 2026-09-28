@@ -242,6 +242,10 @@ try {
     # escrituras
     $e1 = Pedir '/escribir' 'POST' @{confirmar = $true; ncu = 1; tcus = '1'; variable = '41010'; valor = '-1.685'}
     Check 'escribir: una variable' $e1.ok 'True'
+    Check 'escribir: llega al simulador' $e1.correctas 1
+    Check 'escribir: ningun fallo oculto en HTTP OK' $e1.fallos 0
+    $journal=@(Get-ChildItem (Join-Path $tmp 'tcu-toolbox/registro') -Filter 'comandos_*.jsonl')
+    Check 'escribir: registra antes de enviar' ($journal.Count -gt 0 -and (Get-Content $journal[0].FullName -Raw).Contains('PREPARADO')) $true
     $e2 = Pedir '/escribir-lote' 'POST' @{confirmar = $true; ncu = 1; tcus = '1-2'
         valores = @(@{variable = '41010'; valor = '-1.685'}, @{variable = '41111'; valor = '55'})}
     Check 'escribir-lote: varias variables' $e2.ok 'True'
