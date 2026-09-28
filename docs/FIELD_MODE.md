@@ -10,6 +10,12 @@ The asset key is always the canonical \`asset_id\` served by \`/assets/live\`.
 ## What v1 does
 
 - Loads canonical tracker identity and live SCADA telemetry.
+- Loads `/assets/actual-vs-expected`: SCADA owns the measured snapshot and
+  SolarGPT owns expected tracking. The join key is the canonical `asset_id`.
+- Shows encoder−expected and target−expected residuals only when the actual
+  snapshot has an exact timestamp and fresh communication evidence.
+- Stores the returned Actual-vs-Expected snapshot in the inspection bundle so
+  exported evidence keeps the model state/provenance used at inspection time.
 - Caches the last asset snapshot for offline use.
 - Captures a signed physical tracker angle; the phone sensor supplies only the
   magnitude and the technician confirms sign to avoid mixing angle conventions.
@@ -28,8 +34,11 @@ The asset key is always the canonical \`asset_id\` served by \`/assets/live\`.
 ### No duplicated solar physics
 
 Field Mode contains no solar position, clear-sky model, transposition, tracker
-or backtracking equation. Expected production / expected Voc/Isc must later be
-served by an approved canonical SolarGPT endpoint if that workflow is added.
+or backtracking equation. Expected tracker angle is now served by the canonical SolarGPT
+`/expected/tracker` contract and consumed through SCADA. Expected production
+remains unavailable because SCADA currently exposes no canonical measured
+inverter/MPPT/string power channel. Field Mode therefore displays
+`UNKNOWN_NO_MEASURED_POWER_CHANNEL` instead of inventing a power residual.
 
 ### No invented inspection backend
 
@@ -54,6 +63,7 @@ Fields:
 - layout_key
 - started_at / completed_at
 - telemetry_snapshot
+- expected_snapshot (optional/read-only SolarGPT diagnostic snapshot)
 - measurements
 - strings
 - checklist
