@@ -288,3 +288,14 @@ create policy "acciones crear" on acciones for insert to authenticated with chec
 - Token obligatorio (401 sin él); el agente escucha solo en localhost y sale al mundo únicamente por el túnel.
 - `agente_config.json` (token y credenciales) **no se sube al repo** (gitignore) — solo el ejemplo.
 - Config extra para pruebas: `puerto_ncu` (simulador), `dir_datos` (carpeta plantas alternativa), `timeout_ms`.
+
+
+### Acceso 4.3
+El token distingue mayusculas. La web ya no lo conserva entre recargas. Usa un
+token generado aleatoriamente y HTTPS en cualquier enlace remoto. CORS permite
+por defecto solo `https://factiun-cartera.imoriana3.workers.dev`; otros frontends
+requieren `origenes_permitidos` como array de origenes exactos en la configuracion.
+CORS no autentica llamadas nativas. El token sigue siendo compartido y
+`X-Usuario` es atribucion declarada, no identidad verificada. No se acredita
+por tanto aislamiento por operador o cliente. No rotar una credencial en
+planta sin coordinar su sustitucion en los consumidores autorizados.

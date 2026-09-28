@@ -3,7 +3,7 @@ const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypt
 const root=path.resolve(__dirname,'..'),other=process.argv[2];
 if(!other){console.error('Falta ruta al repositorio contraparte. Paridad no comprobada.');process.exit(2);}
 let failed=false;
-for(const name of ['operacion-contract.js','operations-v1.json']){
+for(const name of ['operacion-contract.js','operations-v1.json','access-v1.json']){
   try{
     const a=fs.readFileSync(path.join(root,'contracts',name));
     const b=fs.readFileSync(path.resolve(other,'contracts',name));

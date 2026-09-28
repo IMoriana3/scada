@@ -87,8 +87,8 @@ jobs:
             exit 1
           }
 
-          function Test-Interfaz([string]$exe) {
-            $p = Start-Process $exe -ArgumentList '-NoProfile','-File','test_sequences_ui.ps1' -PassThru -RedirectStandardOutput ui.out -RedirectStandardError ui.err
+          function Test-Interfaz([string]$exe, [string]$archivo='test_sequences_ui.ps1') {
+            $p = Start-Process $exe -ArgumentList '-NoProfile','-File',$archivo -PassThru -RedirectStandardOutput ui.out -RedirectStandardError ui.err
             $termino = $p.WaitForExit(60000)
             if (-not $termino) { Stop-Process -Id $p.Id -Force }
             Get-Content ui.out,ui.err
@@ -106,6 +106,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
           powershell -NoProfile -File test_operations.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          pwsh -NoProfile -File test_security.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_security.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          foreach($exe in @('pwsh','powershell')){
+            $securityUi = @(Test-Interfaz $exe 'test_security_ui.ps1')
+            $securityUi | Write-Host
+            if ($securityUi[-1] -ne 0) { $rc = 1 }
+          }
           pwsh -NoProfile -File test_client.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
           powershell -NoProfile -File test_client.ps1

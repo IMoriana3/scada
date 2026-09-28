@@ -1,4 +1,4 @@
-# Prueba del TCU Agente de punta a punta: lo arranca de verdad contra
+﻿# Prueba del TCU Agente de punta a punta: lo arranca de verdad contra
 # mb_server.py y le pide TODAS las rutas. Es la unica forma de saber que el
 # agente sigue funcionando despues de tocar la toolbox, porque no tiene copia de
 # la logica: la extrae de TCU_Toolbox.ps1 por nombre de funcion.
@@ -58,6 +58,11 @@ try {
     }
     if (-not $vivo) { throw "el agente no arranca. Log:`r`n" + (Get-Content (Join-Path $tmp 'agente.log') -Raw) + (Get-Content (Join-Path $tmp 'agente.err') -Raw) }
 
+    foreach($cab in @(@{'X-Token'=$TOKEN.ToUpperInvariant()},@{'X-Token'=$TOKEN;'Origin'='https://untrusted.example'})){
+        $rechazado=$false
+        try{Invoke-RestMethod -Uri "http://localhost:$PUERTO/ping" -Headers $cab -NoProxy -TimeoutSec 10|Out-Null}catch{$rechazado=$_.Exception.Response.StatusCode.value__ -in @(401,403)}
+        Check 'seguridad: token alterado u origen ajeno rechazado' $rechazado $true
+    }
     $ping = Pedir '/ping'
     Check 'ping: responde' $ping.ok 'True'
     Check 'ping: dice la planta' $ping.planta 'Sim'

@@ -54,3 +54,16 @@ La matriz de firmware no constituye una certificación. Los logs locales no son
 inmutables; falta completar valores previos/posteriores y verificación física
 por operación. La política de cierre del navegador no sustituye las reglas de
 autorización, concurrencia y auditoría del servidor.
+
+## Acceso 11.95 / access-v1
+
+| Capacidad | Toolbox | Online / agente | Estado |
+|---|---|---|---|
+| Nueva contraseña y cambio | 15–128, actual obligatoria, PBKDF2-SHA256/600k | Misma longitud; proveedor Supabase, actual verificada | Implementado en clientes; exigir política desde Supabase pendiente |
+| Intentos fallidos | Cinco fallos / cinco minutos, persistidos | Límites del proveedor y perímetro | Configuración real online UNKNOWN; no sustituirla por un contador JS |
+| Sesiones | Login local, reautenticación para administrar cuentas | sessionStorage, 15 min inactividad / 8 h UI; token agente solo en memoria | Caducidad del servidor y bloqueo local durante maniobras pendientes |
+| Identidad y permisos | Archivos locales modificables por dueño del PC | Supabase y token de servicio compartido | Diferencia explícita; MFA, RLS por cliente/planta y agente con identidad individual pendientes |
+| Actualización | Conserva cuentas/limitador; bloquea retorno incompatible con hashes v2 | Se retiran tokens persistentes del navegador | La retirada local no revoca copias previas; rotación operativa pendiente |
+
+No declarar seguridad comercial por tener login, roles visuales o este contrato.
+Ver `docs/audit/ACCESS-SECURITY__scada.md`.

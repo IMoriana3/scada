@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '4.2'
+$VERSION_AGENTE = '4.3'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -37,6 +37,15 @@ if ($ini -lt 0 -or $fin -lt 0) { throw 'No se pudo extraer la logica de la toolb
 # hay nada que suponer, y los cambios de hora de marzo y octubre salen solos.
 # Los lectores toleran las dos formas: la vieja no lleva 'T' ni signo, y se sigue
 # leyendo como hasta ahora.
+function Agente-TokenValido([string]$recibido,[string]$esperado){
+    if(-not $recibido -or -not $esperado -or $recibido.Length -gt 4096){return $false}
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try{
+        $a=$sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($recibido))
+        $b=$sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($esperado))
+        return Secreto-Igual $a $b
+    }finally{$sha.Dispose()}
+}
 function Ahora-ISO { (Get-Date).ToString('o') }
 
 function Con([string]$t, $color = $null) { Write-Host $t }   # shim de consola para funciones extraidas
@@ -1345,7 +1354,11 @@ while ($true) {
     $ctx = $tarea.Result
     $tarea = $listener.GetContextAsync()
     $req = $ctx.Request; $res = $ctx.Response
-    $res.Headers.Add('Access-Control-Allow-Origin', '*')
+    $origenNavegador=[string]$req.Headers['Origin']
+    $origenes=if($cfg.origenes_permitidos){@($cfg.origenes_permitidos)}else{@('https://factiun-cartera.imoriana3.workers.dev')}
+    if($origenNavegador -and $origenNavegador -cnotin $origenes){$res.StatusCode=403;$res.Close();continue}
+    if($origenNavegador){$res.Headers.Add('Access-Control-Allow-Origin',$origenNavegador);$res.Headers.Add('Vary','Origin')}
+    $res.Headers.Add('Cache-Control','no-store')
     $res.Headers.Add('Access-Control-Allow-Headers', 'X-Token,X-Usuario,Content-Type')
     $res.Headers.Add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
     if ($req.HttpMethod -eq 'OPTIONS') { $res.StatusCode = 204; $res.Close(); continue }
@@ -1357,7 +1370,7 @@ while ($true) {
     $script:GwPedido    = "$($req.QueryString['gw'])"
     $t0 = Get-Date
     try {
-        if ($req.Headers['X-Token'] -ne $cfg.token) { $code = 401; $out = @{error = 'token invalido'} }
+        if (-not (Agente-TokenValido ([string]$req.Headers['X-Token']) ([string]$cfg.token))) { $code = 401; $out = @{error = 'token invalido'} }
         elseif ($req.HttpMethod -eq 'GET') {
             switch ($req.Url.AbsolutePath) {
                 '/ping' {

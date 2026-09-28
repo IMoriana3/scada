@@ -1,0 +1,70 @@
+{
+  "contract": "access-v1",
+  "status": "client-hardening; server authorization not certified",
+  "password": {
+    "min_length": 15,
+    "max_length": 128,
+    "allow_spaces": true,
+    "case_sensitive": true,
+    "require_current_on_change": true
+  },
+  "toolbox": {
+    "kdf": "PBKDF2-SHA256",
+    "iterations": 600000,
+    "salt_bytes": 16,
+    "hash_bytes": 32,
+    "legacy_kdf": "PBKDF2-SHA1",
+    "failed_attempts": 5,
+    "cooldown_seconds": 300
+  },
+  "online_ui_session": {
+    "idle_seconds": 900,
+    "absolute_seconds": 28800,
+    "storage": "sessionStorage",
+    "server_enforced": false
+  },
+  "agent": {
+    "persist_bearer_in_browser": false,
+    "remote_transport": "HTTPS",
+    "token_case_sensitive": true,
+    "identity": "shared service token; individual authorization pending"
+  },
+  "password_cases": [
+    {
+      "id": "short",
+      "value": "short",
+      "allowed": false
+    },
+    {
+      "id": "minimum",
+      "value": "xxxxxxxxxxxxxxx",
+      "allowed": true
+    },
+    {
+      "id": "maximum",
+      "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "allowed": true
+    },
+    {
+      "id": "over_limit",
+      "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "allowed": false
+    },
+    {
+      "id": "blank",
+      "value": "                    ",
+      "allowed": false
+    },
+    {
+      "id": "passphrase",
+      "value": "Tres palabras mas palabras",
+      "allowed": true
+    }
+  ],
+  "kdf_vector": {
+    "password": "verification-passphrase",
+    "salt_b64": "AAECAwQFBgcICQoLDA0ODw==",
+    "iterations": 600000,
+    "hash_b64": "5zr+h2qG4Xf+Tp83ibp8eZuDu2RCs5amQTTrcTmz+5A="
+  }
+}

@@ -1705,20 +1705,20 @@ Check 'grupos: usa la conexion de la ventana' (@($g5.grupos)[0].cx.etiqueta) '50
 # --------------------------------------------------------------------------
 Write-Host ''
 Write-Host '== contrasenas =='
-$uA = Usuario-Nuevo 'ana' 'Ana Perez' 'admin' 'clave1234'
-Check 'usuario: no guarda la contrasena' ("$($uA | ConvertTo-Json)".Contains('clave1234')) $false
+$uA = Usuario-Nuevo 'ana' 'Ana Perez' 'admin' 'frase-prueba-1234'
+Check 'usuario: no guarda la contrasena' ("$($uA | ConvertTo-Json)".Contains('frase-prueba-1234')) $false
 Check 'usuario: guarda hash' ("$($uA.hash)".Length -gt 20) $true
 Check 'usuario: sal propia' ("$($uA.sal)".Length -gt 10) $true
-Check 'usuario: el hash depende de la sal' ((Pwd-Hash 'clave1234' $uA.sal 100000) -eq $uA.hash) $true
-$uB = Usuario-Nuevo 'bea' 'Bea Ruiz' 'lectura' 'clave1234'
+Check 'usuario: el hash depende de la sal' ((Pwd-Hash 'frase-prueba-1234' $uA.sal 600000 'PBKDF2-SHA256') -eq $uA.hash) $true
+$uB = Usuario-Nuevo 'bea' 'Bea Ruiz' 'lectura' 'frase-prueba-1234'
 Check 'usuario: misma clave, distinto hash' ($uA.hash -eq $uB.hash) $false
 $lista = @($uA, $uB)
-Check 'login: usuario y clave buenos' ((Usuario-Validar $lista 'ana' 'clave1234').rol) 'admin'
+Check 'login: usuario y clave buenos' ((Usuario-Validar $lista 'ana' 'frase-prueba-1234').rol) 'admin'
 Check 'login: clave mala' (Usuario-Validar $lista 'ana' 'otra') $null
-Check 'login: usuario que no existe' (Usuario-Validar $lista 'nadie' 'clave1234') $null
-Check 'login: no distingue mayusculas en el usuario' ((Usuario-Validar $lista 'ANA' 'clave1234').usuario) 'ana'
-Check 'login: la clave si distingue' (Usuario-Validar $lista 'ana' 'CLAVE1234') $null
-Check 'login: lista vacia' (Usuario-Validar @() 'ana' 'clave1234') $null
+Check 'login: usuario que no existe' (Usuario-Validar $lista 'nadie' 'frase-prueba-1234') $null
+Check 'login: no distingue mayusculas en el usuario' ((Usuario-Validar $lista 'ANA' 'frase-prueba-1234').usuario) 'ana'
+Check 'login: la clave si distingue' (Usuario-Validar $lista 'ana' 'FRASE-PRUEBA-1234') $null
+Check 'login: lista vacia' (Usuario-Validar @() 'ana' 'frase-prueba-1234') $null
 
 Write-Host ''
 Write-Host '== jerarquia de roles =='
@@ -2897,23 +2897,23 @@ Write-Host '== los usuarios se guardan de verdad =='
 # El fallo de la v7.4: el alta creaba el usuario, no lo guardaba, y al reabrir
 # lo volvia a pedir. Aqui se hace el viaje entero: crear, guardar, releer del
 # disco y entrar con esa contrasena.
-if (Test-Path $FICH_USUARIOS) { Remove-Item $FICH_USUARIOS -Force }
+foreach($f in @($FICH_USUARIOS,($FICH_USUARIOS+'.inicializados'),($FICH_USUARIOS+'.acceso.json'))){if(Test-Path $f){Remove-Item $f -Force}}
 Check 'usuarios: se parte sin fichero' (@(Usuarios-Cargar).Count) 0
-$admin = Usuario-Nuevo 'jefe' 'Jefe de planta' 'admin' 'clave-larga-1'
+$admin = Usuario-Nuevo 'jefe' 'Jefe de planta' 'admin' 'frase-clave-larga-1'
 Usuarios-Guardar @($admin)
 Check 'usuarios: el fichero existe' (Test-Path $FICH_USUARIOS) $true
 $releidos = @(Usuarios-Cargar)
 Check 'usuarios: se relee uno' $releidos.Count 1
 Check 'usuarios: con su rol' $releidos[0].rol 'admin'
-Check 'usuarios: entra con su clave tras releer' ((Usuario-Validar $releidos 'jefe' 'clave-larga-1').nombre) 'Jefe de planta'
-Check 'usuarios: y no con otra' (Usuario-Validar $releidos 'jefe' 'clave-larga-2') $null
-Check 'usuarios: el fichero no lleva la clave en claro' ((Get-Content $FICH_USUARIOS -Raw).Contains('clave-larga-1')) $false
+Check 'usuarios: entra con su clave tras releer' ((Usuario-Validar $releidos 'jefe' 'frase-clave-larga-1').nombre) 'Jefe de planta'
+Check 'usuarios: y no con otra' (Usuario-Validar $releidos 'jefe' 'frase-clave-larga-2') $null
+Check 'usuarios: el fichero no lleva la clave en claro' ((Get-Content $FICH_USUARIOS -Raw).Contains('frase-clave-larga-1')) $false
 # alta de un segundo usuario sobre la lista releida
-Usuarios-Guardar (@($releidos) + (Usuario-Nuevo 'tec' 'Tecnico' 'tecnico' 'otra-clave'))
+Usuarios-Guardar (@($releidos) + (Usuario-Nuevo 'tec' 'Tecnico' 'tecnico' 'otra-clave-larga-prueba'))
 $dos = @(Usuarios-Cargar)
 Check 'usuarios: ahora hay dos' $dos.Count 2
-Check 'usuarios: el primero sigue entrando' ((Usuario-Validar $dos 'jefe' 'clave-larga-1') -ne $null) $true
-Check 'usuarios: y el segundo tambien' ((Usuario-Validar $dos 'tec' 'otra-clave').rol) 'tecnico'
+Check 'usuarios: el primero sigue entrando' ((Usuario-Validar $dos 'jefe' 'frase-clave-larga-1') -ne $null) $true
+Check 'usuarios: y el segundo tambien' ((Usuario-Validar $dos 'tec' 'otra-clave-larga-prueba').rol) 'tecnico'
 Remove-Item $FICH_USUARIOS -Force
 
 Write-Host ''

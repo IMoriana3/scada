@@ -28,7 +28,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.94'
+$VERSION_TOOLBOX = '11.95'
 $script:ModoDemo = [bool]$Demo
 $VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
 
@@ -4842,46 +4842,140 @@ $ROL_DESC = @{
 $script:Usuario = $null
 $FICH_USUARIOS = Join-Path $PSScriptRoot 'usuarios.json'
 
-# PBKDF2 con sal por usuario: la contraseña nunca se guarda, ni en claro ni en
-# un hash pelado que se rompa con una tabla.
-function Pwd-Hash([string]$pass, [string]$salB64, [int]$iter) {
-    $sal = [Convert]::FromBase64String($salB64)
-    $k = New-Object System.Security.Cryptography.Rfc2898DeriveBytes($pass, $sal, $iter)
-    try { return [Convert]::ToBase64String($k.GetBytes(32)) } finally { $k.Dispose() }
+# Password format v2. SHA1 is read only for migration from the shipped v11.94.
+# These local controls do not create a trust boundary against the Windows owner.
+function Secreto-Igual([byte[]]$a,[byte[]]$b) {
+    if($null -eq $a -or $null -eq $b -or $a.Length -ne $b.Length){return $false}
+    $d=0
+    for($j=0;$j -lt $a.Length;$j++){$d=$d -bor ($a[$j] -bxor $b[$j])}
+    return ($d -eq 0)
+}
+function Pwd-Politica([string]$pass) {
+    return ($pass.Length -ge 15 -and $pass.Length -le 128 -and -not [string]::IsNullOrWhiteSpace($pass))
+}
+function Pwd-Hash([string]$pass,[string]$salB64,[int]$iter,[string]$algoritmo='PBKDF2-SHA1') {
+    if($iter -lt 100000 -or $iter -gt 2000000){throw 'Coste de contrasena no admitido.'}
+    $sal=[Convert]::FromBase64String($salB64)
+    if($sal.Length -ne 16){throw 'Sal de contrasena no valida.'}
+    if($algoritmo -ceq 'PBKDF2-SHA256'){
+        # .NET Framework 4.7.2+ / PowerShell 5.1 and PowerShell 7.
+        $k=[Security.Cryptography.Rfc2898DeriveBytes]::new($pass,$sal,$iter,[Security.Cryptography.HashAlgorithmName]::SHA256)
+    }elseif($algoritmo -ceq 'PBKDF2-SHA1'){
+        $k=New-Object Security.Cryptography.Rfc2898DeriveBytes($pass,$sal,$iter)
+    }else{throw 'Algoritmo de contrasena desconocido.'}
+    try{return [Convert]::ToBase64String($k.GetBytes(32))}finally{$k.Dispose()}
 }
 function Pwd-Sal {
-    $b = New-Object byte[] 16
-    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-    try { $rng.GetBytes($b) } finally { $rng.Dispose() }
+    $b=New-Object byte[] 16;$rng=[Security.Cryptography.RandomNumberGenerator]::Create()
+    try{$rng.GetBytes($b)}finally{$rng.Dispose()}
     return [Convert]::ToBase64String($b)
 }
-function Usuario-Nuevo([string]$usuario, [string]$nombre, [string]$rol, [string]$pass) {
-    $sal = Pwd-Sal
-    $iter = 100000
-    return [ordered]@{usuario=$usuario; nombre=$nombre; rol=$rol; sal=$sal; iteraciones=$iter; hash=(Pwd-Hash $pass $sal $iter)}
+function Usuario-Rehash($u,[string]$pass){
+    $sal=Pwd-Sal
+    return [ordered]@{usuario="$($u.usuario)";nombre="$($u.nombre)";rol="$($u.rol)";algoritmo='PBKDF2-SHA256';sal=$sal;iteraciones=600000;hash=(Pwd-Hash $pass $sal 600000 'PBKDF2-SHA256')}
 }
-# Comprueba usuario+contraseña contra la lista. Pura: se prueba sin ventana.
-function Usuario-Validar($usuarios, [string]$usuario, [string]$pass) {
-    foreach ($u in @($usuarios)) {
-        if ("$($u.usuario)".ToLower() -ne "$usuario".ToLower()) { continue }
-        $h = Pwd-Hash $pass "$($u.sal)" ([int]$u.iteraciones)
-        if ($h -eq "$($u.hash)") { return $u }
+function Usuario-Nuevo([string]$usuario,[string]$nombre,[string]$rol,[string]$pass){
+    if(-not (Pwd-Politica $pass)){throw 'Usa una contrasena de 15 a 128 caracteres; puedes usar una frase.'}
+    if([string]::IsNullOrWhiteSpace($usuario) -or $rol -notin $ROLES){throw 'Usuario o rol no valido.'}
+    return Usuario-Rehash @{usuario=$usuario.Trim();nombre=$nombre;rol=$rol} $pass
+}
+function Usuario-Validar($usuarios,[string]$usuario,[string]$pass){
+    if($pass.Length -gt 128){return $null}
+    foreach($u in @($usuarios)){
+        if("$($u.usuario)".ToLowerInvariant() -ne $usuario.Trim().ToLowerInvariant()){continue}
+        $alg=if($u.algoritmo){[string]$u.algoritmo}else{'PBKDF2-SHA1'}
+        $h=Pwd-Hash $pass "$($u.sal)" ([int]$u.iteraciones) $alg
+        if(Secreto-Igual ([Convert]::FromBase64String($h)) ([Convert]::FromBase64String("$($u.hash)"))){return $u}
         return $null
     }
+    # Unknown users also perform a KDF; error messages do not reveal existence.
+    $null=Pwd-Hash $pass 'AAAAAAAAAAAAAAAAAAAAAA==' 600000 'PBKDF2-SHA256'
     return $null
 }
 function Usuarios-Cargar {
-    if (-not (Test-Path $FICH_USUARIOS)) { return @() }
-    try {
-        $lista=@(Get-Content $FICH_USUARIOS -Raw | ConvertFrom-Json)
+    if(-not (Test-Path -LiteralPath $FICH_USUARIOS)){
+        if(Test-Path -LiteralPath ($FICH_USUARIOS+'.inicializados')){throw 'Falta usuarios.json en una instalacion inicializada. Recupera la copia de seguridad; no se crea otro administrador.'}
+        return @()
+    }
+    try{
+        $lista=@(Get-Content -LiteralPath $FICH_USUARIOS -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop)
         if($lista.Count -eq 0 -or @($lista|Where-Object{$_.rol -eq 'admin'}).Count -eq 0){throw 'No hay administrador valido.'}
-        foreach($u in $lista){if(-not $u.usuario -or $u.rol -notin $ROLES -or -not $u.hash -or -not $u.sal -or $u.iteraciones -lt 100000){throw 'Registro de usuario invalido.'}}
+        $vistos=@{}
+        foreach($u in $lista){
+            $k="$($u.usuario)".Trim().ToLowerInvariant()
+            if(-not $k -or $vistos.ContainsKey($k) -or $u.rol -notin $ROLES -or $u.iteraciones -lt 100000 -or $u.iteraciones -gt 2000000){throw 'Registro de usuario invalido o duplicado.'}
+            if($u.algoritmo -and $u.algoritmo -cnotin @('PBKDF2-SHA1','PBKDF2-SHA256')){throw 'Algoritmo desconocido.'}
+            if(([Convert]::FromBase64String("$($u.hash)")).Length -ne 32 -or ([Convert]::FromBase64String("$($u.sal)")).Length -ne 16){throw 'Hash o sal invalido.'}
+            $vistos[$k]=$true
+        }
         return $lista
-    } catch { throw "usuarios.json no es valido. Conserva el fichero y recupera una copia de seguridad: $_" }
+    }catch{throw 'usuarios.json no es valido. Conserva el fichero y recupera una copia de seguridad.'}
 }
-function Usuarios-Guardar($lista) {
-    ConvertTo-Json @($lista) -Depth 4 | Set-Content $FICH_USUARIOS -Encoding UTF8
+function Acceso-GuardarJson([string]$ruta,$valor){
+    $temporal=$ruta+'.'+[guid]::NewGuid().ToString('N')+'.tmp'
+    try{
+        ConvertTo-Json -InputObject $valor -Depth 6|Set-Content -LiteralPath $temporal -Encoding UTF8 -ErrorAction Stop
+        if(Test-Path -LiteralPath $ruta){[IO.File]::Replace($temporal,$ruta,[NullString]::Value)}else{[IO.File]::Move($temporal,$ruta)}
+    }finally{if(Test-Path -LiteralPath $temporal){Remove-Item -LiteralPath $temporal -Force}}
 }
+function Usuarios-Guardar($lista){
+    Acceso-GuardarJson $FICH_USUARIOS @($lista)
+    # Do not teach password recovery by deleting the database.
+    if(-not (Test-Path -LiteralPath ($FICH_USUARIOS+'.inicializados'))){
+        Set-Content -LiteralPath ($FICH_USUARIOS+'.inicializados') -Value 'v2' -Encoding ASCII -ErrorAction Stop
+    }
+}
+function Acceso-Iniciar([string]$usuario,[string]$pass){
+    $candado=$null;$ruta=$FICH_USUARIOS+'.acceso.json'
+    try{
+        $candado=New-Object IO.FileStream(($FICH_USUARIOS+'.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+        $estado=@{fallos=0;bloqueado_hasta=0}
+        if(Test-Path -LiteralPath $ruta){
+            try{
+                $r=Get-Content -LiteralPath $ruta -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop
+                if($null -eq $r.fallos -or $null -eq $r.bloqueado_hasta -or $r.fallos -lt 0 -or $r.fallos -gt 5 -or $r.bloqueado_hasta -lt 0){throw 'Estado invalido'}
+                $estado=@{fallos=[int]$r.fallos;bloqueado_hasta=[long]$r.bloqueado_hasta}
+            }catch{throw 'No se puede leer el control de acceso. Recupera el registro con soporte.'}
+        }
+        $ahora=[datetime]::UtcNow.Ticks
+        if($estado.bloqueado_hasta -gt $ahora){throw 'Acceso temporalmente bloqueado. Espera cinco minutos antes de reintentar.'}
+        if($estado.bloqueado_hasta -gt 0){$estado=@{fallos=0;bloqueado_hasta=0}}
+        $lista=@(Usuarios-Cargar)
+        $u=Usuario-Validar $lista $usuario $pass
+        if(-not $u){
+            $estado.fallos++
+            if($estado.fallos -ge 5){$estado.bloqueado_hasta=[datetime]::UtcNow.AddMinutes(5).Ticks}
+            Acceso-GuardarJson $ruta $estado
+            throw 'Usuario o contrasena incorrectos.'
+        }
+        if($u.algoritmo -cne 'PBKDF2-SHA256' -or $u.iteraciones -lt 600000){
+            $nuevo=Usuario-Rehash $u $pass
+            $lista=@($lista|ForEach-Object{if($_.usuario -eq $u.usuario){$nuevo}else{$_}})
+            Usuarios-Guardar $lista;$u=$nuevo
+        }else{
+            if(-not (Test-Path -LiteralPath ($FICH_USUARIOS+'.inicializados'))){Usuarios-Guardar $lista}
+        }
+        Acceso-GuardarJson $ruta @{fallos=0;bloqueado_hasta=0}
+        return $u
+    }finally{if($candado){$candado.Dispose()}}
+}
+function Usuario-CambiarClave([string]$usuario,[string]$actual,[string]$nueva){
+    if(-not (Pwd-Politica $nueva)){throw 'Usa una contrasena de 15 a 128 caracteres; puedes usar una frase.'}
+    $u=Acceso-Iniciar $usuario $actual
+    if($actual -ceq $nueva){throw 'Elige una contrasena distinta de la actual.'}
+    $candado=$null
+    try{
+        $candado=New-Object IO.FileStream(($FICH_USUARIOS+'.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+        $lista=@(Usuarios-Cargar)
+        $u=Usuario-Validar $lista $usuario $actual
+        if(-not $u){throw 'La cuenta ha cambiado. Vuelve a identificarte.'}
+        $nuevo=Usuario-Nuevo "$($u.usuario)" "$($u.nombre)" "$($u.rol)" $nueva
+        $lista=@($lista|ForEach-Object{if($_.usuario -eq $u.usuario){$nuevo}else{$_}})
+        Usuarios-Guardar $lista
+        return $nuevo
+    }finally{if($candado){$candado.Dispose()}}
+}
+
 # Jerarquia de permisos: admin >= tecnico >= lectura.
 function Puede([string]$minimo) {
     if (-not $script:Usuario) { return $false }
@@ -17648,13 +17742,45 @@ function Dialogo-Usuario([string]$titulo, [string]$rolFijo) {
     $bOk.Add_Click({
         $u = $tU.Text.Trim()
         if ($u -eq '') { [void][System.Windows.Forms.MessageBox]::Show('El usuario no puede estar vacío.','Aviso'); return }
-        if ($tP.Text.Length -lt 12) { [void][System.Windows.Forms.MessageBox]::Show('La contraseña necesita al menos 12 caracteres.','Aviso'); return }
-        if ($tP.Text -ne $tP2.Text) { [void][System.Windows.Forms.MessageBox]::Show('Las dos contraseñas no coinciden.','Aviso'); return }
+        if (-not (Pwd-Politica $tP.Text)) { [void][System.Windows.Forms.MessageBox]::Show('Usa una frase de 15 a 128 caracteres.','Aviso'); return }
+        if ($tP.Text -cne $tP2.Text) { [void][System.Windows.Forms.MessageBox]::Show('Las dos contraseñas no coinciden.','Aviso'); return }
         $sal.usuario = Usuario-Nuevo $u $(if ($tN.Text.Trim()) { $tN.Text.Trim() } else { $u }) "$($cbR.SelectedItem)" $tP.Text
         $d.DialogResult = 'OK'; $d.Close()
     }.GetNewClosure())
-    [void]$d.ShowDialog()
-    return $sal.usuario
+    try { [void]$d.ShowDialog(); return $sal.usuario } finally { $tP.Clear(); $d.Dispose() }
+}
+
+function Dialogo-Clave([string]$usuario){
+    $d=New-Object Windows.Forms.Form
+    $d.Text="Cambiar contrasena - $usuario";$d.Size=New-Object Drawing.Size(450,290)
+    $d.FormBorderStyle='FixedDialog';$d.StartPosition='CenterScreen';$d.MaximizeBox=$false;$d.MinimizeBox=$false
+    [void](LG $d 'Actual' 15 90 20);$actual=TG $d '' 115 18 300;$actual.UseSystemPasswordChar=$true
+    [void](LG $d 'Nueva' 15 90 55);$nueva=TG $d '' 115 53 300;$nueva.UseSystemPasswordChar=$true
+    [void](LG $d 'Repetir' 15 90 90);$repetir=TG $d '' 115 88 300;$repetir.UseSystemPasswordChar=$true
+    [void](LG $d 'Usa una frase de 15 a 128 caracteres.' 15 400 125)
+    $aviso=LG $d '' 15 400 150;$aviso.ForeColor=[Drawing.Color]::Firebrick;$aviso.Height=36
+    $ok=New-Object Windows.Forms.Button;$ok.Text='Cambiar';$ok.Location=New-Object Drawing.Point(215,200);$ok.Size=New-Object Drawing.Size(95,28)
+    $cancel=New-Object Windows.Forms.Button;$cancel.Text='Cancelar';$cancel.Location=New-Object Drawing.Point(320,200);$cancel.Size=New-Object Drawing.Size(95,28);$cancel.DialogResult='Cancel'
+    $d.Controls.Add($ok);$d.Controls.Add($cancel);$d.AcceptButton=$ok;$d.CancelButton=$cancel
+    $resultado=@{usuario=$null}
+    $ok.Add_Click({
+        if($nueva.Text -cne $repetir.Text){$aviso.Text='Las contrasenas no coinciden.';return}
+        $ok.Enabled=$false
+        try{
+            $resultado.usuario=Usuario-CambiarClave $usuario $actual.Text $nueva.Text
+            $d.DialogResult='OK';$d.Close()
+        }catch{$aviso.Text=[string]$_;$actual.Clear()}finally{$ok.Enabled=$true}
+    }.GetNewClosure())
+    try{[void]$d.ShowDialog();return $resultado.usuario}finally{$actual.Clear();$nueva.Clear();$repetir.Clear();$d.Dispose()}
+}
+function Confirmar-Administrador {
+    if(-not (Puede 'admin')){return $false}
+    $u=Dialogo-Login @(Usuarios-Cargar)
+    if(-not $u -or $u.usuario -ne $script:Usuario.usuario -or $u.rol -ne 'admin'){
+        [void][Windows.Forms.MessageBox]::Show('Confirma con tu propia cuenta de administrador.','Acceso no confirmado')
+        return $false
+    }
+    return $true
 }
 
 function Dialogo-Login($usuarios) {
@@ -17675,14 +17801,15 @@ function Dialogo-Login($usuarios) {
     $d.Controls.Add($bOk); $d.Controls.Add($bCa); $d.AcceptButton = $bOk; $d.CancelButton = $bCa
     $sal = @{ usuario = $null }
     $bOk.Add_Click({
-        $u = Usuario-Validar $usuarios $tU.Text.Trim() $tP.Text
+        try { $u = Acceso-Iniciar $tU.Text.Trim() $tP.Text } catch { $lblE.Text = [string]$_; $tP.Clear(); return }
         if ($null -eq $u) { $lblE.Text = 'Usuario o contraseña incorrectos.'; $tP.Text = ''; $tP.Focus(); return }
+        if(-not (Pwd-Politica $tP.Text)) { $renovado=Dialogo-Clave "$($u.usuario)"; if(-not $renovado){$tP.Clear();return};$u=$renovado }
         $sal.usuario = $u
+        $tP.Clear()
         $d.DialogResult = 'OK'; $d.Close()
     }.GetNewClosure())
     $d.Add_Shown({ if ($tU.Text) { $tP.Focus() } else { $tU.Focus() } }.GetNewClosure())
-    [void]$d.ShowDialog()
-    return $sal.usuario
+    try { [void]$d.ShowDialog(); return $sal.usuario } finally { $tP.Clear(); $d.Dispose() }
 }
 
 # Botones que cada rol NO puede usar. Todo lo que escriba en un equipo es de
@@ -17746,6 +17873,8 @@ $btnUsuarios.Add_Click({
     $d.Controls.Add($bAlta); $d.Controls.Add($bBaja); $d.Controls.Add($bPass); $d.Controls.Add($bCerrar)
     $d.AcceptButton = $bCerrar
     $bAlta.Add_Click({
+        if(-not (Confirmar-Administrador)){return}
+        $st.lista = @(Usuarios-Cargar)
         $n = Dialogo-Usuario 'Alta de usuario' ''
         if (-not $n) { return }
         if (@($st.lista | Where-Object { "$($_.usuario)".ToLower() -eq "$($n.usuario)".ToLower() }).Count -gt 0) {
@@ -17758,6 +17887,8 @@ $btnUsuarios.Add_Click({
         & $pintar
     }.GetNewClosure())
     $bBaja.Add_Click({
+        if(-not (Confirmar-Administrador)){return}
+        $st.lista = @(Usuarios-Cargar)
         if ($lv.SelectedItems.Count -eq 0) { return }
         $u = $lv.SelectedItems[0].Text
         if ($u -eq "$($script:Usuario.usuario)") { [void][System.Windows.Forms.MessageBox]::Show('No puedes borrarte a ti mismo.','Aviso'); return }
@@ -17771,15 +17902,11 @@ $btnUsuarios.Add_Click({
         & $pintar
     }.GetNewClosure())
     $bPass.Add_Click({
-        $n = Dialogo-Usuario 'Cambiar mi contraseña' "$($script:Usuario.rol)"
-        if (-not $n) { return }
-        if ("$($n.usuario)".ToLower() -ne "$($script:Usuario.usuario)".ToLower()) {
-            [void][System.Windows.Forms.MessageBox]::Show("Escribe tu propio usuario ($($script:Usuario.usuario)).",'Aviso'); return
-        }
-        $st.lista = @(@($st.lista | Where-Object { "$($_.usuario)".ToLower() -ne "$($n.usuario)".ToLower() }) + $n)
-        try { Usuarios-Guardar $st.lista } catch { [void][System.Windows.Forms.MessageBox]::Show("No se pudo guardar: $_",'Error'); return }
+        $n = Dialogo-Clave "$($script:Usuario.usuario)"
+        if(-not $n){return}
+        $st.lista = @(Usuarios-Cargar)
         Auditar 'USUARIO_PASS' '' '' "$($n.usuario)"
-        Con "Contraseña cambiada para $($n.usuario)." ([System.Drawing.Color]::LightGreen)
+        Con 'Contrasena actualizada. Vuelve a identificarte al reabrir la herramienta.' ([System.Drawing.Color]::LightGreen)
         & $pintar
     }.GetNewClosure())
     [void]$d.ShowDialog($form)
@@ -17789,7 +17916,7 @@ try{$usuarios = @(Usuarios-Cargar)}catch{[void][Windows.Forms.MessageBox]::Show(
 if($script:ModoDemo){$usuarios=@(@{usuario='demo';nombre='Demostracion';rol='lectura'})}
 if ($usuarios.Count -eq 0) {
     [void][System.Windows.Forms.MessageBox]::Show(
-        "Primer arranque: no hay usuarios dados de alta.`r`n`r`nVas a crear el ADMINISTRADOR. Guarda bien la contraseña: si se pierde, hay que borrar usuarios.json a mano.",
+        "Primer arranque: no hay usuarios dados de alta.`r`n`r`nVas a crear el ADMINISTRADOR. Guarda la contraseña en tu gestor y una copia de seguridad de los usuarios. Si se pierde, solicita recuperacion al responsable de la instalacion.",
         'TCU Toolbox', 'OK', 'Information')
     $nuevo = Dialogo-Usuario 'Crear administrador' 'admin'
     if (-not $nuevo) { return }
