@@ -3987,12 +3987,59 @@ Check 'nav: abre en el diagnostico de planta' ($src.Contains("@{txt='Diagnóstic
 # El arbol es lo unico que se lee en pantalla: va con tildes y con ñ.
 Check 'nav: las etiquetas van bien escritas' ($src.Contains("@{txt='Lectura de señales'; tab=`$tabH}")) $true
 Check 'nav: y sin "senales" sin ñ' ($src.Contains("Lectura de senales'; tab")) $false
-# y tienen que caber todas sin barra de scroll: 31 lineas a 20 px son 620, y el
-# arbol llega hasta abajo del todo (663). Con 400 px se veian 18 de 31.
+# LA CUENTA DEL ARBOL, que cambio de sentido y se quedo sin vigilar.
+#
+# Hasta la v11.90 el arbol se desplegaba entero siempre, asi que la regla era
+# "todas las lineas caben sin barra de scroll" (31 a 20 px = 620 en los 663 de
+# alto; con 400 px se veian 18 de 31 y los bloques de abajo quedaban escondidos).
+# La v11.91 lo hizo PLEGABLE: Nav-Filtrar abre solo el primer bloque. Con eso, el
+# total dejo de importar -42 lineas a 24 px son 1.008, no caben, y no pasa nada
+# porque un TreeView hace scroll- y la comprobacion se borro.
+#
+# Pero se borro a medias: quedaron tres regex calculando cosas que ya no usaba
+# nadie, y un comentario diciendo "31 lineas a 20 px" cuando ni eran 31 ni eran
+# 20. Un comentario que miente envejece peor que una comprobacion que falla.
+#
+# Esta es la regla que SI importa ahora: el bloque MAS GRANDE, desplegado y con
+# su cabecera, tiene que caber. Ese es el peor caso de una navegacion normal, y
+# si deja de caber vuelve el defecto de antes -hojas debajo del borde- solo que
+# dentro de un bloque.
+#
+# Y se exige UNA SOLA asignacion de ItemHeight. Habia dos (16 arriba, 24 mil
+# lineas mas abajo), la de arriba muerta, y el regex de esta suite encontraba
+# justo la muerta: la comprobacion habria hecho la cuenta con el valor que no
+# estaba en vigor. El regex acepta ahora con y sin espacios alrededor del igual.
 $mNav = [regex]::Match($src, '\$nav\.Size = New-Object System\.Drawing\.Size\(\d+, (?<h>\d+)\)')
-$mIt  = [regex]::Match($src, '\$nav\.ItemHeight = (?<h>\d+)')
+Check 'nav: se sabe el alto del arbol' $mNav.Success $true
+
+# LA ETIQUETA DEL MAPA, que va en el titulo de la ventana. Decia R7.1 desde la
+# v11.86, que es cuando entraron registros que solo existen en el R8: el angulo
+# de la posicion segura 7 por grupo (40030-40039) y los limites de recorrido por
+# TCU (50047/50048). Quien lo lee en campo lo lee para saber que da por bueno la
+# herramienta, asi que una etiqueta atrasada dice que no pregunta algo que si
+# pregunta. Esto la ata a los registros: si se usan los del R8, la etiqueta lo
+# dice; y si algun dia se quitan, esta comprobacion avisa de que sobra.
+$usaR8 = ($src -match '\$GR_SP7_BASE\s*=\s*40030') -and ($src -match '\$LIM_ESTE\s*=\s*47')
+Check 'mapa: se usan registros del R8' $usaR8 $true
+Check 'mapa: y la etiqueta del titulo lo dice' ($VERSION_MAPA -like '*NCU R8*') $true
+Check 'mapa: sin quedarse en el R7.1' ($VERSION_MAPA -like '*R7.1*') $false
+
+$itAsign = @([regex]::Matches($src, '\$nav\.ItemHeight\s*=\s*(?<h>\d+)'))
+Check 'nav: el alto de fila se asigna UNA vez (dos = una muerta)' $itAsign.Count 1
 $mArb = [regex]::Match($src, '\$NAV_ARBOL = @\((?<c>[\s\S]*?)\r?\n\)')
-$lineasNav = ([regex]::Matches($mArb.Groups['c'].Value, '@\{txt=')).Count + ([regex]::Matches($mArb.Groups['c'].Value, '@\{bloque')).Count
+$altoNav = [int]$mNav.Groups['h'].Value
+$altoFila = [int]$itAsign[0].Groups['h'].Value
+# una linea por hoja mas la cabecera del bloque
+$mayor = 0
+foreach ($b in [regex]::Matches($mArb.Groups['c'].Value, "@\{bloque = '(?<n>[^']+)'; hojas = @\((?<h>[\s\S]*?)\)\}")) {
+    $n = ([regex]::Matches($b.Groups['h'].Value, '@\{txt=')).Count + 1
+    if ($n -gt $mayor) { $mayor = $n }
+}
+Check 'nav: los bloques se leen' ($mayor -gt 1) $true
+Check "nav: el bloque mayor desplegado cabe ($mayor x $altoFila px en $altoNav)" (($mayor * $altoFila) -le $altoNav) $true
+# el arbol es plegable: si dejara de serlo, la cuenta que vale vuelve a ser el total
+Check 'nav: y es plegable, que es lo que hace valida esa cuenta' ($src -match '\$nav\.ShowPlusMinus\s*=\s*\$true') $true
+Check 'nav: con solo el primer bloque abierto al entrar' ($src.Contains('$nav.Nodes[0].Expand()')) $true
 Check 'nav: filtro disponible sin eliminar funciones' ($src.Contains('function Nav-Filtrar')) $true
 Check 'nav: el arbol sigue a los saltos del codigo' ($src.Contains('$tabs.Add_SelectedIndexChanged(')) $true
 # cada pestana tiene que ser alcanzable: una pestana sin hoja es una pestana a

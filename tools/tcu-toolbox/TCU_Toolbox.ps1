@@ -26,8 +26,14 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.93'
-$VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
+$VERSION_TOOLBOX = '11.94'
+# La etiqueta va en el titulo de la ventana: es lo que mira alguien en campo
+# para saber QUE MAPA da por bueno la herramienta. Decia R7.1 desde la v11.86,
+# que es cuando entraron registros que solo existen en el R8 (40030-40039, el
+# angulo de la posicion segura 7 por grupo, y 50047/50048, los limites de
+# recorrido por TCU). Una etiqueta que se queda atras no es un detalle: dice
+# que la herramienta no pregunta cosas que si pregunta.
+$VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R8 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
 $PUERTO_NCU = 502
@@ -936,8 +942,45 @@ function Alarmas-Desglose([string]$hex1, [string]$hex2) {
 
 # Guardia de viento para tests de movimiento: consulta las HSU cacheadas por
 # la NCU. Devuelve @{nivel;alarma} o $null si no hay datos de HSU.
-function Viento-Seguro([string]$ipNcu, [int]$to, [int]$puerto = 0) {
+# Cuanto vale una lectura de viento para REPETIRLA, no para fiarse de ella.
+#
+# La guardia por paso de las recetas (v11.90) arreglo algo de verdad: antes se
+# consultaba una vez por NCU, asi que una tirada de dos horas se apoyaba en una
+# lectura de hace dos horas. Pero cada consulta es conectar al 502, leer el
+# bloque compacto de HSUs, cerrar y reconectar al gateway, y eso pasa por CADA
+# paso que mueve y por CADA TCU: en El Burgo, una receta con un paso de AUTO
+# sobre 108 TCUs son 108 ciclos de conexion de mas intercalados, cada uno con
+# 5 s de presupuesto de timeout y cada uno una ocasion de dar el "conexion
+# rechazada / la unica conexion esta cogida" que este mismo fichero ya sabe que
+# pasa. El trafico era el problema, no la frecuencia.
+#
+# Asi que se reutiliza la lectura DENTRO de una ventana corta, y con tres
+# condiciones que la hacen defendible:
+#
+#  1. Solo si quien llama lo pide ($cacheS). Las guardias de boton -test de
+#     motor, comando de grupo- siguen leyendo fresco SIEMPRE: ahi el tecnico
+#     acaba de pulsar y espera el dato de ahora, y con cache podria quedarse
+#     bloqueado por un viento que ya paro, o pasar por un "seguro" de hace 20 s.
+#  2. Solo se guarda el EXITO. Un fallo de lectura no se cachea, porque cachear
+#     un $null bloquearia 30 s de TCUs por un solo hipo de la red.
+#  3. Cada tirada de receta empieza limpiando la cache (Viento-OlvidarCache).
+#
+# Y lo que no hay que perder de vista: esto NO es la proteccion. La proteccion
+# es la alarma de viento del propio controlador, que es independiente de esta
+# ventana y no depende de que nosotros preguntemos. Esta guardia es para no
+# mandar nosotros a un seguidor a moverse con viento; 30 s de ventana valen
+# menos que los 108 reintentos de conexion que evitan.
+$VIENTO_CACHE_S = 30
+$script:VientoCache = @{}
+function Viento-OlvidarCache { $script:VientoCache = @{} }
+
+function Viento-Seguro([string]$ipNcu, [int]$to, [int]$puerto = 0, [int]$cacheS = 0) {
     if ($puerto -eq 0) { $puerto = $PUERTO_NCU }
+    $clave = "$ipNcu|$puerto"
+    if ($cacheS -gt 0 -and $script:VientoCache.ContainsKey($clave)) {
+        $c = $script:VientoCache[$clave]
+        if (((Get-Date) - $c.cuando).TotalSeconds -lt $cacheS) { return $c.v }
+    }
     try {
         Modbus-Conectar $ipNcu $puerto $to
         $hs = @(Ncu-HsuCompat)
@@ -954,7 +997,10 @@ function Viento-Seguro([string]$ipNcu, [int]$to, [int]$puerto = 0) {
             }
         }
         if ($nivel -lt 0) { return $null }
-        return @{nivel=$nivel; alarma=$alarma}
+        $r = @{nivel=$nivel; alarma=$alarma}
+        # solo el exito: un $null cacheado bloquearia 30 s de TCUs por un hipo
+        if ($cacheS -gt 0) { $script:VientoCache[$clave] = @{cuando = (Get-Date); v = $r} }
+        return $r
     } catch { Modbus-Cerrar; return $null }
 }
 
@@ -5025,17 +5071,30 @@ $gbCon.Controls.Add($btnCancelar)
 # es ese orden; las pestanas siguen existiendo por dentro (todo el codigo que
 # salta de una a otra sigue funcionando), pero su cabecera no se ve: quien
 # navega es el arbol.
-# Alto: hasta abajo del todo, a la altura de la consola. Con 400 px cabian 18 de
-# las 31 lineas del arbol y las demas quedaban debajo de una barra de scroll:
-# los bloques REPETIDORES y TCUs no se veian sin arrastrar, que es justo lo que
-# el arbol venia a evitar. La consola se corre a su derecha.
+# Alto: hasta abajo del todo, a la altura de la consola. La consola se corre a
+# su derecha.
+#
+# El arbol es PLEGABLE desde la v11.91: Nav-Filtrar despliega solo el primer
+# bloque, y con filtro escrito despliega todos. Eso cambia cual es la cuenta que
+# importa. Antes se desplegaba todo siempre y habia que meter las 31 lineas
+# enteras en el hueco -con 400 px cabian 18, y REPETIDORES y TCUs quedaban bajo
+# una barra de scroll, que es justo lo que el arbol venia a evitar-. Ahora las 42
+# lineas a 24 px son 1.008 y NO caben, ni tienen que caber: el TreeView hace
+# scroll y solo hay un bloque abierto. Lo que si tiene que caber es EL BLOQUE MAS
+# GRANDE desplegado con su cabecera (TCUs, 15 lineas x 24 = 360), porque ese es
+# el peor caso de una navegacion normal. La suite lo vigila asi.
+#
+# Y va todo aqui. Estas tres propiedades se estaban asignando DOS VECES -16 px,
+# sin +/- y con borde aqui; 24 px, con +/- y sin borde mil lineas mas abajo-, asi
+# que las de arriba eran codigo muerto y su comentario decia una geometria que no
+# era la que se veia. Peor: el regex de la suite encontraba la muerta.
 $nav = New-Object System.Windows.Forms.TreeView
 $nav.Location = New-Object System.Drawing.Point(10, 72)
 $nav.Size = New-Object System.Drawing.Size(176, 663)
 $nav.HideSelection = $false
-$nav.ShowLines = $false; $nav.ShowRootLines = $false; $nav.ShowPlusMinus = $false
-$nav.FullRowSelect = $true; $nav.ItemHeight = 16   # 40 lineas x 16 = 640 en los 663 de alto
-$nav.BorderStyle = 'FixedSingle'
+$nav.ShowLines = $false; $nav.ShowRootLines = $false
+$nav.FullRowSelect = $true
+$nav.ItemHeight = 24; $nav.ShowPlusMinus = $true; $nav.BorderStyle = 'None'
 $form.Controls.Add($nav)
 
 # El panel es el que RECORTA: la cabecera de pestanas no se puede ocultar con
@@ -14636,7 +14695,7 @@ function Sec-Plan($trabajos) {
 # de socket al 502; restaurar SIEMPRE el gateway antes del siguiente paso TCU.
 function Sec-PrepararPaso($destino, $paso, [bool]$simular) {
     if ($simular -or -not (Sec-Mueve @($paso))) { return }
-    $v = Viento-Seguro $destino.ip $destino.to
+    $v = Viento-Seguro $destino.ip $destino.to 0 $VIENTO_CACHE_S
     if ($null -eq $v -or $v.alarma -or $v.nivel -gt 0) { throw 'movimiento bloqueado: viento activo o sin datos actuales de HSU' }
     Modbus-Conectar $destino.ip $destino.puerto $destino.to
 }
@@ -14669,6 +14728,8 @@ function Sec-RecetaTcu($destino, $pasos, [bool]$simular) {
     return 'VERIFICADO'
 }
 function Sec-Correr([bool]$simular, $planReintento = $null) {
+    # una tirada nunca arranca con una lectura de viento heredada de la anterior
+    Viento-OlvidarCache
     $pasos = @($script:SecPasos | ForEach-Object { @{tipo="$($_.tipo)"; valor="$($_.valor)"} })
     $val = Sec-Validar $pasos $VARIABLES
     if (@($val.errores).Count -gt 0) { throw ('La receta tiene errores y no se lanza: ' + ($val.errores -join '; ')) }
@@ -15087,11 +15148,24 @@ function Lim-LeerTcu([int]$tcu) {
 # no se toca: escribir el par entero obligaria a saber el que no quieres cambiar
 # y un valor de mas es un limite que nadie pidio.
 function Lim-EscribirTcu([int]$tcu, $este, $oeste) {
+    # Por Gr-EscribirPalabra y no con FC16 a pelo: hay NCUs que contestan
+    # IllegalFunction a FC16 y solo aceptan FC06 -es la razon por la que existe
+    # ese camino-, y cuando se arreglo para los comandos de grupo (v11.87) estas
+    # dos escrituras se quedaron fuera. El resultado era que los grupos se
+    # recuperaban de esa NCU y los limites de recorrido no, en la misma planta y
+    # con el mismo aparato. El par junto sigue yendo de una sola peticion cuando
+    # FC16 vale, que es lo normal.
     if ($null -ne $este -and $null -ne $oeste) {
-        FC16-Escribir $UNIT_NCU (Lim-Dir $tcu $LIM_ESTE) @([int]$este, [int]$oeste)
+        try { FC16-Escribir $UNIT_NCU (Lim-Dir $tcu $LIM_ESTE) @([int]$este, [int]$oeste) }
+        catch {
+            if ("$_" -notmatch 'IllegalFunction') { throw }
+            # sin FC16 no hay escritura multiple: uno y luego el otro
+            [void](Gr-EscribirPalabra (Lim-Dir $tcu $LIM_ESTE)  ([int]$este))
+            [void](Gr-EscribirPalabra (Lim-Dir $tcu $LIM_OESTE) ([int]$oeste))
+        }
     } else {
-        if ($null -ne $este)  { FC16-Escribir $UNIT_NCU (Lim-Dir $tcu $LIM_ESTE)  @([int]$este) }
-        if ($null -ne $oeste) { FC16-Escribir $UNIT_NCU (Lim-Dir $tcu $LIM_OESTE) @([int]$oeste) }
+        if ($null -ne $este)  { [void](Gr-EscribirPalabra (Lim-Dir $tcu $LIM_ESTE)  ([int]$este)) }
+        if ($null -ne $oeste) { [void](Gr-EscribirPalabra (Lim-Dir $tcu $LIM_OESTE) ([int]$oeste)) }
     }
     Start-Sleep -Milliseconds 150
     $l = Lim-LeerTcu $tcu
@@ -15277,7 +15351,7 @@ $btnGRAplicar.Add_Click({ Lanzar {
                     # el plazo hay un rato en el que los seguidores estan fuera
                     # con el plazo viejo, que puede ser 0 (o sea, nunca vuelven)
                     if ($null -ne $segundos) {
-                        FC16-Escribir $UNIT_NCU 40080 @([int]$segundos)
+                        [void](Gr-EscribirPalabra 40080 ([int]$segundos))
                         $via = "40080 = $segundos s"
                     }
                     $e = Gr-EscribirAngulo $bits $angW
@@ -17429,7 +17503,6 @@ $form.Controls.Add($txtNav);$ttW.SetToolTip($txtNav,'Filtrar funciones por nombr
 $lblVista=New-Object Windows.Forms.Label
 $lblVista.Font=New-Object Drawing.Font('Segoe UI',12,[Drawing.FontStyle]::Bold)
 $lblVista.AutoEllipsis=$true;$lblVista.TextAlign='MiddleLeft';$form.Controls.Add($lblVista)
-$nav.ItemHeight=24;$nav.ShowPlusMinus=$true;$nav.BorderStyle='None'
 $txtNav.Add_TextChanged({Nav-Filtrar})
 function Nav-Filtrar {
     $consulta=Buscar-Norm $txtNav.Text

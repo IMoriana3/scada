@@ -4,6 +4,61 @@
 
 Es el complemento de **escritura** del SCADA de este repo: el SCADA es solo-lectura a propósito; cuando hay que *cambiar* algo en un TCU (configuración, reloj, NVM) se usa esta toolbox desde el portátil conectado a la LAN de planta.
 
+## Cuatro cosas que se habían quedado a medias (v11.94)
+
+Repaso de lo que entró entre la v11.87 y la v11.93. Nada de esto añade función:
+son cuatro cosas que decían algo que ya no era verdad, o que llegaron a un sitio
+y no al de al lado.
+
+**La etiqueta del mapa.** El título de la ventana decía `NCU R7.1` desde la
+v11.86, que es cuando entraron registros que solo existen en el **R8** — el
+ángulo de la posición segura 7 por grupo (`40030`-`40039`) y los límites de
+recorrido por TCU (`50047`/`50048`). Quien lee esa etiqueta en campo la lee para
+saber qué da por bueno la herramienta, así que atrasada dice que no pregunta algo
+que sí pregunta. Ahora dice `NCU R8`, y una comprobación la ata a los registros:
+si se usan los del R8, la etiqueta lo dice.
+
+**El alto de fila del árbol se asignaba dos veces** (16 px arriba, 24 px mil
+líneas más abajo) y la de arriba era código muerto con un comentario describiendo
+una geometría que no se veía. Peor: el regex de la suite encontraba justo la
+muerta, así que si alguien reactivaba la comprobación la habría hecho con el valor
+que no estaba en vigor. Una sola asignación, y la suite exige que siga siendo una.
+
+Y la cuenta del árbol cambió de sentido sin que nadie lo dijera. Cuando se
+desplegaba entero, la regla era «todas las líneas caben sin barra de scroll». Al
+hacerlo **plegable** (v11.91) el total dejó de importar —42 líneas a 24 px son
+1.008, no caben, y da igual porque un TreeView hace scroll— y la comprobación se
+borró… dejando tres regex calculando cosas que ya no usaba nadie y un comentario
+diciendo «31 líneas a 20 px». La regla que importa ahora es otra: **el bloque más
+grande, desplegado y con su cabecera, tiene que caber** (TCUs, 15 × 24 = 360 en
+663). Eso es lo que se vigila.
+
+**El *fallback* a FC06 no llegó a los límites de recorrido.** El arreglo de la
+v11.87 —hay NCUs que contestan `IllegalFunction` a FC16 y solo aceptan FC06— entró
+en los comandos de grupo y dejó fuera `Lim-EscribirTcu` y la escritura del `40080`,
+que seguían llamando a FC16 a pelo. El resultado sería que en la misma planta y
+con el mismo aparato los grupos se recuperan de esa NCU y los límites no. Ya van
+por el mismo camino, y el par sigue yendo de una sola petición cuando FC16 vale.
+Se prueba ejecutando la función de verdad, no buscando palabras en el fuente: ese
+bug pasó una vez por delante de un grep con todas las palabras en su sitio.
+
+**La guardia de viento reutiliza la lectura durante 30 s.** Que pasara a ser *por
+paso* (v11.90) arregló algo real: antes se consultaba una vez por NCU, así que una
+tirada de dos horas se apoyaba en una lectura de hace dos horas. Pero cada consulta
+es conectar al 502, leer el bloque de HSUs, cerrar y reconectar al gateway, y eso
+por cada paso que mueve y por cada TCU: en El Burgo, una receta con un paso de AUTO
+sobre 108 TCUs son 108 ciclos de conexión de más, cada uno con 5 s de presupuesto
+de *timeout*. El problema era el tráfico, no la frecuencia.
+
+La reutilización es **opt-in y con tres condiciones**: las guardias de botón (test
+de motor, comando de grupo) **siguen leyendo fresco siempre**, porque ahí el
+técnico acaba de pulsar y espera el dato de ahora —con caché podría quedarse
+bloqueado por un viento que ya paró—; **solo se guarda el éxito**, porque cachear
+un fallo bloquearía 30 s de TCUs por un hipo de red; y **cada tirada empieza
+limpiando** la reutilización anterior. Y lo que no hay que perder de vista: esto no
+es la protección. La protección es la alarma de viento del propio controlador, que
+es independiente de esta ventana.
+
 ## Histórico CSV de NCU (v11.93)
 
 Desde **Operación → ficha del equipo → Histórico CSV**, o desde el detalle del
