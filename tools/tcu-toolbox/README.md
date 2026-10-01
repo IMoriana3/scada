@@ -4,6 +4,123 @@
 
 Es el complemento de **escritura** del SCADA de este repo: el SCADA es solo-lectura a propósito; cuando hay que *cambiar* algo en un TCU (configuración, reloj, NVM) se usa esta toolbox desde el portátil conectado a la LAN de planta.
 
+## Dejar de entrar en la página de la NCU (v11.96)
+
+El objetivo es que la configuración de una NCU se haga desde aquí y no desde su
+página web. Esta versión pone la base: **copia, comparación y la edición de
+grupos**, que es lo único que por Modbus no se puede hacer de ninguna manera.
+
+### Lo que ya funciona
+
+- **GUARDAR CONFIG** deja la configuración entera de la NCU en un JSON con
+  planta, NCU, IP, versión de panel y fecha. Hoy, **si una NCU se muere, nadie
+  tiene su configuración**: hay que reconstruirla de memoria y de los `.bat` de
+  Sunner. Esto es el seguro que faltaba, y además es el paso previo obligatorio
+  de cualquier escritura.
+- **COMPARAR CON...** carea lo leído contra una copia guardada y dice qué ha
+  cambiado, línea a línea. Responde a «¿qué ha tocado alguien aquí desde el
+  viernes?», que hoy no tiene respuesta.
+- **METER / SACAR** editan a qué grupo pertenece cada seguidor.
+
+### Por qué una escritura de configuración no es como una escritura Modbus
+
+Una Modbus toca **un registro**: si sale mal, se reescribe. La API de la NCU
+manda la configuración **entera** en un solo envío, con la red dentro. El fallo
+no es «un valor raro»: es una NCU que ya no está en la red y alguien cogiendo el
+coche. De ahí tres reglas, y las tres se comprueban en el banco:
+
+1. **Nada se edita en sitio.** Cada cambio devuelve una copia nueva y lo leído de
+   la NCU se queda intacto, para que el diff sea siempre contra la verdad del
+   aparato.
+2. **Lista blanca, no lista negra.** Cada cambio declara qué rutas va a tocar;
+   antes de mandar se comparan las dos configuraciones **enteras** y se exige que
+   todo lo que cambie esté en lo declarado. Una lista negra solo protege de lo
+   que se nos ocurrió; ésta protege también de lo que no.
+3. **La red es intocable**, pase lo que pase. No hay casilla que lo abra: ni
+   `ip_config`, ni la IP, el puerto o el tipo de una red Modbus. Los esclavos de
+   dentro sí son configuración normal.
+
+Y el orden de una escritura no es negociable: **copia → diferencias → guarda →
+confirmar enseñando TODO lo que cambia → mandar → releer y comparar**. Lo último
+importa: que la NCU conteste bien no quiere decir que lo haya aplicado — eso ya
+lo sabemos del «Allow writing» del Modbus — así que lo que vale es releer.
+
+La edición de grupos además se niega a hacer dos cosas: meter en un grupo un
+seguidor que **esa NCU no tiene configurado** (daría un grupo que dice mover algo
+que no está), y meter uno que **ya está en otro grupo**, diciendo en cuál. Esto
+último es **regla nuestra**: la API no dice si admite estar en dos.
+
+### ⚠️ La escritura va DESARMADA, y por qué
+
+Todo lo anterior está hecho y probado, pero **el envío no manda nada todavía**.
+El extremo, el verbo y la forma del cuerpo salen de leer el JavaScript de la
+página de la NCU, **no de ver una petición funcionando**. Y como se manda el
+objeto entero, si la forma no es exactamente la que la NCU espera —o si otra
+versión del panel la quiere distinta— el fallo no es que no se aplique: es que se
+aplica a medias, con la red dentro.
+
+No es una precaución simbólica: `Api-Escribir` devuelve sin llamar a la red, y el
+banco lo comprueba **espiando el cliente HTTP** y exigiendo que no se le llame.
+Una precaución que no se comprueba es una intención.
+
+**Para armarla hace falta una sola cosa:** abrir el DevTools en la pestaña
+*Network*, cambiar algo pequeño en la página de la NCU y mirar la petición que
+sale — método, ruta, `Content-Type` y la forma del cuerpo (si es el objeto
+entero, si va envuelto, si lleva algún campo de versión). Con eso se rellena el
+bloque, se pone `$API_ESCRITURA_CONFIRMADA` a `$true` y se añade su prueba.
+
+### Reiniciar la NCU, y por qué ésta sí va armada
+
+`REINICIAR NCU` manda el *soft restart*. Va **armada** mientras la escritura de
+configuración no, y la diferencia no es capricho — es **cómo falla cada una si
+nos hemos equivocado de ruta**:
+
+- El reinicio es un `POST` **sin cuerpo**. Ruta equivocada ⇒ **404 y no pasa
+  nada**. Falla seguro.
+- La configuración es un `PUT` con el objeto **entero**. Forma equivocada ⇒ **se
+  aplica a medias**, con la red dentro. Falla peligroso.
+
+Lo que hay que cuidar en el reinicio no es técnico, es **operativo**, y la
+ventana de confirmar lo dice entero: los seguidores **siguen al sol por su
+cuenta** —el seguimiento vive en la TCU, no en la NCU—, pero mientras esté abajo
+**no hay quien mande una posición segura**: ni por grupo, ni por viento, ni desde
+el SCADA, que además se queda sin ver la planta.
+
+Por eso lleva **guardia de viento** y aquí no es una formalidad: con viento, se
+niega. Lee fresco siempre, sin caché — el técnico acaba de pulsar.
+
+Y **que la NCU conteste no es que haya reiniciado**: si no hizo caso, contesta
+igual de bien. Lo único que lo distingue es que su **tiempo de marcha haya ido
+hacia atrás**, así que se espera a que vuelva, se relee y se compara. Si vuelve
+con más marcha que antes, se dice que **no ha reiniciado** en vez de darlo por
+bueno.
+
+**El firmware de la NCU (OTA) se queda fuera. Es una decisión, no un pendiente.**
+
+Conviene decirlo bien, porque la primera versión de esta nota lo justificaba mal:
+el *TCU Updater* de Sunner actualiza el firmware de las **TCUs**, y el de la
+**NCU** no lo toca. O sea que el firmware de la NCU se sigue haciendo subiendo el
+fichero en su página web, y ésa es la única parte de la página que **no**
+pretendemos sustituir.
+
+El motivo es que rompe la red de seguridad sobre la que se apoya todo lo demás de
+esta pestaña: aquí se escribe y **se vuelve a leer para comprobarlo**. Con una
+imagen de firmware no hay nada que releer — si sube a medias o sube la que no es,
+la NCU se queda **inservible y fuera de alcance**, ni por web ni por Modbus ni
+desde aquí, y eso se arregla yendo a la planta con un cable. Subir una imagen es
+la única operación de esta herramienta que no se puede deshacer desde esta
+herramienta.
+
+El banco exige que el extremo **no aparezca ni escrito**, para que no entre por
+descuido.
+
+### Lo que esta versión NO sustituye todavía de la página
+
+Faltan los logs y CSV, el histórico de MAC, la tabla de *fulltracking* y el
+websocket de tiempo real. El **firmware de la NCU** no está en esta lista: se
+queda fuera a propósito (ver arriba), así que la página seguirá haciendo falta
+para eso y solo para eso.
+
 ## Panel web de la NCU: leer lo que el Modbus no cuenta (v11.95)
 
 La pestaña **NCU › Panel web** lee la página de configuración de la NCU y saca de

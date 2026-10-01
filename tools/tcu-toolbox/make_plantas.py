@@ -37,7 +37,9 @@ import unicodedata
 from pathlib import Path
 
 
-# Plantas que ya tienen fichero con otro nombre, del modo plants.yml. Ver `destino`, abajo.
+# Plantas que ya tienen fichero con otro nombre. La respetan LOS DOS caminos que
+# escriben en plantas/: el de plants.yml y el de --tarjeta. Si solo la respeta
+# uno, la planta acaba con dos ficheros y sale duplicada en el portatil.
 MISMO_FICHERO = {"23003": "elburgo.json"}
 
 
@@ -719,7 +721,13 @@ def main() -> None:
         destino = Path(args.salida)
     else:
         pid = (cfg.get("plant") or {}).get("id") or "planta"
-        destino = Path("plantas") / f"{pid}.json"
+        # MISMO_FICHERO tambien AQUI, y no solo en el modo --tarjeta. Sin esto,
+        # El Burgo se escribia en 23003.json teniendo ya su elburgo.json, y el
+        # portatil de campo veia la planta DOS VECES en la lista: justo lo que
+        # esa tabla existe para evitar. Paso de verdad -el workflow que regenera
+        # en cada cambio de plants.yml creo el segundo fichero el 25/09/2026- y
+        # estuvo asi hasta la v11.96, con las dos copias identicas.
+        destino = Path("plantas") / MISMO_FICHERO.get(str(pid), f"{pid}.json")
     destino.parent.mkdir(parents=True, exist_ok=True)
     destino.write_text(json.dumps(salida, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"{destino}: {len(plantas)} entradas ({len(ncus)} NCUs)")

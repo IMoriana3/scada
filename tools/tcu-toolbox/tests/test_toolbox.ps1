@@ -150,10 +150,15 @@ Check 'la NCU con 2 gws sale una vez, con su nombre' ($PLANTAS.Contains('El Burg
 Check 'y no queda su entrada (auto)' ($PLANTAS.Contains("El Burgo I NCU1$sufAuto")) 'False'
 Check 'ni las de gateway sueltas' ($PLANTAS.Contains('El Burgo I NCU1 GW1')) 'False'
 Check 'auto NCU1 gws' (@($PLANTAS['El Burgo I NCU1'].gws).Count) 2
-# los dos tramos del GW2 -46-107 y la 109 suelta- son UN gateway desde la
-# v11.64: la entrada (auto) de la NCU2 tiene dos gateways, no tres
-Check 'auto NCU2 gws (los dos tramos del GW2 son uno)' (@($PLANTAS['El Burgo I NCU2'].gws).Count) 2
-Check 'auto NCU2 rango' "$($PLANTAS['El Burgo I NCU2'].ini)-$($PLANTAS['El Burgo I NCU2'].fin)" '1-109'
+# LA 109 YA NO ESTA, Y A PROPOSITO. Era un rango suelto en el GW2 que llego de
+# los .bat de Sunner; el 01/10/2026 se confirmo leyendo el panel de la NCU2 que
+# existe de verdad -y que la 108 no-, pero es un PROTOTIPO montado para
+# certificaciones y no un seguidor de la planta, asi que se saco de plants.yml.
+# Si alguien la ve faltar y la devuelve "porque la NCU la tiene", que lea esto:
+# no es un descuido. Ojo, lo que esto NO cambia: la NCU2 la sigue teniendo en su
+# GRUPO 10, y eso vive en la NCU.
+Check 'auto NCU2 gws' (@($PLANTAS['El Burgo I NCU2'].gws).Count) 2
+Check 'auto NCU2 rango (sin el prototipo 109)' "$($PLANTAS['El Burgo I NCU2'].ini)-$($PLANTAS['El Burgo I NCU2'].fin)" '1-107'
 
 # el desplegable va ORDENADO: por planta, NCU por numero (NCU2 antes que NCU14),
 # y dentro de cada NCU el base, GW1, GW2 y por ultimo (auto). Antes salia en
@@ -189,8 +194,11 @@ Check 'auto 40-47: 2 segmentos' ($segs.Count) 2
 Check 'auto seg1 = 503' ($segs[0].puerto) 503
 Check 'auto seg1 tcus' (@($segs[0].tcus) -join ',') '40,41,42,43,44,45'
 Check 'auto seg2 = 504' ($segs[1].puerto) 504
+# pedir el 105..109 ya no trae la 109: no esta declarada, asi que no se sondea.
+# Que un numero que el tecnico teclea se caiga del plan es correcto aqui -no hay
+# tal seguidor para nosotros- y es justo lo que pidio Inaki.
 $segs2 = @(Plan-Segmentos @(105..109) $cxAuto)
-Check 'auto 109 va al 504' (@($segs2[-1].tcus) -join ',') '105,106,107,109'
+Check 'auto 105-109 va al 504 y sin el prototipo' (@($segs2[-1].tcus) -join ',') '105,106,107'
 Check 'auto avisa huerfano 108' (($script:ConMsgs -join ';') -like '*108*') 'True'
 $cxFijo = @{ip='x'; puerto=503; gws=$null; etiqueta='503'; to=1000; reint=1}
 Check 'puerto fijo: 1 segmento' (@(Plan-Segmentos @(1..5) $cxFijo).Count) 1
@@ -202,11 +210,10 @@ Check 'planta ncus = 2' (@($pc.ncus).Count) 2
 Check 'planta ncu1 gws' (@($pc.ncus[0].gws).Count) 2
 Check 'planta ncu2 gws' (@($pc.ncus[1].gws).Count) 2
 Check 'planta ncu2 ip' ($pc.ncus[1].ip) '10.100.1.56'
-# la cuenta se hace con Tcus-DeGw, que es quien respeta los huecos: sumar
-# ini..fin a pelo se traga la 108, que no es de esta NCU
+# la cuenta se hace con Tcus-DeGw, que es quien respeta los huecos
 $ltNcu2 = @(); foreach ($g in $pc.ncus[1].gws) { $ltNcu2 += @(Tcus-DeGw $g) }
 $ltNcu2 = @($ltNcu2 | Sort-Object -Unique)
-Check 'planta ncu2 tcus (107+109, sin 108)' "$($ltNcu2.Count)/$($ltNcu2[-1])" '108/109'
+Check 'planta ncu2 tcus (1-107, sin el prototipo 109)' "$($ltNcu2.Count)/$($ltNcu2[-1])" '107/107'
 Check 'planta ncu2: la 108 no cuelga de la NCU2' ($ltNcu2 -contains 108) $false
 try { $null = Plan-Segmentos @(1..3) @{multi=$pc.ncus; ip='(planta)'; to=1000; reint=1}; Check 'multi en Plan-Segmentos lanza' 'no-lanzo' 'lanza' }
 catch { Check 'multi en Plan-Segmentos lanza' 'lanza' 'lanza' }
@@ -4196,8 +4203,10 @@ Check 'tramos: ni el de una entrada normal' (Nombre-SinTramo 'Ayora NCU6') 'Ayor
 # ---- la invariante, sobre las plantas de verdad ----
 # Aqui es donde se vio el fallo: Measure-Object devuelve DOUBLE y las claves del
 # diccionario son int, asi que ContainsKey(46.0) no casaba y TODO el rango salia
-# hueco. El Burgo pasaba de 216 TCUs a 153 y San Jose de 2289 a 1686.
-foreach ($caso in @(@('elburgo.json', 153, 216), @('24025-ayora.json', 751, 751), @('24019-san-jose.json', 2289, 2289))) {
+# hueco. El Burgo pasaba de sus TCUs a 153 y San Jose de 2289 a 1686.
+# (El Burgo son 215 desde que se saco el prototipo 109: 108 de la NCU1 y 107
+# de la NCU2.)
+foreach ($caso in @(@('elburgo.json', 153, 215), @('24025-ayora.json', 751, 751), @('24019-san-jose.json', 2289, 2289))) {
     $PLANTAS = [ordered]@{}
     [void](Cargar-FicheroPlantas (Join-Path $raizTb "plantas/$($caso[0])"))
     $tot = 0

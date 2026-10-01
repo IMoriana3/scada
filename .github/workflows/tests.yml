@@ -26,6 +26,33 @@ jobs:
           python tools/test_electrical_contract.py
           python tools/test_electrical_api.py
 
+  # El banco de ficheros de planta de la toolbox (python) no corria en ningun
+  # workflow: por eso el fichero duplicado de El Burgo estuvo una semana en main.
+  plantas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # openpyxl lo necesitan test_ip_gateway.py y test_tramos.py: el modo Excel
+      # de make_plantas.py lee la hoja «Direcciones IP» y esas dos le fabrican
+      # una. Falto en la primera pasada de este job y por eso nacio en rojo.
+      - name: Instalar dependencias
+        run: pip install pyyaml openpyxl
+      - name: Ficheros de planta de la toolbox
+        working-directory: tools/tcu-toolbox
+        run: |
+          set -o pipefail
+          rc=0
+          for f in test_plantas_unicas.py test_gateways_solape.py test_tramos.py \
+                   test_conservar.py test_tarjeta.py test_ip_gateway.py \
+                   test_columnas_rsu.py test_sanjose_ambitos.py; do
+            echo "── $f ──"
+            python "$f" || rc=1
+          done
+          exit $rc
+
   node:
     runs-on: ubuntu-latest
     steps:
@@ -133,6 +160,11 @@ jobs:
           pwsh -NoProfile -File test_panel_ncu.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
           powershell -NoProfile -File test_panel_ncu.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_panel_cfg.ps1 ──'
+          pwsh -NoProfile -File test_panel_cfg.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_panel_cfg.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
           Write-Host '── test_panel_ncu_red.ps1 (contra la maqueta de la API) ──'
           pwsh -NoProfile -File test_panel_ncu_red.ps1
