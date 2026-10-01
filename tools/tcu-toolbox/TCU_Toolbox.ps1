@@ -2644,6 +2644,66 @@ function Api-Escribir([string]$ip, $sesion, $cfg, [int]$to) {
     return @{ok = $true; nota = ''}
 }
 
+# ---- el reinicio de la NCU, y por que ESTE si va armado ----
+# Al contrario que la escritura de configuracion, aqui no hay forma de cuerpo
+# que adivinar: es un POST sin cuerpo. Si la ruta estuviera mal, la NCU
+# contesta 404 y NO PASA NADA. Falla seguro, y por eso se puede armar sin haber
+# visto una captura; el PUT de configuracion falla peligroso -se aplica a
+# medias, con la red dentro- y por eso no.
+#
+# Lo que hay que cuidar aqui no es tecnico, es OPERATIVO: mientras la NCU
+# reinicia nadie supervisa la planta. Los seguidores siguen al sol por su
+# cuenta -el seguimiento vive en la TCU, no en la NCU-, pero durante esa
+# ventana NO HAY QUIEN MANDE UNA POSICION SEGURA: ni por grupo, ni por viento,
+# ni desde el SCADA. De ahi la guardia de viento, que aqui no es una formalidad.
+$API_REINICIO = '/private_api/commands/soft_restart'
+$API_REINICIO_ESPERA_S = 120     # cuanto se espera a que vuelva antes de rendirse
+$API_REINICIO_PASO_S   = 3
+
+# Si de verdad ha reiniciado, su reloj de marcha tiene que haber ido HACIA
+# ATRAS. Que conteste no basta: podria no haber hecho caso y seguir como
+# estaba, y eso se parece demasiado a haber funcionado. Pura.
+function Api-Reinicio-Volvio($uptimeAntes, $uptimeDespues) {
+    if ($null -eq $uptimeDespues) { return @{ok = $false; nota = 'no ha vuelto a contestar'} }
+    if ([double]$uptimeDespues -ge [double]$uptimeAntes) {
+        return @{ok = $false; nota = "contesta, pero su tiempo de marcha NO ha bajado ($([math]::Round([double]$uptimeDespues/3600000.0,1)) h): no ha reiniciado"}
+    }
+    return @{ok = $true; nota = "arriba otra vez, con $([math]::Round([double]$uptimeDespues/1000.0)) s de marcha"}
+}
+
+# Lo que se para y lo que no. Se dice entero antes de preguntar, porque quien
+# pulsa esto en una planta tiene que saber que deja a ciegas y durante cuanto
+# no se sabe. Pura.
+function Api-TextoReinicio([string]$ncu, [int]$nTcus, $viento) {
+    $t = "REINICIAR LA NCU $ncu`r`n`r`nSe para su supervision de $nTcus seguidor(es) hasta que vuelva."
+    $t += "`r`n`r`nLo que NO se para: los seguidores siguen al sol por su cuenta, porque el seguimiento vive en la TCU."
+    $t += "`r`nLo que SI se para, y es lo que importa: mientras este abajo NO HAY QUIEN MANDE UNA POSICION SEGURA. Ni por grupo, ni por viento, ni desde el SCADA. Tampoco responde Modbus, asi que el SCADA deja de ver la planta."
+    $t += "`r`n`r`nCuanto tarda en volver no lo sabemos: se espera hasta $API_REINICIO_ESPERA_S s y se dice lo que pase."
+    if ($null -eq $viento) {
+        $t += "`r`n`r`nOJO: no se ha podido leer el viento. Se continua a ciegas en ese punto."
+    } else {
+        $t += "`r`n`r`nViento ahora: nivel $($viento.nivel)" + $(if ($viento.alarma) { ' CON ALARMA' } else { ' (sin alarma)' })
+    }
+    $t += "`r`n`r`nContinuar?"
+    return $t
+}
+
+function Api-Reiniciar([string]$ip, $sesion, [int]$to) {
+    $seg = [math]::Max(5, [int]($to / 1000))
+    try {
+        [void](Invoke-RestMethod -Uri "http://${ip}:$API_PUERTO$API_REINICIO" -Method Post `
+                   -ContentType 'application/json' -Body '{}' -WebSession $sesion -TimeoutSec $seg)
+    } catch {
+        $m = "$($_.Exception.Message)"
+        # que corte la conexion es lo ESPERADO: se esta reiniciando mientras
+        # contesta, asi que un corte no es un fallo y no se canta como tal
+        if ($m -match '404') { return @{ok = $false; nota = "esta NCU no tiene $API_REINICIO : panel de otra version"} }
+        if ($m -match '401|403') { return @{ok = $false; nota = 'la sesion no vale para reiniciar'} }
+        return @{ok = $true; nota = "la conexion se corto al mandarlo ($m), que es lo normal si ha reiniciado: se comprueba abajo"}
+    }
+    return @{ok = $true; nota = ''}
+}
+
 # ---- el transporte de LECTURA: dos llamadas ----
 # La sesion va por cookie, asi que hace falta el WebRequestSession del login
 # para la segunda llamada. Y SOLO estas dos: un GET de lectura y el POST del
@@ -7859,13 +7919,24 @@ $btnPANSacar.ForeColor = [System.Drawing.Color]::White
 $btnPANSacar.Enabled = $false
 $tabPAN.Controls.Add($btnPANSacar)
 
+# En rojo y no naranja como METER/SACAR: es lo unico de esta pestana que para
+# la supervision de la planta entera, no un seguidor ni un grupo.
+$btnPANReiniciar = New-Object System.Windows.Forms.Button
+$btnPANReiniciar.Text = 'REINICIAR NCU'
+$btnPANReiniciar.Location = New-Object System.Drawing.Point(10, 318)
+$btnPANReiniciar.Size = New-Object System.Drawing.Size(130, 28)
+$btnPANReiniciar.BackColor = [System.Drawing.Color]::Firebrick
+$btnPANReiniciar.ForeColor = [System.Drawing.Color]::White
+$btnPANReiniciar.Enabled = $false
+$tabPAN.Controls.Add($btnPANReiniciar)
+
 $lvPAN = New-Object System.Windows.Forms.ListView
 $lvPAN.Location = New-Object System.Drawing.Point(10, 86)
 $lvPAN.Size = New-Object System.Drawing.Size(898, 222)
 $lvPAN.View = 'Details'; $lvPAN.FullRowSelect = $true; $lvPAN.GridLines = $true
 $tabPAN.Controls.Add($lvPAN)
 
-$lblPANNota = LG $tabPAN 'Habla con la pagina web de la NCU por HTTP (puerto 80), con el mismo usuario y contrasena con los que se entra a mano; no se guardan en ningun sitio. LEER PANEL trae de una vez lo que el mapa Modbus no da: a que grupo pertenece cada seguidor -con eso la pestana Grupos ya dice a cuantos va la orden-, las HSUs de verdad con su esclavo y cuales son prestadas de otra NCU, la version de firmware, si "Allow writing on the modbus map" esta puesto, y los errores por equipo de donde salen las TCUs mudas. GUARDAR CONFIG deja la configuracion entera en un JSON con fecha: hoy, si una NCU se muere, nadie tiene la suya. COMPARAR CON... carea lo leido contra una copia y dice que ha cambiado. METER y SACAR editan los grupos, que es lo unico que por Modbus no se puede hacer de ninguna manera: antes de mandar nada se ensena TODO lo que cambia, se guarda copia, y la red de la NCU no se toca jamas. OJO: la NCU sirve su pagina en HTTP pelado, asi que usuario y contrasena viajan en claro por la red de planta.' 10 890 318
+$lblPANNota = LG $tabPAN 'Habla con la pagina web de la NCU por HTTP (puerto 80), con el mismo usuario y contrasena con los que se entra a mano; no se guardan en ningun sitio. LEER PANEL trae de una vez lo que el mapa Modbus no da: a que grupo pertenece cada seguidor -con eso la pestana Grupos ya dice a cuantos va la orden-, las HSUs de verdad con su esclavo y cuales son prestadas de otra NCU, la version de firmware, si "Allow writing on the modbus map" esta puesto, y los errores por equipo de donde salen las TCUs mudas. GUARDAR CONFIG deja la configuracion entera en un JSON con fecha: hoy, si una NCU se muere, nadie tiene la suya. COMPARAR CON... carea lo leido contra una copia y dice que ha cambiado. METER y SACAR editan los grupos, que es lo unico que por Modbus no se puede hacer de ninguna manera: antes de mandar nada se ensena TODO lo que cambia, se guarda copia, y la red de la NCU no se toca jamas. OJO: la NCU sirve su pagina en HTTP pelado, asi que usuario y contrasena viajan en claro por la red de planta.' 10 890 352
 $lblPANNota.ForeColor = [System.Drawing.Color]::Gray
 
 # ============================ TAB GRUPOS NCU ============================
@@ -16449,7 +16520,7 @@ function Api-Pintar {
     # los de configuracion, solo con UNA NCU leida: estos cambian cosas y no se
     # mandan a ciegas a varias a la vez
     $uno = (@($script:ApiUltimo).Count -eq 1)
-    foreach ($b in @($btnPANCopia, $btnPANComparar, $btnPANMeter, $btnPANSacar)) { $b.Enabled = $uno }
+    foreach ($b in @($btnPANCopia, $btnPANComparar, $btnPANMeter, $btnPANSacar, $btnPANReiniciar)) { $b.Enabled = $uno }
 }
 
 $cbPANVista.Add_SelectedIndexChanged({ if (@($script:ApiUltimo).Count -gt 0) { Api-Pintar } })
@@ -16636,6 +16707,61 @@ $btnPANSacar.Add_Click({ Lanzar {
     $g = 0; if (-not [int]::TryParse("$($txtPANGrupo.Text)".Trim(), [ref]$g)) { Con 'Pon el numero de grupo.' ([System.Drawing.Color]::Orange); return }
     $t = @(Parse-ListaNums "$($txtPANTcus.Text)")
     Api-AplicarCambio $n (Api-GrupoEditar $n.cfg $g $t $false) "SACAR del grupo $g los seguidores: $(Api-Rango $t)"
+} })
+
+$btnPANReiniciar.Add_Click({ Lanzar {
+    $n = Api-UnaNcu; if ($null -eq $n) { return }
+    $usuario = "$($txtPANUser.Text)".Trim(); $clave = "$($txtPANPass.Text)"
+    if ($usuario -eq '' -or $clave -eq '') { Con 'Hacen falta el usuario y la contrasena del panel.' ([System.Drawing.Color]::Orange); return }
+    $cx = Params-Conexion
+
+    # GUARDIA DE VIENTO, y aqui no es una formalidad: dejar la planta sin quien
+    # mande una posicion segura es exactamente lo que no se hace con viento.
+    # Fresca siempre, sin cache: el tecnico acaba de pulsar.
+    $v = Viento-Seguro "$($n.ip)" $cx.to
+    if ($null -ne $v -and ([int]$v.nivel -gt 0 -or $v.alarma)) {
+        Con "NO se reinicia: hay viento (nivel $($v.nivel)$(if ($v.alarma) { ', CON ALARMA' })). Mientras la NCU este abajo nadie puede mandar una posicion segura." ([System.Drawing.Color]::Firebrick)
+        return
+    }
+    if ($null -eq $v) { Con 'No se ha podido leer el viento: se avisa en la ventana y decides tu.' ([System.Drawing.Color]::Orange) }
+
+    $nT = 0
+    foreach ($red in @($n.cfg.modbus_networks)) { $nT += @($red.trackers).Count }
+    $resp = [System.Windows.Forms.MessageBox]::Show((Api-TextoReinicio "$($n.ncu)" $nT $v),
+                'Reiniciar la NCU', 'YesNo', 'Warning')
+    if ($resp -ne [System.Windows.Forms.DialogResult]::Yes) { Con 'Cancelado.' ([System.Drawing.Color]::Gray); return }
+
+    # la copia tambien aqui: es gratis y es justo cuando se quiere tener
+    [void](Api-GuardarCopia $n 'antes de reiniciar')
+    $antes = [double]$n.datos.uptime
+    $e = Api-Entrar "$($n.ip)" $usuario $clave $cx.to
+    if (-not $e.ok) { Con $e.nota ([System.Drawing.Color]::Firebrick); return }
+    $r = Api-Reiniciar "$($n.ip)" $e.sesion $cx.to
+    if (-not $r.ok) { Con $r.nota ([System.Drawing.Color]::Firebrick); $clave = $null; return }
+    if ("$($r.nota)" -ne '') { Con $r.nota ([System.Drawing.Color]::Gray) }
+    Con "Mandado. Esperando a que la NCU $($n.ncu) vuelva (hasta $API_REINICIO_ESPERA_S s)..." ([System.Drawing.Color]::SteelBlue)
+
+    $t0 = Get-Date; $vuelta = $null
+    while (((Get-Date) - $t0).TotalSeconds -lt $API_REINICIO_ESPERA_S) {
+        Start-Sleep -Seconds $API_REINICIO_PASO_S
+        [System.Windows.Forms.Application]::DoEvents()
+        if (Chequear-Cancelado) { break }
+        $e2 = Api-Entrar "$($n.ip)" $usuario $clave $cx.to
+        if (-not $e2.ok) { continue }
+        $l2 = Api-Leer "$($n.ip)" $e2.sesion $cx.to
+        if ($l2.ok) { $vuelta = $l2.datos; break }
+    }
+    $clave = $null
+    $segs = [int]((Get-Date) - $t0).TotalSeconds
+    $ver = Api-Reinicio-Volvio $antes $(if ($null -eq $vuelta) { $null } else { $vuelta.uptime })
+    if ($ver.ok) {
+        $script:ApiUltimo = @(,@{ncu = "$($n.ncu)"; ip = "$($n.ip)"; cuando = (Get-Date)
+                                 datos = $vuelta; cfg = $vuelta.config_data.config})
+        Api-Pintar
+        Con "NCU $($n.ncu): $($ver.nota). Tardo $segs s." ([System.Drawing.Color]::DarkGreen)
+    } else {
+        Con "NCU $($n.ncu): $($ver.nota) (tras $segs s). Compruebala antes de irte." ([System.Drawing.Color]::Firebrick)
+    }
 } })
 
 $btnPANCsv.Add_Click({

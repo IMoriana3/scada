@@ -7,14 +7,16 @@ $tokens = $null; $errores = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($fuente, [ref]$tokens, [ref]$errores)
 if ($errores.Count) { throw "TCU_Toolbox.ps1 con errores de sintaxis: $($errores.Count)" }
 foreach ($n in @('Api-Clonar','Api-Tipo','Api-ListaPlana','Api-Breve','Api-Diferencias','Api-CambioSeguro',
-                 'Api-GrupoEditar','Api-GrupoBandera','Api-Ajuste','Api-TextoCambio','Api-Escribir','Api-GrupoDe')) {
+                 'Api-GrupoEditar','Api-GrupoBandera','Api-Ajuste','Api-TextoCambio','Api-Escribir','Api-GrupoDe',
+                 'Api-Reinicio-Volvio','Api-TextoReinicio','Api-Reiniciar')) {
     $nodos = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $x.Name -eq $n }, $true))
     if ($nodos.Count -ne 1) { throw "Se esperaba una sola funcion $n (hay $($nodos.Count))" }
     . ([scriptblock]::Create($nodos[0].Extent.Text))
 }
 $src = Get-Content $fuente -Raw
 foreach ($v in @('$API_INTOCABLE','$API_INTOCABLE_PATRON','$API_COPIA_PROF','$API_BANDERAS','$API_AJUSTES',
-                 '$API_ESCRITURA_CONFIRMADA','$API_ESCRITURA_FALTA','$API_CONFIG','$API_PUERTO')) {
+                 '$API_ESCRITURA_CONFIRMADA','$API_ESCRITURA_FALTA','$API_CONFIG','$API_PUERTO',
+                 '$API_REINICIO','$API_REINICIO_ESPERA_S','$API_REINICIO_PASO_S')) {
     $nodo = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.AssignmentStatementAst] -and "$($x.Left)" -eq $v }, $true))
     if ($nodo.Count -ne 1) { throw "Se esperaba una sola asignacion de $v (hay $($nodo.Count))" }
     . ([scriptblock]::Create($nodo[0].Extent.Text))
@@ -158,5 +160,54 @@ $ponPut = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Langua
 Igual $ponPut.Count 1 'y hay exactamente una escritura, la suya'
 Igual (@($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.CommandAst] }, $true) |
          Where-Object { "$($_.Extent.Text)" -match 'private_api/(ota|commands)' }).Count) 0 'ni firmware ni reinicio'
+
+# ================= EL REINICIO =================
+# Va armado y la escritura no, y la diferencia esta en COMO FALLA cada uno si
+# nos hemos equivocado de ruta: un POST sin cuerpo contra una ruta mala da 404 y
+# no pasa nada; un PUT con el objeto entero contra una forma mala se aplica a
+# medias. Falla seguro frente a falla peligroso.
+
+# QUE CONTESTE NO ES QUE HAYA REINICIADO. Si la NCU no hizo caso y sigue como
+# estaba, contesta igual de bien: lo unico que lo distingue es que su tiempo de
+# marcha haya ido hacia atras.
+Igual ((Api-Reinicio-Volvio 163441033 4200).ok) $true 'el tiempo de marcha ha bajado: ha reiniciado de verdad'
+Igual ((Api-Reinicio-Volvio 163441033 163460000).ok) $false 'contesta pero lleva MAS tiempo en marcha: no ha reiniciado'
+Igual ((Api-Reinicio-Volvio 163441033 163460000).nota -match 'NO ha reiniciado') $true 'y se dice, no se da por bueno'
+Igual ((Api-Reinicio-Volvio 163441033 163441033).ok) $false 'ni el mismo tiempo de marcha vale'
+Igual ((Api-Reinicio-Volvio 163441033 $null).ok) $false 'si no vuelve a contestar, tampoco'
+Igual ((Api-Reinicio-Volvio 163441033 $null).nota -match 'no ha vuelto') $true 'y se distingue de "no reinicio"'
+
+# la ventana dice lo que se para Y lo que no: el seguimiento no se para, la
+# posicion segura si, y eso es lo que decide si se pulsa o no
+$tr = Api-TextoReinicio '2' 108 @{nivel = 0; alarma = $false}
+Igual ($tr -match '108 seguidor') $true 'dice a cuantos afecta'
+Igual ($tr -match 'siguen al sol por su cuenta') $true 'y que el seguimiento NO se para'
+Igual ($tr -match 'NO HAY QUIEN MANDE UNA POSICION SEGURA') $true 'y que la posicion segura SI'
+Igual ($tr -match 'el SCADA deja de ver la planta') $true 'y que el SCADA se queda ciego'
+Igual ($tr -match 'nivel 0') $true 'con el viento de ahora delante'
+Igual ((Api-TextoReinicio '2' 108 $null) -match 'no se ha podido leer el viento') $true 'y si no se pudo leer, lo admite'
+Igual ((Api-TextoReinicio '2' 108 @{nivel=2; alarma=$true}) -match 'CON ALARMA') $true 'la alarma de viento se canta'
+
+# el boton existe, pide viento fresco y se niega con viento
+Igual ($src.Contains('$btnPANReiniciar.Add_Click')) $true 'hay boton de reinicio'
+Igual ($src -match 'Viento-Seguro "\$\(\$n\.ip\)" \$cx\.to\r?\n') $true 'que lee el viento SIN cache: el tecnico acaba de pulsar'
+Igual ($src.Contains('NO se reinicia: hay viento')) $true 'y se niega si lo hay'
+Igual ($src.Contains("Api-GuardarCopia `$n 'antes de reiniciar'")) $true 'y guarda copia antes, que es cuando se quiere tener'
+
+# un 404 no se confunde con un reinicio: si la ruta no existe, no ha pasado nada
+$script:llamadas = 0
+function Invoke-RestMethod { $script:llamadas++; throw [System.Exception]::new('Response status code does not indicate success: 404 (Not Found).') }
+$r404 = Api-Reiniciar '10.100.1.56' $null 5000
+Igual $r404.ok $false 'un 404 no se da por reiniciado'
+Igual ($r404.nota -match 'panel de otra version') $true 'y se dice que esa NCU no tiene esa ruta'
+# pero que se CORTE la conexion si es lo normal: esta reiniciando mientras contesta
+function Invoke-RestMethod { throw [System.Exception]::new('The underlying connection was closed') }
+$rCorte = Api-Reiniciar '10.100.1.56' $null 5000
+Igual $rCorte.ok $true 'que se corte la conexion no es un fallo: esta reiniciando'
+Igual ($rCorte.nota -match 'se comprueba abajo') $true 'y se verifica despues en vez de darlo por hecho'
+
+# y el reinicio es un POST sin cuerpo util: nada que adivinar
+Igual (@([regex]::Matches($src, [regex]::Escape('/private_api/commands/soft_restart'))).Count) 1 'el extremo de reinicio aparece una sola vez'
+Igual ($src -match 'private_api/ota') $false 'y el de firmware sigue sin aparecer ni escrito'
 
 Write-Host 'test_panel_cfg.ps1: OK'

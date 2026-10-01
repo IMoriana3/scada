@@ -243,13 +243,20 @@ Igual ($src.Contains('Gr-AvisoEscritura $script:ApiUltimo $script:GrNcus')) $tru
 # desarmado y tiene sus propias guardas en test_panel_cfg.ps1.
 $llamadas = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.CommandAst] }, $true) |
               Where-Object { "$($_.GetCommandName())" -match '^Invoke-(RestMethod|WebRequest)$' })
-$dePanel = @($llamadas | Where-Object { "$($_.Extent.Text)" -match 'API_AUTH|API_DATOS|API_CONFIG|private_api' })
+$dePanel = @($llamadas | Where-Object { "$($_.Extent.Text)" -match 'API_AUTH|API_DATOS|API_CONFIG|API_REINICIO|private_api' })
 $deLectura = @($dePanel | Where-Object { "$($_.Extent.Text)" -match 'API_AUTH|API_DATOS' })
 Igual $deLectura.Count 2 'leer el panel siguen siendo dos llamadas: el login y el volcado'
 Igual (@($deLectura | Where-Object { "$($_.Extent.Text)" -match "Method Post" }).Count) 1 'una sola POST, la del login'
 Igual (@($deLectura | Where-Object { "$($_.Extent.Text)" -match "Method (Put|Patch|Delete)" }).Count) 0 'y ninguna escritura en el camino de lectura'
-Igual $dePanel.Count 3 'contra el panel hay TRES llamadas en total: login, volcado y la configuracion desarmada'
-Igual ($src -match 'private_api/(ota|commands)') $false 'ni el extremo de firmware ni el de reinicio'
+Igual $dePanel.Count 4 'contra el panel hay CUATRO llamadas: login, volcado, configuracion (desarmada) y reinicio'
+# El reinicio SI esta y la escritura de configuracion no, y la diferencia no es
+# capricho: un POST sin cuerpo contra una ruta equivocada da 404 y no pasa nada;
+# un PUT con el objeto entero contra una forma equivocada se aplica a medias.
+# Falla seguro frente a falla peligroso.
+Igual ($src -match 'private_api/commands/soft_restart') $true 'el reinicio esta, y va armado'
+# el FIRMWARE no, y esto no es un olvido: esta herramienta no actualiza firmware
+# -eso lo hace el TCU Updater de Sunner- y por ahi se sube una imagen a una NCU
+Igual ($src -match 'private_api/ota') $false 'el extremo de firmware no aparece ni escrito'
 # y la escritura que existe no puede salir por descuido
 Igual ($src -match '\$API_ESCRITURA_CONFIRMADA = \$false') $true 'la escritura de configuracion va desarmada'
 
