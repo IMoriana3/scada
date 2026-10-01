@@ -175,7 +175,15 @@ Igual ((Api-Reinicio-Volvio 163441033 163460000).ok) $false 'contesta pero lleva
 Igual ((Api-Reinicio-Volvio 163441033 163460000).nota -match 'NO ha reiniciado') $true 'y se dice, no se da por bueno'
 Igual ((Api-Reinicio-Volvio 163441033 163441033).ok) $false 'ni el mismo tiempo de marcha vale'
 Igual ((Api-Reinicio-Volvio 163441033 $null).ok) $false 'si no vuelve a contestar, tampoco'
-Igual ((Api-Reinicio-Volvio 163441033 $null).nota -match 'no ha vuelto') $true 'y se distingue de "no reinicio"'
+# QUE NO CONTESTE EN NUESTRA VENTANA NO ES QUE ESTE MAL. La espera es un numero
+# que pusimos nosotros sin saber cuanto tarda una NCU en arrancar, asi que
+# cantarlo como fallo manda a alguien a la planta por nada.
+$aun = Api-Reinicio-Volvio 163441033 $null
+Igual ($aun.nota -match 'no ha contestado todavia') $true 'un "aun no" no se canta como "no ha vuelto"'
+Igual ($aun.nota -match 'vuelve a LEER PANEL') $true 'y se dice que hacer antes de alarmarse'
+Igual $aun.tarda $true 'se marca como "tarda", para pintarlo distinto de un fallo'
+Igual ((Api-Reinicio-Volvio 163441033 163460000).tarda) $false 'en cambio no reiniciar SI es un fallo'
+Igual ((Api-Reinicio-Volvio 163441033 4200).tarda) $false 'y el caso bueno tampoco es "tarda"'
 
 # la ventana dice lo que se para Y lo que no: el seguimiento no se para, la
 # posicion segura si, y eso es lo que decide si se pulsa o no

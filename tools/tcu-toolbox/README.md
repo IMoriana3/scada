@@ -89,7 +89,14 @@ el SCADA, que además se queda sin ver la planta.
 Por eso lleva **guardia de viento** y aquí no es una formalidad: con viento, se
 niega. Lee fresco siempre, sin caché — el técnico acaba de pulsar.
 
-Y **que la NCU conteste no es que haya reiniciado**: si no hizo caso, contesta
+Y hay un matiz que no es cosmético: **que no conteste dentro de nuestra ventana
+de espera no quiere decir que esté mal**. Esa ventana es un número que pusimos
+nosotros sin saber cuánto tarda una NCU en arrancar, así que se dice lo que
+sabemos —*no ha contestado todavía*— y qué hacer antes de alarmarse: dale un
+minuto y vuelve a `LEER PANEL`. Cantar eso como fallo manda a alguien a la planta
+por nada, y se pinta en naranja y no en rojo.
+
+Distinto es **que la NCU conteste y no sea que haya reiniciado**: si no hizo caso, contesta
 igual de bien. Lo único que lo distingue es que su **tiempo de marcha haya ido
 hacia atrás**, así que se espera a que vuelva, se relee y se compara. Si vuelve
 con más marcha que antes, se dice que **no ha reiniciado** en vez de darlo por
