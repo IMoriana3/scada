@@ -15,7 +15,7 @@ foreach ($n in @('Api-Clonar','Api-Tipo','Api-ListaPlana','Api-Breve','Api-Difer
 }
 $src = Get-Content $fuente -Raw
 foreach ($v in @('$API_INTOCABLE','$API_INTOCABLE_PATRON','$API_COPIA_PROF','$API_BANDERAS','$API_AJUSTES',
-                 '$API_ESCRITURA_CONFIRMADA','$API_ESCRITURA_FALTA','$API_CONFIG','$API_PUERTO',
+                 '$API_ESCRITURA_CONFIRMADA','$API_ESCRITURA_FALTA','$API_ESCRITURA_PANEL','$API_CONFIG','$API_PUERTO',
                  '$API_REINICIO','$API_REINICIO_ESPERA_S','$API_REINICIO_PASO_S')) {
     $nodo = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.AssignmentStatementAst] -and "$($x.Left)" -eq $v }, $true))
     if ($nodo.Count -ne 1) { throw "Se esperaba una sola asignacion de $v (hay $($nodo.Count))" }
@@ -145,22 +145,40 @@ Igual ($t -match 'ENTERA') $true 'avisa de que se manda la configuracion entera'
 Igual ($t -match 'copia\.json') $true 'y dice donde quedo la copia'
 Igual ($t -match 'se relee y se compara') $true 'y que se verifica despues'
 
-# ============ Y LO MAS IMPORTANTE: NO SALE A LA RED ============
-# No basta con que $API_ESCRITURA_CONFIRMADA sea $false en el fuente: se espia
-# el cliente HTTP y se exige que no se le llame. Una precaucion que no se
-# comprueba es una intencion.
-Igual $API_ESCRITURA_CONFIRMADA $false 'la escritura va desarmada'
-$script:llamadas = 0
-function Invoke-RestMethod { $script:llamadas++; throw 'el banco no deja salir a la red' }
-$e = Api-Escribir '10.100.1.56' $null $cfg 5000
-Igual $e.ok $false 'desarmada, no escribe'
-Igual $script:llamadas 0 'y NO llega a llamar al cliente HTTP'
-Igual ($e.nota -match 'DESARMADA') $true 'lo dice'
-# antes aqui decia 'DevTools', porque lo que faltaba era averiguar la forma de la
-# peticion. Ya se sabe: lo que falta es decidir armarla, y el mensaje lo dice.
-Igual ($e.nota -match 'decision de armarla') $true 'y dice exactamente que hace falta para armarla'
-Igual ($e.nota -match 'PUT /private_api/config') $true 'diciendo ademas que la forma ya se conoce'
-Igual ($API_ESCRITURA_FALTA.Length -gt 80) $true 'con instrucciones de verdad, no un "pendiente"'
+# ============ LA ESCRITURA, YA ARMADA: QUE SIGUE ENTRE MEDIAS ============
+# Armarla no quita frenos, deja que exista el ultimo tramo. Lo que se comprueba
+# aqui es que ese tramo sigue teniendo delante todo lo demas, y sobre todo que
+# NO SALE NADA que la ida y vuelta no haya aprobado.
+Igual $API_ESCRITURA_CONFIRMADA $true 'la escritura esta armada'
+Igual $API_ESCRITURA_PANEL 'v1.17.1' 'con el panel contra el que se capturo anotado'
+
+# lo que se manda es EXACTAMENTE lo que aprobo la ida y vuelta, no otra cosa
+$script:cuerpo = $null; $script:tipo = $null; $script:verbo = $null; $script:uri = $null
+function Invoke-RestMethod {
+    param([string]$Uri, [string]$Method, [string]$ContentType, $Body, $WebSession, [int]$TimeoutSec)
+    $script:uri = $Uri; $script:verbo = $Method; $script:tipo = $ContentType; $script:cuerpo = $Body
+    return @{ok = $true}
+}
+$w = Api-Escribir '10.100.1.56' $null $cfg 5000
+Igual $w.ok $true 'armada, escribe'
+Igual $script:verbo 'Put' 'con PUT, como la captura'
+Igual $script:tipo 'text/plain' 'y con text/plain, como la captura'
+Igual $script:uri 'http://10.100.1.56:80/private_api/config' 'contra el extremo de configuracion'
+Igual ($script:cuerpo -eq (Api-IdaYVuelta $cfg).texto) $true 'y manda EXACTAMENTE el texto que aprobo la ida y vuelta'
+Igual (($script:cuerpo | ConvertFrom-Json).plant_id) 'ElBurgo' 'que es JSON y es la configuracion'
+Igual (($script:cuerpo | ConvertFrom-Json).ip_config.ip) '10.100.1.56' 'con la red intacta: va el objeto entero'
+
+# Y SI LA IDA Y VUELTA NO APRUEBA, NO SALE NADA. Esta es la que de verdad
+# protege ahora que esta armada: antes bastaba con que el seguro estuviera
+# puesto, ahora hay que comprobar que el ultimo freno frena.
+$script:cuerpo = $null; $script:salidas = 0
+function Invoke-RestMethod { $script:salidas++; return @{ok = $true} }
+$hondoW = [pscustomobject]@{v = 1}
+for ($i = 0; $i -lt ($API_COPIA_PROF + 10); $i++) { $hondoW = [pscustomobject]@{dentro = $hondoW} }
+$wMal = Api-Escribir '10.100.1.56' $null $hondoW 5000
+Igual $wMal.ok $false 'una configuracion que no sobrevive al JSON no se manda'
+Igual $script:salidas 0 'y NO llega a llamar al cliente HTTP'
+Igual ($wMal.nota -match 'no sobrevive') $true 'diciendo por que'
 
 # el extremo peligroso existe en UN solo sitio, y es el bloque desarmado
 # Esto contaba apariciones del texto y se quedo corto en cuanto la evidencia de
@@ -295,8 +313,7 @@ Igual ($src -match 'Method Put') $true 'y con PUT'
 Igual ($src -match 'Content-Length: 10203') $true 'la evidencia de la captura queda escrita al lado'
 Igual ($src -match 'panel v1\.17\.1') $true 'con el panel contra el que se comprobo'
 
-# y sigue sin poder salir a la red: lo que falta ya no es el dato, es la decision
-Igual $API_ESCRITURA_CONFIRMADA $false 'la escritura sigue desarmada'
-Igual ($API_ESCRITURA_FALTA -match 'la decision de armarla') $true 'y se dice que lo que falta es decidirlo, no averiguarlo'
+# la evidencia de la captura sigue escrita al lado del codigo que la usa
+Igual ($API_ESCRITURA_PANEL -ne '') $true 'queda anotado el panel contra el que se capturo'
 
 Write-Host 'test_panel_cfg.ps1: OK'

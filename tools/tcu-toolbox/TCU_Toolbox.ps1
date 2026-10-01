@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.98'
+$VERSION_TOOLBOX = '11.99'
 # La etiqueta va en el titulo de la ventana: es lo que mira alguien en campo
 # para saber QUE MAPA da por bueno la herramienta. Decia R7.1 desde la v11.86,
 # que es cuando entraron registros que solo existen en el R8 (40030-40039, el
@@ -2655,13 +2655,20 @@ function Api-TextoCambio([string]$ncu, [string]$que, $difs, [string]$copia) {
 # red de los Digi-, que no estaban en $API_INTOCABLE; y el tcu_timeout real es
 # 6000, fuera del rango que $API_AJUSTES se habia inventado.
 #
-# AUN ASI SIGUE DESARMADA, y ya no por falta de datos: armarla es permitir que
-# esta herramienta reescriba la configuracion de una NCU en produccion, y eso lo
-# decide quien responde de la planta, no quien escribe el codigo. Es un cambio de
-# una linea cuando se diga.
+# ARMADA el 01/10/2026, y quien lo decidio fue Inaki, que es quien responde de la
+# planta. Estuvo desarmada mientras la forma de la peticion era una deduccion; se
+# confirmo con una captura del DevTools y entonces lo que faltaba ya no era un
+# dato sino una decision, que no es del que escribe el codigo.
+#
+# Lo que esto habilita: que la herramienta reescriba la configuracion de una NCU
+# EN PRODUCCION. Lo que sigue entre medias, y no es poco: la lista blanca, los
+# intocables, la copia obligatoria antes, el diff entero en la ventana de
+# confirmar, la ida y vuelta por JSON y la relectura posterior. Armar no es
+# quitar frenos, es dejar que el ultimo tramo exista.
 $API_CONFIG = '/private_api/config'
-$API_ESCRITURA_CONFIRMADA = $false
-$API_ESCRITURA_FALTA = 'la forma de la peticion ya se conoce (PUT /private_api/config, text/plain, el objeto de configuracion tal cual; visto en el panel v1.17.1 de El Burgo NCU2). Lo que falta es la decision de armarla: mientras tanto esta ventana lee, compara y prepara el cambio -con su copia y su diff- pero no lo manda.'
+$API_ESCRITURA_CONFIRMADA = $true
+$API_ESCRITURA_PANEL = 'v1.17.1'      # el panel contra el que se capturo la peticion
+$API_ESCRITURA_FALTA = 'la escritura esta armada; si ves este mensaje es que alguien la ha vuelto a desarmar en el fuente.'
 
 # LA IDA Y VUELTA POR JSON, ANTES DE MANDAR NADA. Lo que sale por el cable no es
 # el objeto que la NCU nos dio: es lo que PowerShell escribe al reserializarlo.

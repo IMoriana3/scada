@@ -97,16 +97,31 @@ posible *antes* de que sea tarde; después de un `PUT` a medias no hay vuelta.
 Probada contra una pérdida de verdad: una configuración más honda que la
 profundidad de serialización, que `ConvertTo-Json` trunca sin avisar.
 
-### ⚠️ Aun así sigue DESARMADA
+### ⚠️ ARMADA el 01/10/2026
 
-Y ya **no por falta de datos**. Armarla es permitir que esta herramienta
-reescriba la configuración de una NCU en producción, y eso lo decide quien
-responde de la planta, no quien escribe el código. Es un cambio de una línea
-cuando se diga.
+Estuvo desarmada mientras la forma de la petición era una deducción. Capturada y
+confirmada, lo que faltaba ya no era un dato sino **una decisión**, y ésa no es
+de quien escribe el código: la tomó Iñaki, que es quien responde de la planta.
 
-Mientras tanto no es una precaución simbólica: `Api-Escribir` devuelve sin llamar
-a la red, y el banco lo comprueba **espiando el cliente HTTP** y exigiendo que no
-se le llame. Una precaución que no se comprueba es una intención.
+**Armar no quita frenos; deja que exista el último tramo.** Lo que sigue delante
+de cada escritura:
+
+1. Copia de seguridad **obligatoria** — si no se puede guardar, no se manda.
+2. El diff **entero** en la ventana de confirmar, no «3 cambios».
+3. La **lista blanca**: todo lo que cambie tiene que estar en lo que el cambio
+   declaró tocar.
+4. Los **intocables**: `ip_config`, `http_port`, `modbus_port`,
+   `gw1_config`/`gw2_config`. Sin excepción ni opción que lo abra.
+5. La **ida y vuelta por JSON**: si lo que PowerShell serializa no vuelve
+   idéntico, no sale.
+6. La **relectura** después, entrando de nuevo, y el diff contra lo que se mandó.
+
+Las seis están probadas ejecutándolas, y la quinta además **al revés**: con el
+freno quitado, el banco cae.
+
+**El primer uso real recomendado** es `SACAR` el seguidor 109 del grupo 10 de la
+NCU2: un solo campo, con copia previa, diff delante y relectura después. Si eso
+sale bien, lo demás va detrás.
 
 ### Reiniciar la NCU, y por qué ésta sí va armada
 
