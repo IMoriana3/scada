@@ -1,0 +1,341 @@
+{
+ "version": "v1.17.1",
+ "ncu_time": 1790845075353,
+ "uptime": 163441033,
+ "stop_button": false,
+ "mqtt_connected": true,
+ "tracker_status": [
+  {
+   "total_requests": 0,
+   "total_errors": 0,
+   "consecutive_errors": 0,
+   "last_successful_request": 0,
+   "fast_registers": [],
+   "latency": 0,
+   "comm_error": true,
+   "fulltracking_status": {
+    "Sending": 0
+   }
+  },
+  {
+   "total_requests": 14298,
+   "total_errors": 535,
+   "consecutive_errors": 1,
+   "last_successful_request": 1790845024353,
+   "fast_registers": [],
+   "latency": 726,
+   "comm_error": false,
+   "fulltracking_status": "UpToDate"
+  },
+  {
+   "total_requests": 14296,
+   "total_errors": 529,
+   "consecutive_errors": 0,
+   "last_successful_request": 1790845045353,
+   "fast_registers": [],
+   "latency": 1006,
+   "comm_error": false,
+   "fulltracking_status": "UpToDate"
+  },
+  {
+   "total_requests": 1308,
+   "total_errors": 1308,
+   "consecutive_errors": 1308,
+   "last_successful_request": 0,
+   "fast_registers": [],
+   "latency": 1009,
+   "comm_error": true,
+   "fulltracking_status": "UpToDate"
+  },
+  {
+   "total_requests": 14288,
+   "total_errors": 2000,
+   "consecutive_errors": 0,
+   "last_successful_request": 1790845046353,
+   "fast_registers": [],
+   "latency": 901,
+   "comm_error": false,
+   "fulltracking_status": "UpToDate"
+  },
+  {
+   "total_requests": 14285,
+   "total_errors": 423,
+   "consecutive_errors": 11,
+   "last_successful_request": 1790844182977,
+   "fast_registers": [],
+   "latency": 1005,
+   "comm_error": true,
+   "fulltracking_status": "UpToDate"
+  },
+  {
+   "total_requests": 0,
+   "total_errors": 0,
+   "consecutive_errors": 0,
+   "last_successful_request": 0,
+   "fast_registers": [],
+   "latency": 0,
+   "comm_error": true,
+   "fulltracking_status": {
+    "Sending": 0
+   }
+  },
+  {
+   "total_requests": 11321,
+   "total_errors": 48,
+   "consecutive_errors": 0,
+   "last_successful_request": 1790845065353,
+   "fast_registers": [],
+   "latency": 165,
+   "comm_error": false,
+   "fulltracking_status": "UpToDate"
+  }
+ ],
+ "hsu_status": [
+  {
+   "product_id": 4,
+   "firmware_version": 22,
+   "total_requests": 32670,
+   "total_errors": 1305,
+   "consecutive_errors": 0,
+   "last_successful_request": 1790845072442,
+   "fast_registers": [],
+   "latency": 58,
+   "comm_error": false
+  },
+  {
+   "product_id": null,
+   "firmware_version": null,
+   "total_requests": 32587,
+   "total_errors": 0,
+   "consecutive_errors": 0,
+   "last_successful_request": 1790845072389,
+   "fast_registers": [],
+   "latency": 2,
+   "comm_error": false
+  },
+  {
+   "product_id": null,
+   "firmware_version": null,
+   "total_requests": 32558,
+   "total_errors": 0,
+   "consecutive_errors": 0,
+   "last_successful_request": 1790845072388,
+   "fast_registers": [],
+   "latency": 5,
+   "comm_error": false
+  },
+  {
+   "product_id": 4,
+   "firmware_version": 20,
+   "total_requests": 32671,
+   "total_errors": 2426,
+   "consecutive_errors": 5,
+   "last_successful_request": 1790845049287,
+   "fast_registers": [],
+   "latency": 1339,
+   "comm_error": false
+  },
+  {
+   "product_id": 4,
+   "firmware_version": 20,
+   "total_requests": 32667,
+   "total_errors": 113,
+   "consecutive_errors": 0,
+   "last_successful_request": 1790845073370,
+   "fast_registers": [],
+   "latency": 345,
+   "comm_error": false
+  },
+  {
+   "product_id": 6,
+   "firmware_version": 24,
+   "total_requests": 32667,
+   "total_errors": 8638,
+   "consecutive_errors": 0,
+   "last_successful_request": 1790845073836,
+   "fast_registers": [],
+   "latency": 567,
+   "comm_error": false
+  },
+  {
+   "product_id": null,
+   "firmware_version": null,
+   "total_requests": 0,
+   "total_errors": 0,
+   "consecutive_errors": 0,
+   "last_successful_request": 0,
+   "fast_registers": [],
+   "latency": 0,
+   "comm_error": true
+  },
+  {
+   "product_id": null,
+   "firmware_version": null,
+   "total_requests": 0,
+   "total_errors": 0,
+   "consecutive_errors": 0,
+   "last_successful_request": 0,
+   "fast_registers": [],
+   "latency": 0,
+   "comm_error": true
+  },
+  {
+   "product_id": null,
+   "firmware_version": null,
+   "total_requests": 0,
+   "total_errors": 0,
+   "consecutive_errors": 0,
+   "last_successful_request": 0,
+   "fast_registers": [],
+   "latency": 0,
+   "comm_error": true
+  },
+  {
+   "product_id": null,
+   "firmware_version": null,
+   "total_requests": 0,
+   "total_errors": 0,
+   "consecutive_errors": 0,
+   "last_successful_request": 0,
+   "fast_registers": [],
+   "latency": 0,
+   "comm_error": true
+  }
+ ],
+ "gateway_status": [
+  {
+   "address": "10.100.1.57",
+   "last_connection": 1790693783835,
+   "connected": true
+  },
+  {
+   "address": "10.100.1.58",
+   "last_connection": 1790819944278,
+   "connected": true
+  }
+ ],
+ "ups_status": {
+  "power_ok": true,
+  "battery_low": false
+ },
+ "tcu_feature_support": [
+  {
+   "feature": "Fulltracking",
+   "supported": 7,
+   "total": 8
+  }
+ ],
+ "other_ncus": [
+  "10.100.1.56",
+  "10.100.1.52"
+ ],
+ "config_data": {
+  "oudated": false,
+  "invalid": false,
+  "config": {
+   "plant_id": "ElBurgo",
+   "gateway_id": "NCU2",
+   "modbus_enable_writing": true,
+   "ip_config": {
+    "ip": "10.100.1.56"
+   },
+   "tcu_timeout": 600,
+   "hsu_timeout": 600,
+   "tcu_interval_ms": 1000,
+   "hsu_interval_ms": 5000,
+   "modbus_networks": [
+    {
+     "network_type": "TCP",
+     "ip": "192.168.0.36",
+     "port": 502,
+     "hsus": [
+      {
+       "id": 3,
+       "modbus_id": 230
+      }
+     ],
+     "trackers": [
+      {
+       "modbus_id": 1
+      },
+      {
+       "modbus_id": 2
+      },
+      {
+       "modbus_id": 3
+      }
+     ]
+    },
+    {
+     "network_type": "TCP",
+     "ip": "192.168.0.37",
+     "port": 502,
+     "hsus": [
+      {
+       "id": 4,
+       "modbus_id": 231
+      },
+      {
+       "id": 5,
+       "modbus_id": 210
+      }
+     ],
+     "trackers": [
+      {
+       "modbus_id": 4
+      },
+      {
+       "modbus_id": 5
+      },
+      {
+       "modbus_id": 7
+      }
+     ]
+    }
+   ],
+   "external_hsus": [
+    {
+     "id": 1,
+     "use_modbus": true,
+     "external_ip": "10.100.1.52",
+     "external_id": 1
+    },
+    {
+     "id": 2,
+     "use_modbus": true,
+     "external_ip": "10.100.1.52",
+     "external_id": 2
+    }
+   ],
+   "tracker_groups": [
+    {
+     "hsu": 255,
+     "stow_limit_enable": true,
+     "diffuse_tracking_enable": false,
+     "trackers": [
+      1,
+      2,
+      3
+     ]
+    },
+    {
+     "hsu": 255,
+     "stow_limit_enable": true,
+     "diffuse_tracking_enable": false,
+     "trackers": [
+      4,
+      5
+     ]
+    },
+    {
+     "hsu": 255,
+     "stow_limit_enable": true,
+     "diffuse_tracking_enable": true,
+     "trackers": [
+      7
+     ]
+    }
+   ]
+  }
+ }
+}

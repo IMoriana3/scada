@@ -89,6 +89,26 @@ jobs:
             exit 1
           }
 
+          # y la maqueta de la API del panel web de la NCU: el lector se apoya en
+          # que la cookie del login viaje en la segunda llamada, y eso solo se
+          # comprueba contra un servidor que la exija
+          $api = Start-Process -FilePath python -ArgumentList 'api_server.py' -PassThru `
+                   -RedirectStandardOutput api.out -RedirectStandardError api.err
+          $apiArriba = $false
+          for ($i = 0; $i -lt 50 -and -not $apiArriba; $i++) {
+            Start-Sleep -Milliseconds 300
+            try {
+              $c = New-Object System.Net.Sockets.TcpClient
+              $c.Connect('127.0.0.1', 15080); $c.Close(); $apiArriba = $true
+            } catch {}
+          }
+          if (-not $apiArriba) {
+            Write-Host 'api_server.py no llego a escuchar en 15080'
+            if (Test-Path api.out) { Get-Content api.out }
+            if (Test-Path api.err) { Get-Content api.err }
+            exit 1
+          }
+
           function Test-Interfaz([string]$exe) {
             $p = Start-Process $exe -ArgumentList '-NoProfile','-File','test_sequences_ui.ps1' -PassThru -RedirectStandardOutput ui.out -RedirectStandardError ui.err
             $termino = $p.WaitForExit(60000)
@@ -108,6 +128,16 @@ jobs:
           pwsh -NoProfile -File test_viento_cache.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
           powershell -NoProfile -File test_viento_cache.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_panel_ncu.ps1 ──'
+          pwsh -NoProfile -File test_panel_ncu.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_panel_ncu.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_panel_ncu_red.ps1 (contra la maqueta de la API) ──'
+          pwsh -NoProfile -File test_panel_ncu_red.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_panel_ncu_red.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
           pwsh -NoProfile -File test_operations.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
@@ -138,6 +168,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
 
           Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
+          Stop-Process -Id $api.Id -Force -ErrorAction SilentlyContinue
           exit $rc
 
       - name: Capturas de interfaz de secuencias

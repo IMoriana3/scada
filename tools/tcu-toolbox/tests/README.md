@@ -21,6 +21,45 @@ copia de la lógica: la extrae del `.ps1` por nombre de función.
 Sale `TODAS LAS PRUEBAS OK` y código 0, o la lista de fallos y código 1.
 Necesita **PowerShell 7** (`pwsh`) y Python 3; en Windows vale el `pwsh` normal.
 
+## El panel web de la NCU
+
+Dos bancos, porque son dos cosas distintas y una necesita un servidor levantado.
+
+```bash
+pwsh -NoProfile -File test_panel_ncu.ps1        # la lógica, sin red
+
+python3 api_server.py &                         # maqueta de la API en 127.0.0.1:15080
+pwsh -NoProfile -File test_panel_ncu_red.ps1    # el transporte
+```
+
+`test_panel_ncu.ps1` corre contra `fixture_panel_ncu.json`, una maqueta con la
+**estructura real** de un `initial_data` de El Burgo: huecos vacíos en
+`tracker_status`, una TCU muda (todas sus peticiones fallidas), otra recién
+caída, más huecos de HSU con tráfico que estaciones declaradas, un gateway con
+dos estaciones y un grupo de un solo seguidor con difuso. Comprueba lo que se
+**dice** del dato: que un 0 % y un "no se ha preguntado" no salgan iguales, que
+una muda se distinga de una caída, que las filas salgan **sin numerar** si el
+alineamiento de `tracker_status` no cuadra con los esclavos configurados, y que
+la ventana de confirmar una orden de grupo diga a cuántos seguidores va, de
+cuándo es el dato, qué NCU falta si falta, y si el grupo está vacío.
+
+Lleva además dos guardas estáticas sobre el AST: que las columnas declaradas de
+cada vista sean **exactamente** los campos que la función devuelve —un renombrado
+dejaría una columna vacía sin que nadie se enterase— y que contra esa API no haya
+más que **dos llamadas**, una sola `POST`, ningún `PUT`/`PATCH`/`DELETE`, y que
+los extremos que reescriben la configuración, lanzan firmware o reinician la NCU
+no aparezcan ni escritos. Por esa API se puede rehacer la NCU entera de un solo
+`PUT`: que no esté no se deja a la vista.
+
+`api_server.py` imita lo justo de la API —`/private_api/auth` con `Set-Cookie`,
+`/private_api/initial_data` que devuelve 401 **sin** la cookie— porque hay una
+cosa que no se puede comprobar leyendo el código: que la sesión del login viaje
+de verdad en la segunda llamada. También responde 405 a cualquier escritura.
+
+Cada guarda de estos dos bancos está comprobada **al revés**: revirtiendo el
+arreglo y exigiendo que el banco se caiga. Una prueba que pasa igual con el fallo
+puesto no prueba nada.
+
 ## Prueba de navegador (opcional)
 
 Los filtros y el orden del informe HTML son JavaScript, así que se comprueban
