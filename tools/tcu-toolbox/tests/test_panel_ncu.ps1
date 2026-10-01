@@ -254,13 +254,18 @@ Igual $dePanel.Count 4 'contra el panel hay CUATRO llamadas: login, volcado, con
 # un PUT con el objeto entero contra una forma equivocada se aplica a medias.
 # Falla seguro frente a falla peligroso.
 Igual ($src -match 'private_api/commands/soft_restart') $true 'el reinicio esta, y va armado'
-# EL FIRMWARE DE LA NCU no esta todavia, y el motivo que puso aqui la v11.96 era
-# FALSO: decia que lo hace el TCU Updater, y el TCU Updater actualiza las TCUs,
-# no la NCU. Para el firmware de la NCU hoy no hay mas que su pagina web.
-# El motivo de verdad es el riesgo: una imagen subida a medias deja la NCU
-# inservible y fuera de alcance, y ahi no hay nada que releer para comprobarlo,
-# que es la red de seguridad de todo lo demas de esta pestana. Hasta que se vea
-# la peticion real Y se pruebe en una NCU que no este dando servicio, no entra.
+# EL FIRMWARE DE LA NCU SE QUEDA FUERA, Y ES UNA DECISION TOMADA (01/10/2026),
+# no una tarea a medias: que nadie lo retome creyendo que se quedo colgado.
+#
+# Ojo con el motivo, que la v11.96 lo puso FALSO: decia que lo hace el TCU
+# Updater, y el TCU Updater actualiza las TCUs, no la NCU. El firmware de la NCU
+# se sube por su pagina web y seguira siendo asi.
+#
+# El motivo de verdad: todo lo demas de esta pestana se apoya en escribir y
+# RELEER para comprobarlo. Con una imagen de firmware no hay nada que releer, y
+# si sube a medias la NCU se queda inservible y fuera de alcance -ni web, ni
+# Modbus, ni desde aqui-, lo que se arregla yendo a la planta con un cable. Es la
+# unica operacion que no se podria deshacer desde esta herramienta.
 Igual ($src -match 'private_api/ota') $false 'el extremo de firmware no aparece ni escrito'
 # y la escritura que existe no puede salir por descuido
 Igual ($src -match '\$API_ESCRITURA_CONFIRMADA = \$false') $true 'la escritura de configuracion va desarmada'
