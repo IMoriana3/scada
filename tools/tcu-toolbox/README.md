@@ -4,6 +4,42 @@
 
 Es el complemento de **escritura** del SCADA de este repo: el SCADA es solo-lectura a propósito; cuando hay que *cambiar* algo en un TCU (configuración, reloj, NVM) se usa esta toolbox desde el portátil conectado a la LAN de planta.
 
+### Histórico de MAC: lo primero medido de la malla Zigbee (v12.0)
+
+`HISTÓRICO MAC` lee `GET /private_api/mac_history`, que la NCU sirve como **CSV**
+(`discovered;gateway_id;modbus_id;zigbee_mac`). En su página no tiene menú
+propio: vive como un fichero más dentro del visor de CSV, llamado *Mac History*.
+
+**Por qué importa.** Todo lo que medimos hoy —aquí y en el simulador de
+cobertura— va de **ángulos**: dónde apunta cada seguidor frente a dónde debería.
+De la malla Zigbee no se mide nada: se predice desde el terreno y no se comprueba
+contra nada. Esto es lo primero **observado** de la malla, dicho por la NCU y no
+deducido.
+
+Tres cosas salen de ahí, y las tres aparecieron a la primera con el fichero real
+de El Burgo:
+
+- **Una TCU con varias MACs ha sido sustituida, y dice cuándo.** Eso no lo apunta
+  nadie y después no hay forma de saberlo.
+- **El mismo aparato en varios esclavos.** En El Burgo, dos casos que no estaban
+  escritos en ningún sitio: una estación que pasó del **185** (el esclavo de
+  fábrica) al **210** —que es justo el esclavo sin declarar que nos descuadraba
+  el recuento de HSUs—, y una placa que **era la TCU 78 y acabó siendo la 30**.
+- **El careo con el inventario.** La toolbox ya lee por Zigbee la MAC que cada
+  TCU lleva hoy; si no es la última que la NCU vio, o se cambió el equipo sin que
+  se enterara, o ahí no contesta quien se cree.
+
+⚠️ **La fecha viene en `dd-MM-yyyy` y no se puede ordenar como texto.** Con el
+fichero real, ordenar alfabéticamente pone `01-06-2026` antes que `31-12-2025`:
+el resumen diría que la primera vez fue después que la última. Se parsea de
+verdad, y el banco lo comprueba con esas dos fechas exactas. Las columnas se
+buscan además **por la cabecera** y no por su posición, para que el día que la
+NCU meta una columna en medio no acabe una MAC en la casilla de la fecha.
+
+El banco (`tests/test_macs.ps1`) corre contra `tests/fixture_mac_history.csv`,
+que **son filas reales** de la NCU2 de El Burgo con sus dos rarezas dentro — no
+una maqueta inventada.
+
 ## Dejar de entrar en la página de la NCU (v11.96)
 
 El objetivo es que la configuración de una NCU se haga desde aquí y no desde su
