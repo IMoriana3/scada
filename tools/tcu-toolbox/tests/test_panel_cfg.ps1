@@ -8,14 +8,14 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile($fuente, [ref]$
 if ($errores.Count) { throw "TCU_Toolbox.ps1 con errores de sintaxis: $($errores.Count)" }
 foreach ($n in @('Api-Clonar','Api-Tipo','Api-ListaPlana','Api-Breve','Api-Diferencias','Api-CambioSeguro',
                  'Api-GrupoEditar','Api-GrupoBandera','Api-Ajuste','Api-TextoCambio','Api-Escribir','Api-GrupoDe',
-                 'Api-Reinicio-Volvio','Api-TextoReinicio','Api-Reiniciar')) {
+                 'Api-Reinicio-Volvio','Api-TextoReinicio','Api-Reiniciar','Api-IdaYVuelta')) {
     $nodos = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $x.Name -eq $n }, $true))
     if ($nodos.Count -ne 1) { throw "Se esperaba una sola funcion $n (hay $($nodos.Count))" }
     . ([scriptblock]::Create($nodos[0].Extent.Text))
 }
 $src = Get-Content $fuente -Raw
 foreach ($v in @('$API_INTOCABLE','$API_INTOCABLE_PATRON','$API_COPIA_PROF','$API_BANDERAS','$API_AJUSTES',
-                 '$API_ESCRITURA_CONFIRMADA','$API_ESCRITURA_FALTA','$API_CONFIG','$API_PUERTO',
+                 '$API_ESCRITURA_CONFIRMADA','$API_ESCRITURA_FALTA','$API_ESCRITURA_PANEL','$API_CONFIG','$API_PUERTO',
                  '$API_REINICIO','$API_REINICIO_ESPERA_S','$API_REINICIO_PASO_S')) {
     $nodo = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.AssignmentStatementAst] -and "$($x.Left)" -eq $v }, $true))
     if ($nodo.Count -ne 1) { throw "Se esperaba una sola asignacion de $v (hay $($nodo.Count))" }
@@ -38,7 +38,7 @@ $d1 = Api-Clonar $cfg; $d1.tcu_timeout = 900
 $difs = @(Api-Diferencias $cfg $d1)
 Igual $difs.Count 1 'un campo cambiado es una diferencia'
 Igual $difs[0].Ruta 'tcu_timeout' 'con su ruta'
-Igual "$($difs[0].Antes) -> $($difs[0].Ahora)" '600 -> 900' 'y el antes y el despues'
+Igual "$($difs[0].Antes) -> $($difs[0].Ahora)" '6000 -> 900' 'y el antes y el despues'
 
 # UNA LISTA DE SEGUIDORES SE COMPARA COMO CONJUNTO, no por posicion: quitar uno
 # del medio corre todos los de detras y por posicion saldrian diez diferencias
@@ -120,9 +120,16 @@ Igual ((Api-GrupoBandera $cfg 1 'inventada' $true).ok) $false 'una bandera que n
 
 Igual ((Api-Ajuste $cfg 'tcu_interval_ms' 10).ok) $false 'un sondeo de 10 ms no se manda'
 Igual ((Api-Ajuste $cfg 'tcu_interval_ms' 10).nota -match '250') $true 'y se dice el rango'
-Igual ((Api-Ajuste $cfg 'tcu_timeout' 5).ok) $false 'ni un timeout de 5 s'
+# OJO: esto comprobaba que un timeout de 5 se rechazaba, con el rango 30..3600
+# que me invente. La captura del 01/10 enseno que El Burgo lleva 6000, o sea que
+# ese rango rechazaba lo que la NCU tiene puesto. Ahora los limites solo cazan
+# dedazos, asi que un 5 PASA -no sabemos que sea malo- y lo que no pasa es el 0,
+# el negativo y lo absurdo.
+Igual ((Api-Ajuste $cfg 'tcu_timeout' 0).ok) $false 'un timeout de 0 no se manda'
+Igual ((Api-Ajuste $cfg 'tcu_timeout' -5).ok) $false 'ni uno negativo'
+Igual ((Api-Ajuste $cfg 'tcu_timeout' 999999).ok) $false 'ni uno absurdo'
 Igual ((Api-Ajuste $cfg 'tcu_timeout' 'ocho').ok) $false 'ni algo que no es un numero'
-Igual ((Api-Ajuste $cfg 'tcu_timeout' 600).ok) $false 'ni el valor que ya tiene'
+Igual ((Api-Ajuste $cfg 'tcu_timeout' 6000).ok) $false 'ni el valor que ya tiene'
 Igual ((Api-Ajuste $cfg 'inventado' 1).ok) $false 'ni un campo que no se sabe cambiar'
 $a = Api-Ajuste $cfg 'tcu_timeout' 900
 Igual $a.ok $true 'un timeout razonable si'
@@ -138,23 +145,50 @@ Igual ($t -match 'ENTERA') $true 'avisa de que se manda la configuracion entera'
 Igual ($t -match 'copia\.json') $true 'y dice donde quedo la copia'
 Igual ($t -match 'se relee y se compara') $true 'y que se verifica despues'
 
-# ============ Y LO MAS IMPORTANTE: NO SALE A LA RED ============
-# No basta con que $API_ESCRITURA_CONFIRMADA sea $false en el fuente: se espia
-# el cliente HTTP y se exige que no se le llame. Una precaucion que no se
-# comprueba es una intencion.
-Igual $API_ESCRITURA_CONFIRMADA $false 'la escritura va desarmada'
-$script:llamadas = 0
-function Invoke-RestMethod { $script:llamadas++; throw 'el banco no deja salir a la red' }
-$e = Api-Escribir '10.100.1.56' $null $cfg 5000
-Igual $e.ok $false 'desarmada, no escribe'
-Igual $script:llamadas 0 'y NO llega a llamar al cliente HTTP'
-Igual ($e.nota -match 'DESARMADA') $true 'lo dice'
-Igual ($e.nota -match 'DevTools') $true 'y dice exactamente que hace falta para armarla'
-Igual ($API_ESCRITURA_FALTA.Length -gt 80) $true 'con instrucciones de verdad, no un "pendiente"'
+# ============ LA ESCRITURA, YA ARMADA: QUE SIGUE ENTRE MEDIAS ============
+# Armarla no quita frenos, deja que exista el ultimo tramo. Lo que se comprueba
+# aqui es que ese tramo sigue teniendo delante todo lo demas, y sobre todo que
+# NO SALE NADA que la ida y vuelta no haya aprobado.
+Igual $API_ESCRITURA_CONFIRMADA $true 'la escritura esta armada'
+Igual $API_ESCRITURA_PANEL 'v1.17.1' 'con el panel contra el que se capturo anotado'
+
+# lo que se manda es EXACTAMENTE lo que aprobo la ida y vuelta, no otra cosa
+$script:cuerpo = $null; $script:tipo = $null; $script:verbo = $null; $script:uri = $null
+function Invoke-RestMethod {
+    param([string]$Uri, [string]$Method, [string]$ContentType, $Body, $WebSession, [int]$TimeoutSec)
+    $script:uri = $Uri; $script:verbo = $Method; $script:tipo = $ContentType; $script:cuerpo = $Body
+    return @{ok = $true}
+}
+$w = Api-Escribir '10.100.1.56' $null $cfg 5000
+Igual $w.ok $true 'armada, escribe'
+Igual $script:verbo 'Put' 'con PUT, como la captura'
+Igual $script:tipo 'text/plain' 'y con text/plain, como la captura'
+Igual $script:uri 'http://10.100.1.56:80/private_api/config' 'contra el extremo de configuracion'
+Igual ($script:cuerpo -eq (Api-IdaYVuelta $cfg).texto) $true 'y manda EXACTAMENTE el texto que aprobo la ida y vuelta'
+Igual (($script:cuerpo | ConvertFrom-Json).plant_id) 'ElBurgo' 'que es JSON y es la configuracion'
+Igual (($script:cuerpo | ConvertFrom-Json).ip_config.ip) '10.100.1.56' 'con la red intacta: va el objeto entero'
+
+# Y SI LA IDA Y VUELTA NO APRUEBA, NO SALE NADA. Esta es la que de verdad
+# protege ahora que esta armada: antes bastaba con que el seguro estuviera
+# puesto, ahora hay que comprobar que el ultimo freno frena.
+$script:cuerpo = $null; $script:salidas = 0
+function Invoke-RestMethod { $script:salidas++; return @{ok = $true} }
+$hondoW = [pscustomobject]@{v = 1}
+for ($i = 0; $i -lt ($API_COPIA_PROF + 10); $i++) { $hondoW = [pscustomobject]@{dentro = $hondoW} }
+$wMal = Api-Escribir '10.100.1.56' $null $hondoW 5000
+Igual $wMal.ok $false 'una configuracion que no sobrevive al JSON no se manda'
+Igual $script:salidas 0 'y NO llega a llamar al cliente HTTP'
+Igual ($wMal.nota -match 'no sobrevive') $true 'diciendo por que'
 
 # el extremo peligroso existe en UN solo sitio, y es el bloque desarmado
-$usos = @([regex]::Matches($src, [regex]::Escape('/private_api/config')))
-Igual $usos.Count 1 'el extremo de configuracion aparece una sola vez'
+# Esto contaba apariciones del texto y se quedo corto en cuanto la evidencia de
+# la captura entro en un comentario y en un mensaje: el texto aparece 4 veces y
+# solo UNA es una peticion. Lo que importa no es cuantas veces se escribe, es
+# cuantas veces se USA, asi que se cuenta sobre el AST y no sobre el fuente.
+$usaCfg = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.CommandAst] }, $true) |
+            Where-Object { "$($_.GetCommandName())" -match '^Invoke-(RestMethod|WebRequest)$' -and
+                           "$($_.Extent.Text)" -match 'API_CONFIG' })
+Igual $usaCfg.Count 1 'el extremo de configuracion se USA en una sola llamada'
 $ponPut = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.CommandAst] }, $true) |
             Where-Object { "$($_.GetCommandName())" -match '^Invoke-(RestMethod|WebRequest)$' -and "$($_.Extent.Text)" -match 'Method Put' })
 Igual $ponPut.Count 1 'y hay exactamente una escritura, la suya'
@@ -217,5 +251,69 @@ Igual ($rCorte.nota -match 'se comprueba abajo') $true 'y se verifica despues en
 # y el reinicio es un POST sin cuerpo util: nada que adivinar
 Igual (@([regex]::Matches($src, [regex]::Escape('/private_api/commands/soft_restart'))).Count) 1 'el extremo de reinicio aparece una sola vez'
 Igual ($src -match 'private_api/ota') $false 'y el de firmware sigue sin aparecer ni escrito'
+
+# ===== LO QUE DESTAPO LA CAPTURA DE UNA ESCRITURA REAL (01/10/2026) =====
+# Mirando el cuerpo del PUT con el DevTools salieron dos fallos de aqui.
+
+# 1) EL CUERPO TRAE http_port Y modbus_port al mismo nivel que todo lo demas, y
+#    los bloques gw1_config/gw2_config con la red de los Digi. No estaban en los
+#    intocables, y son el mismo desastre que la IP: cambiar http_port deja la
+#    pagina inalcanzable en el :80 y modbus_port deja al SCADA sin ver la planta.
+foreach ($campo in @('http_port', 'modbus_port')) {
+    $x = Api-Clonar $cfg
+    $x.$campo = 8080
+    Igual ((Api-CambioSeguro $cfg $x @($campo)).ok) $false "$campo no se puede cambiar NI pidiendolo"
+}
+$gw2 = Api-Clonar $cfg
+$gw2.gw1_config.network.ip = '10.100.1.99'
+Igual ((Api-CambioSeguro $cfg $gw2 @('gw1_config')).ok) $false 'ni la red de un Digi'
+$gw3 = Api-Clonar $cfg
+$gw3.gw2_config.network.gateway = '10.100.1.1'
+Igual ((Api-CambioSeguro $cfg $gw3 @('gw2_config')).ok) $false 'ni la puerta de enlace del otro'
+
+# y un campo que esta NCU no tenga no revienta: se dice
+$sinCampo = Api-Clonar $cfg
+$sinCampo.PSObject.Properties.Remove('ncu_interval_ms')
+Igual ((Api-Ajuste $sinCampo 'ncu_interval_ms' 2000).ok) $false 'un campo que la NCU no trae no se inventa'
+Igual ((Api-Ajuste $sinCampo 'ncu_interval_ms' 2000).nota -match 'no tiene el campo') $true 'y se dice, en vez de reventar'
+
+# 2) EL RANGO INVENTADO RECHAZABA UN VALOR REAL. El Burgo NCU2 lleva el
+#    tcu_timeout en 6000 y el limite estaba en 3600: la herramienta habria
+#    rechazado el valor que el aparato tiene puesto.
+$real = Api-Clonar $cfg
+$real.tcu_timeout = 6000
+Igual ((Api-Ajuste $real 'tcu_timeout' 7000).ok) $true 'el rango ya no rechaza valores del orden del que lleva la NCU de verdad'
+Igual ((Api-Ajuste $cfg 'tcu_timeout' 6500).ok) $true 'ni valores del orden del 6000 que lleva El Burgo'
+Igual ((Api-Ajuste $cfg 'tcu_interval_ms' 10).ok) $false 'pero un dedazo de 10 ms sigue sin pasar'
+Igual ($src -match 'limites de DEDAZO') $true 'y se dice que son limites nuestros, no documentacion'
+Igual ((Api-Ajuste $cfg 'ncu_interval_ms' 2000).ok) $true 'el sondeo de NCU, que la captura enseno, tambien se sabe cambiar'
+
+# 3) LA IDA Y VUELTA POR JSON. Lo que sale por el cable no es el objeto que la
+#    NCU nos dio, es lo que PowerShell escribe al reserializarlo. Y como el PUT
+#    va con el objeto ENTERO, una perdida ahi se la queda la NCU.
+$iv = Api-IdaYVuelta $cfg
+Igual $iv.ok $true 'la configuracion de la maqueta sobrevive a la ida y vuelta'
+Igual ($iv.texto.Length -gt 100) $true 'y devuelve el texto que se mandaria'
+Igual (($iv.texto | ConvertFrom-Json).plant_id) 'ElBurgo' 'texto que es JSON de verdad'
+Igual ((Api-IdaYVuelta ($iv.texto | ConvertFrom-Json)).ok) $true 'y es estable: la vuelta de la vuelta tambien'
+# Y LA GUARDA TIENE QUE CAZAR UNA PERDIDA DE VERDAD. ConvertTo-Json corta al
+# pasar de su profundidad y lo que hay debajo sale como texto, sin avisar: es
+# exactamente la clase de perdida silenciosa que se llevaria el PUT. Una
+# configuracion mas honda que $API_COPIA_PROF lo reproduce.
+$hondo = [pscustomobject]@{v = 1}
+for ($i = 0; $i -lt ($API_COPIA_PROF + 10); $i++) { $hondo = [pscustomobject]@{dentro = $hondo} }
+$ivMal = Api-IdaYVuelta $hondo
+Igual $ivMal.ok $false 'una configuracion que NO sobrevive a la ida y vuelta se caza'
+Igual ($ivMal.nota -match 'no sobrevive a la ida y vuelta') $true 'y se dice que ha pasado'
+Igual ($ivMal.nota -match 'el objeto entero') $true 'y por que importa: el PUT se llevaria la perdida'
+Igual $ivMal.texto '' 'y no se devuelve texto que mandar'
+# y el Content-Type raro de la NCU queda escrito donde se manda
+Igual ($src -match "ContentType 'text/plain'") $true 'se manda con text/plain, que es lo que la NCU usa para su JSON'
+Igual ($src -match 'Method Put') $true 'y con PUT'
+Igual ($src -match 'Content-Length: 10203') $true 'la evidencia de la captura queda escrita al lado'
+Igual ($src -match 'panel v1\.17\.1') $true 'con el panel contra el que se comprobo'
+
+# la evidencia de la captura sigue escrita al lado del codigo que la usa
+Igual ($API_ESCRITURA_PANEL -ne '') $true 'queda anotado el panel contra el que se capturo'
 
 Write-Host 'test_panel_cfg.ps1: OK'

@@ -4,6 +4,42 @@
 
 Es el complemento de **escritura** del SCADA de este repo: el SCADA es solo-lectura a propósito; cuando hay que *cambiar* algo en un TCU (configuración, reloj, NVM) se usa esta toolbox desde el portátil conectado a la LAN de planta.
 
+### Histórico de MAC: lo primero medido de la malla Zigbee (v12.0)
+
+`HISTÓRICO MAC` lee `GET /private_api/mac_history`, que la NCU sirve como **CSV**
+(`discovered;gateway_id;modbus_id;zigbee_mac`). En su página no tiene menú
+propio: vive como un fichero más dentro del visor de CSV, llamado *Mac History*.
+
+**Por qué importa.** Todo lo que medimos hoy —aquí y en el simulador de
+cobertura— va de **ángulos**: dónde apunta cada seguidor frente a dónde debería.
+De la malla Zigbee no se mide nada: se predice desde el terreno y no se comprueba
+contra nada. Esto es lo primero **observado** de la malla, dicho por la NCU y no
+deducido.
+
+Tres cosas salen de ahí, y las tres aparecieron a la primera con el fichero real
+de El Burgo:
+
+- **Una TCU con varias MACs ha sido sustituida, y dice cuándo.** Eso no lo apunta
+  nadie y después no hay forma de saberlo.
+- **El mismo aparato en varios esclavos.** En El Burgo, dos casos que no estaban
+  escritos en ningún sitio: una estación que pasó del **185** (el esclavo de
+  fábrica) al **210** —que es justo el esclavo sin declarar que nos descuadraba
+  el recuento de HSUs—, y una placa que **era la TCU 78 y acabó siendo la 30**.
+- **El careo con el inventario.** La toolbox ya lee por Zigbee la MAC que cada
+  TCU lleva hoy; si no es la última que la NCU vio, o se cambió el equipo sin que
+  se enterara, o ahí no contesta quien se cree.
+
+⚠️ **La fecha viene en `dd-MM-yyyy` y no se puede ordenar como texto.** Con el
+fichero real, ordenar alfabéticamente pone `01-06-2026` antes que `31-12-2025`:
+el resumen diría que la primera vez fue después que la última. Se parsea de
+verdad, y el banco lo comprueba con esas dos fechas exactas. Las columnas se
+buscan además **por la cabecera** y no por su posición, para que el día que la
+NCU meta una columna en medio no acabe una MAC en la casilla de la fecha.
+
+El banco (`tests/test_macs.ps1`) corre contra `tests/fixture_mac_history.csv`,
+que **son filas reales** de la NCU2 de El Burgo con sus dos rarezas dentro — no
+una maqueta inventada.
+
 ## Dejar de entrar en la página de la NCU (v11.96)
 
 El objetivo es que la configuración de una NCU se haga desde aquí y no desde su
@@ -50,24 +86,78 @@ seguidor que **esa NCU no tiene configurado** (daría un grupo que dice mover al
 que no está), y meter uno que **ya está en otro grupo**, diciendo en cuál. Esto
 último es **regla nuestra**: la API no dice si admite estar en dos.
 
-### ⚠️ La escritura va DESARMADA, y por qué
+### La petición ya se conoce (capturada el 01/10/2026)
 
-Todo lo anterior está hecho y probado, pero **el envío no manda nada todavía**.
-El extremo, el verbo y la forma del cuerpo salen de leer el JavaScript de la
-página de la NCU, **no de ver una petición funcionando**. Y como se manda el
-objeto entero, si la forma no es exactamente la que la NCU espera —o si otra
-versión del panel la quiere distinta— el fallo no es que no se aplique: es que se
-aplica a medias, con la red dentro.
+Con el DevTools de la página de la NCU2 de El Burgo (panel **v1.17.1**), guardar
+un cambio de configuración sale así:
 
-No es una precaución simbólica: `Api-Escribir` devuelve sin llamar a la red, y el
-banco lo comprueba **espiando el cliente HTTP** y exigiendo que no se le llame.
-Una precaución que no se comprueba es una intención.
+```
+PUT http://10.100.1.56/private_api/config
+Content-Type: text/plain          <- sí, text/plain para un JSON
+Content-Length: 10203             <- solo config, no el initial_data entero
+cuerpo: {plant_id:"ElBurgo", gateway_id:"NCU2", location:{...}, ...}
+                                  <- el objeto TAL CUAL, sin envolver
+-> 200 OK, application/json, 39 bytes
+```
 
-**Para armarla hace falta una sola cosa:** abrir el DevTools en la pestaña
-*Network*, cambiar algo pequeño en la página de la NCU y mirar la petición que
-sale — método, ruta, `Content-Type` y la forma del cuerpo (si es el objeto
-entero, si va envuelto, si lleva algún campo de versión). Con eso se rellena el
-bloque, se pone `$API_ESCRITURA_CONFIRMADA` a `$true` y se añade su prueba.
+Verbo, ruta, tipo y forma son los que se habían deducido del JavaScript. Ahora
+están **confirmados**, y queda escrito con qué panel: si algún día una NCU lleva
+otro y no cuadra, que se sepa contra qué se comprobó.
+
+**Y la captura destapó dos fallos**, los dos del tipo que no quieres descubrir en
+campo:
+
+- **La lista de intocables se había quedado corta.** El cuerpo trae `http_port` y
+  `modbus_port` al mismo nivel que todo lo demás, más `gw1_config`/`gw2_config`
+  con la red de cada Digi. Cambiar `http_port` deja la página inalcanzable en
+  el `:80`; `modbus_port` deja al SCADA sin ver la planta. Es el mismo desastre
+  que la IP y no estaban.
+- **Un rango inventado rechazaba un valor real.** El límite del `tcu_timeout`
+  estaba en 30..3600 «porque suena razonable», y El Burgo lo tiene en **6000**:
+  la herramienta habría rechazado el valor que el aparato lleva puesto. Ahora son
+  límites de **dedazo** —anchos, solo para cazar un 10 donde iba un 10000— y se
+  dice que son nuestros, no documentación. Las unidades siguen sin estar claras
+  (6000 en TCU y 600 en HSU no cuadra con que ambos sean lo mismo), así que la
+  etiqueta ya no dice `[s]`.
+
+### La ida y vuelta por JSON, antes de mandar nada
+
+Lo que sale por el cable **no es el objeto que la NCU nos dio**: es lo que
+PowerShell escribe al reserializarlo. Si `ConvertTo-Json` perdiera un campo,
+redondeara una latitud o convirtiera un `null` en otra cosa, el `PUT` se llevaría
+esa pérdida — y como va el objeto **entero**, la NCU se quedaría con ella.
+
+Así que antes de salir se reserializa, se vuelve a leer y se compara contra lo
+que íbamos a mandar: **si no es idéntico, no sale**. Es la única comprobación
+posible *antes* de que sea tarde; después de un `PUT` a medias no hay vuelta.
+Probada contra una pérdida de verdad: una configuración más honda que la
+profundidad de serialización, que `ConvertTo-Json` trunca sin avisar.
+
+### ⚠️ ARMADA el 01/10/2026
+
+Estuvo desarmada mientras la forma de la petición era una deducción. Capturada y
+confirmada, lo que faltaba ya no era un dato sino **una decisión**, y ésa no es
+de quien escribe el código: la tomó Iñaki, que es quien responde de la planta.
+
+**Armar no quita frenos; deja que exista el último tramo.** Lo que sigue delante
+de cada escritura:
+
+1. Copia de seguridad **obligatoria** — si no se puede guardar, no se manda.
+2. El diff **entero** en la ventana de confirmar, no «3 cambios».
+3. La **lista blanca**: todo lo que cambie tiene que estar en lo que el cambio
+   declaró tocar.
+4. Los **intocables**: `ip_config`, `http_port`, `modbus_port`,
+   `gw1_config`/`gw2_config`. Sin excepción ni opción que lo abra.
+5. La **ida y vuelta por JSON**: si lo que PowerShell serializa no vuelve
+   idéntico, no sale.
+6. La **relectura** después, entrando de nuevo, y el diff contra lo que se mandó.
+
+Las seis están probadas ejecutándolas, y la quinta además **al revés**: con el
+freno quitado, el banco cae.
+
+**El primer uso real recomendado** es `SACAR` el seguidor 109 del grupo 10 de la
+NCU2: un solo campo, con copia previa, diff delante y relectura después. Si eso
+sale bien, lo demás va detrás.
 
 ### Reiniciar la NCU, y por qué ésta sí va armada
 

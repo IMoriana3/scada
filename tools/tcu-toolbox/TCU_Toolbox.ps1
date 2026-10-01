@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.97'
+$VERSION_TOOLBOX = '12.0'
 # La etiqueta va en el titulo de la ventana: es lo que mira alguien en campo
 # para saber QUE MAPA da por bueno la herramienta. Decia R7.1 desde la v11.86,
 # que es cuando entraron registros que solo existen en el R8 (40030-40039, el
@@ -2351,7 +2351,15 @@ function Api-Gravedad($vista, $fila) {
 #   3. Y HAY UN TROZO INTOCABLE pase lo que pase: la red. No hay opcion, casilla
 #      ni parametro que lo abra. Un error en cualquier otro campo se arregla
 #      desde esta misma ventana; en ese, no.
-$API_INTOCABLE = @('ip_config')
+# Esta lista nacio corta y lo destapo la captura de una escritura real: el
+# cuerpo del PUT trae, al mismo nivel que todo lo demas, http_port y modbus_port
+# -y los bloques gw1_config/gw2_config con la red de cada Digi-. Cambiar
+# http_port deja la pagina de la NCU inalcanzable en el :80; cambiar modbus_port
+# deja al SCADA sin ver la planta; tocar gwN_config.network deja sin gateway.
+# Son exactamente el mismo desastre que la IP, y no estaban. Con la lista blanca
+# nunca habrian cambiado, pero esto es el cinturon ademas de los tirantes, y un
+# cinturon que no abarca lo peor no es un cinturon.
+$API_INTOCABLE = @('ip_config', 'http_port', 'modbus_port', 'gw1_config', 'gw2_config')
 # el direccionamiento de las redes Modbus es lo mismo: cambiarlo es dejar de ver
 # a los gateways. Los esclavos de dentro si son configuracion normal.
 $API_INTOCABLE_PATRON = '^modbus_networks\[\d+\]\.(ip|port|network_type)$'
@@ -2554,16 +2562,27 @@ function Api-GrupoBandera($cfg, [int]$grupo, [string]$cual, [bool]$valor) {
              permitidas = @("tracker_groups[$($grupo - 1)].$campo")}
 }
 
-# Los ajustes sueltos de la NCU. Cada uno con su RANGO, y el rango no es un
-# adorno: un sondeo de 10 ms satura la Zigbee de la planta entera y un timeout
-# de 5 s da por muertas TCUs que solo iban lentas. Lo que no esta aqui no se
-# sabe cambiar, y eso es a proposito: se anade cuando se conoce su rango bueno,
-# no cuando hace falta. Pura.
+# Los ajustes sueltos de la NCU, con un limite cada uno para que un dedazo no
+# pase: un sondeo de 10 ms satura la Zigbee de la planta entera.
+#
+# PERO OJO CON LOS LIMITES, que ya me equivoque una vez. La primera version
+# ponia el timeout de TCU en 30..3600 "porque suena razonable", y la El Burgo
+# NCU2 lo tiene en 6000: o sea que la herramienta habria RECHAZADO el valor que
+# el aparato lleva puesto de verdad. Un limite inventado que rechaza lo que la
+# NCU acepta es peor que no tener limite, porque parece autoridad.
+#
+# Asi que son limites de DEDAZO y no de ingenieria: anchos a proposito, solo
+# para cazar un 10 donde iba un 10000. No salen de ninguna documentacion -no la
+# tenemos- y por eso no se presentan como si saliesen. Y las unidades no estan
+# claras: El Burgo lleva tcu_timeout 6000 y hsu_timeout 600, que no cuadra con
+# que los dos sean segundos de lo mismo. Mientras no se sepa, la etiqueta no
+# miente: no dice [s].
 $API_AJUSTES = [ordered]@{
-    tcu_timeout            = @{que = 'timeout de TCU [s]';        min = 30;  max = 3600; tipo = 'int'}
-    hsu_timeout            = @{que = 'timeout de HSU [s]';        min = 30;  max = 3600; tipo = 'int'}
-    tcu_interval_ms        = @{que = 'sondeo de TCU [ms]';        min = 250; max = 60000; tipo = 'int'}
-    hsu_interval_ms        = @{que = 'sondeo de HSU [ms]';        min = 250; max = 60000; tipo = 'int'}
+    tcu_timeout            = @{que = 'timeout de TCU';            min = 1;   max = 86400;  tipo = 'int'}
+    hsu_timeout            = @{que = 'timeout de HSU';            min = 1;   max = 86400;  tipo = 'int'}
+    tcu_interval_ms        = @{que = 'sondeo de TCU [ms]';        min = 250; max = 600000; tipo = 'int'}
+    hsu_interval_ms        = @{que = 'sondeo de HSU [ms]';        min = 250; max = 600000; tipo = 'int'}
+    ncu_interval_ms        = @{que = 'sondeo de NCU [ms]';        min = 250; max = 600000; tipo = 'int'}
     modbus_enable_writing  = @{que = 'permitir escritura Modbus'; tipo = 'bool'}
 }
 function Api-Ajuste($cfg, [string]$campo, $valor) {
@@ -2584,6 +2603,14 @@ function Api-Ajuste($cfg, [string]$campo, $valor) {
         }
         $v = $n
     }
+    # Que el campo EXISTA en esta NCU. Sin esto, una NCU con otro panel que no lo
+    # traiga hacia reventar la asignacion con una excepcion en mitad del
+    # manejador, en vez de decir lo que pasa. No todas las NCUs tienen por que
+    # tener los mismos campos, y eso no es un fallo nuestro ni suyo.
+    if ($null -eq $cfg.PSObject.Properties[$campo]) {
+        return @{ok = $false; cfg = $null; permitidas = @()
+                 nota = "esta NCU no tiene el campo '$campo' en su configuracion: no se inventa"}
+    }
     if ("$($cfg.$campo)" -ceq "$v") {
         return @{ok = $false; nota = "$($d.que) ya vale eso"; cfg = $null; permitidas = @()}
     }
@@ -2602,41 +2629,80 @@ function Api-TextoCambio([string]$ncu, [string]$que, $difs, [string]$copia) {
         $t += "`r`n  $($d.Ruta)"
         if ("$($d.Antes)" -ne '' -or "$($d.Ahora)" -ne '') { $t += "`r`n      $($d.Antes)  ->  $($d.Ahora)" }
     }
-    $t += "`r`n`r`nSe manda la configuracion ENTERA de la NCU, no solo esta linea: asi funciona su API. Por eso se ha comprobado que no cambia nada mas, y por eso hay copia."
+    $t += "`r`n`r`nSe manda la configuracion ENTERA de la NCU, no solo esta linea: asi funciona su API (PUT /private_api/config, visto en el panel v1.17.1). Por eso se ha comprobado que no cambia nada mas, y por eso hay copia."
     $t += "`r`n`r`nCopia de seguridad previa: $copia"
     $t += "`r`n`r`nDespues se relee y se compara: si la NCU no lo ha tomado, se dice.`r`n`r`nContinuar?"
     return $t
 }
 
-# ---- la escritura, Y POR QUE VA DESARMADA ----
-# Esto esta entero menos una cosa: NO SE HA VISTO UNA ESCRITURA DE VERDAD. El
-# extremo, el verbo y la forma del cuerpo salen de leer el JavaScript de la
-# pagina de la NCU, no de ver una peticion funcionando. Y una escritura de
-# configuracion manda el objeto ENTERO: si la forma no es exactamente la que la
-# NCU espera -o si otra version del panel la quiere distinta- el fallo no es que
-# no se aplique, es que se aplica a medias. Con la red dentro.
+# ---- la escritura: QUE SE SABE YA, Y QUE FALTA ----
+# El 01/10/2026 se vio una escritura DE VERDAD con el DevTools de la pagina de
+# la NCU2 de El Burgo (panel v1.17.1). Sale asi:
 #
-# Asi que mientras no haya una captura real, esto no manda nada. No es una
-# precaucion simbolica: Api-Escribir devuelve sin llamar a la red, y el banco lo
-# comprueba espiando el cliente HTTP.
+#     PUT http://10.100.1.56/private_api/config
+#     Content-Type: text/plain          <- si, text/plain para un JSON
+#     Content-Length: 10203             <- solo config, no el initial_data entero
+#     cuerpo: {plant_id:"ElBurgo", gateway_id:"NCU2", location:{...}, ...}
+#                                       <- el objeto TAL CUAL, sin envolver
+#     -> 200 OK, application/json, 39 bytes
 #
-# PARA ARMARLO hace falta una sola cosa: abrir el DevTools en la pestana Network,
-# cambiar algo pequeno en la pagina de la NCU, y mirar la peticion que sale ->
-# metodo, ruta, Content-Type y la forma del cuerpo (si es el objeto entero, si va
-# envuelto, si lleva algun campo de version). Con eso se rellena este bloque, se
-# pone $API_ESCRITURA_CONFIRMADA a $true y se anade su prueba. Sin eso, no.
+# O sea: verbo, ruta, tipo y forma son los que se habian deducido del JavaScript.
+# Queda escrito con que panel se vio: si algun dia una NCU lleva otro y no
+# cuadra, que se sepa contra que se comprobo esto.
+#
+# Y la captura corrigio dos cosas de aqui al lado: el cuerpo trae http_port y
+# modbus_port al mismo nivel que todo lo demas -mas gw1_config/gw2_config con la
+# red de los Digi-, que no estaban en $API_INTOCABLE; y el tcu_timeout real es
+# 6000, fuera del rango que $API_AJUSTES se habia inventado.
+#
+# ARMADA el 01/10/2026, y quien lo decidio fue Inaki, que es quien responde de la
+# planta. Estuvo desarmada mientras la forma de la peticion era una deduccion; se
+# confirmo con una captura del DevTools y entonces lo que faltaba ya no era un
+# dato sino una decision, que no es del que escribe el codigo.
+#
+# Lo que esto habilita: que la herramienta reescriba la configuracion de una NCU
+# EN PRODUCCION. Lo que sigue entre medias, y no es poco: la lista blanca, los
+# intocables, la copia obligatoria antes, el diff entero en la ventana de
+# confirmar, la ida y vuelta por JSON y la relectura posterior. Armar no es
+# quitar frenos, es dejar que el ultimo tramo exista.
 $API_CONFIG = '/private_api/config'
-$API_ESCRITURA_CONFIRMADA = $false
-$API_ESCRITURA_FALTA = 'falta ver UNA escritura real del panel para saber la forma exacta del cuerpo. Abre el DevTools (pestana Network), cambia algo pequeno en la pagina de la NCU y pasa metodo, ruta, Content-Type y forma del cuerpo. Hasta entonces esta ventana lee, compara y prepara el cambio, pero no lo manda.'
+$API_ESCRITURA_CONFIRMADA = $true
+$API_ESCRITURA_PANEL = 'v1.17.1'      # el panel contra el que se capturo la peticion
+$API_ESCRITURA_FALTA = 'la escritura esta armada; si ves este mensaje es que alguien la ha vuelto a desarmar en el fuente.'
+
+# LA IDA Y VUELTA POR JSON, ANTES DE MANDAR NADA. Lo que sale por el cable no es
+# el objeto que la NCU nos dio: es lo que PowerShell escribe al reserializarlo.
+# Si ConvertTo-Json perdiera un campo, redondeara una latitud o convirtiera un
+# null en otra cosa, el PUT se llevaria esa perdida -y como va el objeto ENTERO,
+# la NCU se quedaria con ella-. Asi que antes de salir se reserializa, se vuelve
+# a leer y se compara contra lo que ibamos a mandar: si no es identico, no sale.
+# Es la unica comprobacion posible ANTES de que sea tarde; despues de un PUT a
+# medias no hay vuelta. Pura.
+function Api-IdaYVuelta($cfg) {
+    try {
+        $txt = $cfg | ConvertTo-Json -Depth $API_COPIA_PROF
+        $otra = $txt | ConvertFrom-Json
+    } catch {
+        return @{ok = $false; nota = "no se puede serializar la configuracion: $($_.Exception.Message)"; texto = ''}
+    }
+    $d = @(Api-Diferencias $cfg $otra)
+    if ($d.Count -gt 0) {
+        return @{ok = $false; texto = ''
+                 nota = "la configuracion no sobrevive a la ida y vuelta por JSON en $($d.Count) campo(s) -el primero, $($d[0].Ruta)-: NO se manda, porque el PUT va con el objeto entero y se llevaria esa perdida"}
+    }
+    return @{ok = $true; nota = ''; texto = $txt}
+}
 
 function Api-Escribir([string]$ip, $sesion, $cfg, [int]$to) {
     if (-not $API_ESCRITURA_CONFIRMADA) {
         return @{ok = $false; nota = "escritura DESARMADA: $API_ESCRITURA_FALTA"}
     }
+    $iv = Api-IdaYVuelta $cfg
+    if (-not $iv.ok) { return @{ok = $false; nota = $iv.nota} }
     $seg = [math]::Max(5, [int]($to / 1000))
     try {
         [void](Invoke-RestMethod -Uri "http://${ip}:$API_PUERTO$API_CONFIG" -Method Put `
-                   -ContentType 'text/plain' -Body ($cfg | ConvertTo-Json -Depth $API_COPIA_PROF) `
+                   -ContentType 'text/plain' -Body $iv.texto `
                    -WebSession $sesion -TimeoutSec $seg)
     } catch {
         return @{ok = $false; nota = "la NCU no tomo la configuracion: $($_.Exception.Message)"}
@@ -2712,6 +2778,162 @@ function Api-Reiniciar([string]$ip, $sesion, [int]$to) {
     return @{ok = $true; nota = ''}
 }
 
+# ===================== EL HISTORICO DE MAC DE LA NCU =====================
+# La NCU guarda cuando vio por primera vez cada MAC Zigbee, en que gateway y con
+# que esclavo Modbus. Es un CSV, no JSON, y en su pagina no tiene menu propio:
+# vive como un fichero mas dentro del visor de CSV, con el nombre "Mac History".
+#
+#     GET /private_api/mac_history
+#     cabecera:  discovered ; gateway_id ; modbus_id ; zigbee_mac
+#
+# POR QUE MERECE LA PENA, y no es un capricho. Todo lo que la herramienta y el
+# simulador de cobertura miden hoy va de ANGULOS: donde apunta cada seguidor
+# frente a donde deberia. De la malla Zigbee no se mide nada: se predice desde el
+# terreno y no se comprueba contra nada. Esto es lo primero OBSERVADO de la
+# malla, dicho por la NCU y no deducido:
+#
+#   - Una TCU con VARIAS MACs ha sido SUSTITUIDA, y dice cuando. Eso no lo apunta
+#     nadie y luego no hay manera de saberlo.
+#   - Una MAC que aparece en LOS DOS gateways es un nodo que se reasocio: esta en
+#     el borde de la cobertura. Hoy eso se ve como errores intermitentes y se le
+#     echa la culpa al equipo.
+#   - Y con el inventario que ya leemos por Zigbee (la MAC Xbee de cada TCU) se
+#     puede carear: si la MAC que lleva hoy no es la ultima que la NCU vio, algo
+#     no cuadra entre lo que hay montado y lo que la NCU cree.
+$API_MACS = '/private_api/mac_history'
+
+# El CSV, a filas. Se mira la CABECERA para saber que columna es cual en vez de
+# fiarse del orden: el dia que la NCU meta una columna en medio, esto sigue
+# funcionando en lugar de poner fechas en la columna de MAC. Pura.
+function Api-MacsParsear([string]$texto) {
+    $lineas = @("$texto" -split "`r?`n" | Where-Object { "$_".Trim() -ne '' })
+    if ($lineas.Count -eq 0) { return @() }
+    $cab = @($lineas[0] -split ';' | ForEach-Object { "$_".Trim().ToLower() })
+    $iD = [array]::IndexOf($cab, 'discovered')
+    $iG = [array]::IndexOf($cab, 'gateway_id')
+    $iM = [array]::IndexOf($cab, 'modbus_id')
+    $iZ = [array]::IndexOf($cab, 'zigbee_mac')
+    if ($iD -lt 0 -or $iG -lt 0 -or $iM -lt 0 -or $iZ -lt 0) { return @() }
+    $r = @()
+    foreach ($l in @($lineas | Select-Object -Skip 1)) {
+        $c = @($l -split ';')
+        if ($c.Count -le [math]::Max([math]::Max($iD, $iG), [math]::Max($iM, $iZ))) { continue }
+        $tcu = 0
+        if (-not [int]::TryParse("$($c[$iM])".Trim(), [ref]$tcu)) { continue }
+        $r += ,[pscustomobject]@{
+            Descubierta = "$($c[$iD])".Trim()
+            Gateway     = "$($c[$iG])".Trim()
+            TCU         = $tcu
+            MAC         = "$($c[$iZ])".Trim().ToUpper()
+        }
+    }
+    return @($r)
+}
+
+# LA FECHA, QUE NO SE PUEDE ORDENAR COMO TEXTO. Viene en dd-MM-yyyy HH:mm:ss, y
+# ordenar eso alfabeticamente pone "01-06-2026" antes que "31-12-2025": el
+# resumen diria que la primera vez fue despues que la ultima. Se vio con el
+# fichero real de El Burgo antes de que llegara a campo. Devuelve $null si no
+# cuadra, y entonces se ordena por texto, que es peor pero no miente. Pura.
+function Api-MacsFecha([string]$t) {
+    $d = [datetime]::MinValue
+    if ([datetime]::TryParseExact("$t".Trim(), 'dd-MM-yyyy HH:mm:ss',
+            [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$d)) { return $d }
+    return $null
+}
+
+# EL MISMO APARATO EN VARIOS ESCLAVOS. Esta es la vista que da las respuestas: si
+# una MAC aparece bajo dos modbus_id distintos, es el MISMO equipo re-direccionado
+# o movido de sitio. En El Burgo salieron dos casos de un vistazo -una estacion
+# que paso del 185 al 210, y una placa que de ser la TCU 78 paso a ser la 30-, y
+# ninguno de los dos estaba apuntado en ningun sitio. Pura.
+function Api-MacsPorMac($filas) {
+    $por = @{}
+    foreach ($f in @($filas)) {
+        $m = "$($f.MAC)"
+        if (-not $por.ContainsKey($m)) { $por[$m] = @() }
+        $por[$m] += ,$f
+    }
+    $r = @()
+    foreach ($m in @($por.Keys | Sort-Object)) {
+        $fs = @($por[$m] | Sort-Object { $(if ($null -ne (Api-MacsFecha $_.Descubierta)) { Api-MacsFecha $_.Descubierta } else { [datetime]::MinValue }) })
+        $ids = @($fs | ForEach-Object { [int]$_.TCU } | Select-Object -Unique)
+        if ($ids.Count -le 1) { continue }      # lo normal: una MAC, un esclavo
+        $r += ,[pscustomobject]@{
+            MAC = $m
+            Esclavos = ($ids -join ' -> ')
+            Cuando = (@($fs | ForEach-Object { "$($_.Descubierta)" }) -join '  |  ')
+            Nota = 'el MISMO aparato ha estado en mas de un esclavo: re-direccionado o movido de sitio'
+        }
+    }
+    return @($r)
+}
+
+# Lo que el CSV crudo no dice y es lo que se va a mirar: por TCU, cuantas MACs
+# distintas ha tenido y en cuantos gateways ha aparecido. Un CSV de mil lineas no
+# se lee; esta tabla si. Pura.
+function Api-MacsResumen($filas) {
+    # ordenadas por fecha ANTES de agrupar: asi "la MAC actual" es la de la ultima
+    # vez y no la que viniera la ultima en el fichero
+    $orden = @(@($filas) | Sort-Object { $(if ($null -ne (Api-MacsFecha $_.Descubierta)) { Api-MacsFecha $_.Descubierta } else { [datetime]::MinValue }) })
+    $por = @{}
+    foreach ($f in $orden) {
+        $k = [int]$f.TCU
+        if (-not $por.ContainsKey($k)) { $por[$k] = @{macs = @(); gws = @(); fechas = @()} }
+        if ($por[$k].macs -notcontains "$($f.MAC)") { $por[$k].macs += "$($f.MAC)" }
+        if ($por[$k].gws  -notcontains "$($f.Gateway)") { $por[$k].gws += "$($f.Gateway)" }
+        $por[$k].fechas += "$($f.Descubierta)"
+    }
+    $r = @()
+    foreach ($k in @($por.Keys | Sort-Object)) {
+        $d = $por[$k]
+        # por FECHA y no por texto: ver Api-MacsFecha
+        $fe = @($d.fechas | Sort-Object { $(if ($null -ne (Api-MacsFecha $_)) { Api-MacsFecha $_ } else { [datetime]::MinValue }) })
+        $r += ,[pscustomobject]@{
+            TCU = $k
+            MACs = $d.macs.Count
+            Gateways = ($d.gws -join ', ')
+            Primera = $fe[0]
+            Ultima = $fe[-1]
+            MAC_actual = $d.macs[-1]
+            Nota = $(if ($d.macs.Count -gt 1 -and $d.gws.Count -gt 1) { 'SUSTITUIDA y vista en varios gateways' }
+                     elseif ($d.macs.Count -gt 1) { "SUSTITUIDA: $($d.macs.Count) MACs distintas" }
+                     elseif ($d.gws.Count -gt 1) { 'vista en VARIOS gateways: nodo que se reasocia' }
+                     else { '' })
+        }
+    }
+    return @($r)
+}
+
+# EL CAREO CON EL INVENTARIO, que es donde esto deja de ser una curiosidad. El
+# inventario lee por Zigbee la MAC que cada TCU lleva HOY; el historico dice la
+# ultima que la NCU vio. Si no coinciden, una de las dos cosas esta mal y merece
+# una mirada: o se cambio el equipo sin que la NCU se enterase, o la TCU que
+# contesta en ese esclavo no es la que la NCU cree. Pura.
+function Api-MacsCareo($resumen, $inventario) {
+    # $porTcu y NO $inv: PowerShell no distingue mayusculas en los nombres de
+    # variable, asi que un $inv pisa $INV -la cultura invariante- y rompe el
+    # parseo de decimales de todo lo que se llame desde aqui. Ya paso una vez con
+    # Portada-Bloques y el banco lo prohibe desde entonces; lo acabo de volver a
+    # escribir y me ha cazado.
+    $porTcu = @{}
+    foreach ($i in @($inventario)) {
+        $m = "$($i.MAC)".Trim().ToUpper()
+        if ($m -ne '') { $porTcu[[int]$i.TCU] = $m }
+    }
+    $r = @()
+    foreach ($x in @($resumen)) {
+        $hoy = $(if ($porTcu.ContainsKey([int]$x.TCU)) { $porTcu[[int]$x.TCU] } else { '' })
+        if ($hoy -eq '') { continue }        # sin inventario de esa TCU no hay careo que hacer
+        if ($hoy -eq "$($x.MAC_actual)") { continue }
+        $r += ,[pscustomobject]@{
+            TCU = $x.TCU; En_la_NCU = "$($x.MAC_actual)"; En_el_equipo = $hoy
+            Nota = 'la MAC que lleva hoy no es la ultima que la NCU vio: o se cambio sin que se enterase, o ahi no contesta quien se cree'
+        }
+    }
+    return @($r)
+}
+
 # ---- el transporte de LECTURA: dos llamadas ----
 # La sesion va por cookie, asi que hace falta el WebRequestSession del login
 # para la segunda llamada. Y SOLO estas dos: un GET de lectura y el POST del
@@ -2746,6 +2968,23 @@ function Api-Entrar([string]$ip, [string]$usuario, [string]$clave, [int]$to) {
 # El volcado entero de una tacada: unos 54 KB de JSON con la configuracion y el
 # estado de todos los equipos. Por eso se lee UNA vez y se reparte entre las
 # vistas, en vez de una llamada por pestana.
+# El historico viene en CSV, asi que Invoke-RestMethod lo devolveria parseado a
+# su manera; se pide como texto plano y se parsea aqui, que es donde se sabe lo
+# que hay. Pura de red: solo lee.
+function Api-LeerMacs([string]$ip, $sesion, [int]$to) {
+    $seg = [math]::Max(5, [int]($to / 1000))
+    try {
+        $r = Invoke-WebRequest -Uri "http://${ip}:$API_PUERTO$API_MACS" -Method Get `
+                 -WebSession $sesion -TimeoutSec $seg -UseBasicParsing
+    } catch {
+        $m = "$($_.Exception.Message)"
+        if ($m -match '401|403|[Uu]nauthor') { return @{ok = $false; nota = 'la sesion no vale: hay que volver a entrar'; texto = ''} }
+        if ($m -match '404') { return @{ok = $false; nota = "esta NCU no tiene ${API_MACS}: panel de otra version"; texto = ''} }
+        return @{ok = $false; nota = "no se puede leer el historico de MAC: $m"; texto = ''}
+    }
+    return @{ok = $true; nota = ''; texto = "$($r.Content)"}
+}
+
 function Api-Leer([string]$ip, $sesion, [int]$to) {
     $seg = [math]::Max(5, [int]($to / 1000))
     try {
@@ -7903,6 +8142,13 @@ $btnPANComparar.Location = New-Object System.Drawing.Point(368, 52)
 $btnPANComparar.Size = New-Object System.Drawing.Size(140, 28)
 $btnPANComparar.Enabled = $false
 $tabPAN.Controls.Add($btnPANComparar)
+
+$btnPANMacs = New-Object System.Windows.Forms.Button
+$btnPANMacs.Text = 'HISTORICO MAC'
+$btnPANMacs.Location = New-Object System.Drawing.Point(146, 318)
+$btnPANMacs.Size = New-Object System.Drawing.Size(140, 28)
+$btnPANMacs.Enabled = $false
+$tabPAN.Controls.Add($btnPANMacs)
 
 [void](LG $tabPAN 'Grupo:' 518 44 58)
 $txtPANGrupo = TG $tabPAN '' 562 52 36
@@ -16528,7 +16774,7 @@ function Api-Pintar {
     # los de configuracion, solo con UNA NCU leida: estos cambian cosas y no se
     # mandan a ciegas a varias a la vez
     $uno = (@($script:ApiUltimo).Count -eq 1)
-    foreach ($b in @($btnPANCopia, $btnPANComparar, $btnPANMeter, $btnPANSacar, $btnPANReiniciar)) { $b.Enabled = $uno }
+    foreach ($b in @($btnPANCopia, $btnPANComparar, $btnPANMeter, $btnPANSacar, $btnPANReiniciar, $btnPANMacs)) { $b.Enabled = $uno }
 }
 
 $cbPANVista.Add_SelectedIndexChanged({ if (@($script:ApiUltimo).Count -gt 0) { Api-Pintar } })
@@ -16688,7 +16934,19 @@ function Api-AplicarCambio($n, $r, [string]$que) {
     # Y SE RELEE. Que la NCU conteste bien a la escritura no quiere decir que la
     # haya aplicado -eso ya se sabe del "Allow writing" del Modbus-, asi que lo
     # que vale es volver a leer y comparar.
-    $l = Api-Leer "$($n.ip)" $e.sesion $cx.to
+    #
+    # ENTRANDO OTRA VEZ, y conviene decir por que con precision. En el DevTools
+    # de la propia pagina se ve que al guardar la configuracion RECARGA y vuelve
+    # a pasar por /private_api/auth; ese auth es un GET que devuelve 200, o sea
+    # una COMPROBACION de sesion, no un login nuevo: con el firmware v1.17.1 la
+    # sesion SOBREVIVE al guardado. Asi que esto no arregla un problema visto,
+    # es un seguro barato -una peticion- contra que otra version se comporte
+    # distinto. Si la sesion siguiera valiendo, el login de mas no estorba; si
+    # no valiese, sin esto diriamos "se mando pero no se ha podido comprobar"
+    # sin que pase nada, y eso cuesta un viaje a la planta.
+    $e2 = Api-Entrar "$($n.ip)" $usuario $clave $cx.to
+    $ses = $(if ($e2.ok) { $e2.sesion } else { $e.sesion })
+    $l = Api-Leer "$($n.ip)" $ses $cx.to
     if (-not $l.ok) { Con "Se mando, pero no se ha podido releer para comprobarlo: $($l.nota)" ([System.Drawing.Color]::Orange); return }
     $quedan = @(Api-Diferencias $r.cfg $l.datos.config_data.config)
     $script:ApiUltimo = @(,@{ncu = "$($n.ncu)"; ip = "$($n.ip)"; cuando = (Get-Date)
@@ -16772,6 +17030,53 @@ $btnPANReiniciar.Add_Click({ Lanzar {
         Con "NCU $($n.ncu): $($ver.nota) (tras $segs s)." $color
         if (-not $ver.tarda) { Con 'Compruebala antes de irte.' ([System.Drawing.Color]::Firebrick) }
     }
+} })
+
+$btnPANMacs.Add_Click({ Lanzar {
+    $n = Api-UnaNcu; if ($null -eq $n) { return }
+    $usuario = "$($txtPANUser.Text)".Trim(); $clave = "$($txtPANPass.Text)"
+    if ($usuario -eq '' -or $clave -eq '') { Con 'Hacen falta el usuario y la contrasena del panel.' ([System.Drawing.Color]::Orange); return }
+    $cx = Params-Conexion
+    $e = Api-Entrar "$($n.ip)" $usuario $clave $cx.to
+    $clave = $null
+    if (-not $e.ok) { Con $e.nota ([System.Drawing.Color]::Firebrick); return }
+    $h = Api-LeerMacs "$($n.ip)" $e.sesion $cx.to
+    if (-not $h.ok) { Con $h.nota ([System.Drawing.Color]::Firebrick); return }
+    $filas = @(Api-MacsParsear $h.texto)
+    if ($filas.Count -eq 0) { Con 'El historico de MAC vino vacio o con otro formato del esperado.' ([System.Drawing.Color]::Orange); return }
+
+    $res = @(Api-MacsResumen $filas)
+    $pm  = @(Api-MacsPorMac $filas)
+    $car = @(Api-MacsCareo $res $script:UltimoInv)
+
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Historico de MAC de la NCU $($n.ncu): $($filas.Count) apuntes, $($res.Count) esclavos." ([System.Drawing.Color]::SteelBlue)
+    foreach ($x in @($res | Where-Object { "$($_.Nota)" -ne '' })) {
+        Con ("  TCU {0,-5} {1}" -f $x.TCU, $x.Nota) ([System.Drawing.Color]::DarkOrange)
+    }
+    foreach ($x in $pm) {
+        Con ("  MISMO APARATO  {0}  esclavos {1}" -f $x.MAC, $x.Esclavos) ([System.Drawing.Color]::DarkOrange)
+    }
+    if ($car.Count -gt 0) {
+        foreach ($x in $car) { Con ("  NO CUADRA  TCU {0}: la NCU vio {1}, el equipo lleva {2}" -f $x.TCU, $x.En_la_NCU, $x.En_el_equipo) ([System.Drawing.Color]::Firebrick) }
+    } elseif (@($script:UltimoInv).Count -eq 0) {
+        Con '  (sin careo con el inventario: no se ha hecho ninguno en esta sesion)' ([System.Drawing.Color]::Gray)
+    }
+
+    Lv-Columnas $lvPAN @(@{t='NCU';w=45}, @{t='TCU';w=55}, @{t='MACs';w=50}, @{t='Gateways';w=80},
+                        @{t='Primera';w=140}, @{t='Ultima';w=140}, @{t='MAC_actual';w=150}, @{t='Nota';w=260})
+    $lvPAN.Items.Clear(); $script:ApiFilas = @()
+    foreach ($x in $res) {
+        $it = New-Object System.Windows.Forms.ListViewItem("$($n.ncu)")
+        foreach ($c in @($x.TCU, $x.MACs, $x.Gateways, $x.Primera, $x.Ultima, $x.MAC_actual, $x.Nota)) { [void]$it.SubItems.Add("$c") }
+        if ("$($x.Nota)" -ne '') { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
+        [void]$lvPAN.Items.Add($it)
+        $script:ApiFilas += ,[pscustomobject]@{NCU = "$($n.ncu)"; TCU = $x.TCU; MACs = $x.MACs; Gateways = "$($x.Gateways)"
+                                               Primera = "$($x.Primera)"; Ultima = "$($x.Ultima)"
+                                               MAC_actual = "$($x.MAC_actual)"; Nota = "$($x.Nota)"}
+    }
+    Lv-Sincronizar $lvPAN
+    $btnPANCsv.Enabled = ($script:ApiFilas.Count -gt 0)
 } })
 
 $btnPANCsv.Add_Click({

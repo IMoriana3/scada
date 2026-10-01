@@ -239,7 +239,7 @@
    "ip_config": {
     "ip": "10.100.1.56"
    },
-   "tcu_timeout": 600,
+   "tcu_timeout": 6000,
    "hsu_timeout": 600,
    "tcu_interval_ms": 1000,
    "hsu_interval_ms": 5000,
@@ -335,7 +335,48 @@
       7
      ]
     }
-   ]
+   ],
+   "ncu_interval_ms": 1000,
+   "http_port": 80,
+   "modbus_port": 502,
+   "gw1_config": {
+    "network": {
+     "type": "manual",
+     "ip": "10.100.1.57",
+     "netmask": "255.255.255.240",
+     "gateway": "10.100.1.49"
+    }
+   },
+   "gw2_config": {
+    "network": {
+     "type": "manual",
+     "ip": "10.100.1.58",
+     "netmask": "255.255.255.240",
+     "gateway": "10.100.1.49"
+    }
+   },
+   "location": {
+    "latitude": 41.576454,
+    "longitude": -0.798685
+   },
+   "mqtt_address": "tcp://ejemplo.invalido:1883",
+   "mqtt_credentials": null,
+   "ntp_config": {
+    "ip": null
+   },
+   "validate_server_cert": false,
+   "server_ca_path": null,
+   "tcu_axis_azimuth_offset": 0,
+   "hsu_wind_direction_deadband": 30,
+   "tcu_wind_direction_change_delay": 600,
+   "alarm_configuration": {
+    "enable_global_snow_alarm": false,
+    "enable_snow_alarm_latching": false
+   },
+   "external_control": {
+    "enable_watchdog": false,
+    "watchdog_warn_threshold": 0
+   }
   }
  }
 }

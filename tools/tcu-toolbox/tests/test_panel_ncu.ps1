@@ -267,8 +267,14 @@ Igual ($src -match 'private_api/commands/soft_restart') $true 'el reinicio esta,
 # Modbus, ni desde aqui-, lo que se arregla yendo a la planta con un cable. Es la
 # unica operacion que no se podria deshacer desde esta herramienta.
 Igual ($src -match 'private_api/ota') $false 'el extremo de firmware no aparece ni escrito'
-# y la escritura que existe no puede salir por descuido
-Igual ($src -match '\$API_ESCRITURA_CONFIRMADA = \$false') $true 'la escritura de configuracion va desarmada'
+# La escritura de configuracion ya va ARMADA (01/10/2026, decision de Inaki tras
+# capturar la peticion real). Lo que se exige ahora no es que este desarmada,
+# sino que no pueda salir por descuido: que pase por la ida y vuelta por JSON
+# -el ultimo freno- y que lo que se mande sea lo que esa guarda aprobo. Eso se
+# comprueba ejecutandolo en test_panel_cfg.ps1; aqui basta con que el freno siga
+# estando en el camino.
+Igual ($src -match '\$iv = Api-IdaYVuelta \$cfg') $true 'la escritura pasa por la ida y vuelta por JSON'
+Igual ($src -match '-Body \$iv\.texto') $true 'y manda lo que esa guarda aprobo, no otra cosa'
 
 # la contrasena no se guarda en ningun sitio que sobreviva a cerrar la ventana
 Igual ($src -match 'txtPANPass[^
