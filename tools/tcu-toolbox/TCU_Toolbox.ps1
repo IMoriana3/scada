@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.97'
+$VERSION_TOOLBOX = '11.98'
 # La etiqueta va en el titulo de la ventana: es lo que mira alguien en campo
 # para saber QUE MAPA da por bueno la herramienta. Decia R7.1 desde la v11.86,
 # que es cuando entraron registros que solo existen en el R8 (40030-40039, el
@@ -2351,7 +2351,15 @@ function Api-Gravedad($vista, $fila) {
 #   3. Y HAY UN TROZO INTOCABLE pase lo que pase: la red. No hay opcion, casilla
 #      ni parametro que lo abra. Un error en cualquier otro campo se arregla
 #      desde esta misma ventana; en ese, no.
-$API_INTOCABLE = @('ip_config')
+# Esta lista nacio corta y lo destapo la captura de una escritura real: el
+# cuerpo del PUT trae, al mismo nivel que todo lo demas, http_port y modbus_port
+# -y los bloques gw1_config/gw2_config con la red de cada Digi-. Cambiar
+# http_port deja la pagina de la NCU inalcanzable en el :80; cambiar modbus_port
+# deja al SCADA sin ver la planta; tocar gwN_config.network deja sin gateway.
+# Son exactamente el mismo desastre que la IP, y no estaban. Con la lista blanca
+# nunca habrian cambiado, pero esto es el cinturon ademas de los tirantes, y un
+# cinturon que no abarca lo peor no es un cinturon.
+$API_INTOCABLE = @('ip_config', 'http_port', 'modbus_port', 'gw1_config', 'gw2_config')
 # el direccionamiento de las redes Modbus es lo mismo: cambiarlo es dejar de ver
 # a los gateways. Los esclavos de dentro si son configuracion normal.
 $API_INTOCABLE_PATRON = '^modbus_networks\[\d+\]\.(ip|port|network_type)$'
@@ -2554,16 +2562,27 @@ function Api-GrupoBandera($cfg, [int]$grupo, [string]$cual, [bool]$valor) {
              permitidas = @("tracker_groups[$($grupo - 1)].$campo")}
 }
 
-# Los ajustes sueltos de la NCU. Cada uno con su RANGO, y el rango no es un
-# adorno: un sondeo de 10 ms satura la Zigbee de la planta entera y un timeout
-# de 5 s da por muertas TCUs que solo iban lentas. Lo que no esta aqui no se
-# sabe cambiar, y eso es a proposito: se anade cuando se conoce su rango bueno,
-# no cuando hace falta. Pura.
+# Los ajustes sueltos de la NCU, con un limite cada uno para que un dedazo no
+# pase: un sondeo de 10 ms satura la Zigbee de la planta entera.
+#
+# PERO OJO CON LOS LIMITES, que ya me equivoque una vez. La primera version
+# ponia el timeout de TCU en 30..3600 "porque suena razonable", y la El Burgo
+# NCU2 lo tiene en 6000: o sea que la herramienta habria RECHAZADO el valor que
+# el aparato lleva puesto de verdad. Un limite inventado que rechaza lo que la
+# NCU acepta es peor que no tener limite, porque parece autoridad.
+#
+# Asi que son limites de DEDAZO y no de ingenieria: anchos a proposito, solo
+# para cazar un 10 donde iba un 10000. No salen de ninguna documentacion -no la
+# tenemos- y por eso no se presentan como si saliesen. Y las unidades no estan
+# claras: El Burgo lleva tcu_timeout 6000 y hsu_timeout 600, que no cuadra con
+# que los dos sean segundos de lo mismo. Mientras no se sepa, la etiqueta no
+# miente: no dice [s].
 $API_AJUSTES = [ordered]@{
-    tcu_timeout            = @{que = 'timeout de TCU [s]';        min = 30;  max = 3600; tipo = 'int'}
-    hsu_timeout            = @{que = 'timeout de HSU [s]';        min = 30;  max = 3600; tipo = 'int'}
-    tcu_interval_ms        = @{que = 'sondeo de TCU [ms]';        min = 250; max = 60000; tipo = 'int'}
-    hsu_interval_ms        = @{que = 'sondeo de HSU [ms]';        min = 250; max = 60000; tipo = 'int'}
+    tcu_timeout            = @{que = 'timeout de TCU';            min = 1;   max = 86400;  tipo = 'int'}
+    hsu_timeout            = @{que = 'timeout de HSU';            min = 1;   max = 86400;  tipo = 'int'}
+    tcu_interval_ms        = @{que = 'sondeo de TCU [ms]';        min = 250; max = 600000; tipo = 'int'}
+    hsu_interval_ms        = @{que = 'sondeo de HSU [ms]';        min = 250; max = 600000; tipo = 'int'}
+    ncu_interval_ms        = @{que = 'sondeo de NCU [ms]';        min = 250; max = 600000; tipo = 'int'}
     modbus_enable_writing  = @{que = 'permitir escritura Modbus'; tipo = 'bool'}
 }
 function Api-Ajuste($cfg, [string]$campo, $valor) {
@@ -2584,6 +2603,14 @@ function Api-Ajuste($cfg, [string]$campo, $valor) {
         }
         $v = $n
     }
+    # Que el campo EXISTA en esta NCU. Sin esto, una NCU con otro panel que no lo
+    # traiga hacia reventar la asignacion con una excepcion en mitad del
+    # manejador, en vez de decir lo que pasa. No todas las NCUs tienen por que
+    # tener los mismos campos, y eso no es un fallo nuestro ni suyo.
+    if ($null -eq $cfg.PSObject.Properties[$campo]) {
+        return @{ok = $false; cfg = $null; permitidas = @()
+                 nota = "esta NCU no tiene el campo '$campo' en su configuracion: no se inventa"}
+    }
     if ("$($cfg.$campo)" -ceq "$v") {
         return @{ok = $false; nota = "$($d.que) ya vale eso"; cfg = $null; permitidas = @()}
     }
@@ -2602,41 +2629,73 @@ function Api-TextoCambio([string]$ncu, [string]$que, $difs, [string]$copia) {
         $t += "`r`n  $($d.Ruta)"
         if ("$($d.Antes)" -ne '' -or "$($d.Ahora)" -ne '') { $t += "`r`n      $($d.Antes)  ->  $($d.Ahora)" }
     }
-    $t += "`r`n`r`nSe manda la configuracion ENTERA de la NCU, no solo esta linea: asi funciona su API. Por eso se ha comprobado que no cambia nada mas, y por eso hay copia."
+    $t += "`r`n`r`nSe manda la configuracion ENTERA de la NCU, no solo esta linea: asi funciona su API (PUT /private_api/config, visto en el panel v1.17.1). Por eso se ha comprobado que no cambia nada mas, y por eso hay copia."
     $t += "`r`n`r`nCopia de seguridad previa: $copia"
     $t += "`r`n`r`nDespues se relee y se compara: si la NCU no lo ha tomado, se dice.`r`n`r`nContinuar?"
     return $t
 }
 
-# ---- la escritura, Y POR QUE VA DESARMADA ----
-# Esto esta entero menos una cosa: NO SE HA VISTO UNA ESCRITURA DE VERDAD. El
-# extremo, el verbo y la forma del cuerpo salen de leer el JavaScript de la
-# pagina de la NCU, no de ver una peticion funcionando. Y una escritura de
-# configuracion manda el objeto ENTERO: si la forma no es exactamente la que la
-# NCU espera -o si otra version del panel la quiere distinta- el fallo no es que
-# no se aplique, es que se aplica a medias. Con la red dentro.
+# ---- la escritura: QUE SE SABE YA, Y QUE FALTA ----
+# El 01/10/2026 se vio una escritura DE VERDAD con el DevTools de la pagina de
+# la NCU2 de El Burgo (panel v1.17.1). Sale asi:
 #
-# Asi que mientras no haya una captura real, esto no manda nada. No es una
-# precaucion simbolica: Api-Escribir devuelve sin llamar a la red, y el banco lo
-# comprueba espiando el cliente HTTP.
+#     PUT http://10.100.1.56/private_api/config
+#     Content-Type: text/plain          <- si, text/plain para un JSON
+#     Content-Length: 10203             <- solo config, no el initial_data entero
+#     cuerpo: {plant_id:"ElBurgo", gateway_id:"NCU2", location:{...}, ...}
+#                                       <- el objeto TAL CUAL, sin envolver
+#     -> 200 OK, application/json, 39 bytes
 #
-# PARA ARMARLO hace falta una sola cosa: abrir el DevTools en la pestana Network,
-# cambiar algo pequeno en la pagina de la NCU, y mirar la peticion que sale ->
-# metodo, ruta, Content-Type y la forma del cuerpo (si es el objeto entero, si va
-# envuelto, si lleva algun campo de version). Con eso se rellena este bloque, se
-# pone $API_ESCRITURA_CONFIRMADA a $true y se anade su prueba. Sin eso, no.
+# O sea: verbo, ruta, tipo y forma son los que se habian deducido del JavaScript.
+# Queda escrito con que panel se vio: si algun dia una NCU lleva otro y no
+# cuadra, que se sepa contra que se comprobo esto.
+#
+# Y la captura corrigio dos cosas de aqui al lado: el cuerpo trae http_port y
+# modbus_port al mismo nivel que todo lo demas -mas gw1_config/gw2_config con la
+# red de los Digi-, que no estaban en $API_INTOCABLE; y el tcu_timeout real es
+# 6000, fuera del rango que $API_AJUSTES se habia inventado.
+#
+# AUN ASI SIGUE DESARMADA, y ya no por falta de datos: armarla es permitir que
+# esta herramienta reescriba la configuracion de una NCU en produccion, y eso lo
+# decide quien responde de la planta, no quien escribe el codigo. Es un cambio de
+# una linea cuando se diga.
 $API_CONFIG = '/private_api/config'
 $API_ESCRITURA_CONFIRMADA = $false
-$API_ESCRITURA_FALTA = 'falta ver UNA escritura real del panel para saber la forma exacta del cuerpo. Abre el DevTools (pestana Network), cambia algo pequeno en la pagina de la NCU y pasa metodo, ruta, Content-Type y forma del cuerpo. Hasta entonces esta ventana lee, compara y prepara el cambio, pero no lo manda.'
+$API_ESCRITURA_FALTA = 'la forma de la peticion ya se conoce (PUT /private_api/config, text/plain, el objeto de configuracion tal cual; visto en el panel v1.17.1 de El Burgo NCU2). Lo que falta es la decision de armarla: mientras tanto esta ventana lee, compara y prepara el cambio -con su copia y su diff- pero no lo manda.'
+
+# LA IDA Y VUELTA POR JSON, ANTES DE MANDAR NADA. Lo que sale por el cable no es
+# el objeto que la NCU nos dio: es lo que PowerShell escribe al reserializarlo.
+# Si ConvertTo-Json perdiera un campo, redondeara una latitud o convirtiera un
+# null en otra cosa, el PUT se llevaria esa perdida -y como va el objeto ENTERO,
+# la NCU se quedaria con ella-. Asi que antes de salir se reserializa, se vuelve
+# a leer y se compara contra lo que ibamos a mandar: si no es identico, no sale.
+# Es la unica comprobacion posible ANTES de que sea tarde; despues de un PUT a
+# medias no hay vuelta. Pura.
+function Api-IdaYVuelta($cfg) {
+    try {
+        $txt = $cfg | ConvertTo-Json -Depth $API_COPIA_PROF
+        $otra = $txt | ConvertFrom-Json
+    } catch {
+        return @{ok = $false; nota = "no se puede serializar la configuracion: $($_.Exception.Message)"; texto = ''}
+    }
+    $d = @(Api-Diferencias $cfg $otra)
+    if ($d.Count -gt 0) {
+        return @{ok = $false; texto = ''
+                 nota = "la configuracion no sobrevive a la ida y vuelta por JSON en $($d.Count) campo(s) -el primero, $($d[0].Ruta)-: NO se manda, porque el PUT va con el objeto entero y se llevaria esa perdida"}
+    }
+    return @{ok = $true; nota = ''; texto = $txt}
+}
 
 function Api-Escribir([string]$ip, $sesion, $cfg, [int]$to) {
     if (-not $API_ESCRITURA_CONFIRMADA) {
         return @{ok = $false; nota = "escritura DESARMADA: $API_ESCRITURA_FALTA"}
     }
+    $iv = Api-IdaYVuelta $cfg
+    if (-not $iv.ok) { return @{ok = $false; nota = $iv.nota} }
     $seg = [math]::Max(5, [int]($to / 1000))
     try {
         [void](Invoke-RestMethod -Uri "http://${ip}:$API_PUERTO$API_CONFIG" -Method Put `
-                   -ContentType 'text/plain' -Body ($cfg | ConvertTo-Json -Depth $API_COPIA_PROF) `
+                   -ContentType 'text/plain' -Body $iv.texto `
                    -WebSession $sesion -TimeoutSec $seg)
     } catch {
         return @{ok = $false; nota = "la NCU no tomo la configuracion: $($_.Exception.Message)"}
@@ -16688,7 +16747,19 @@ function Api-AplicarCambio($n, $r, [string]$que) {
     # Y SE RELEE. Que la NCU conteste bien a la escritura no quiere decir que la
     # haya aplicado -eso ya se sabe del "Allow writing" del Modbus-, asi que lo
     # que vale es volver a leer y comparar.
-    $l = Api-Leer "$($n.ip)" $e.sesion $cx.to
+    #
+    # ENTRANDO OTRA VEZ, y conviene decir por que con precision. En el DevTools
+    # de la propia pagina se ve que al guardar la configuracion RECARGA y vuelve
+    # a pasar por /private_api/auth; ese auth es un GET que devuelve 200, o sea
+    # una COMPROBACION de sesion, no un login nuevo: con el firmware v1.17.1 la
+    # sesion SOBREVIVE al guardado. Asi que esto no arregla un problema visto,
+    # es un seguro barato -una peticion- contra que otra version se comporte
+    # distinto. Si la sesion siguiera valiendo, el login de mas no estorba; si
+    # no valiese, sin esto diriamos "se mando pero no se ha podido comprobar"
+    # sin que pase nada, y eso cuesta un viaje a la planta.
+    $e2 = Api-Entrar "$($n.ip)" $usuario $clave $cx.to
+    $ses = $(if ($e2.ok) { $e2.sesion } else { $e.sesion })
+    $l = Api-Leer "$($n.ip)" $ses $cx.to
     if (-not $l.ok) { Con "Se mando, pero no se ha podido releer para comprobarlo: $($l.nota)" ([System.Drawing.Color]::Orange); return }
     $quedan = @(Api-Diferencias $r.cfg $l.datos.config_data.config)
     $script:ApiUltimo = @(,@{ncu = "$($n.ncu)"; ip = "$($n.ip)"; cuando = (Get-Date)

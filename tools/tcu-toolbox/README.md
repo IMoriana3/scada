@@ -50,24 +50,63 @@ seguidor que **esa NCU no tiene configurado** (daría un grupo que dice mover al
 que no está), y meter uno que **ya está en otro grupo**, diciendo en cuál. Esto
 último es **regla nuestra**: la API no dice si admite estar en dos.
 
-### ⚠️ La escritura va DESARMADA, y por qué
+### La petición ya se conoce (capturada el 01/10/2026)
 
-Todo lo anterior está hecho y probado, pero **el envío no manda nada todavía**.
-El extremo, el verbo y la forma del cuerpo salen de leer el JavaScript de la
-página de la NCU, **no de ver una petición funcionando**. Y como se manda el
-objeto entero, si la forma no es exactamente la que la NCU espera —o si otra
-versión del panel la quiere distinta— el fallo no es que no se aplique: es que se
-aplica a medias, con la red dentro.
+Con el DevTools de la página de la NCU2 de El Burgo (panel **v1.17.1**), guardar
+un cambio de configuración sale así:
 
-No es una precaución simbólica: `Api-Escribir` devuelve sin llamar a la red, y el
-banco lo comprueba **espiando el cliente HTTP** y exigiendo que no se le llame.
-Una precaución que no se comprueba es una intención.
+```
+PUT http://10.100.1.56/private_api/config
+Content-Type: text/plain          <- sí, text/plain para un JSON
+Content-Length: 10203             <- solo config, no el initial_data entero
+cuerpo: {plant_id:"ElBurgo", gateway_id:"NCU2", location:{...}, ...}
+                                  <- el objeto TAL CUAL, sin envolver
+-> 200 OK, application/json, 39 bytes
+```
 
-**Para armarla hace falta una sola cosa:** abrir el DevTools en la pestaña
-*Network*, cambiar algo pequeño en la página de la NCU y mirar la petición que
-sale — método, ruta, `Content-Type` y la forma del cuerpo (si es el objeto
-entero, si va envuelto, si lleva algún campo de versión). Con eso se rellena el
-bloque, se pone `$API_ESCRITURA_CONFIRMADA` a `$true` y se añade su prueba.
+Verbo, ruta, tipo y forma son los que se habían deducido del JavaScript. Ahora
+están **confirmados**, y queda escrito con qué panel: si algún día una NCU lleva
+otro y no cuadra, que se sepa contra qué se comprobó.
+
+**Y la captura destapó dos fallos**, los dos del tipo que no quieres descubrir en
+campo:
+
+- **La lista de intocables se había quedado corta.** El cuerpo trae `http_port` y
+  `modbus_port` al mismo nivel que todo lo demás, más `gw1_config`/`gw2_config`
+  con la red de cada Digi. Cambiar `http_port` deja la página inalcanzable en
+  el `:80`; `modbus_port` deja al SCADA sin ver la planta. Es el mismo desastre
+  que la IP y no estaban.
+- **Un rango inventado rechazaba un valor real.** El límite del `tcu_timeout`
+  estaba en 30..3600 «porque suena razonable», y El Burgo lo tiene en **6000**:
+  la herramienta habría rechazado el valor que el aparato lleva puesto. Ahora son
+  límites de **dedazo** —anchos, solo para cazar un 10 donde iba un 10000— y se
+  dice que son nuestros, no documentación. Las unidades siguen sin estar claras
+  (6000 en TCU y 600 en HSU no cuadra con que ambos sean lo mismo), así que la
+  etiqueta ya no dice `[s]`.
+
+### La ida y vuelta por JSON, antes de mandar nada
+
+Lo que sale por el cable **no es el objeto que la NCU nos dio**: es lo que
+PowerShell escribe al reserializarlo. Si `ConvertTo-Json` perdiera un campo,
+redondeara una latitud o convirtiera un `null` en otra cosa, el `PUT` se llevaría
+esa pérdida — y como va el objeto **entero**, la NCU se quedaría con ella.
+
+Así que antes de salir se reserializa, se vuelve a leer y se compara contra lo
+que íbamos a mandar: **si no es idéntico, no sale**. Es la única comprobación
+posible *antes* de que sea tarde; después de un `PUT` a medias no hay vuelta.
+Probada contra una pérdida de verdad: una configuración más honda que la
+profundidad de serialización, que `ConvertTo-Json` trunca sin avisar.
+
+### ⚠️ Aun así sigue DESARMADA
+
+Y ya **no por falta de datos**. Armarla es permitir que esta herramienta
+reescriba la configuración de una NCU en producción, y eso lo decide quien
+responde de la planta, no quien escribe el código. Es un cambio de una línea
+cuando se diga.
+
+Mientras tanto no es una precaución simbólica: `Api-Escribir` devuelve sin llamar
+a la red, y el banco lo comprueba **espiando el cliente HTTP** y exigiendo que no
+se le llame. Una precaución que no se comprueba es una intención.
 
 ### Reiniciar la NCU, y por qué ésta sí va armada
 
