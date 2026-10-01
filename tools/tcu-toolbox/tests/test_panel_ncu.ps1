@@ -254,8 +254,13 @@ Igual $dePanel.Count 4 'contra el panel hay CUATRO llamadas: login, volcado, con
 # un PUT con el objeto entero contra una forma equivocada se aplica a medias.
 # Falla seguro frente a falla peligroso.
 Igual ($src -match 'private_api/commands/soft_restart') $true 'el reinicio esta, y va armado'
-# el FIRMWARE no, y esto no es un olvido: esta herramienta no actualiza firmware
-# -eso lo hace el TCU Updater de Sunner- y por ahi se sube una imagen a una NCU
+# EL FIRMWARE DE LA NCU no esta todavia, y el motivo que puso aqui la v11.96 era
+# FALSO: decia que lo hace el TCU Updater, y el TCU Updater actualiza las TCUs,
+# no la NCU. Para el firmware de la NCU hoy no hay mas que su pagina web.
+# El motivo de verdad es el riesgo: una imagen subida a medias deja la NCU
+# inservible y fuera de alcance, y ahi no hay nada que releer para comprobarlo,
+# que es la red de seguridad de todo lo demas de esta pestana. Hasta que se vea
+# la peticion real Y se pruebe en una NCU que no este dando servicio, no entra.
 Igual ($src -match 'private_api/ota') $false 'el extremo de firmware no aparece ni escrito'
 # y la escritura que existe no puede salir por descuido
 Igual ($src -match '\$API_ESCRITURA_CONFIRMADA = \$false') $true 'la escritura de configuracion va desarmada'

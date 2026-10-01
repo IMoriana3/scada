@@ -95,15 +95,25 @@ hacia atrás**, así que se espera a que vuelva, se relee y se compara. Si vuelv
 con más marcha que antes, se dice que **no ha reiniciado** en vez de darlo por
 bueno.
 
-**El firmware (OTA) no está, y no es un olvido.** Esta herramienta no actualiza
-firmware —eso lo hace el *TCU Updater* de Sunner— y por ese extremo se sube una
-imagen a una NCU. El banco exige que no aparezca **ni escrito**.
+**El firmware de la NCU (OTA) no está todavía**, y conviene decir bien por qué,
+porque la primera versión de esta nota lo justificaba mal. El *TCU Updater* de
+Sunner actualiza el firmware de las **TCUs**; el de la **NCU** no lo toca. Así
+que para el firmware de la NCU **hoy no hay alternativa a su página web**, y es
+una de las cosas que faltan para dejar de entrar en ella.
+
+No está por otro motivo, y es el peor de todos los riesgos de esta pestaña: una
+imagen subida a medias o equivocada deja la NCU **inservible y fuera de alcance**
+— no hay nada que releer para comprobarlo, que es la red de seguridad de todo lo
+demás de aquí. Antes de armarlo hacen falta dos cosas, no una: ver la petición
+real en el DevTools **y** probarlo primero en una NCU que no esté dando servicio.
+Mientras tanto el banco exige que el extremo no aparezca **ni escrito**.
 
 ### Lo que esta versión NO sustituye todavía de la página
 
-Para dejar de entrar en ella del todo faltan: los logs y CSV, el histórico de
-MAC, la tabla de *fulltracking* y el websocket de tiempo real. Y el firmware,
-que no va a estar.
+Para dejar de entrar en ella del todo faltan: el **firmware de la NCU** (ver
+arriba: no lo cubre el *TCU Updater*, así que hoy solo se puede por la página),
+los logs y CSV, el histórico de MAC, la tabla de *fulltracking* y el websocket de
+tiempo real.
 
 ## Panel web de la NCU: leer lo que el Modbus no cuenta (v11.95)
 
