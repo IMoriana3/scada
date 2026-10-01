@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '11.96'
+$VERSION_TOOLBOX = '11.97'
 # La etiqueta va en el titulo de la ventana: es lo que mira alguien en campo
 # para saber QUE MAPA da por bueno la herramienta. Decia R7.1 desde la v11.86,
 # que es cuando entraron registros que solo existen en el R8 (40030-40039, el
@@ -2664,11 +2664,19 @@ $API_REINICIO_PASO_S   = 3
 # ATRAS. Que conteste no basta: podria no haber hecho caso y seguir como
 # estaba, y eso se parece demasiado a haber funcionado. Pura.
 function Api-Reinicio-Volvio($uptimeAntes, $uptimeDespues) {
-    if ($null -eq $uptimeDespues) { return @{ok = $false; nota = 'no ha vuelto a contestar'} }
-    if ([double]$uptimeDespues -ge [double]$uptimeAntes) {
-        return @{ok = $false; nota = "contesta, pero su tiempo de marcha NO ha bajado ($([math]::Round([double]$uptimeDespues/3600000.0,1)) h): no ha reiniciado"}
+    # OJO AL MATIZ, que no es cosmetico: que no conteste dentro de NUESTRA
+    # ventana no quiere decir que este mal. La ventana es un numero que pusimos
+    # nosotros sin saber cuanto tarda una NCU en arrancar. Decirlo como "no ha
+    # vuelto" a secas manda a alguien a la planta por nada, asi que se dice lo
+    # que sabemos -que no ha contestado AUN- y lo que hay que hacer.
+    if ($null -eq $uptimeDespues) {
+        return @{ok = $false; tarda = $true
+                 nota = "no ha contestado todavia. Puede que solo tarde mas que nuestra espera de $API_REINICIO_ESPERA_S s: dale un minuto y vuelve a LEER PANEL antes de pensar en ir a la planta"}
     }
-    return @{ok = $true; nota = "arriba otra vez, con $([math]::Round([double]$uptimeDespues/1000.0)) s de marcha"}
+    if ([double]$uptimeDespues -ge [double]$uptimeAntes) {
+        return @{ok = $false; tarda = $false; nota = "contesta, pero su tiempo de marcha NO ha bajado ($([math]::Round([double]$uptimeDespues/3600000.0,1)) h): no ha reiniciado"}
+    }
+    return @{ok = $true; tarda = $false; nota = "arriba otra vez, con $([math]::Round([double]$uptimeDespues/1000.0)) s de marcha"}
 }
 
 # Lo que se para y lo que no. Se dice entero antes de preguntar, porque quien
@@ -16760,7 +16768,9 @@ $btnPANReiniciar.Add_Click({ Lanzar {
         Api-Pintar
         Con "NCU $($n.ncu): $($ver.nota). Tardo $segs s." ([System.Drawing.Color]::DarkGreen)
     } else {
-        Con "NCU $($n.ncu): $($ver.nota) (tras $segs s). Compruebala antes de irte." ([System.Drawing.Color]::Firebrick)
+        $color = $(if ($ver.tarda) { [System.Drawing.Color]::DarkOrange } else { [System.Drawing.Color]::Firebrick })
+        Con "NCU $($n.ncu): $($ver.nota) (tras $segs s)." $color
+        if (-not $ver.tarda) { Con 'Compruebala antes de irte.' ([System.Drawing.Color]::Firebrick) }
     }
 } })
 
