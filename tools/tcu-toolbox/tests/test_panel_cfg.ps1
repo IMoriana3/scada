@@ -1,0 +1,162 @@
+# La configuracion de la NCU: copia, comparacion y cambio. Sin red y sin NCU.
+# Lo que de verdad se prueba aqui es que NO SE PUEDE MANDAR lo que no se pidio
+# mandar, porque una escritura de configuracion va con la red dentro.
+$ErrorActionPreference = 'Stop'
+$fuente = Join-Path (Split-Path $PSScriptRoot -Parent) 'TCU_Toolbox.ps1'
+$tokens = $null; $errores = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($fuente, [ref]$tokens, [ref]$errores)
+if ($errores.Count) { throw "TCU_Toolbox.ps1 con errores de sintaxis: $($errores.Count)" }
+foreach ($n in @('Api-Clonar','Api-Tipo','Api-ListaPlana','Api-Breve','Api-Diferencias','Api-CambioSeguro',
+                 'Api-GrupoEditar','Api-GrupoBandera','Api-Ajuste','Api-TextoCambio','Api-Escribir','Api-GrupoDe')) {
+    $nodos = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $x.Name -eq $n }, $true))
+    if ($nodos.Count -ne 1) { throw "Se esperaba una sola funcion $n (hay $($nodos.Count))" }
+    . ([scriptblock]::Create($nodos[0].Extent.Text))
+}
+$src = Get-Content $fuente -Raw
+foreach ($v in @('$API_INTOCABLE','$API_INTOCABLE_PATRON','$API_COPIA_PROF','$API_BANDERAS','$API_AJUSTES',
+                 '$API_ESCRITURA_CONFIRMADA','$API_ESCRITURA_FALTA','$API_CONFIG','$API_PUERTO')) {
+    $nodo = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.AssignmentStatementAst] -and "$($x.Left)" -eq $v }, $true))
+    if ($nodo.Count -ne 1) { throw "Se esperaba una sola asignacion de $v (hay $($nodo.Count))" }
+    . ([scriptblock]::Create($nodo[0].Extent.Text))
+}
+function Igual($real, $esperado, [string]$que) { if ("$real" -ne "$esperado") { throw "$que : obtenido '$real', esperado '$esperado'" } }
+$datos = Get-Content (Join-Path $PSScriptRoot 'fixture_panel_ncu.json') -Raw | ConvertFrom-Json
+$cfg = $datos.config_data.config
+
+# ---- la copia es INDEPENDIENTE: si no, se compara contra lo ya manoseado ----
+$c = Api-Clonar $cfg
+Igual (@($c.tracker_groups).Count) 3 'la copia trae los grupos'
+$c.tracker_groups[0].trackers = @(99)
+Igual ((@($cfg.tracker_groups[0].trackers) -join ',')) '1,2,3' 'tocar la copia NO toca lo que se leyo de la NCU'
+Igual ($null -eq (Api-Clonar $null)) $true 'clonar nada no revienta'
+
+# ---- las diferencias ----
+Igual (@(Api-Diferencias $cfg (Api-Clonar $cfg)).Count) 0 'una copia identica no difiere en nada'
+$d1 = Api-Clonar $cfg; $d1.tcu_timeout = 900
+$difs = @(Api-Diferencias $cfg $d1)
+Igual $difs.Count 1 'un campo cambiado es una diferencia'
+Igual $difs[0].Ruta 'tcu_timeout' 'con su ruta'
+Igual "$($difs[0].Antes) -> $($difs[0].Ahora)" '600 -> 900' 'y el antes y el despues'
+
+# UNA LISTA DE SEGUIDORES SE COMPARA COMO CONJUNTO, no por posicion: quitar uno
+# del medio corre todos los de detras y por posicion saldrian diez diferencias
+# donde solo ha pasado una cosa.
+$d2 = Api-Clonar $cfg; $d2.tracker_groups[0].trackers = @(1,3)
+$difs2 = @(Api-Diferencias $cfg $d2)
+Igual $difs2.Count 1 'quitar un seguidor es UNA diferencia, no una por posicion'
+Igual $difs2[0].Antes 'quitado: 2' 'y dice cual se ha quitado'
+$d3 = Api-Clonar $cfg; $d3.tracker_groups[0].trackers = @(1,2,3,9)
+Igual ((@(Api-Diferencias $cfg $d3)[0]).Ahora) 'metido: 9' 'y cual se ha metido'
+# en cambio una lista de OBJETOS si va por posicion, que es donde importa
+$d4 = Api-Clonar $cfg; $d4.modbus_networks[1].hsus[1].modbus_id = 211
+Igual ((@(Api-Diferencias $cfg $d4)[0]).Ruta) 'modbus_networks[1].hsus[1].modbus_id' 'una lista de objetos va por posicion'
+# y un texto que solo cambia de mayusculas SI es un cambio
+$d5 = Api-Clonar $cfg; $d5.plant_id = 'elburgo'
+Igual (@(Api-Diferencias $cfg $d5).Count) 1 'un cambio de mayusculas cuenta'
+
+# ================= LA GUARDA: lo que de verdad protege =================
+$g = Api-GrupoEditar $cfg 1 @(2) $false
+Igual $g.ok $true 'se puede sacar un seguidor de un grupo'
+Igual ((@($g.cfg.tracker_groups[0].trackers) -join ',')) '1,3' 'y sale'
+Igual ($g.permitidas -join ',') 'tracker_groups[0].trackers' 'el cambio declara que iba a tocar'
+$s = Api-CambioSeguro $cfg $g.cfg $g.permitidas
+Igual $s.ok $true 'un cambio que toca solo lo que declaro, pasa'
+Igual $s.difs.Count 1 'con su unica diferencia'
+
+# un cambio que toca algo MAS de lo que declaro, no pasa
+$sucio = Api-Clonar $g.cfg
+$sucio.tcu_timeout = 900
+$s2 = Api-CambioSeguro $cfg $sucio $g.permitidas
+Igual $s2.ok $false 'tocar algo que no se declaro NO pasa'
+Igual ($s2.nota -match 'tcu_timeout') $true 'y se dice exactamente que'
+
+# LA RED NO SE TOCA NUNCA, aunque alguien la meta en las permitidas
+$red = Api-Clonar $cfg
+$red.ip_config.ip = '10.100.1.99'
+$s3 = Api-CambioSeguro $cfg $red @('ip_config')
+Igual $s3.ok $false 'la IP de la NCU no se puede cambiar NI pidiendolo'
+Igual ($s3.fuera[0].Ruta -match 'ip_config') $true 'y se nombra'
+$red2 = Api-Clonar $cfg
+$red2.modbus_networks[0].ip = '192.168.0.99'
+Igual ((Api-CambioSeguro $cfg $red2 @('modbus_networks')).ok) $false 'ni la IP de una red Modbus'
+$red3 = Api-Clonar $cfg
+$red3.modbus_networks[0].port = 503
+Igual ((Api-CambioSeguro $cfg $red3 @('modbus_networks')).ok) $false 'ni su puerto'
+# pero los esclavos de dentro SI son configuracion normal
+$esc = Api-Clonar $cfg
+$esc.modbus_networks[0].hsus[0].modbus_id = 229
+Igual ((Api-CambioSeguro $cfg $esc @('modbus_networks')).ok) $true 'un esclavo de dentro si se puede cambiar'
+
+Igual ((Api-CambioSeguro $cfg (Api-Clonar $cfg) @('tcu_timeout')).ok) $false 'sin cambios no hay nada que mandar'
+Igual ((Api-CambioSeguro $cfg (Api-Clonar $cfg) @('tcu_timeout')).nota -match 'ningun cambio') $true 'y se dice'
+
+# ---- meter y sacar de grupos: lo que se rechaza y por que ----
+Igual ((Api-GrupoEditar $cfg 9 @(1) $false).ok) $false 'un grupo que no existe se rechaza'
+Igual ((Api-GrupoEditar $cfg 9 @(1) $false).nota -match 'tiene 3') $true 'diciendo cuantos hay'
+Igual ((Api-GrupoEditar $cfg 1 @() $false).ok) $false 'sin seguidores no se hace nada'
+Igual ((Api-GrupoEditar $cfg 1 @(7) $false).ok) $false 'sacar uno que no esta en ese grupo'
+Igual ((Api-GrupoEditar $cfg 1 @(99) $true).ok) $false 'meter un seguidor que la NCU no tiene configurado'
+Igual ((Api-GrupoEditar $cfg 1 @(99) $true).nota -match 'no existe') $true 'y se dice por que'
+Igual ((Api-GrupoEditar $cfg 1 @(7) $true).ok) $false 'meter uno que ya esta en OTRO grupo'
+Igual ((Api-GrupoEditar $cfg 1 @(7) $true).nota -match 'ya esta en el grupo 3') $true 'diciendo en cual'
+Igual ((Api-GrupoEditar $cfg 1 @(7) $true).nota -match 'regla nuestra') $true 'y que esa regla es nuestra, no de la API'
+Igual ((Api-GrupoEditar $cfg 1 @(1,2,3) $true).ok) $false 'meter los que ya estaban no es un cambio'
+$m = Api-GrupoEditar $cfg 1 @(6) $true
+Igual $m.ok $false 'el 6 no esta configurado en la maqueta tampoco'
+# sacar varios, con uno que no estaba: se hace y se avisa
+$q = Api-GrupoEditar $cfg 1 @(2,7) $false
+Igual $q.ok $true 'sacar varios con uno que no estaba, se hace'
+Igual ($q.nota -match 'no estaban: 7') $true 'y se avisa del que no estaba'
+
+# ---- banderas y ajustes ----
+Igual ((Api-GrupoBandera $cfg 3 'difuso' $true).ok) $false 'poner una bandera a lo que ya vale, no es cambio'
+$b = Api-GrupoBandera $cfg 3 'difuso' $false
+Igual $b.ok $true 'quitar el difuso del grupo 3'
+Igual ($b.permitidas -join ',') 'tracker_groups[2].diffuse_tracking_enable' 'declarando su ruta'
+Igual ((Api-CambioSeguro $cfg $b.cfg $b.permitidas).ok) $true 'y pasa la guarda'
+Igual ((Api-GrupoBandera $cfg 1 'inventada' $true).ok) $false 'una bandera que no se sabe cambiar'
+
+Igual ((Api-Ajuste $cfg 'tcu_interval_ms' 10).ok) $false 'un sondeo de 10 ms no se manda'
+Igual ((Api-Ajuste $cfg 'tcu_interval_ms' 10).nota -match '250') $true 'y se dice el rango'
+Igual ((Api-Ajuste $cfg 'tcu_timeout' 5).ok) $false 'ni un timeout de 5 s'
+Igual ((Api-Ajuste $cfg 'tcu_timeout' 'ocho').ok) $false 'ni algo que no es un numero'
+Igual ((Api-Ajuste $cfg 'tcu_timeout' 600).ok) $false 'ni el valor que ya tiene'
+Igual ((Api-Ajuste $cfg 'inventado' 1).ok) $false 'ni un campo que no se sabe cambiar'
+$a = Api-Ajuste $cfg 'tcu_timeout' 900
+Igual $a.ok $true 'un timeout razonable si'
+Igual ((Api-CambioSeguro $cfg $a.cfg $a.permitidas).ok) $true 'y pasa la guarda'
+$w = Api-Ajuste $cfg 'modbus_enable_writing' $false
+Igual $w.ok $true 'la escritura Modbus se puede desmarcar desde aqui'
+
+# ---- el texto de confirmar ensena TODO lo que cambia ----
+$t = Api-TextoCambio '2' 'Sacar el seguidor 2 del grupo 1' $s.difs 'C:\x\copia.json'
+Igual ($t -match 'tracker_groups\[0\]\.trackers') $true 'la ventana nombra lo que cambia'
+Igual ($t -match 'quitado: 2') $true 'y que se quita'
+Igual ($t -match 'ENTERA') $true 'avisa de que se manda la configuracion entera'
+Igual ($t -match 'copia\.json') $true 'y dice donde quedo la copia'
+Igual ($t -match 'se relee y se compara') $true 'y que se verifica despues'
+
+# ============ Y LO MAS IMPORTANTE: NO SALE A LA RED ============
+# No basta con que $API_ESCRITURA_CONFIRMADA sea $false en el fuente: se espia
+# el cliente HTTP y se exige que no se le llame. Una precaucion que no se
+# comprueba es una intencion.
+Igual $API_ESCRITURA_CONFIRMADA $false 'la escritura va desarmada'
+$script:llamadas = 0
+function Invoke-RestMethod { $script:llamadas++; throw 'el banco no deja salir a la red' }
+$e = Api-Escribir '10.100.1.56' $null $cfg 5000
+Igual $e.ok $false 'desarmada, no escribe'
+Igual $script:llamadas 0 'y NO llega a llamar al cliente HTTP'
+Igual ($e.nota -match 'DESARMADA') $true 'lo dice'
+Igual ($e.nota -match 'DevTools') $true 'y dice exactamente que hace falta para armarla'
+Igual ($API_ESCRITURA_FALTA.Length -gt 80) $true 'con instrucciones de verdad, no un "pendiente"'
+
+# el extremo peligroso existe en UN solo sitio, y es el bloque desarmado
+$usos = @([regex]::Matches($src, [regex]::Escape('/private_api/config')))
+Igual $usos.Count 1 'el extremo de configuracion aparece una sola vez'
+$ponPut = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.CommandAst] }, $true) |
+            Where-Object { "$($_.GetCommandName())" -match '^Invoke-(RestMethod|WebRequest)$' -and "$($_.Extent.Text)" -match 'Method Put' })
+Igual $ponPut.Count 1 'y hay exactamente una escritura, la suya'
+Igual (@($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.CommandAst] }, $true) |
+         Where-Object { "$($_.Extent.Text)" -match 'private_api/(ota|commands)' }).Count) 0 'ni firmware ni reinicio'
+
+Write-Host 'test_panel_cfg.ps1: OK'

@@ -158,6 +158,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
           powershell -NoProfile -File test_panel_ncu.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_panel_cfg.ps1 ──'
+          pwsh -NoProfile -File test_panel_cfg.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_panel_cfg.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
           Write-Host '── test_panel_ncu_red.ps1 (contra la maqueta de la API) ──'
           pwsh -NoProfile -File test_panel_ncu_red.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }

@@ -235,18 +235,23 @@ Igual ($txtSin -match 'no se sabe') $true 'sin alcance sigue admitiendolo, que e
 Igual ($src.Contains('Gr-Alcance $script:ApiUltimo $script:GrNcus $bits')) $true 'y el boton de grupos lo pasa'
 Igual ($src.Contains('Gr-AvisoEscritura $script:ApiUltimo $script:GrNcus')) $true 'junto con el aviso de escritura'
 
-# ---- SOLO LEE: ni un verbo de escritura contra la API ----
-# Por esta API se puede reescribir la configuracion ENTERA de la NCU, red
-# incluida, de un solo PUT. Que no haya ni una llamada de esas no es algo que se
-# deje a la vista: se comprueba.
+# ---- EL CAMINO DE LECTURA SIGUE SIENDO DOS LLAMADAS ----
+# Esto decia "solo lee" y dejo de ser verdad cuando entro la escritura de
+# configuracion (v11.96), asi que se ha reescrito en vez de aflojarse: lo que se
+# exige ahora es que la LECTURA no haya crecido -el login y el volcado, y nada
+# mas- y que lo unico que escribe sea el bloque de configuracion, que va
+# desarmado y tiene sus propias guardas en test_panel_cfg.ps1.
 $llamadas = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.CommandAst] }, $true) |
               Where-Object { "$($_.GetCommandName())" -match '^Invoke-(RestMethod|WebRequest)$' })
-$dePanel = @($llamadas | Where-Object { "$($_.Extent.Text)" -match 'API_AUTH|API_DATOS|private_api' })
-Igual $dePanel.Count 2 'contra el panel hay exactamente dos llamadas: el login y la lectura'
-Igual (@($dePanel | Where-Object { "$($_.Extent.Text)" -match "Method Post" }).Count) 1 'una sola POST, la del login'
-Igual (@($dePanel | Where-Object { "$($_.Extent.Text)" -match "Method (Put|Patch|Delete)" }).Count) 0 'ni un PUT, PATCH o DELETE'
-Igual ($src -match '/private_api/config') $false 'y el extremo que reescribe la NCU entera no aparece ni escrito'
-Igual ($src -match 'private_api/(ota|commands)') $false 'ni el de firmware ni el de reinicio'
+$dePanel = @($llamadas | Where-Object { "$($_.Extent.Text)" -match 'API_AUTH|API_DATOS|API_CONFIG|private_api' })
+$deLectura = @($dePanel | Where-Object { "$($_.Extent.Text)" -match 'API_AUTH|API_DATOS' })
+Igual $deLectura.Count 2 'leer el panel siguen siendo dos llamadas: el login y el volcado'
+Igual (@($deLectura | Where-Object { "$($_.Extent.Text)" -match "Method Post" }).Count) 1 'una sola POST, la del login'
+Igual (@($deLectura | Where-Object { "$($_.Extent.Text)" -match "Method (Put|Patch|Delete)" }).Count) 0 'y ninguna escritura en el camino de lectura'
+Igual $dePanel.Count 3 'contra el panel hay TRES llamadas en total: login, volcado y la configuracion desarmada'
+Igual ($src -match 'private_api/(ota|commands)') $false 'ni el extremo de firmware ni el de reinicio'
+# y la escritura que existe no puede salir por descuido
+Igual ($src -match '\$API_ESCRITURA_CONFIRMADA = \$false') $true 'la escritura de configuracion va desarmada'
 
 # la contrasena no se guarda en ningun sitio que sobreviva a cerrar la ventana
 Igual ($src -match 'txtPANPass[^
