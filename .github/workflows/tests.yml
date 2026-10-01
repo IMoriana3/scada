@@ -35,8 +35,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Instalar PyYAML
-        run: pip install pyyaml
+      # openpyxl lo necesitan test_ip_gateway.py y test_tramos.py: el modo Excel
+      # de make_plantas.py lee la hoja «Direcciones IP» y esas dos le fabrican
+      # una. Falto en la primera pasada de este job y por eso nacio en rojo.
+      - name: Instalar dependencias
+        run: pip install pyyaml openpyxl
       - name: Ficheros de planta de la toolbox
         working-directory: tools/tcu-toolbox
         run: |
