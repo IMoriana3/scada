@@ -4,6 +4,44 @@
 
 Es el complemento de **escritura** del SCADA de este repo: el SCADA es solo-lectura a propósito; cuando hay que *cambiar* algo en un TCU (configuración, reloj, NVM) se usa esta toolbox desde el portátil conectado a la LAN de planta.
 
+### El gateway como equipo propio del Diagnóstico (v12.7)
+
+Lo pidió Iñaki el 02/10/2026: *"los GW los metería en la columna de la izquierda,
+como elemento propio como NCU, TCU, HSU y repetidor; y permitiría ver FW, ver
+estados y reiniciar desde ahí"*. Hasta aquí los datos del Digi colgaban de la
+fila de la NCU como campos `GW1_CPU_pct`, `GW2_Modelo`… y el gateway **no existía
+como equipo**.
+
+**Ahora es una fila más del Diagnóstico**, debajo de su NCU: `GW1` / `GW2` en la
+columna de equipo, su número en la columna GW, y en la nota el firmware, el
+modelo y la carga. Tiene su bloque **GATEWAYS** en el árbol de la izquierda (con
+la vista *solo gateways* y el acceso a *Identificar / reiniciar*), cuenta aparte
+en el resumen (*Gateways: 4 (4 OK)*) y, al seleccionarla, el panel lateral y el
+diálogo de detalle ofrecen **Identificar gateway** y **Reiniciar gateway** — el
+mismo flujo que el botón de Inventario, con la guardia de viento mirada en *su*
+NCU y la comprobación por uptime.
+
+**La salud sale de lo único que se le puede preguntar a un Digi.** No contestar
+por RCI es **ALARMA** (un gateway apagado o sin red deja a todas sus TCUs fuera del
+alcance de la NCU); la CPU alta es **AVISO**, y contestar sin que se reconozca nada
+también, porque no se puede decir que esté bien. Nunca OFFLINE: ese estado es de
+las TCUs.
+
+**La fila tiene exactamente la forma de la fila de la NCU**, con los campos del
+Digi añadidos (`IP_gw`, `Modelo`, `MAC`, `FW`, `CPU_pct`, `Mem_pct`, `Uptime_s`,
+`TCUs_gw`), así que Operación, el CSV y el informe no se enteran. Los campos
+`GWn_*` colgados de la NCU **se mantienen**: el SCADA y el Seguimiento PEM los leen
+del JSON.
+
+**Dos arreglos que salieron al hacerlo:**
+- En **Operación**, la NCU y el gateway **son el origen**: no tienen "edad de
+  origen" que desconocer. Salían siempre como `EDAD DE ORIGEN DESCONOCIDA` y toda
+  la pestaña parecía dudosa.
+- La fila de la NCU en **conexión a una sola NCU** se pintaba corrida una columna
+  (la salud bajo *TCU*, la nota bajo *Edad s*) hasta que un filtro la repintaba
+  bien. Tenía nueve subelementos para diez columnas. El barrido de planta ya iba
+  bien.
+
 ### Todas las plantas saben ya la IP de sus Digi (v12.6)
 
 `IDENTIFICAR GATEWAYS` decía en Ayora *"ninguno de los 16 gateways declarados trae

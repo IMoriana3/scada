@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '12.6'
+$VERSION_TOOLBOX = '12.7'
 # La etiqueta va en el titulo de la ventana: es lo que mira alguien en campo
 # para saber QUE MAPA da por bueno la herramienta. Decia R7.1 desde la v11.86,
 # que es cuando entraron registros que solo existen en el R8 (40030-40039, el
@@ -3708,6 +3708,15 @@ function Gw-Anotar($fila, [hashtable]$campos) {
 # en la tabla y como bloque `gateways` aparte en el JSON, nunca entre las TCUs
 # (Plan-Firmware y el Seguimiento PEM hacen [int] de la columna TCU).
 
+# Cuantas TCUs cuelgan de un tramo, o $null si no se sabe: es lo que el texto
+# de confirmar el reinicio dice que se queda sin posicion segura. Pura.
+function Gw-CuantasTcus($ini, $fin) {
+    $a = 0; $b = 0
+    if (-not [int]::TryParse("$ini", [ref]$a) -or -not [int]::TryParse("$fin", [ref]$b)) { return $null }
+    if ($b -lt $a) { return $null }
+    return ($b - $a + 1)
+}
+
 # Los gateways de UNA conexion como lista {ncu, nGw, ip}: con 'auto' los de la
 # NCU (gws); con puerto fijo, el de ese puerto y su ip_gw. Sin nulos: con
 # puerto fijo gws es $null, y @($null) en PS 5.1 es una lista de uno, que el
@@ -3715,9 +3724,9 @@ function Gw-Anotar($fila, [hashtable]$campos) {
 function Gws-DeCx($cx) {
     $l = @()
     if ($cx.gws) {
-        foreach ($g in @($cx.gws)) { if ($g) { $l += ,@{ncu = ''; nGw = (Gw-Numero ([int]$g.puerto)); ip = "$($g.ip_gw)".Trim()} } }
+        foreach ($g in @($cx.gws)) { if ($g) { $l += ,@{ncu = ''; nGw = (Gw-Numero ([int]$g.puerto)); ip = "$($g.ip_gw)".Trim(); tcus = (Gw-CuantasTcus $g.ini $g.fin)} } }
     } elseif ("$($cx.puerto)" -match '^\d+$') {
-        $l += ,@{ncu = ''; nGw = (Gw-Numero ([int]$cx.puerto)); ip = "$($cx.ip_gw)".Trim()}
+        $l += ,@{ncu = ''; nGw = (Gw-Numero ([int]$cx.puerto)); ip = "$($cx.ip_gw)".Trim(); tcus = (Gw-CuantasTcus $cx.ini $cx.fin)}
     }
     return @($l)
 }
@@ -3732,7 +3741,7 @@ function Gws-Objetivos-Topologia($gws) {
     foreach ($g in @($gws)) {
         if (-not $g) { continue }
         $ip = "$($g.ip_gw)".Trim(); if ($ip -eq '') { continue }
-        $l += ,@{ncu = ''; nGw = (Gw-Numero ([int]$g.puerto)); ip = $ip}
+        $l += ,@{ncu = ''; nGw = (Gw-Numero ([int]$g.puerto)); ip = $ip; tcus = (Gw-CuantasTcus $g.ini $g.fin)}
     }
     return @(Gw-Objetivos $l '')
 }
@@ -3779,6 +3788,43 @@ function Diag-NotaNcu($dn) {
     if ($g -eq '') { return $a }
     if ($a -eq '') { return $g }
     return "$a  |  $g"
+}
+
+# LA FILA DEL GATEWAY EN EL DIAGNOSTICO. Lo pidio Inaki el 02/10/2026: el
+# gateway como elemento propio, al lado de NCU, TCU, HSU y repetidor, y no como
+# un punado de campos colgados de la fila de la NCU. Misma forma que la fila de
+# la NCU (Diag-FilaNcu) para que Operacion, el CSV y el informe no se enteren,
+# y encima los campos del Digi -IP, modelo, MAC, firmware, carga- con su nombre.
+#
+# La salud sale de lo unico que se le puede preguntar a un Digi: si contesta y
+# como va de CPU. No contestar es ALARMA -un gateway apagado o sin red deja a
+# todas sus TCUs fuera del alcance de la NCU-, la CPU alta es AVISO, y contestar
+# sin que se reconozca nada tambien, porque no se puede decir que este bien.
+# Nunca OFFLINE: ese estado es de las TCUs y Diag-OffPorNcu lo cuenta. Pura.
+function Diag-FilaGw([string]$ncu, [int]$nGw, [string]$ip, $lect, $tcus = $null) {
+    $c = $(if ($lect -and $lect.ok -and $lect.carga -and $lect.carga.ok) { $lect.carga } else { $null })
+    $i = $(if ($lect -and $lect.ok -and $lect.ident) { $lect.ident } else { @{} })
+    $linea = Gw-Linea $nGw $ip $lect
+    $nota = $linea -replace '^GW\d+ \S+: ', ''
+    if (-not $lect -or -not $lect.ok) {
+        $salud = 'ALARMA'; $nota = 'sin respuesta por RCI (puerto 80): apagado, sin red, o pide usuario y contrasena'
+    } elseif ($null -eq $c -and "$($i['fw'])" -eq '' -and "$($i['producto'])" -eq '') {
+        $salud = 'AVISO'
+    } elseif ($c -and $c.cpu -ge $GW_CPU_ALTA) {
+        $salud = 'AVISO'; $nota = "CPU alta: $nota"
+    } else {
+        $salud = 'OK'
+    }
+    return [pscustomobject]@{
+        NCU=$ncu; GW="$nGw"; TCU="GW$nGw"; Salud=$salud; Modo='-'
+        Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''
+        Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''; Edad_s=''
+        Alarmas=$nota
+        main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
+        IP_gw=$ip; Modelo="$($i['producto'])"; MAC="$($i['mac'])"; FW="$($i['fw'])"; Boot="$($i['boot'])"
+        CPU_pct=$(if ($c) { $c.cpu } else { $null }); Mem_pct=$(if ($c) { Gw-MemPct $c } else { $null })
+        Uptime_s=$(if ($c) { $c.uptime } else { $null }); TCUs_gw=$tcus
+    }
 }
 
 # La fila de un gateway en el inventario (bloque `gateways` del JSON). Pura.
@@ -4305,6 +4351,9 @@ function Fila-Tipo($f) {
     if ($t -eq 'NCU') { return 'NCU' }
     if ($t -like 'HSU*' -or $t -like 'RSU*') { return 'HSU' }
     if ($t -match '^\d+$') { return 'TCU' }
+    # el gateway, desde la v12.7: antes sus datos colgaban de la fila de la NCU
+    # como campos y no existia como equipo; ahora es fila propia, como la HSU
+    if ($t -match '^GW\d+$') { return 'GW' }
     return 'REP'
 }
 
@@ -4316,6 +4365,7 @@ function Diag-NivelNombre([string]$n) {
         'NCU' { return 'solo NCUs' }
         'HSU' { return 'solo HSUs' }
         'REP' { return 'solo repetidores' }
+        'GW'  { return 'solo gateways' }
         'TCU' { return 'solo TCUs' }
         default { return 'todo' }
     }
@@ -12280,6 +12330,7 @@ function Diag-Correr {
     }
     $nOk = 0; $nAviso = 0; $nAlarma = 0; $nOff = 0
     $nHOk = 0; $nHMal = 0        # las HSUs van aparte de la cuenta de TCUs
+    $nGwOk = 0; $nGwMal = 0      # y los gateways tambien (v12.7)
     $nDiagTot = 0; foreach ($tr in $trabajos) { $nDiagTot += @($tr.tcus).Count }
     Prog-Iniciar $nDiagTot
     # Planta completa por el bloque compacto: cada NCU es una conexion propia y
@@ -12302,7 +12353,7 @@ function Diag-Correr {
                 # dato. El barrido en serie ya lo hacia; el paralelo no, y es el
                 # modo por defecto.
                 $dnP = Diag-FilaNcu $eti $(if ($o) { $o.salud } else { $null }) $(if ($o) { "$($o.error)" } else { "$($r.error)" })
-                Diag-AnotarGws $dnP (Gws-Objetivos-Topologia $r.tarea.gws) ([int]$r.tarea.to)
+                $gwsP = @(Diag-AnotarGws $dnP (Gws-Objetivos-Topologia $r.tarea.gws) ([int]$r.tarea.to))
                 $itemNP = New-Object System.Windows.Forms.ListViewItem($eti)
                 foreach ($c in @('', $dnP.TCU, $dnP.Salud, $dnP.Modo, '', '', '', '', '', (Diag-NotaNcu $dnP))) { [void]$itemNP.SubItems.Add("$c") }
                 switch ("$($dnP.Salud)") {
@@ -12312,6 +12363,12 @@ function Diag-Correr {
                 }
                 $lvG.Items.Add($itemNP) | Out-Null
                 $script:UltimoDiag += $dnP
+                # los gateways, debajo de su NCU y como equipo propio
+                foreach ($fg in $gwsP) {
+                    $lvG.Items.Add((Diag-ItemGw $fg)) | Out-Null
+                    $script:UltimoDiag += $fg
+                    if ("$($fg.Salud)" -eq 'OK') { $nGwOk++ } else { $nGwMal++ }
+                }
                 if ("$($dnP.Salud)" -ne 'OK') { Con ("NCU{0}  {1,-8} {2}" -f $eti, $dnP.Salud, $dnP.Alarmas) ([System.Drawing.Color]::Orange) }
                 if ($null -eq $o -or "$($o.error)" -ne '') {
                     $msg = $(if ($o) { "$($o.error)" } else { "$($r.error)" })
@@ -12369,9 +12426,14 @@ function Diag-Correr {
         # El reloj solo se menciona si de verdad esta desviado (Reloj-Nota):
         # colgado de cada fila parecia un problema y no lo era.
         $dn = Diag-FilaNcu "$($tr.ncu)" $ns $nsErr
-        Diag-AnotarGws $dn (Gws-Objetivos-Cx $tr.cx) ([int]$tr.cx.to)
+        $gwsN = @(Diag-AnotarGws $dn (Gws-Objetivos-Cx $tr.cx) ([int]$tr.cx.to))
         $itemN = New-Object System.Windows.Forms.ListViewItem("$($tr.ncu)")
-        foreach ($c in @($dn.TCU, $dn.Salud, $dn.Modo, $dn.Tilt, $dn.Objetivo, $dn.Dif, $dn.SoC, '', (Diag-NotaNcu $dn))) { [void]$itemN.SubItems.Add("$c") }
+        # DIEZ subelementos, como las demas filas: esta linea tenia nueve y la
+        # fila de la NCU salia corrida una columna a la izquierda -la salud bajo
+        # TCU, la nota bajo 'Edad s'- hasta que se tocaba un filtro y
+        # Diag-Refrescar la repintaba bien. Solo en conexion a una NCU; el
+        # barrido de planta ya iba bien. Visto al meter los gateways (v12.7).
+        foreach ($c in @('', $dn.TCU, $dn.Salud, $dn.Modo, '', '', '', '', '', (Diag-NotaNcu $dn))) { [void]$itemN.SubItems.Add("$c") }
         switch ($dn.Salud) {
             'OK'     { $itemN.ForeColor = [System.Drawing.Color]::DarkGreen }
             'AVISO'  { $itemN.ForeColor = [System.Drawing.Color]::DarkOrange }
@@ -12379,6 +12441,11 @@ function Diag-Correr {
         }
         $lvG.Items.Add($itemN) | Out-Null
         $script:UltimoDiag += $dn
+        foreach ($fg in $gwsN) {
+            $lvG.Items.Add((Diag-ItemGw $fg)) | Out-Null
+            $script:UltimoDiag += $fg
+            if ("$($fg.Salud)" -eq 'OK') { $nGwOk++ } else { $nGwMal++ }
+        }
         if ($dn.Salud -ne 'OK') { Con ("NCU{0}  {1,-8} {2}" -f $tr.ncu, $dn.Salud, $dn.Alarmas) ([System.Drawing.Color]::Orange) }
         [System.Windows.Forms.Application]::DoEvents()
     }
@@ -12598,6 +12665,7 @@ function Diag-Correr {
     Cierre-Guardar (Nombre-Planta); Cierre-Pintar
     $lblGResumen.Text = "TCUs -> OK: $nOk  Aviso: $nAviso  Alarma: $nAlarma  Off: $nOff" +
         $(if (($nHOk + $nHMal) -gt 0) { "   |   HSUs: $($nHOk + $nHMal) ($nHOk OK)" } else { '' }) +
+        $(if (($nGwOk + $nGwMal) -gt 0) { "   |   Gateways: $($nGwOk + $nGwMal) ($nGwOk OK)" } else { '' }) +
         $(if ($reps.Count -gt 0) { "   |   Repetidores: $($reps.Count) ($nROk OK)" } else { '' })
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     # Un OFFLINE no vale lo mismo que otro: los de una NCU que no contesta por la
@@ -12738,6 +12806,24 @@ function Diag-PrepararAccion($destino, [string]$accion) {
     }
     Con "Accion preparada desde diagnostico: NCU$($destino.ncu) / $($destino.tipo) $($destino.tcu) / $($destino.ip):$($destino.puerto). Revisa y ejecuta en la pantalla de destino." ([Drawing.Color]::SteelBlue)
 }
+# LAS ACCIONES DE UNA FILA DE GATEWAY, para el dialogo de detalle y para el
+# panel lateral: las dos ventanas ofrecen lo mismo y despachan por aqui. Lo que
+# se le puede pedir a un Digi: identificarlo (modelo, firmware, carga) y
+# reiniciarlo, con los mismos frenos que el boton de Inventario. $true si la
+# accion era de gateway (y ya esta hecha o explicada), $false si no es cosa suya.
+function Diag-AccionGw($fila, $destino, [string]$accion) {
+    if ($accion -ne 'Identificar gateway' -and $accion -ne 'Reiniciar gateway') { return $false }
+    $gwFila = @{ncu = "$($fila.NCU)"; nGw = [int]("0" + "$($fila.GW)"); ip = "$($fila.IP_gw)"; tcus = $fila.TCUs_gw}
+    if ("$($gwFila.ip)" -eq '') { Con 'Esta fila de gateway no trae la IP del Digi: repite el diagnostico.' ([System.Drawing.Color]::Orange); return $true }
+    if ($accion -eq 'Identificar gateway') {
+        Lanzar { Con ('=' * 96) ([System.Drawing.Color]::SteelBlue); [void](Gw-IdentificarUno $gwFila ([int]$destino.to) (Gw-CredencialUI)) }
+    } else {
+        # el viento se mira en LA NCU de este gateway, que es la que lo tiene
+        Lanzar { Gw-ReiniciarFlujo $gwFila @{ip = "$($destino.ip)"; multi = $null; to = $destino.to} }
+    }
+    return $true
+}
+
 function Diag-Acciones($tag=$null) {
     if($script:Ocupado){return}
     if(-not $tag){if($lvG.SelectedItems.Count -ne 1){return};$tag=$lvG.SelectedItems[0].Tag}
@@ -12757,13 +12843,15 @@ function Diag-Acciones($tag=$null) {
         $destino=Diag-Objetivo $fila $tag.trabajos
         $acciones=@('Diagnostico NCU','Estaciones meteo')
         if($destino.tipo -eq 'TCU'){$acciones=@('Leer variables','Configurar variables','Copia de seguridad','Modo / alarmas / stow','Receta secuencial')}
-        $acciones+=@('Historico CSV')
+        # el gateway (v12.7): lo que se le puede pedir a un Digi y nada mas; sin
+        # historico CSV, que es de las TCUs. El login del Digi es el de Inventario.
+        if($destino.tipo -eq 'GW'){$acciones=@('Identificar gateway','Reiniciar gateway')} else {$acciones+=@('Historico CSV')}
         foreach($a in $acciones){
             $b=Sec-Boton $barra $a
             $b.Add_Click({$d.Tag=$a;$d.DialogResult='OK';$d.Close()}.GetNewClosure())
         }
     }catch{$detalle.Text+="`r`n`r`n$_"}
-    try { if($d.ShowDialog($form) -eq 'OK'){if($d.Tag -eq 'Historico CSV'){Hist-Abrir $tag}else{Diag-PrepararAccion $destino "$($d.Tag)"}} } finally {$d.Dispose()}
+    try { if($d.ShowDialog($form) -eq 'OK'){if($d.Tag -eq 'Historico CSV'){Hist-Abrir $tag}elseif(Diag-AccionGw $fila $destino "$($d.Tag)"){}else{Diag-PrepararAccion $destino "$($d.Tag)"}} } finally {$d.Dispose()}
 }
 # Diagnostico SOLO de las estaciones meteo. Las HSUs viven en un bloque aparte
 # de la NCU (30200+, diez huecos): UNA lectura por NCU. Diagnosticar las diez de
@@ -14738,12 +14826,17 @@ function Gw-Leer([string]$ip, [int]$to, $cred = $null) {
 }
 
 # En el barrido de diagnostico: los gateways de la NCU, colgados de su fila.
+# Desde la v12.7 ADEMAS devuelve una fila por gateway (Diag-FilaGw), que el
+# barrido pinta debajo de la NCU y mete en el diagnostico como equipo propio.
+# Los campos GWn_* colgados de la NCU se mantienen: el SCADA y el Seguimiento
+# PEM los leen del JSON y no tienen por que enterarse del cambio.
 function Diag-AnotarGws($dn, $objetivos, [int]$to) {
-    $lineas = @()
+    $lineas = @(); $filas = @()
     foreach ($g in @($objetivos)) {
         if ($script:Cancelar) { break }
         $l = Gw-Leer $g.ip $to (Gw-CredencialUI)
         [void](Gw-Anotar $dn (Gw-Campos $g.nGw $g.ip $l))
+        $filas += ,(Diag-FilaGw "$($dn.NCU)" ([int]$g.nGw) "$($g.ip)" $l $(if ($g.ContainsKey('tcus')) { $g.tcus } else { $null }))
         $linea = Gw-Linea $g.nGw $g.ip $l
         $lineas += $linea
         $col = $(if (-not $l.ok) { [System.Drawing.Color]::Salmon }
@@ -14752,6 +14845,20 @@ function Diag-AnotarGws($dn, $objetivos, [int]$to) {
         Con "   $linea" $col
     }
     if ($lineas.Count -gt 0) { $dn | Add-Member -NotePropertyName Gateways -NotePropertyValue ($lineas -join '; ') -Force }
+    return @($filas)
+}
+
+# La fila del gateway en la tabla del Diagnostico, con el mismo reparto de
+# columnas que las demas (GW, TCU, Salud, Modo, ..., Alarmas).
+function Diag-ItemGw($fg) {
+    $item = New-Object System.Windows.Forms.ListViewItem("$($fg.NCU)")
+    foreach ($c in @($fg.GW, $fg.TCU, $fg.Salud, $fg.Modo, '', '', '', '', '', $fg.Alarmas)) { [void]$item.SubItems.Add("$c") }
+    switch ("$($fg.Salud)") {
+        'OK'     { $item.ForeColor = [System.Drawing.Color]::DarkGreen }
+        'AVISO'  { $item.ForeColor = [System.Drawing.Color]::DarkOrange }
+        'ALARMA' { $item.ForeColor = [System.Drawing.Color]::Firebrick }
+    }
+    return $item
 }
 
 # La carga del gateway: primero device_stats; si no se reconoce, TODO el estado
@@ -14767,22 +14874,10 @@ function Gw-Carga-Leer([string]$ip, [int]$to, $cred = $null) {
     return @{ok = $false; carga = $null; consulta = ''; crudo = ("$t1`n$t2").Trim()}
 }
 
-$btnIGGwReinicio.Add_Click({ Lanzar {
-    $cx = Params-Conexion
-    # los gateways de la conexion con lo que cuelga de cada uno, para el texto
-    $gws = @()
-    if ($cx.multi) {
-        foreach ($n in $cx.multi) { foreach ($g in @($n.gws)) { if ($g) {
-            $gws += ,@{ncu = "$($n.ncu)"; nGw = (Gw-Numero ([int]$g.puerto)); ip = "$($g.ip_gw)".Trim(); tcus = ([int]$g.fin - [int]$g.ini + 1)} } } }
-    } elseif ($cx.gws) {
-        foreach ($g in @($cx.gws)) { if ($g) {
-            $gws += ,@{ncu = (Ncu-DeNombre $cx.nombre); nGw = (Gw-Numero ([int]$g.puerto)); ip = "$($g.ip_gw)".Trim(); tcus = ([int]$g.fin - [int]$g.ini + 1)} } }
-    } elseif ("$($cx.puerto)" -match '^\d+$') {
-        $gws += ,@{ncu = (Ncu-DeNombre $cx.nombre); nGw = (Gw-Numero ([int]$cx.puerto)); ip = "$($cx.ip_gw)".Trim(); tcus = ([int]$cx.fin - [int]$cx.ini + 1)}
-    }
-    $o = Gw-ObjetivoReinicio $gws $txtIGGwIp.Text
-    if (-not $o.ok) { Con "NO se reinicia: $($o.nota)." ([System.Drawing.Color]::Orange); return }
-    $gw = $o.gw
+# EL FLUJO DE REINICIAR UN GATEWAY, separado del boton para que el Diagnostico
+# lo pueda lanzar desde la fila del gateway (v12.7). $gw es {ncu, nGw, ip,
+# tcus}; $cx da las NCUs a las que mirar el viento y el timeout.
+function Gw-ReiniciarFlujo($gw, $cx) {
     $clave = $(if ("$($gw.ncu)" -eq '?' -or "$($gw.ncu)" -eq '') { "GW $($gw.ip) (IP a mano)" } else { "NCU$($gw.ncu) GW$($gw.nGw) $($gw.ip)" })
     $cred = Gw-CredencialUI
     $to = [int]$cx.to
@@ -14859,7 +14954,84 @@ $btnIGGwReinicio.Add_Click({ Lanzar {
         Con "${clave}: $($ver.nota) (tras $segs s)." $color
         if (-not $ver.tarda) { Con 'Compruebalo antes de irte.' ([System.Drawing.Color]::Firebrick) }
     }
+}
+
+$btnIGGwReinicio.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    # los gateways de la conexion con lo que cuelga de cada uno, para el texto
+    $gws = @()
+    if ($cx.multi) {
+        foreach ($n in $cx.multi) { foreach ($g in @($n.gws)) { if ($g) {
+            $gws += ,@{ncu = "$($n.ncu)"; nGw = (Gw-Numero ([int]$g.puerto)); ip = "$($g.ip_gw)".Trim(); tcus = ([int]$g.fin - [int]$g.ini + 1)} } } }
+    } elseif ($cx.gws) {
+        foreach ($g in @($cx.gws)) { if ($g) {
+            $gws += ,@{ncu = (Ncu-DeNombre $cx.nombre); nGw = (Gw-Numero ([int]$g.puerto)); ip = "$($g.ip_gw)".Trim(); tcus = ([int]$g.fin - [int]$g.ini + 1)} } }
+    } elseif ("$($cx.puerto)" -match '^\d+$') {
+        $gws += ,@{ncu = (Ncu-DeNombre $cx.nombre); nGw = (Gw-Numero ([int]$cx.puerto)); ip = "$($cx.ip_gw)".Trim(); tcus = ([int]$cx.fin - [int]$cx.ini + 1)}
+    }
+    $o = Gw-ObjetivoReinicio $gws $txtIGGwIp.Text
+    if (-not $o.ok) { Con "NO se reinicia: $($o.nota)." ([System.Drawing.Color]::Orange); return }
+    Gw-ReiniciarFlujo $o.gw $cx
 } })
+
+# IDENTIFICAR UN GATEWAY: identidad y carga, con los volcados crudos cuando no
+# se reconoce algo. Separado del boton para que el Diagnostico lo lance desde
+# la fila del gateway (v12.7). Devuelve @{ident; carga} con si se reconocio.
+function Gw-IdentificarUno($g, [int]$to, $cred) {
+    $okId = $false; $okCarga = $false
+    $r = Gw-Identidad $g.ip $to $cred
+    $clave = $(if ("$($g.ncu)" -eq '?') { 'GW (IP a mano)' } else { "NCU$($g.ncu) GW$($g.nGw)" })
+    if ($r.ok) {
+        $okId = $true
+        Con ("{0}  {1}  ->  {2}  MAC {3}  FW {4}  boot {5}  POST {6}  HW {7}  PAN {8}  canal {9}   (por '{10}')" -f $clave, $g.ip,
+             $r.ext.producto, $r.ext.mac, $r.ext.fw, $r.ext.boot, $r.ext.post, $r.ext.hw, $r.ext.pan, $r.ext.canal, $r.consulta) ([System.Drawing.Color]::LightGreen)
+        foreach ($f in @($script:UltimoInvG)) {
+            if ("$($f.Tipo)" -eq 'GW' -and "$($f.NCU)" -eq "$($g.ncu)" -and "$($f.GW)" -eq "$($g.nGw)") {
+                $f.MAC = "$($r.ext.mac)"; $f.FW = "$($r.ext.fw)"; $f.FW_fabrica = "$($r.ext.boot)"; $f.HW = "$($r.ext.hw)"
+                $f.Nota = (Gw-NotaIdentidad $r.ext) + "$($f.Nota)"
+                [void](Gw-Anotar $f @{IP_gw = $g.ip; Modelo = $r.ext.producto; Boot = $r.ext.boot; POST = $r.ext.post
+                                      ProductId = $r.ext.pid; PAN = $r.ext.pan; Canal = $r.ext.canal})
+            }
+        }
+    } else {
+        Con "$clave  $($g.ip): no se ha reconocido la identidad en la respuesta." ([System.Drawing.Color]::Salmon)
+    }
+    # con un campo que falte se vuelca TODO lo que contesto, consulta por
+    # consulta: es lo que dice como se llama de verdad lo que falta
+    if (-not $r.completo) {
+        if (@($r.crudos).Count -gt 0) {
+            Con "  --- respuesta cruda, para saber que consulta hay que hacer de verdad ---" ([System.Drawing.Color]::Gainsboro)
+            foreach ($c in @($r.crudos)) { Con ("  [{0}]  {1}" -f $c.n, ("$($c.xml)" -replace '\s+', ' ')) ([System.Drawing.Color]::Gainsboro) }
+        } else {
+            Con "  el gateway no ha contestado en el puerto 80 (o pide usuario y contrasena)." ([System.Drawing.Color]::Gainsboro)
+        }
+    }
+    # la carga del propio Digi, aparte de la identidad: puede salir una sin la otra
+    $k = Gw-Carga-Leer $g.ip $to $cred
+    if ($k.ok) {
+        $okCarga = $true
+        $res = Gw-CargaResumen $k.carga
+        $col = $(if ($k.carga.cpu -ge $GW_CPU_ALTA) { [System.Drawing.Color]::Orange } else { [System.Drawing.Color]::LightGreen })
+        Con ("{0}  {1}  ->  {2}   (por '{3}')" -f $clave, $g.ip, $res, $k.consulta) $col
+        foreach ($f in @($script:UltimoInvG)) {
+            if ("$($f.Tipo)" -eq 'GW' -and "$($f.NCU)" -eq "$($g.ncu)" -and "$($f.GW)" -eq "$($g.nGw)") {
+                $f.Nota = "$res  |  " + "$($f.Nota)"
+                [void](Gw-Anotar $f @{IP_gw = $g.ip; CPU_pct = $k.carga.cpu; Mem_pct = (Gw-MemPct $k.carga)
+                                      Mem_total_MB = $(if ($null -ne $k.carga.mem_total) { Gw-Mb $k.carga.mem_total } else { $null })
+                                      Uptime_s = $k.carga.uptime})
+            }
+        }
+    } else {
+        Con "$clave  $($g.ip): no se ha reconocido la CPU en la respuesta." ([System.Drawing.Color]::Salmon)
+        if ("$($k.crudo)" -ne '') {
+            Con "  --- respuesta cruda a query_state, para saber que consulta hay que hacer de verdad ---" ([System.Drawing.Color]::Gainsboro)
+            Con ("  " + ("$($k.crudo)" -replace '\s+', ' ')) ([System.Drawing.Color]::Gainsboro)
+        } else {
+            Con "  el gateway no ha contestado a query_state en el puerto 80 (o pide usuario y contrasena)." ([System.Drawing.Color]::Gainsboro)
+        }
+    }
+    return @{ident = $okId; carga = $okCarga}
+}
 
 $btnIGGw.Add_Click({ Lanzar {
     $cx = Params-Conexion
@@ -14884,57 +15056,9 @@ $btnIGGw.Add_Click({ Lanzar {
     $n = 0; $nCarga = 0
     foreach ($g in $conIp) {
         if (Chequear-Cancelado) { break }
-        $r = Gw-Identidad $g.ip ([int]$cx.to) $cred
-        $clave = $(if ("$($g.ncu)" -eq '?') { 'GW (IP a mano)' } else { "NCU$($g.ncu) GW$($g.nGw)" })
-        if ($r.ok) {
-            $n++
-            Con ("{0}  {1}  ->  {2}  MAC {3}  FW {4}  boot {5}  POST {6}  HW {7}  PAN {8}  canal {9}   (por '{10}')" -f $clave, $g.ip,
-                 $r.ext.producto, $r.ext.mac, $r.ext.fw, $r.ext.boot, $r.ext.post, $r.ext.hw, $r.ext.pan, $r.ext.canal, $r.consulta) ([System.Drawing.Color]::LightGreen)
-            foreach ($f in @($script:UltimoInvG)) {
-                if ("$($f.Tipo)" -eq 'GW' -and "$($f.NCU)" -eq "$($g.ncu)" -and "$($f.GW)" -eq "$($g.nGw)") {
-                    $f.MAC = "$($r.ext.mac)"; $f.FW = "$($r.ext.fw)"; $f.FW_fabrica = "$($r.ext.boot)"; $f.HW = "$($r.ext.hw)"
-                    $f.Nota = (Gw-NotaIdentidad $r.ext) + "$($f.Nota)"
-                    [void](Gw-Anotar $f @{IP_gw = $g.ip; Modelo = $r.ext.producto; Boot = $r.ext.boot; POST = $r.ext.post
-                                          ProductId = $r.ext.pid; PAN = $r.ext.pan; Canal = $r.ext.canal})
-                }
-            }
-        } else {
-            Con "$clave  $($g.ip): no se ha reconocido la identidad en la respuesta." ([System.Drawing.Color]::Salmon)
-        }
-        # con un campo que falte se vuelca TODO lo que contesto, consulta por
-        # consulta: es lo que dice como se llama de verdad lo que falta
-        if (-not $r.completo) {
-            if (@($r.crudos).Count -gt 0) {
-                Con "  --- respuesta cruda, para saber que consulta hay que hacer de verdad ---" ([System.Drawing.Color]::Gainsboro)
-                foreach ($c in @($r.crudos)) { Con ("  [{0}]  {1}" -f $c.n, ("$($c.xml)" -replace '\s+', ' ')) ([System.Drawing.Color]::Gainsboro) }
-            } else {
-                Con "  el gateway no ha contestado en el puerto 80 (o pide usuario y contrasena)." ([System.Drawing.Color]::Gainsboro)
-            }
-        }
-        # la carga del propio Digi, aparte de la identidad: puede salir una sin la otra
-        $k = Gw-Carga-Leer $g.ip ([int]$cx.to) $cred
-        if ($k.ok) {
-            $nCarga++
-            $res = Gw-CargaResumen $k.carga
-            $col = $(if ($k.carga.cpu -ge $GW_CPU_ALTA) { [System.Drawing.Color]::Orange } else { [System.Drawing.Color]::LightGreen })
-            Con ("{0}  {1}  ->  {2}   (por '{3}')" -f $clave, $g.ip, $res, $k.consulta) $col
-            foreach ($f in @($script:UltimoInvG)) {
-                if ("$($f.Tipo)" -eq 'GW' -and "$($f.NCU)" -eq "$($g.ncu)" -and "$($f.GW)" -eq "$($g.nGw)") {
-                    $f.Nota = "$res  |  " + "$($f.Nota)"
-                    [void](Gw-Anotar $f @{IP_gw = $g.ip; CPU_pct = $k.carga.cpu; Mem_pct = (Gw-MemPct $k.carga)
-                                          Mem_total_MB = $(if ($null -ne $k.carga.mem_total) { Gw-Mb $k.carga.mem_total } else { $null })
-                                          Uptime_s = $k.carga.uptime})
-                }
-            }
-        } else {
-            Con "$clave  $($g.ip): no se ha reconocido la CPU en la respuesta." ([System.Drawing.Color]::Salmon)
-            if ("$($k.crudo)" -ne '') {
-                Con "  --- respuesta cruda a query_state, para saber que consulta hay que hacer de verdad ---" ([System.Drawing.Color]::Gainsboro)
-                Con ("  " + ("$($k.crudo)" -replace '\s+', ' ')) ([System.Drawing.Color]::Gainsboro)
-            } else {
-                Con "  el gateway no ha contestado a query_state en el puerto 80 (o pide usuario y contrasena)." ([System.Drawing.Color]::Gainsboro)
-            }
-        }
+        $u = Gw-IdentificarUno $g ([int]$cx.to) $cred
+        if ($u.ident) { $n++ }
+        if ($u.carga) { $nCarga++ }
         Prog-Paso
         [System.Windows.Forms.Application]::DoEvents()
     }
@@ -19505,6 +19629,9 @@ $NAV_ARBOL = @(
         @{txt='Estabilidad';        tab=$tabE}
         @{txt='Auditoría';          tab=$tabAN}
         @{txt='Firmware';           tab=$tabFN})}
+    @{bloque = 'GATEWAYS'; hojas = @(
+        @{txt='Diagnóstico';             tab=$tabG; vista='GW'}
+        @{txt='Identificar / reiniciar'; tab=$tabIG})}
     @{bloque = 'HSU'; hojas = @(
         @{txt='Diagnóstico';        tab=$tabG; vista='HSU'}
         @{txt='Auditoría';          tab=$tabAH}
@@ -19691,12 +19818,12 @@ $accionesDetalle=New-Object Windows.Forms.FlowLayoutPanel
 $accionesDetalle.AutoSize=$true;$accionesDetalle.Dock='Fill';$accionesDetalle.FlowDirection='TopDown';$accionesDetalle.WrapContents=$false
 $detalleLayout.Controls.Add($accionesDetalle)
 $script:BotonesDetalle=@()
-foreach($accion in @('Leer variables','Configurar variables','Copia de seguridad','Modo / alarmas / stow','Receta secuencial','Diagnostico NCU','Estaciones meteo','Historico CSV')){
+foreach($accion in @('Leer variables','Configurar variables','Copia de seguridad','Modo / alarmas / stow','Receta secuencial','Diagnostico NCU','Estaciones meteo','Historico CSV','Identificar gateway','Reiniciar gateway')){
     $b=New-Object Windows.Forms.Button;$b.Text=$accion;$b.Tag=$accion;$b.Width=216;$b.Height=28;$b.FlatStyle='Flat'
     $b.Add_Click({param($s,$e)
         if($script:Ocupado -or $lvG.SelectedItems.Count -ne 1){return}
         $tag=$lvG.SelectedItems[0].Tag
-        try{if(-not $tag.trabajos){throw 'Repite el diagnóstico para recuperar el alcance de conexión.'};$destino=Diag-Objetivo $tag.fila $tag.trabajos;if($s.Tag -eq 'Historico CSV'){Hist-Abrir $tag}else{Diag-PrepararAccion $destino $s.Tag}}
+        try{if(-not $tag.trabajos){throw 'Repite el diagnóstico para recuperar el alcance de conexión.'};$destino=Diag-Objetivo $tag.fila $tag.trabajos;if($s.Tag -eq 'Historico CSV'){Hist-Abrir $tag}elseif(Diag-AccionGw $tag.fila $destino $s.Tag){}else{Diag-PrepararAccion $destino $s.Tag}}
         catch{$txtDetalle.AppendText("`r`n$_")}
     })
     $accionesDetalle.Controls.Add($b);$script:BotonesDetalle+=,$b
@@ -19715,7 +19842,7 @@ function Diag-Detalle {
         $destino=Diag-Objetivo $fila $tag.trabajos
         $acciones=@('Diagnostico NCU','Estaciones meteo')
         if($destino.tipo -eq 'TCU'){$acciones=@('Leer variables','Configurar variables','Copia de seguridad','Modo / alarmas / stow','Receta secuencial')}
-        $acciones+=@('Historico CSV')
+        if($destino.tipo -eq 'GW'){$acciones=@('Identificar gateway','Reiniciar gateway')} else {$acciones+=@('Historico CSV')}
         foreach($b in $script:BotonesDetalle){$b.Visible=$acciones -contains $b.Tag}
     }catch{$txtDetalle.AppendText("`r`n`r`n$_")}
 }

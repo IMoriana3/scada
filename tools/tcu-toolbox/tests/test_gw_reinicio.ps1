@@ -124,7 +124,15 @@ $t = Gw-TextoReinicio $gws[0] @{nivel=1; alarma=$true} 1 1
 Igual ($t -match 'CON ALARMA') $true 'la alarma de viento sale en el texto'
 
 # ---- Y EL MANEJADOR PASA POR DONDE TIENE QUE PASAR ----
-$h = [regex]::Match($src, '(?s)\$btnIGGwReinicio\.Add_Click\(\{(.*?)\n\} \}\)').Groups[1].Value
+# Desde la v12.7 el boton solo elige el gateway y llama a Gw-ReiniciarFlujo, que
+# es lo que tambien lanza el Diagnostico desde la fila del gateway: se mira el
+# boton y el flujo juntos, en ese orden.
+$boton = [regex]::Match($src, '(?s)\$btnIGGwReinicio\.Add_Click\(\{(.*?)\n\} \}\)').Groups[1].Value
+$flujo = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $x.Name -eq 'Gw-ReiniciarFlujo' }, $true))
+Igual $flujo.Count 1 'hay un flujo de reinicio separado del boton'
+$h = $boton + "`n" + $flujo[0].Extent.Text
+Igual ($boton -match 'Gw-ReiniciarFlujo \$o\.gw \$cx') $true 'el boton llama al flujo con el gateway elegido'
+Igual ($src -match 'Diag-AccionGw') $true 'y el Diagnostico tambien llega a el'
 Igual ($h.Length -gt 100) $true 'hay manejador'
 Igual ($h -match 'Gw-ObjetivoReinicio') $true 'elige UN gateway'
 Igual ($h -match 'Gw-Carga-Leer \$gw\.ip') $true 'lee el uptime ANTES'

@@ -2591,7 +2591,11 @@ Check 'edad: columna en la tabla' ($src.Contains("lvG.Columns.Add('Edad s'")) $t
 Check 'edad: la calcula el bloque compacto' ($src.Contains('Edad_s = $(if ($edad -ge 0)')) $true
 Check 'edad: en blanco si no se sabe' ([regex]::IsMatch($src, 'Edad_s = \$\(if \(\$edad -ge 0\) \{ \$edad \} else \{ '''' \}\)')) $true
 # (la ultima casilla es la nota de la fila NCU: alarmas y, desde la v11.82, sus gateways)
-Check 'edad: la fila de la NCU no lleva' ($src.Contains("`$dn.SoC, '', (Diag-NotaNcu `$dn)")) $true
+# Hasta la v12.7 esto buscaba "$dn.SoC, '', (Diag-NotaNcu $dn)": la linea de NUEVE
+# casillas para diez columnas, que pintaba la fila de la NCU corrida una a la
+# izquierda en conexion simple. Ahora se exige la de diez, con la edad en blanco.
+Check 'edad: la fila de la NCU no lleva' ($src.Contains("@('', `$dn.TCU, `$dn.Salud, `$dn.Modo, '', '', '', '', '', (Diag-NotaNcu `$dn))")) $true
+Check 'edad: y la fila corrida de nueve casillas ya no esta' ($src.Contains("`$dn.SoC, '', (Diag-NotaNcu `$dn)")) $false
 # el bloque de TCUs ya no repite la edad en la nota (el de HSUs es otro sitio)
 $blqTcu = $src.Substring($src.IndexOf('function Ncu-DiagCompat'), 3000)
 Check 'edad: ya no se repite en la nota' ($blqTcu.Contains('datos de hace')) $false
@@ -4941,7 +4945,10 @@ Check 'carga: y si no, todo el estado para ver el esquema' ($src.Contains('<quer
 Check 'carga: lo que no se reconoce se vuelca' ($src.Contains('respuesta cruda a query_state')) $true
 # el Digi puede pedir login: se manda, y la clave NO se guarda con la sesion
 Check 'carga: el login se manda al Digi' ($src.Substring($src.IndexOf('function Rci-Post'), 700).Contains('$p.Credential = $cred')) $true
-Check 'carga: y la identidad va con el mismo login' ($src.Contains('Gw-Identidad $g.ip ([int]$cx.to) $cred')) $true
+# desde la v12.7 la identidad se pide dentro de Gw-IdentificarUno, al que el boton
+# le pasa el mismo $cred que a la carga; se mira la llamada de dentro y la de fuera
+Check 'carga: y la identidad va con el mismo login' ($src.Contains('Gw-Identidad $g.ip $to $cred')) $true
+Check 'carga: y el boton se lo pasa a quien identifica' ($src.Contains('Gw-IdentificarUno $g ([int]$cx.to) $cred')) $true
 Check 'carga: la clave del Digi NO se guarda en config_local' ($src.Substring($src.IndexOf('function Config-Guardar'), 1500).Contains('txtIGPass')) $false
 # las topologias no llevan ip_gw todavia: con una IP a mano se pregunta a esa y solo a esa
 $gwsT = @(@{ncu='5'; nGw=1; ip='10.21.236.5'}, @{ncu='5'; nGw=2; ip=''}, @{ncu='6'; nGw=1; ip='10.21.236.6'}, @{ncu='6'; nGw=1; ip='10.21.236.6'})
