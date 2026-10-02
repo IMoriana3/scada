@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '12.0'
+$VERSION_TOOLBOX = '12.1'
 # La etiqueta va en el titulo de la ventana: es lo que mira alguien en campo
 # para saber QUE MAPA da por bueno la herramienta. Decia R7.1 desde la v11.86,
 # que es cuando entraron registros que solo existen en el R8 (40030-40039, el
@@ -2802,6 +2802,27 @@ function Api-Reiniciar([string]$ip, $sesion, [int]$to) {
 #     no cuadra entre lo que hay montado y lo que la NCU cree.
 $API_MACS = '/private_api/mac_history'
 
+# LA NCU CUENTA LOS GATEWAYS DESDE 0 Y NOSOTROS DESDE 1. En su CSV el
+# gateway_id vale 0 y 1; en plants.yml, en los ficheros de planta, en esta
+# herramienta y en la boca de cualquiera que este en la planta son GW1 (puerto
+# 503) y GW2 (puerto 504). Ensenar el numero crudo saca un "GW0" que no existe
+# en ningun sitio, y quien lo lee o cree que es un fallo o se va a buscar un
+# gateway que no hay.
+#
+# La equivalencia no es un supuesto: en El Burgo el gateway_id 0 trae los
+# esclavos 1-45, que es EXACTAMENTE el rango que plants.yml da al GW1, y el 1
+# trae del 46 en adelante, que es el del GW2. Se traduce n -> GW(n+1), que vale
+# igual si algun dia una NCU tiene tres.
+#
+# Lo que no se entienda se deja CRUDO en vez de inventarse un nombre, y el
+# numero original se guarda aparte para que el CSV exportado no pierda nada.
+# Pura.
+function Api-MacsGw([string]$id) {
+    $n = 0
+    if ([int]::TryParse("$id".Trim(), [ref]$n) -and $n -ge 0) { return "GW$($n + 1)" }
+    return "$id".Trim()
+}
+
 # El CSV, a filas. Se mira la CABECERA para saber que columna es cual en vez de
 # fiarse del orden: el dia que la NCU meta una columna en medio, esto sigue
 # funcionando en lugar de poner fechas en la columna de MAC. Pura.
@@ -2822,7 +2843,8 @@ function Api-MacsParsear([string]$texto) {
         if (-not [int]::TryParse("$($c[$iM])".Trim(), [ref]$tcu)) { continue }
         $r += ,[pscustomobject]@{
             Descubierta = "$($c[$iD])".Trim()
-            Gateway     = "$($c[$iG])".Trim()
+            Gateway     = (Api-MacsGw "$($c[$iG])")      # GW1/GW2, como se habla
+            Gateway_id  = "$($c[$iG])".Trim()            # y el crudo de la NCU, sin perderlo
             TCU         = $tcu
             MAC         = "$($c[$iZ])".Trim().ToUpper()
         }

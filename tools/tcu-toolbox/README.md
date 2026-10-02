@@ -29,6 +29,16 @@ de El Burgo:
   TCU lleva hoy; si no es la última que la NCU vio, o se cambió el equipo sin que
   se enterara, o ahí no contesta quien se cree.
 
+⚠️ **La NCU cuenta los gateways desde 0 y nosotros desde 1.** En su CSV el
+`gateway_id` vale `0` y `1`; en `plants.yml`, en los ficheros de planta, en esta
+herramienta y en la boca de cualquiera que esté en la planta son **GW1** (puerto
+503) y **GW2** (puerto 504). Enseñar el número crudo saca un «GW0» que no existe
+en ningún sitio, y quien lo lee o cree que es un fallo o se va a buscar un
+gateway que no hay. Se traduce `n → GW(n+1)` y el número original se guarda
+aparte, para que el CSV exportado no pierda nada. La equivalencia no es un
+supuesto: en El Burgo el `gateway_id` 0 trae los esclavos 1-45, que es
+exactamente el rango que `plants.yml` da al GW1.
+
 ⚠️ **La fecha viene en `dd-MM-yyyy` y no se puede ordenar como texto.** Con el
 fichero real, ordenar alfabéticamente pone `01-06-2026` antes que `31-12-2025`:
 el resumen diría que la primera vez fue después que la última. Se parsea de
