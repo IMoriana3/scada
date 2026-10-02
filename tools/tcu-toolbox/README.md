@@ -4,6 +4,42 @@
 
 Es el complemento de **escritura** del SCADA de este repo: el SCADA es solo-lectura a propósito; cuando hay que *cambiar* algo en un TCU (configuración, reloj, NVM) se usa esta toolbox desde el portátil conectado a la LAN de planta.
 
+### Configuración de la HSU interna de la NCU (v12.3)
+
+`CONFIG HSU` lee `GET /private_api/internal_hsu_config`: **qué sensores lleva
+montados** la estación interna de la NCU y con qué parámetros — anemómetro
+sónico, veleta, anemómetro RS-485, piranómetro, nieve, temperatura, inundación,
+con sus tiempos de activación y umbrales.
+
+**Por qué hacía falta.** La toolbox ya lee y escribe umbrales de viento en la
+HSU por Modbus, pero **no sabía qué sensores declara cada estación**. Sin eso no
+se puede decir lo único que de verdad importa aquí: que una HSU **declare
+piranómetro y no dé irradiancia**, o que declare nieve y no haya sensor.
+
+**Se enseña genérico, y a propósito.** Del *bundle* de la página salen los
+nombres de campo (`flood_sensor`, `snow_sensor`, `pyranometer`, `anemometer`,
+`activation_time`, `activation_threshold`, `activation_speed`…) pero **no la
+forma del objeto**: cómo anidan y qué cuelga de qué. Reconstruir un esquema a
+partir de identificadores sueltos es exactamente lo que ya salió mal una vez con
+los rangos inventados del `tcu_timeout`, así que esto **aplana lo que venga** y
+lo enseña tal cual, con la ruta completa de cada campo.
+
+⚠️ **Lo que no aparece NO se da por ausente.** Un sensor que no se encuentre en
+la respuesta puede no estar… o llamarse de otra manera. Se dice *«no aparece»* y
+se explica que no es lo mismo que decir que no lo tiene. Y `snow_sensor_check` no
+se confunde con `snow_sensor`: la búsqueda es por campo completo, no por
+subcadena.
+
+Las filas salen **en orden alfabético y estable**, para que dos volcados de NCUs
+distintas se puedan carear.
+
+**Solo lee.** El `PUT` existe y es JSON —no un binario, así que no cae en la
+categoría del firmware— pero no se cablea hasta ver una escritura real, por lo
+mismo de siempre.
+
+Una NCU que todavía no haya detectado su estación interna contesta vacío; eso se
+dice como tal y no como un fallo.
+
 ### Histórico de MAC: lo primero medido de la malla Zigbee (v12.0)
 
 `HISTÓRICO MAC` lee `GET /private_api/mac_history`, que la NCU sirve como **CSV**

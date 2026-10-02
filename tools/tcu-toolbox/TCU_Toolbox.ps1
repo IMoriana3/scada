@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '12.2'
+$VERSION_TOOLBOX = '12.3'
 # La etiqueta va en el titulo de la ventana: es lo que mira alguien en campo
 # para saber QUE MAPA da por bueno la herramienta. Decia R7.1 desde la v11.86,
 # que es cuando entraron registros que solo existen en el R8 (40030-40039, el
@@ -2956,6 +2956,86 @@ function Api-MacsCareo($resumen, $inventario) {
     return @($r)
 }
 
+# ============ LA CONFIGURACION DE LA HSU INTERNA DE LA NCU ============
+# La NCU guarda aparte que sensores lleva montados su estacion y con que
+# parametros: anemometro sonico, veleta, anemometro RS-485, piranometro, sensor
+# de nieve, de temperatura y de inundacion, con sus tiempos y umbrales.
+#
+#     GET /private_api/internal_hsu_config
+#
+# POR QUE HACE FALTA. La toolbox ya lee y escribe umbrales de viento en la HSU
+# por Modbus, pero no sabe QUE SENSORES declara cada estacion. Sin eso no se
+# puede decir lo unico que de verdad importa aqui: que una HSU declare
+# piranometro y no de irradiancia, o que declare nieve y no haya sensor.
+#
+# SE ENSENA GENERICO Y A PROPOSITO. Del bundle de la pagina salen los nombres de
+# campo -flood_sensor, snow_sensor, pyranometer, anemometer, activation_time,
+# activation_threshold, activation_speed...- pero NO la forma del objeto: como
+# anidan y que cuelga de que. Reconstruir un esquema a partir de identificadores
+# sueltos es exactamente lo que ya salio mal una vez con los rangos inventados
+# del tcu_timeout, asi que esto aplana lo que venga y lo ensena tal cual. Cuando
+# se vea un volcado de verdad se podra poner una vista con nombres bonitos; hasta
+# entonces, ensenar el dato sin interpretarlo es mas util que interpretarlo mal.
+#
+# SOLO LEE. El PUT existe -es JSON, no un binario- pero no se cablea hasta ver
+# una escritura real, por lo mismo de siempre.
+$API_HSU_CFG = '/private_api/internal_hsu_config'
+
+# Un objeto cualquiera a filas Ruta/Valor, sea cual sea su forma. Se apoya en
+# Api-Tipo y Api-Breve, que ya saben distinguir objeto, lista y valor. Pura.
+function Api-Aplanar($o, [string]$ruta = '') {
+    $r = @()
+    switch (Api-Tipo $o) {
+        'obj' {
+            foreach ($n in @($o.PSObject.Properties.Name | Sort-Object)) {
+                $r += @(Api-Aplanar $o.$n $(if ($ruta -eq '') { "$n" } else { "$ruta.$n" }))
+            }
+        }
+        'lista' {
+            $l = @($o)
+            if ($l.Count -eq 0) { $r += ,[pscustomobject]@{Ruta = $ruta; Valor = '(lista vacia)'} }
+            for ($i = 0; $i -lt $l.Count; $i++) { $r += @(Api-Aplanar $l[$i] "$ruta[$i]") }
+        }
+        default { $r += ,[pscustomobject]@{Ruta = $ruta; Valor = (Api-Breve $o)} }
+    }
+    return @($r)
+}
+
+# Lo poco que SI se puede afirmar sin conocer la forma: que sensores aparecen
+# nombrados y si estan puestos. Se busca por el nombre del campo en la ruta, no
+# por una posicion supuesta, y lo que no se encuentre NO se da por ausente: se
+# dice que no aparece, que no es lo mismo. Pura.
+$API_HSU_SENSORES = [ordered]@{
+    anemometer        = 'anemometro (RS-485)'
+    sonic_anemometer  = 'anemometro sonico'
+    vane              = 'veleta'
+    pyranometer       = 'piranometro'
+    snow_sensor       = 'sensor de nieve'
+    flood_sensor      = 'sensor de inundacion'
+    temperature_sensor = 'sensor de temperatura'
+}
+function Api-HsuSensores($filas) {
+    $r = @()
+    foreach ($k in @($API_HSU_SENSORES.Keys)) {
+        $m = @(@($filas) | Where-Object { "$($_.Ruta)" -match ("(^|\.)" + [regex]::Escape($k) + "($|\.|\[)") })
+        if ($m.Count -eq 0) {
+            $r += ,[pscustomobject]@{Sensor = $API_HSU_SENSORES[$k]; Campo = $k; Estado = 'no aparece'
+                                     Nota = 'esta NCU no nombra este sensor en su configuracion; no es lo mismo que decir que no lo tiene'}
+            continue
+        }
+        # el campo suelto (sin sub-rutas) es el que dice si esta puesto
+        $suelto = @($m | Where-Object { "$($_.Ruta)" -match ([regex]::Escape($k) + '$') })
+        $v = $(if ($suelto.Count -gt 0) { "$($suelto[0].Valor)" } else { '' })
+        $puesto = ($v -match '^(True|true|1|si|Si)$')
+        $r += ,[pscustomobject]@{
+            Sensor = $API_HSU_SENSORES[$k]; Campo = $k
+            Estado = $(if ($v -eq '') { 'con parametros' } elseif ($puesto) { 'SI' } else { 'no' })
+            Nota = $(if ($m.Count -gt 1) { "$($m.Count) campos bajo esta rama" } else { '' })
+        }
+    }
+    return @($r)
+}
+
 # ---- el transporte de LECTURA: dos llamadas ----
 # La sesion va por cookie, asi que hace falta el WebRequestSession del login
 # para la segunda llamada. Y SOLO estas dos: un GET de lectura y el POST del
@@ -3005,6 +3085,26 @@ function Api-LeerMacs([string]$ip, $sesion, [int]$to) {
         return @{ok = $false; nota = "no se puede leer el historico de MAC: $m"; texto = ''}
     }
     return @{ok = $true; nota = ''; texto = "$($r.Content)"}
+}
+
+function Api-LeerHsuCfg([string]$ip, $sesion, [int]$to) {
+    $seg = [math]::Max(5, [int]($to / 1000))
+    try {
+        $d = Invoke-RestMethod -Uri "http://${ip}:$API_PUERTO$API_HSU_CFG" -Method Get `
+                 -WebSession $sesion -TimeoutSec $seg
+    } catch {
+        $m = "$($_.Exception.Message)"
+        if ($m -match '401|403|[Uu]nauthor') { return @{ok = $false; nota = 'la sesion no vale: hay que volver a entrar'; datos = $null} }
+        if ($m -match '404') { return @{ok = $false; nota = "esta NCU no tiene ${API_HSU_CFG}: panel de otra version"; datos = $null} }
+        return @{ok = $false; nota = "no se puede leer la configuracion de la HSU: $m"; datos = $null}
+    }
+    if ($null -eq $d) {
+        # la pagina tiene un mensaje para esto: "An internal HSU has not yet been
+        # detected for configuration". O sea que una NCU sin estacion interna
+        # detectada contesta vacio, y eso no es un fallo nuestro.
+        return @{ok = $false; nota = 'la NCU no devuelve configuracion de HSU interna: puede que todavia no haya detectado ninguna'; datos = $null}
+    }
+    return @{ok = $true; nota = ''; datos = $d}
 }
 
 function Api-Leer([string]$ip, $sesion, [int]$to) {
@@ -8164,6 +8264,13 @@ $btnPANComparar.Location = New-Object System.Drawing.Point(368, 52)
 $btnPANComparar.Size = New-Object System.Drawing.Size(140, 28)
 $btnPANComparar.Enabled = $false
 $tabPAN.Controls.Add($btnPANComparar)
+
+$btnPANHsuCfg = New-Object System.Windows.Forms.Button
+$btnPANHsuCfg.Text = 'CONFIG HSU'
+$btnPANHsuCfg.Location = New-Object System.Drawing.Point(292, 318)
+$btnPANHsuCfg.Size = New-Object System.Drawing.Size(120, 28)
+$btnPANHsuCfg.Enabled = $false
+$tabPAN.Controls.Add($btnPANHsuCfg)
 
 $btnPANMacs = New-Object System.Windows.Forms.Button
 $btnPANMacs.Text = 'HISTORICO MAC'
@@ -16796,7 +16903,7 @@ function Api-Pintar {
     # los de configuracion, solo con UNA NCU leida: estos cambian cosas y no se
     # mandan a ciegas a varias a la vez
     $uno = (@($script:ApiUltimo).Count -eq 1)
-    foreach ($b in @($btnPANCopia, $btnPANComparar, $btnPANMeter, $btnPANSacar, $btnPANReiniciar, $btnPANMacs)) { $b.Enabled = $uno }
+    foreach ($b in @($btnPANCopia, $btnPANComparar, $btnPANMeter, $btnPANSacar, $btnPANReiniciar, $btnPANMacs, $btnPANHsuCfg)) { $b.Enabled = $uno }
 }
 
 $cbPANVista.Add_SelectedIndexChanged({ if (@($script:ApiUltimo).Count -gt 0) { Api-Pintar } })
@@ -17099,6 +17206,41 @@ $btnPANMacs.Add_Click({ Lanzar {
     }
     Lv-Sincronizar $lvPAN
     $btnPANCsv.Enabled = ($script:ApiFilas.Count -gt 0)
+} })
+
+$btnPANHsuCfg.Add_Click({ Lanzar {
+    $n = Api-UnaNcu; if ($null -eq $n) { return }
+    $usuario = "$($txtPANUser.Text)".Trim(); $clave = "$($txtPANPass.Text)"
+    if ($usuario -eq '' -or $clave -eq '') { Con 'Hacen falta el usuario y la contrasena del panel.' ([System.Drawing.Color]::Orange); return }
+    $cx = Params-Conexion
+    $e = Api-Entrar "$($n.ip)" $usuario $clave $cx.to
+    $clave = $null
+    if (-not $e.ok) { Con $e.nota ([System.Drawing.Color]::Firebrick); return }
+    $h = Api-LeerHsuCfg "$($n.ip)" $e.sesion $cx.to
+    if (-not $h.ok) { Con $h.nota ([System.Drawing.Color]::Orange); return }
+
+    $filas = @(Api-Aplanar $h.datos)
+    $sens = @(Api-HsuSensores $filas)
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Configuracion de la HSU interna de la NCU $($n.ncu): $($filas.Count) campos." ([System.Drawing.Color]::SteelBlue)
+    foreach ($x in $sens) {
+        $c = $(if ("$($x.Estado)" -eq 'SI') { [System.Drawing.Color]::DarkGreen }
+               elseif ("$($x.Estado)" -eq 'no aparece') { [System.Drawing.Color]::Gray }
+               else { [System.Drawing.Color]::DimGray })
+        Con ("  {0,-24} {1,-16} {2}" -f $x.Sensor, $x.Estado, $x.Nota) $c
+    }
+
+    Lv-Columnas $lvPAN @(@{t='NCU';w=45}, @{t='Campo';w=420}, @{t='Valor';w=420})
+    $lvPAN.Items.Clear(); $script:ApiFilas = @()
+    foreach ($x in $filas) {
+        $it = New-Object System.Windows.Forms.ListViewItem("$($n.ncu)")
+        [void]$it.SubItems.Add("$($x.Ruta)"); [void]$it.SubItems.Add("$($x.Valor)")
+        [void]$lvPAN.Items.Add($it)
+        $script:ApiFilas += ,[pscustomobject]@{NCU = "$($n.ncu)"; Campo = "$($x.Ruta)"; Valor = "$($x.Valor)"}
+    }
+    Lv-Sincronizar $lvPAN
+    $btnPANCsv.Enabled = ($script:ApiFilas.Count -gt 0)
+    Con 'Se ensena tal cual lo da la NCU: los nombres de campo son suyos. Si quieres que esto tenga una vista con nombres y unidades, pasame este volcado.' ([System.Drawing.Color]::Gray)
 } })
 
 $btnPANCsv.Add_Click({
