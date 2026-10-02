@@ -14,7 +14,7 @@ import yaml
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
-from decode import tracker_health
+from decode import tracker_health, desvios_entre_vecinos
 from events import RegistroEventos
 from traffic import TrafficMeter
 from scada_identity import configured_identity
@@ -60,8 +60,16 @@ def clasificar(trackers):
     un evento que diga `ok → alarm` mientras la muestra de ese mismo instante
     dice `warn` es peor que no tener eventos.
     """
+    # EL RESIDUO CONTRA VECINOS SE CALCULA AQUÍ PORQUE AQUÍ ESTÁ LA FLOTA. Una
+    # función que ve un seguidor no puede comparar con los otros, y este es el
+    # único punto donde están todos los TCU de la NCU con la MISMA marca de
+    # tiempo — que es la única comparación que significa algo, porque el sol es
+    # el mismo para todos. Una sola pasada por ciclo, como el resto.
+    desvios = desvios_entre_vecinos(trackers)
     for t in trackers:
-        t["health"] = tracker_health(t["fields"], t["alarms"], t["comms_age_s"])
+        t["desvio_vecinos"] = desvios.get(t["tcu"])
+        t["health"] = tracker_health(t["fields"], t["alarms"], t["comms_age_s"],
+                                     desvio_vecinos=t["desvio_vecinos"])
     return trackers
 
 
@@ -81,6 +89,12 @@ def tracker_points(plant_id, ncu_id, trackers, source=None):
             p.tag("source", source)
         if t["comms_age_s"] is not None:
             p.field("comms_age_s", float(t["comms_age_s"]))
+        # SE PUBLICA LA MEDIDA, no solo el color que provoca. Un ámbar cuyo
+        # número no se puede leer obliga a creerse la clasificación; con el
+        # desvío servido, quien mira el mapa puede ver CUÁNTO se separa de sus
+        # vecinas y decidir. None no se escribe: no es cero, es «no juzgado».
+        if t.get("desvio_vecinos") is not None:
+            p.field("desvio_vecinos", float(t["desvio_vecinos"]))
         for k in ("tilt_angle", "target_angle", "soc", "soh", "battery_voltage",
                   "battery_current", "temp_battery", "temp_pcb", "motor_current",
                   "panel_voltage", "main_state", "bt_active", "safe_position",
