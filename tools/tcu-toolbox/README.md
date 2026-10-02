@@ -4,6 +4,27 @@
 
 Es el complemento de **escritura** del SCADA de este repo: el SCADA es solo-lectura a propósito; cuando hay que *cambiar* algo en un TCU (configuración, reloj, NVM) se usa esta toolbox desde el portátil conectado a la LAN de planta.
 
+### Ayora ya sabe la IP de sus Digi, y el segundo Digi de cada NCU es de reserva
+
+`IDENTIFICAR GATEWAYS` decía en Ayora *"ninguno de los 16 gateways declarados trae
+ip_gw"*: el fichero de planta se generó antes de que `make_plantas.py` leyera las
+columnas `IP GW` del Excel. La regla la dio Iñaki el 02/10/2026: **los dos Digi de
+cada NCU van en las dos direcciones siguientes a la de la NCU** (NCU1
+`192.168.4.10` → `.11` y `.12`), y `plantas/24025-ayora.json` lleva ya la del GW1
+en las 16 NCUs. Con eso, Diagnóstico e Inventario le preguntan solos a cada Digi
+y el inventario sale con modelo, MAC, firmware y carga de cada gateway.
+
+**El `.12` no es un gateway que falte.** En Ayora cada NCU tiene un solo gateway
+con TCUs (puerto 503, todas en él); el segundo Digi está montado **de reserva**,
+sin ninguna TCU colgando. Por eso el fichero declara uno por NCU y está bien así.
+No tiene hueco en la topología —un gateway sin TCUs no existe para el barrido—,
+así que hoy no se le pregunta nada; si algún día interesa saber si la reserva
+está viva y con qué firmware, es un botón aparte, no un gateway más.
+
+⚠️ Las 16 IPs son **regla, no lectura**: ninguna se ha preguntado aún por RCI. La
+comprobación es pulsar `IDENTIFICAR GATEWAYS` en planta. San José (38 gateways),
+Fayón, Túnez y Bagnarelli siguen sin `ip_gw`.
+
 ### `REINICIAR GATEWAY`: reiniciar un Digi desde la app (v12.5)
 
 Lo pidió Iñaki el 02/10/2026. Botón en **Inventario global**, al lado de
