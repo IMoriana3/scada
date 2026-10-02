@@ -16,6 +16,28 @@ jobs:
           python-version: '3.12'
       - name: Instalar dependencias de API y banco Modbus
         run: pip install -r api/requirements.txt 'pymodbus>=3.6' httpx
+
+      # EL REPO HERMANO, porque dos bancos lo necesitan y sin él uno falla y el
+      # otro —peor— PASA EN SILENCIO. Medido el 2026-10-02, con el hermano
+      # escondido: `test_plants_yml` sale con rc=2 (y puso este job en rojo),
+      # pero `test_modbus_map` sale con **rc=0** avisando de que no compara
+      # nada. Es deliberado para un portátil de campo y es veneno en una
+      # puerta: verde sin haber mirado el mapa.
+      #
+      # `cobertura-zigbee` es PÚBLICO, así que esto no necesita secreto ninguno.
+      # Va a `..` porque es donde los dos bancos lo buscan (`../cobertura-zigbee`).
+      - name: el repo hermano cobertura-zigbee (lo piden dos bancos)
+        run: git clone --depth 1 https://github.com/IMoriana3/cobertura-zigbee ../cobertura-zigbee
+
+      # Y QUE SU AUSENCIA CUESTE UN ROJO, no un verde callado. Si el clon falla
+      # o el hermano mueve esos ficheros, el banco del mapa seguiría saliendo 0:
+      # esto lo convierte en un fallo con nombre.
+      - name: el hermano trae lo que esos dos bancos necesitan
+        run: |
+          test -f ../cobertura-zigbee/tools/modbus_src/ncu_r7_hsu_r23.json || {
+            echo "ROJO · falta el mapa R7 del hermano: test_modbus_map pasaría EN SILENCIO"; exit 1; }
+          test -d ../cobertura-zigbee || {
+            echo "ROJO · falta el hermano: test_plants_yml no tiene layouts"; exit 1; }
       # LOS BANCOS DE `tools/` EN BUCLE, Y NO UNO A UNO. La lista escrita a mano
       # es exactamente lo que dejó CINCO bancos sin correr sin que nada lo
       # dijera: `test_eventos`, `test_health_modo`, `test_modbus_map`,
