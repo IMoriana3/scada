@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '12.4'
+$VERSION_TOOLBOX = '12.5'
 # La etiqueta va en el titulo de la ventana: es lo que mira alguien en campo
 # para saber QUE MAPA da por bueno la herramienta. Decia R7.1 desde la v11.86,
 # que es cuando entraron registros que solo existen en el R8 (40030-40039, el
@@ -3841,6 +3841,138 @@ function Gw-Carga([string]$xml) {
     }
     if ($null -ne $r.cpu -and $r.cpu -ge 0 -and $r.cpu -le 100) { $r.ok = $true } else { $r.cpu = $null }
     return $r
+}
+
+# ---- REINICIAR EL GATEWAY ----
+# Lo pidio Inaki el 02/10/2026: poder reiniciar un Digi desde aqui, sin ir a su
+# pagina. Es el mismo tipo de accion que REINICIAR NCU, con la misma pega
+# operativa a escala de medio campo: mientras el gateway arranca, la NCU no
+# llega a NINGUNA de las TCUs que cuelgan de el. Los seguidores siguen al sol
+# por su cuenta -el seguimiento vive en la TCU-, pero durante esa ventana no hay
+# quien les mande una posicion segura. De ahi la guardia de viento, otra vez.
+#
+# QUE ESTA VERIFICADO Y QUE NO, dicho con precision. El transporte si: POST XML
+# a /UE/rci, el que usa a diario el recolector de cobertura y el que contesto en
+# El Burgo a device_info y device_stats. El VERBO no: <reboot/> sale de la
+# referencia RCI de Digi y no se ha visto todavia contra un ConnectPort de
+# verdad. Por eso la prueba de que funciono NO es la respuesta al reboot -que
+# se vuelca cruda si no se reconoce- sino el uptime: antes de mandar nada se le
+# lee el tiempo de marcha, y despues tiene que (1) dejar de contestar y (2)
+# volver con un uptime MENOR. Si contesta todo el rato con el mismo uptime, no
+# ha reiniciado, diga lo que diga el XML. Esa comprobacion no depende de
+# acertar el esquema de la respuesta.
+#
+# Y UNO CADA VEZ. Nunca "los gateways": el de la IP escrita a mano o, sin IP,
+# el unico que declare la conexion. Con dos declarados y sin IP, se pide la IP.
+# Reiniciar los dos a la vez deja la NCU sin ningun seguidor a la vista.
+$RCI_REINICIO = '<rci_request version="1.1"><reboot/></rci_request>'
+$GW_REINICIO_ESPERA_S = 180    # cuanto se espera a que vuelva; nadie ha medido lo que tarda un X2D
+$GW_REINICIO_CAIDA_S  = 30     # cuanto se le da para DEJAR de contestar tras el reboot
+$GW_REINICIO_PASO_S   = 5
+
+# Que gateway se reinicia: el de la IP a mano o, sin ella, el unico declarado.
+# Pasa la entrada entera (ncu, nGw, ip, tcus) para que el texto de confirmar
+# diga lo que cuelga. Pura.
+function Gw-ObjetivoReinicio($gws, [string]$ipManual) {
+    $ip = "$ipManual".Trim()
+    if ($ip -ne '') {
+        # si la IP a mano es la de un gateway declarado, se aprovecha lo que se
+        # sabe de el; si no, se reinicia igual pero sin saber que cuelga
+        foreach ($g in @($gws)) { if ("$($g.ip)".Trim() -eq $ip) { return @{ok = $true; gw = $g; nota = ''} } }
+        return @{ok = $true; gw = @{ncu = '?'; nGw = 0; ip = $ip; tcus = $null}; nota = ''}
+    }
+    $conIp = @(); $vistas = @{}
+    foreach ($g in @($gws)) {
+        $gip = "$($g.ip)".Trim()
+        if ($gip -eq '' -or $vistas.ContainsKey($gip)) { continue }
+        $vistas[$gip] = $true; $conIp += ,$g
+    }
+    if ($conIp.Count -eq 1) { return @{ok = $true; gw = $conIp[0]; nota = ''} }
+    if ($conIp.Count -eq 0) {
+        return @{ok = $false; gw = $null; nota = 'ningun gateway declarado trae ip_gw: escribe la IP del Digi en la casilla "IP del gateway a mano"'}
+    }
+    return @{ok = $false; gw = $null
+             nota = "hay $($conIp.Count) gateways con IP y se reinicia UNO cada vez: escribe en la casilla la IP del que quieras ($(@($conIp | ForEach-Object { "GW$($_.nGw) $($_.ip)" }) -join ', '))"}
+}
+
+# Las NCUs a las que preguntar el viento antes de tocar un gateway: la de la
+# conexion o, en Planta completa, todas. El viento es de la planta, no del
+# gateway, y con una IP a mano no se sabe de que NCU cuelga. Pura.
+function Gw-NcusParaViento($cx) {
+    $l = @()
+    if ($cx.multi) { foreach ($n in @($cx.multi)) { if ("$($n.ip)" -ne '') { $l += "$($n.ip)" } } }
+    elseif ("$($cx.ip)" -ne '' -and "$($cx.ip)" -ne 'NA') { $l += "$($cx.ip)" }
+    return @($l)
+}
+
+# De varias lecturas de viento, la peor: el nivel mas alto y alarma si la hay
+# en cualquiera. $null si ninguna se pudo leer. Pura.
+function Gw-VientoPeor($lecturas) {
+    $peor = $null; $leidas = 0
+    foreach ($v in @($lecturas)) {
+        if ($null -eq $v) { continue }
+        $leidas++
+        if ($null -eq $peor) { $peor = @{nivel = [int]$v.nivel; alarma = [bool]$v.alarma}; continue }
+        if ([int]$v.nivel -gt $peor.nivel) { $peor.nivel = [int]$v.nivel }
+        if ($v.alarma) { $peor.alarma = $true }
+    }
+    return @{v = $peor; leidas = $leidas; total = @($lecturas).Count}
+}
+
+# Que dijo el Digi al reboot. 'aceptado' si contesta con <reboot>, 'error' si
+# trae <error>, 'silencio' si no contesta (puede haberse ido ya a reiniciar: no
+# es malo, se comprueba por el uptime) y 'raro' si contesta otra cosa, que se
+# vuelca para aprender el esquema. Pura.
+function Gw-ReinicioAceptado([string]$xml) {
+    $t = "$xml".Trim()
+    if ($t -eq '') { return @{estado = 'silencio'; nota = 'no ha contestado al reboot (puede haberse ido ya a reiniciar)'} }
+    if ($t -match '(?is)<error\b') {
+        $d = [regex]::Match($t, '(?is)<desc\b[^>]*>\s*([^<]+?)\s*<')
+        $hint = [regex]::Match($t, '(?is)<hint\b[^>]*>\s*([^<]+?)\s*<')
+        $m = 'el Digi ha contestado con error al reboot'
+        if ($d.Success) { $m += ": $($d.Groups[1].Value)" }
+        if ($hint.Success) { $m += " ($($hint.Groups[1].Value))" }
+        return @{estado = 'error'; nota = $m}
+    }
+    if ($t -match '(?is)<reboot\b') { return @{estado = 'aceptado'; nota = 'el Digi ha aceptado el reboot'} }
+    return @{estado = 'raro'; nota = 'el Digi ha contestado algo que no se reconoce; se vuelca'}
+}
+
+# Si de verdad reinicio: tiene que haber DEJADO de contestar y haber vuelto con
+# menos tiempo de marcha. Un Digi que contesta todo el rato con el mismo uptime
+# no ha reiniciado, diga lo que diga el XML. Pura.
+function Gw-ReinicioVolvio($uptimeAntes, $uptimeDespues, [bool]$cayo) {
+    if ($null -eq $uptimeDespues) {
+        if ($cayo) {
+            return @{ok = $false; tarda = $true
+                     nota = "se fue abajo y no ha vuelto a contestar en $GW_REINICIO_ESPERA_S s. Puede que solo tarde mas que nuestra espera: dale un minuto y pulsa IDENTIFICAR GATEWAYS antes de pensar en ir a la planta"}
+        }
+        return @{ok = $false; tarda = $false; nota = 'no ha contestado ni antes ni despues: no se puede decir nada de el'}
+    }
+    if ([double]$uptimeDespues -ge [double]$uptimeAntes) {
+        $m = "contesta, pero su tiempo de marcha NO ha bajado ($uptimeAntes -> $uptimeDespues): no ha reiniciado"
+        if (-not $cayo) { $m += ' (ni dejo de contestar en ningun momento)' }
+        return @{ok = $false; tarda = $false; nota = $m}
+    }
+    return @{ok = $true; tarda = $false; nota = "arriba otra vez, con $uptimeDespues s de marcha (tenia $uptimeAntes)"}
+}
+
+# Lo que se para y lo que no, entero, antes de preguntar. Pura.
+function Gw-TextoReinicio($gw, $viento, [int]$leidas, [int]$total) {
+    $quien = $(if ("$($gw.ncu)" -eq '?' -or "$($gw.ncu)" -eq '') { "el gateway $($gw.ip) (IP a mano)" } else { "el gateway GW$($gw.nGw) de la NCU$($gw.ncu), $($gw.ip)" })
+    $t = "REINICIAR $($quien.ToUpper())`r`n`r`n"
+    if ($null -ne $gw.tcus) { $t += "Mientras arranca, la NCU no llega a los $($gw.tcus) seguidores que cuelgan de el." }
+    else { $t += "Mientras arranca, la NCU no llega a NINGUN seguidor de los que cuelgan de el (IP a mano: no se cuantos son)." }
+    $t += "`r`n`r`nLo que NO se para: esos seguidores siguen al sol por su cuenta, porque el seguimiento vive en la TCU."
+    $t += "`r`nLo que SI se para: mientras este abajo NO HAY QUIEN LES MANDE UNA POSICION SEGURA, ni por grupo, ni por viento, ni desde el SCADA. El resto de la planta sigue como estaba."
+    $t += "`r`n`r`nCuanto tarda en volver no lo sabemos: se espera hasta $GW_REINICIO_ESPERA_S s y se dice lo que pase. Se comprueba por su tiempo de marcha, no por lo que conteste."
+    if ($null -eq $viento) {
+        $t += "`r`n`r`nOJO: no se ha podido leer el viento en ninguna NCU ($total consultadas). Se continua a ciegas en ese punto."
+    } else {
+        $t += "`r`n`r`nViento ahora (peor de $leidas NCU): nivel $($viento.nivel)" + $(if ($viento.alarma) { ' CON ALARMA' } else { ' (sin alarma)' })
+    }
+    $t += "`r`n`r`nContinuar?"
+    return $t
 }
 
 # A que gateways se pregunta. Con una IP dada a mano, a esa y solo a esa: las
@@ -8829,9 +8961,22 @@ $txtIGGwIp.Location = New-Object System.Drawing.Point(778, 336)
 $txtIGGwIp.Size = New-Object System.Drawing.Size(120, 22)
 $tabIG.Controls.Add($txtIGGwIp)
 
+# REINICIAR GATEWAY: en rojo como REINICIAR NCU, porque deja a medio campo sin
+# quien le mande una posicion segura. Reinicia UNO: el de la IP a mano o el
+# unico declarado. Login y IP, los mismos que IDENTIFICAR GATEWAYS.
+$btnIGGwReinicio = New-Object System.Windows.Forms.Button
+$btnIGGwReinicio.Text = 'REINICIAR GATEWAY'
+$btnIGGwReinicio.Location = New-Object System.Drawing.Point(190, 50)
+$btnIGGwReinicio.Size = New-Object System.Drawing.Size(170, 28)
+$btnIGGwReinicio.BackColor = [System.Drawing.Color]::Firebrick
+$btnIGGwReinicio.ForeColor = [System.Drawing.Color]::White
+$tabIG.Controls.Add($btnIGGwReinicio)
+$lblIGGwReinicio = LG $tabIG 'Reinicia UN Digi: el de la IP a mano o, sin IP, el unico que declare la conexion. Con guardia de viento, y se comprueba por su tiempo de marcha.' 372 536 54
+$lblIGGwReinicio.ForeColor = [System.Drawing.Color]::DimGray
+
 $lvIG = New-Object System.Windows.Forms.ListView
-$lvIG.Location = New-Object System.Drawing.Point(10, 56)
-$lvIG.Size = New-Object System.Drawing.Size(898, 274)
+$lvIG.Location = New-Object System.Drawing.Point(10, 86)
+$lvIG.Size = New-Object System.Drawing.Size(898, 244)
 $lvIG.View = 'Details'; $lvIG.FullRowSelect = $true; $lvIG.GridLines = $true
 foreach ($c in @(@('Tipo',80), @('NCU',45), @('GW',40), @('Id',110), @('Num. serie',130),
                  @('MAC',140), @('FW',110), @('FW fabrica',95), @('HW',55),
@@ -8839,7 +8984,7 @@ foreach ($c in @(@('Tipo',80), @('NCU',45), @('GW',40), @('Id',110), @('Num. ser
     [void]$lvIG.Columns.Add($c[0], $c[1])
 }
 $tabIG.Controls.Add($lvIG)
-$lblIGNota = LG $tabIG 'Los huecos son reales: la NCU no da serie ni MAC (el mapa R7.1 no los tiene y sus ids estan NOT READY), la HSU no da serie ni fecha, y el gateway no habla Modbus. IDENTIFICAR GATEWAYS le pregunta por HTTP/RCI al Digi su identidad y su carga (CPU y memoria, verificado en El Burgo): necesita ip_gw en el fichero de planta o la IP escrita a mano aqui abajo. Con ip_gw, el Diagnostico y el Inventario ya lo leen solos; el login de aqui vale para los tres.' 10 890 364
+$lblIGNota = LG $tabIG 'Los huecos son reales: la NCU no da serie ni MAC (el mapa R7.1 no los tiene y sus ids estan NOT READY), la HSU no da serie ni fecha, y el gateway no habla Modbus. IDENTIFICAR GATEWAYS le pregunta por HTTP/RCI al Digi su identidad y su carga (CPU y memoria, verificado en El Burgo): necesita ip_gw en el fichero de planta o la IP escrita a mano aqui abajo. Con ip_gw, el Diagnostico y el Inventario ya lo leen solos; el login de aqui vale para los tres. REINICIAR GATEWAY manda un reboot por RCI a UN Digi, con guardia de viento, y comprueba que lo hizo por su tiempo de marcha.' 10 890 364
 $lblIGNota.ForeColor = [System.Drawing.Color]::Gray
 
 # ============================ TAB ANALIZADOR DE BATERIAS ============================
@@ -14619,6 +14764,100 @@ function Gw-Carga-Leer([string]$ip, [int]$to, $cred = $null) {
     if ($c.ok) { return @{ok = $true; carga = $c; consulta = 'query_state (todo el estado)'; crudo = $t2} }
     return @{ok = $false; carga = $null; consulta = ''; crudo = ("$t1`n$t2").Trim()}
 }
+
+$btnIGGwReinicio.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    # los gateways de la conexion con lo que cuelga de cada uno, para el texto
+    $gws = @()
+    if ($cx.multi) {
+        foreach ($n in $cx.multi) { foreach ($g in @($n.gws)) { if ($g) {
+            $gws += ,@{ncu = "$($n.ncu)"; nGw = (Gw-Numero ([int]$g.puerto)); ip = "$($g.ip_gw)".Trim(); tcus = ([int]$g.fin - [int]$g.ini + 1)} } } }
+    } elseif ($cx.gws) {
+        foreach ($g in @($cx.gws)) { if ($g) {
+            $gws += ,@{ncu = (Ncu-DeNombre $cx.nombre); nGw = (Gw-Numero ([int]$g.puerto)); ip = "$($g.ip_gw)".Trim(); tcus = ([int]$g.fin - [int]$g.ini + 1)} } }
+    } elseif ("$($cx.puerto)" -match '^\d+$') {
+        $gws += ,@{ncu = (Ncu-DeNombre $cx.nombre); nGw = (Gw-Numero ([int]$cx.puerto)); ip = "$($cx.ip_gw)".Trim(); tcus = ([int]$cx.fin - [int]$cx.ini + 1)}
+    }
+    $o = Gw-ObjetivoReinicio $gws $txtIGGwIp.Text
+    if (-not $o.ok) { Con "NO se reinicia: $($o.nota)." ([System.Drawing.Color]::Orange); return }
+    $gw = $o.gw
+    $clave = $(if ("$($gw.ncu)" -eq '?' -or "$($gw.ncu)" -eq '') { "GW $($gw.ip) (IP a mano)" } else { "NCU$($gw.ncu) GW$($gw.nGw) $($gw.ip)" })
+    $cred = Gw-CredencialUI
+    $to = [int]$cx.to
+
+    # PRIMERO SU UPTIME, y si no lo da, no se manda nada: sin el tiempo de
+    # marcha de antes no habria forma de comprobar despues que reinicio, y un
+    # Digi que no contesta ahora no es un Digi al que mandarle cosas a ciegas.
+    $k0 = Gw-Carga-Leer $gw.ip $to $cred
+    if (-not $k0.ok -or $null -eq $k0.carga.uptime) {
+        Con "NO se reinicia ${clave}: no contesta a device_stats (o no da uptime), y sin su tiempo de marcha de ANTES no se podria comprobar despues que ha reiniciado." ([System.Drawing.Color]::Firebrick)
+        if ("$($k0.crudo)" -ne '') { Con ("  respuesta cruda: " + ("$($k0.crudo)" -replace '\s+', ' ')) ([System.Drawing.Color]::Gainsboro) }
+        return
+    }
+    $antes = $k0.carga.uptime
+    Con "$clave contesta: $(Gw-CargaResumen $k0.carga)" ([System.Drawing.Color]::SteelBlue)
+
+    # GUARDIA DE VIENTO, en todas las NCUs de la conexion: el viento es de la
+    # planta, y con una IP a mano no se sabe de que NCU cuelga este Digi.
+    $ncus = @(Gw-NcusParaViento $cx)
+    $lect = @(); foreach ($ipN in $ncus) { $lect += ,(Viento-Seguro $ipN $to) }
+    $vp = Gw-VientoPeor $lect
+    if ($null -ne $vp.v -and ([int]$vp.v.nivel -gt 0 -or $vp.v.alarma)) {
+        Con "NO se reinicia: hay viento (nivel $($vp.v.nivel)$(if ($vp.v.alarma) { ', CON ALARMA' })). Mientras el gateway este abajo nadie puede mandar una posicion segura a sus seguidores." ([System.Drawing.Color]::Firebrick)
+        return
+    }
+    if ($null -eq $vp.v) { Con "No se ha podido leer el viento en ninguna de las $($vp.total) NCU: se avisa en la ventana y decides tu." ([System.Drawing.Color]::Orange) }
+
+    $resp = [System.Windows.Forms.MessageBox]::Show((Gw-TextoReinicio $gw $vp.v $vp.leidas $vp.total),
+                'Reiniciar el gateway', 'YesNo', 'Warning')
+    if ($resp -ne [System.Windows.Forms.DialogResult]::Yes) { Con 'Cancelado.' ([System.Drawing.Color]::Gray); return }
+
+    $txt = Rci-Post $gw.ip $to $RCI_REINICIO $cred
+    $ac = Gw-ReinicioAceptado $txt
+    switch ($ac.estado) {
+        'error' { Con "${clave}: $($ac.nota)" ([System.Drawing.Color]::Firebrick); Con ("  " + ("$txt" -replace '\s+', ' ')) ([System.Drawing.Color]::Gainsboro); return }
+        'raro'  { Con "${clave}: $($ac.nota)" ([System.Drawing.Color]::Orange); Con ("  " + ("$txt" -replace '\s+', ' ')) ([System.Drawing.Color]::Gainsboro) }
+        default { Con "${clave}: $($ac.nota)." ([System.Drawing.Color]::Gray) }
+    }
+    Con "Esperando a que $clave se vaya abajo y vuelva (hasta $GW_REINICIO_ESPERA_S s)..." ([System.Drawing.Color]::SteelBlue)
+
+    # FASE 1: que DEJE de contestar. Un Digi suele contestar al reboot y tardar
+    # un par de segundos en irse; si se mirase el uptime en ese hueco saldria el
+    # de antes y se diria "no ha reiniciado" sin razon. Asi que primero se
+    # espera a la caida, con su propio tope.
+    $t0 = Get-Date; $cayo = $false; $ultimo = $null
+    while (((Get-Date) - $t0).TotalSeconds -lt $GW_REINICIO_CAIDA_S) {
+        Start-Sleep -Seconds 2
+        [System.Windows.Forms.Application]::DoEvents()
+        if (Chequear-Cancelado) { break }
+        $k = Gw-Carga-Leer $gw.ip $to $cred
+        if (-not $k.ok) { $cayo = $true; break }
+        $ultimo = $k.carga.uptime
+    }
+    # FASE 2: que vuelva, con un uptime menor.
+    $vuelta = $null
+    if ($cayo) {
+        while (((Get-Date) - $t0).TotalSeconds -lt $GW_REINICIO_ESPERA_S) {
+            Start-Sleep -Seconds $GW_REINICIO_PASO_S
+            [System.Windows.Forms.Application]::DoEvents()
+            if (Chequear-Cancelado) { break }
+            $k = Gw-Carga-Leer $gw.ip $to $cred
+            if ($k.ok -and $null -ne $k.carga.uptime) { $vuelta = $k.carga.uptime; break }
+        }
+    } else {
+        # nunca cayo: lo que haya contestado al final es lo que se juzga
+        $vuelta = $ultimo
+    }
+    $segs = [int]((Get-Date) - $t0).TotalSeconds
+    $ver = Gw-ReinicioVolvio $antes $vuelta $cayo
+    if ($ver.ok) {
+        Con "${clave}: $($ver.nota). Tardo $segs s." ([System.Drawing.Color]::DarkGreen)
+    } else {
+        $color = $(if ($ver.tarda) { [System.Drawing.Color]::DarkOrange } else { [System.Drawing.Color]::Firebrick })
+        Con "${clave}: $($ver.nota) (tras $segs s)." $color
+        if (-not $ver.tarda) { Con 'Compruebalo antes de irte.' ([System.Drawing.Color]::Firebrick) }
+    }
+} })
 
 $btnIGGw.Add_Click({ Lanzar {
     $cx = Params-Conexion
