@@ -4,6 +4,38 @@
 
 Es el complemento de **escritura** del SCADA de este repo: el SCADA es solo-lectura a propósito; cuando hay que *cambiar* algo en un TCU (configuración, reloj, NVM) se usa esta toolbox desde el portátil conectado a la LAN de planta.
 
+### `REINICIAR GATEWAY`: reiniciar un Digi desde la app (v12.5)
+
+Lo pidió Iñaki el 02/10/2026. Botón en **Inventario global**, al lado de
+`IDENTIFICAR GATEWAYS`, con el mismo login y la misma casilla de IP. Manda un
+`<reboot/>` por RCI al Digi y espera a que vuelva.
+
+**Uno cada vez.** El de la IP escrita a mano o, sin IP, el único que declare la
+conexión. Con dos declarados y sin IP se pide la IP: reiniciar los dos a la vez
+deja la NCU sin ningún seguidor a la vista.
+
+**Los mismos frenos que `REINICIAR NCU`, a escala de medio campo.** Mientras el
+gateway arranca, la NCU no llega a ninguna de las TCUs que cuelgan de él: siguen
+al sol por su cuenta, pero **no hay quien les mande una posición segura**. De ahí
+la guardia de viento, que aquí mira **todas las NCUs de la conexión** (el viento
+es de la planta, y con una IP a mano no se sabe de qué NCU cuelga el Digi).
+Antes de mandar nada se enseña entero lo que se para y lo que no.
+
+**Y se le lee el uptime antes de tocarlo — si no lo da, no se manda nada.** Es
+la pieza central: un Digi que no contesta ahora no es un Digi al que mandarle
+cosas a ciegas, y sin su tiempo de marcha de antes no habría forma de comprobar
+después que reinició.
+
+⚠️ **Qué está verificado y qué no.** El *transporte* sí: `POST /UE/rci`, el que
+usa a diario el recolector de cobertura y el que contestó en El Burgo a
+`device_info` y `device_stats`. El *verbo* `<reboot/>` no: sale de la referencia
+RCI de Digi y **no se ha visto todavía contra un ConnectPort real**. Por eso la
+prueba de que funcionó no es la respuesta al reboot —que se vuelca cruda si no
+se reconoce— sino el uptime: después tiene que **(1) dejar de contestar y
+(2) volver con un uptime menor**. Un Digi que contesta todo el rato con el mismo
+tiempo de marcha no ha reiniciado, diga lo que diga el XML. Esa comprobación no
+depende de acertar el esquema de la respuesta.
+
 ### Ajustes de la NCU desde la app, y dos fallos de campo (v12.4)
 
 Tres cosas, las tres salidas de probar la herramienta en planta el 02/10/2026.
