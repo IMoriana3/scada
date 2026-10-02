@@ -3,8 +3,9 @@
 # de antes, no se da por reiniciado uno que contesta todo el rato con el mismo
 # tiempo de marcha, y el viento de CUALQUIER NCU de la conexion lo para.
 #
-# El verbo <reboot/> de RCI no se ha visto contra un Digi real (si el
-# transporte); por eso la prueba de que funciono es el uptime y no el XML.
+# El verbo <reboot/> se vio funcionar en El Burgo el 02/10/2026. La prueba de
+# que funciono sigue siendo el uptime y no el XML, porque eso no depende del
+# firmware que lleve el Digi ni de acertar el esquema de su respuesta.
 $ErrorActionPreference = 'Stop'
 $fuente = Join-Path (Split-Path $PSScriptRoot -Parent) 'TCU_Toolbox.ps1'
 $tokens = $null; $errores = $null
@@ -140,6 +141,7 @@ Igual ($h.IndexOf('Gw-Carga-Leer') -lt $h.IndexOf('Viento-Seguro')) $true 'prime
 Igual ($h.IndexOf('Viento-Seguro') -lt $h.IndexOf('MessageBox')) $true 'el viento antes de preguntar'
 Igual ($h.IndexOf('MessageBox') -lt $h.IndexOf('$RCI_REINICIO')) $true 'y preguntar antes de mandar'
 Igual ($src -match "RCI_REINICIO = '<rci_request version=`"1.1`"><reboot/></rci_request>'") $true 'el verbo es reboot'
-Igual ($src -match 'no se ha visto todavia contra un ConnectPort') $true 'y queda dicho que el verbo no esta verificado'
+Igual ($src -match 'VERIFICADO EN PLANTA el 02/10/2026') $true 'y queda dicho cuando se vio funcionar de verdad'
+Igual ($src -match 'no se ha visto todavia contra un ConnectPort') $false 'y ya no dice que no se ha visto'
 
 Write-Host 'test_gw_reinicio.ps1: OK'

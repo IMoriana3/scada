@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '12.5'
+$VERSION_TOOLBOX = '12.6'
 # La etiqueta va en el titulo de la ventana: es lo que mira alguien en campo
 # para saber QUE MAPA da por bueno la herramienta. Decia R7.1 desde la v11.86,
 # que es cuando entraron registros que solo existen en el R8 (40030-40039, el
@@ -3851,16 +3851,18 @@ function Gw-Carga([string]$xml) {
 # por su cuenta -el seguimiento vive en la TCU-, pero durante esa ventana no hay
 # quien les mande una posicion segura. De ahi la guardia de viento, otra vez.
 #
-# QUE ESTA VERIFICADO Y QUE NO, dicho con precision. El transporte si: POST XML
-# a /UE/rci, el que usa a diario el recolector de cobertura y el que contesto en
-# El Burgo a device_info y device_stats. El VERBO no: <reboot/> sale de la
-# referencia RCI de Digi y no se ha visto todavia contra un ConnectPort de
-# verdad. Por eso la prueba de que funciono NO es la respuesta al reboot -que
-# se vuelca cruda si no se reconoce- sino el uptime: antes de mandar nada se le
-# lee el tiempo de marcha, y despues tiene que (1) dejar de contestar y (2)
-# volver con un uptime MENOR. Si contesta todo el rato con el mismo uptime, no
-# ha reiniciado, diga lo que diga el XML. Esa comprobacion no depende de
-# acertar el esquema de la respuesta.
+# VERIFICADO EN PLANTA el 02/10/2026 por Inaki, en El Burgo: el Digi se fue
+# abajo y volvio con menos tiempo de marcha. Hasta ese dia el verbo <reboot/>
+# era solo lo que dice la referencia RCI de Digi -el transporte si estaba
+# probado, POST XML a /UE/rci-, y la herramienta lo decia asi. Se mantiene la
+# forma de comprobarlo porque no depende de acertar el esquema de la respuesta:
+# la prueba de que funciono NO es el XML que conteste al reboot -que se vuelca
+# crudo si no se reconoce- sino el uptime: antes de mandar nada se le lee el
+# tiempo de marcha, y despues tiene que (1) dejar de contestar y (2) volver con
+# un uptime MENOR. Si contesta todo el rato con el mismo uptime, no ha
+# reiniciado, diga lo que diga el XML. Un firmware distinto (El Burgo mezcla
+# uno de 2013 y uno de 2023) podria contestar otra cosa, y el uptime seguiria
+# siendo la verdad.
 #
 # Y UNO CADA VEZ. Nunca "los gateways": el de la IP escrita a mano o, sin IP,
 # el unico que declare la conexion. Con dos declarados y sin IP, se pide la IP.

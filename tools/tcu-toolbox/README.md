@@ -4,6 +4,37 @@
 
 Es el complemento de **escritura** del SCADA de este repo: el SCADA es solo-lectura a propósito; cuando hay que *cambiar* algo en un TCU (configuración, reloj, NVM) se usa esta toolbox desde el portátil conectado a la LAN de planta.
 
+### Todas las plantas saben ya la IP de sus Digi (v12.6)
+
+`IDENTIFICAR GATEWAYS` decía en Ayora *"ninguno de los 16 gateways declarados trae
+ip_gw"*: el fichero de planta se generó antes de que `make_plantas.py` leyera las
+columnas `IP GW` del Excel. La regla la dio Iñaki el 02/10/2026: **los dos Digi de
+cada NCU van en las dos direcciones siguientes a la de la NCU** (NCU1
+`192.168.4.10` → `.11` y `.12`), y `plantas/24025-ayora.json` lleva ya la del GW1
+en las 16 NCUs. Con eso, Diagnóstico e Inventario le preguntan solos a cada Digi
+y el inventario sale con modelo, MAC, firmware y carga de cada gateway.
+
+**El `.12` no es un gateway que falte.** En Ayora cada NCU tiene un solo gateway
+con TCUs (puerto 503, todas en él); el segundo Digi está montado **de reserva**,
+sin ninguna TCU colgando. Por eso el fichero declara uno por NCU y está bien así.
+No tiene hueco en la topología —un gateway sin TCUs no existe para el barrido—,
+así que hoy no se le pregunta nada; si algún día interesa saber si la reserva
+está viva y con qué firmware, es un botón aparte, no un gateway más.
+
+**La regla vale para todas las plantas** (Iñaki, 02/10/2026): gateway del puerto
+503 → NCU+1, gateway del puerto 504 → NCU+2. Es la misma que ya cumplía El Burgo
+(`.52` → `.53` y `.54`). Aplicada a San José (82 entradas, 21 NCUs), Fayón, Túnez
+y Bagnarelli, comprobando que ninguna IP de gateway coincide con la de otra NCU
+de la misma planta. `make_plantas.py` las conserva al regenerar sin Excel.
+
+⚠️ Son **regla, no lectura**: salvo los dos Digi de El Burgo NCU1, ninguna se ha
+preguntado aún por RCI. La comprobación es pulsar `IDENTIFICAR GATEWAYS` en cada
+planta; el que no conteste, se mira.
+
+También en esta versión: queda registrado en `plants.yml` que el Digi `.53` de El
+Burgo cambió de firmware hacia el 16-17/09 (2.17.2.1 → 2.27.4) y que no tiene
+reloj, y que `REINICIAR GATEWAY` **se vio funcionar en planta** el 02/10.
+
 ### `REINICIAR GATEWAY`: reiniciar un Digi desde la app (v12.5)
 
 Lo pidió Iñaki el 02/10/2026. Botón en **Inventario global**, al lado de
@@ -26,15 +57,14 @@ la pieza central: un Digi que no contesta ahora no es un Digi al que mandarle
 cosas a ciegas, y sin su tiempo de marcha de antes no habría forma de comprobar
 después que reinició.
 
-⚠️ **Qué está verificado y qué no.** El *transporte* sí: `POST /UE/rci`, el que
-usa a diario el recolector de cobertura y el que contestó en El Burgo a
-`device_info` y `device_stats`. El *verbo* `<reboot/>` no: sale de la referencia
-RCI de Digi y **no se ha visto todavía contra un ConnectPort real**. Por eso la
-prueba de que funcionó no es la respuesta al reboot —que se vuelca cruda si no
-se reconoce— sino el uptime: después tiene que **(1) dejar de contestar y
-(2) volver con un uptime menor**. Un Digi que contesta todo el rato con el mismo
-tiempo de marcha no ha reiniciado, diga lo que diga el XML. Esa comprobación no
-depende de acertar el esquema de la respuesta.
+✅ **Verificado en planta el 02/10/2026** (Iñaki, El Burgo): el Digi se fue abajo
+y volvió con menos tiempo de marcha. Hasta ese día el verbo `<reboot/>` era sólo
+lo que dice la referencia RCI de Digi, y la herramienta lo decía así. La forma de
+comprobarlo se mantiene porque no depende del firmware ni del esquema de la
+respuesta: la prueba de que funcionó no es el XML que conteste al reboot —que se
+vuelca crudo si no se reconoce— sino el uptime: después tiene que **(1) dejar de
+contestar y (2) volver con un uptime menor**. Un Digi que contesta todo el rato
+con el mismo tiempo de marcha no ha reiniciado, diga lo que diga el XML.
 
 ### Ajustes de la NCU desde la app, y dos fallos de campo (v12.4)
 
