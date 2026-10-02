@@ -223,10 +223,24 @@ descuido.
 
 ### Lo que esta versión NO sustituye todavía de la página
 
-Faltan los logs y CSV, el histórico de MAC, la tabla de *fulltracking* y el
-websocket de tiempo real. El **firmware de la NCU** no está en esta lista: se
-queda fuera a propósito (ver arriba), así que la página seguirá haciendo falta
-para eso y solo para eso.
+Faltan los **logs y CSV** de la NCU, `internal_hsu_config` y el **websocket** de
+tiempo real.
+
+**Dos cosas no están en esa lista porque se quedan fuera a propósito**, y las dos
+por el mismo motivo: son **subir un fichero binario** a la NCU, y de un binario
+subido a medias **no hay nada que releer** para comprobarlo — que es la red de
+seguridad sobre la que se apoya todo lo demás de esta pestaña.
+
+- **El firmware de la NCU** (`ota`).
+- **La tabla de *fulltracking*** (`PUT /private_api/fulltracking/table`,
+  `application/octet-stream`, 10 minutos de *timeout* y un parámetro
+  `force_send` que, por su propio nombre, sirve para saltarse una comprobación).
+
+Para esas dos, la página de la NCU seguirá haciendo falta. El banco exige que
+ninguno de los dos extremos aparezca **ni escrito**.
+
+⚠️ Que la tabla no se suba desde aquí **no quita** que el `fulltracking_status`
+de cada TCU se lea: eso viene en el volcado y se sigue viendo.
 
 ## Panel web de la NCU: leer lo que el Modbus no cuenta (v11.95)
 
