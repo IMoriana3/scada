@@ -267,6 +267,17 @@ Igual ($src -match 'private_api/commands/soft_restart') $true 'el reinicio esta,
 # Modbus, ni desde aqui-, lo que se arregla yendo a la planta con un cable. Es la
 # unica operacion que no se podria deshacer desde esta herramienta.
 Igual ($src -match 'private_api/ota') $false 'el extremo de firmware no aparece ni escrito'
+# LA TABLA DE FULLTRACKING, FUERA POR EL MISMO MOTIVO (decision del 02/10/2026).
+# En el codigo de la pagina es PUT /private_api/fulltracking/table con
+# Content-Type application/octet-stream, timeout de 10 minutos y un parametro
+# force_send: o sea, SUBIR UN FICHERO BINARIO a la NCU, la misma forma que el
+# firmware. Y el mismo problema: de un binario subido a medias no hay nada que
+# releer para comprobarlo, que es la red de seguridad de todo lo demas de esta
+# pestana. El force_send encima dice que hay una comprobacion que se puede
+# saltar, y eso no lo va a saltar esta herramienta.
+# Ojo: esto NO es el campo fulltracking_status de cada TCU, que se lee y se
+# seguira leyendo; es la subida de la tabla.
+Igual ($src -match 'private_api/fulltracking') $false 'ni el de subir la tabla de fulltracking'
 # La escritura de configuracion ya va ARMADA (01/10/2026, decision de Inaki tras
 # capturar la peticion real). Lo que se exige ahora no es que este desarmada,
 # sino que no pueda salir por descuido: que pase por la ida y vuelta por JSON
