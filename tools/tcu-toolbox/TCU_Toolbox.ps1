@@ -2627,8 +2627,24 @@ function Api-Ajuste($cfg, [string]$campo, $valor) {
 # parsean a mano, con lista cerrada, y lo que no este en la lista NO se
 # interpreta: se rechaza. Mas vale un "no te he entendido" que un si por
 # accidente. Pura.
-$API_AJUSTE_SI = @('1', 'si', 'sí', 'true', 'on', 'yes', 'activado', 'habilitado')
+# Las listas van SIN TILDES, y los acentos de lo que teclee el tecnico se quitan
+# antes de comparar. No es cosmetica: este fichero va en UTF-8 con BOM justo para
+# que PowerShell 5.1 no lea los acentos como ANSI, y si alguien lo guardara
+# alguna vez sin BOM, una 'sí' escrita aqui dentro quedaria corrupta y ya no
+# casaria con la 'sí' que llega del cuadro de texto -que si es Unicode de
+# verdad-. Comparando sin acentos, la respuesta correcta no depende de como se
+# haya guardado el fuente. Lo vio el CI de PowerShell 5.1 el 02/10/2026.
+$API_AJUSTE_SI = @('1', 'si', 'true', 'on', 'yes', 'activado', 'habilitado')
 $API_AJUSTE_NO = @('0', 'no', 'false', 'off', 'desactivado', 'deshabilitado')
+function Api-SinTildes([string]$t) {
+    $d = "$t".Normalize([System.Text.NormalizationForm]::FormD)
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($c in $d.ToCharArray()) {
+        if ([System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($c) -ne
+            [System.Globalization.UnicodeCategory]::NonSpacingMark) { [void]$sb.Append($c) }
+    }
+    return $sb.ToString().Normalize([System.Text.NormalizationForm]::FormC)
+}
 function Api-AjusteTexto([string]$campo, [string]$texto) {
     if (-not $API_AJUSTES.Contains($campo)) {
         return @{ok = $false; valor = $null; nota = "no se sabe cambiar '$campo'"}
@@ -2639,7 +2655,7 @@ function Api-AjusteTexto([string]$campo, [string]$texto) {
         # los numeros los valida Api-Ajuste con su rango: aqui solo se pasan
         return @{ok = $true; valor = $t; nota = ''}
     }
-    $b = $t.ToLowerInvariant()
+    $b = (Api-SinTildes $t).ToLowerInvariant()
     if ($API_AJUSTE_SI -contains $b) { return @{ok = $true;  valor = $true;  nota = ''} }
     if ($API_AJUSTE_NO -contains $b) { return @{ok = $true;  valor = $false; nota = ''} }
     return @{ok = $false; valor = $null

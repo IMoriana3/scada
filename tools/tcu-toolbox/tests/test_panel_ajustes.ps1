@@ -12,7 +12,7 @@ $fuente = Join-Path (Split-Path $PSScriptRoot -Parent) 'TCU_Toolbox.ps1'
 $tokens = $null; $errores = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($fuente, [ref]$tokens, [ref]$errores)
 if ($errores.Count) { throw "TCU_Toolbox.ps1 con errores de sintaxis: $($errores.Count)" }
-foreach ($n in @('Api-Clonar','Api-Ajuste','Api-AjusteTexto')) {
+foreach ($n in @('Api-Clonar','Api-SinTildes','Api-Ajuste','Api-AjusteTexto')) {
     $nodos = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $x.Name -eq $n }, $true))
     if ($nodos.Count -ne 1) { throw "Se esperaba una sola funcion $n (hay $($nodos.Count))" }
     . ([scriptblock]::Create($nodos[0].Extent.Text))
@@ -36,7 +36,18 @@ Igual (Api-AjusteTexto 'modbus_enable_writing' ' No ').valor $false 'con espacio
 Igual (Api-AjusteTexto 'modbus_enable_writing' '0').valor $false 'un 0 es no'
 Igual (Api-AjusteTexto 'modbus_enable_writing' 'false').valor $false 'y false es no'
 Igual (Api-AjusteTexto 'modbus_enable_writing' 'SI').valor $true 'SI es si'
-Igual (Api-AjusteTexto 'modbus_enable_writing' 'sí').valor $true 'con tilde tambien, que es como se escribe'
+# La tilde se construye por codigo y no se escribe: este fichero se queda en
+# ASCII puro como el resto del banco, porque PowerShell 5.1 lee un .ps1 SIN BOM
+# como ANSI y se come los acentos. Fallo asi en el CI el 02/10/2026: la prueba
+# decia que 'si' con tilde no se reconocia, cuando lo que no se reconocia era el
+# literal de la propia prueba.
+$siTilde = 's' + [char]0x00ED
+Igual (Api-AjusteTexto 'modbus_enable_writing' $siTilde).valor $true 'con tilde tambien, que es como se escribe'
+Igual (Api-AjusteTexto 'modbus_enable_writing' ('S' + [char]0x00CD)).valor $true 'y en mayusculas con tilde'
+# y los acentos se quitan ANTES de comparar, asi que la lista puede ir sin ellos
+Igual (Api-SinTildes $siTilde) 'si' 'la tilde se quita para comparar'
+Igual (Api-SinTildes 'desactivado') 'desactivado' 'y lo que no la lleva no se toca'
+Igual (@($API_AJUSTE_SI) -contains $siTilde) $false 'la lista va sin tildes, a proposito'
 Igual (Api-AjusteTexto 'modbus_enable_writing' '1').valor $true 'y un 1'
 # LA QUE IMPORTA: lo que no esta en la lista NO se interpreta
 $x = Api-AjusteTexto 'modbus_enable_writing' 'quiza'
