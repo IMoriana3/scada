@@ -26,7 +26,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$VERSION_TOOLBOX = '12.3'
+$VERSION_TOOLBOX = '12.4'
 # La etiqueta va en el titulo de la ventana: es lo que mira alguien en campo
 # para saber QUE MAPA da por bueno la herramienta. Decia R7.1 desde la v11.86,
 # que es cuando entraron registros que solo existen en el R8 (40030-40039, el
@@ -2619,6 +2619,49 @@ function Api-Ajuste($cfg, [string]$campo, $valor) {
     return @{ok = $true; nota = ''; cfg = $nuevo; permitidas = @($campo)}
 }
 
+# EL TEXTO QUE ESCRIBE EL TECNICO -> EL VALOR, y existe por una trampa concreta
+# de PowerShell: [bool]'no' es $true. Cualquier cadena no vacia lo es. O sea que
+# si el cuadro de texto llegara crudo a Api-Ajuste, escribir "no" en "permitir
+# escritura Modbus" la habria ACTIVADO, que es justo lo contrario de lo que el
+# tecnico queria y en el campo mas delicado de la lista. Asi que los si/no se
+# parsean a mano, con lista cerrada, y lo que no este en la lista NO se
+# interpreta: se rechaza. Mas vale un "no te he entendido" que un si por
+# accidente. Pura.
+# Las listas van SIN TILDES, y los acentos de lo que teclee el tecnico se quitan
+# antes de comparar. No es cosmetica: este fichero va en UTF-8 con BOM justo para
+# que PowerShell 5.1 no lea los acentos como ANSI, y si alguien lo guardara
+# alguna vez sin BOM, una 'sí' escrita aqui dentro quedaria corrupta y ya no
+# casaria con la 'sí' que llega del cuadro de texto -que si es Unicode de
+# verdad-. Comparando sin acentos, la respuesta correcta no depende de como se
+# haya guardado el fuente. Lo vio el CI de PowerShell 5.1 el 02/10/2026.
+$API_AJUSTE_SI = @('1', 'si', 'true', 'on', 'yes', 'activado', 'habilitado')
+$API_AJUSTE_NO = @('0', 'no', 'false', 'off', 'desactivado', 'deshabilitado')
+function Api-SinTildes([string]$t) {
+    $d = "$t".Normalize([System.Text.NormalizationForm]::FormD)
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($c in $d.ToCharArray()) {
+        if ([System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($c) -ne
+            [System.Globalization.UnicodeCategory]::NonSpacingMark) { [void]$sb.Append($c) }
+    }
+    return $sb.ToString().Normalize([System.Text.NormalizationForm]::FormC)
+}
+function Api-AjusteTexto([string]$campo, [string]$texto) {
+    if (-not $API_AJUSTES.Contains($campo)) {
+        return @{ok = $false; valor = $null; nota = "no se sabe cambiar '$campo'"}
+    }
+    $t = "$texto".Trim()
+    if ($t -eq '') { return @{ok = $false; valor = $null; nota = 'pon un valor'} }
+    if ("$($API_AJUSTES[$campo].tipo)" -ne 'bool') {
+        # los numeros los valida Api-Ajuste con su rango: aqui solo se pasan
+        return @{ok = $true; valor = $t; nota = ''}
+    }
+    $b = (Api-SinTildes $t).ToLowerInvariant()
+    if ($API_AJUSTE_SI -contains $b) { return @{ok = $true;  valor = $true;  nota = ''} }
+    if ($API_AJUSTE_NO -contains $b) { return @{ok = $true;  valor = $false; nota = ''} }
+    return @{ok = $false; valor = $null
+             nota = "'$texto' no es ni si ni no, y en este campo no se adivina: escribe SI o NO"}
+}
+
 # El texto de confirmar. Un cambio de configuracion se ensena ENTERO antes de
 # mandarlo -no "se van a aplicar 3 cambios", sino cuales-, porque es lo unico
 # que le da al tecnico la oportunidad de ver que esta tocando lo que no era.
@@ -5093,6 +5136,13 @@ function Ncu-HsuCompat {
             # coma decimal o un cambio de redaccion lo dejaba sin dato. Numeros
             # de verdad, y $null -no cadena vacia- cuando la HSU no contesta:
             # un 0 en una curva de viento es un dato, y aqui no lo hay.
+            # LA EDAD DE ORIGEN, que se calculaba y se tiraba. Arriba sale el
+            # $edad -la NCU dice cuanto hace que oyo a esta estacion- y se usaba
+            # para la salud y para el texto, pero no se ponia en la fila. Sin
+            # ella, Operacion no puede saber si el dato es de ahora y marca
+            # TODA HSU como "EDAD DE ORIGEN DESCONOCIDA", teniendo el dato
+            # delante. Visto en campo el 02/10/2026 en El Burgo.
+            Edad_s=$(if ($edad -ge 0) { $edad } else { '' })
             Viento_ms=$(if ($salud -eq 'OFFLINE') { $null } else { [math]::Round($viento, 2) })
             Dir_deg=$(if ($salud -eq 'OFFLINE') { $null } else { [math]::Round($dir, 1) })
             Nieve_m=$(if ($salud -eq 'OFFLINE') { $null } else { [math]::Round($nieve, 3) })
@@ -5102,8 +5152,17 @@ function Ncu-HsuCompat {
             alarmas_2=$(if ($e) { "0x{0:X4}" -f [int]$e.al2 } else { '' }); alarmas_3=''; alarmas_4=''; system_status=''
         }
     }
-    # un hueco con el bloque ampliado poblado y el basico a cero se emite
-    # igualmente como su HSUn: que el aviso no se quede sin fila
+    # Un hueco con el bloque ampliado POBLADO y el basico a cero se emite
+    # igualmente como su HSUn: que el aviso no se quede sin fila.
+    #
+    # "Poblado" lo decide Hsu-ExtPoblado, y ahi esta la correccion: un hueco que
+    # solo dice "fallo com. HSU" ya no llega hasta aqui. Antes si, y por eso una
+    # NCU con dos estaciones sacaba cinco averiadas de la nada.
+    #
+    # Lo que NO se pierde: una estacion DECLARADA en la topologia que no
+    # conteste la sigue cantando Hsu-Cuadre, que carea esperadas contra
+    # halladas. Ese es el sitio bueno para ese aviso -sabe cuantas deberia
+    # haber- y este no, que solo ve huecos.
     foreach ($h in @($ext.Keys | Sort-Object)) {
         $e = $ext[$h]
         if (@($lista | Where-Object { "$($_.TCU)" -eq ("HSU{0}" -f ($h + 1)) }).Count) { continue }
@@ -5148,6 +5207,13 @@ $NCU_HSUEXT_AL1 = @{
 }
 $NCU_HSUEXT_AL1_PROPIAS = 0xE01F   # bits 0..4, 13, 14, 15: sensores y com
 $NCU_HSUEXT_AL1_METEO   = 0x0640   # bits 6, 9, 10: nieve, viento, racha
+# EL BIT QUE NO PRUEBA QUE HAYA NADA. Un hueco VACIO contesta con el 15 puesto:
+# la NCU esta diciendo "no puedo hablar con la estacion de este hueco", y de una
+# estacion que no existe eso es exactamente lo que se espera. Es prueba de
+# AUSENCIA, no de que haya una estacion rota. Si cuenta para decidir si el hueco
+# esta poblado, se inventan estaciones averiadas: El Burgo NCU1 -que tiene DOS-
+# salia en campo con DIEZ filas, cinco de ellas en ALARMA que no existia.
+$NCU_HSUEXT_AL1_SOLO_AUSENCIA = 0x8000   # bit 15, 'fallo com. HSU'
 $NCU_HSUEXT_AL2 = @{
   0='modo difusa activo'; 1='modulo de computo caido'; 2='com. piranometro tracking'
   3='com. piranometro difusa'; 4='irradiancia no casa con Solcast'; 5='error algoritmo difusa'
@@ -5156,6 +5222,14 @@ $NCU_HSUEXT_AL2_AVERIAS = 0x003E   # todos menos el bit 0, que es un estado y no
 
 # Lee el bloque ampliado entero y devuelve un diccionario hueco -> datos, para
 # que Ncu-HsuCompat lo funda en la fila de su HSUn. NO emite filas propias.
+# Si el bloque ampliado de un hueco dice algo o no. Aparte y pura a proposito:
+# es una decision de criterio -que cuenta como "hay una estacion aqui"- y se
+# equivoco una vez, asi que tiene que poder probarse sin una NCU delante.
+function Hsu-ExtPoblado([int]$w0, [int]$w1, [int]$w2, [int]$al1) {
+    $util = $al1 -band (-bnot $NCU_HSUEXT_AL1_SOLO_AUSENCIA)
+    return -not ($w0 -eq 0 -and $w1 -eq 0 -and $w2 -eq 0 -and $util -eq 0)
+}
+
 function Ncu-HsuExt {
     $r = @{}
     for ($h = 0; $h -lt 10; $h++) {
@@ -5163,7 +5237,7 @@ function Ncu-HsuExt {
         # devuelve lo que haya, sin arrastrar a los bloques basicos
         try { $w = FC03-Leer $UNIT_NCU (Dir-Trama (28000 + 100 * $h)) 30 }
         catch { break }
-        if ($w[0] -eq 0 -and $w[1] -eq 0 -and $w[2] -eq 0 -and $w[3] -eq 0) { continue }   # hueco vacio
+        if (-not (Hsu-ExtPoblado $w[0] $w[1] $w[2] $w[3])) { continue }   # hueco vacio
         $al1 = $w[3]; $al2 = $w[10]
         $sep = Hsu-AlarmasSeparadas $al1 $NCU_HSUEXT_AL1 $NCU_HSUEXT_AL1_PROPIAS $NCU_HSUEXT_AL1_METEO
         $irrH = ([int]$w[22] -shl 16) -bor [int]$w[21]
@@ -8313,13 +8387,39 @@ $btnPANReiniciar.ForeColor = [System.Drawing.Color]::White
 $btnPANReiniciar.Enabled = $false
 $tabPAN.Controls.Add($btnPANReiniciar)
 
+# AJUSTES: los seis campos sueltos de la configuracion que se saben cambiar.
+# Estaban en el motor desde la 11.99 -validados, con rango y con frenos- y sin
+# boton, o sea inalcanzables: el tecnico tenia que seguir yendo a la pagina web
+# para tocar un timeout. Si el objetivo es quitarse de la pagina, un motor sin
+# boton no cuenta.
+[void](LG $tabPAN 'Ajuste:' 418 46 324)
+$cbPANAjuste = New-Object System.Windows.Forms.ComboBox
+$cbPANAjuste.Location = New-Object System.Drawing.Point(468, 320)
+$cbPANAjuste.Size = New-Object System.Drawing.Size(150, 22)
+$cbPANAjuste.DropDownStyle = 'DropDownList'
+foreach ($k in @($API_AJUSTES.Keys)) { [void]$cbPANAjuste.Items.Add("$($API_AJUSTES[$k].que)") }
+$cbPANAjuste.SelectedIndex = 0
+$tabPAN.Controls.Add($cbPANAjuste)
+
+[void](LG $tabPAN 'Valor:' 626 42 324)
+$txtPANValor = TG $tabPAN '' 670 322 56
+
+$btnPANAjustar = New-Object System.Windows.Forms.Button
+$btnPANAjustar.Text = 'APLICAR AJUSTE'
+$btnPANAjustar.Location = New-Object System.Drawing.Point(734, 318)
+$btnPANAjustar.Size = New-Object System.Drawing.Size(150, 28)
+$btnPANAjustar.BackColor = [System.Drawing.Color]::FromArgb(150,60,0)
+$btnPANAjustar.ForeColor = [System.Drawing.Color]::White
+$btnPANAjustar.Enabled = $false
+$tabPAN.Controls.Add($btnPANAjustar)
+
 $lvPAN = New-Object System.Windows.Forms.ListView
 $lvPAN.Location = New-Object System.Drawing.Point(10, 86)
 $lvPAN.Size = New-Object System.Drawing.Size(898, 222)
 $lvPAN.View = 'Details'; $lvPAN.FullRowSelect = $true; $lvPAN.GridLines = $true
 $tabPAN.Controls.Add($lvPAN)
 
-$lblPANNota = LG $tabPAN 'Habla con la pagina web de la NCU por HTTP (puerto 80), con el mismo usuario y contrasena con los que se entra a mano; no se guardan en ningun sitio. LEER PANEL trae de una vez lo que el mapa Modbus no da: a que grupo pertenece cada seguidor -con eso la pestana Grupos ya dice a cuantos va la orden-, las HSUs de verdad con su esclavo y cuales son prestadas de otra NCU, la version de firmware, si "Allow writing on the modbus map" esta puesto, y los errores por equipo de donde salen las TCUs mudas. GUARDAR CONFIG deja la configuracion entera en un JSON con fecha: hoy, si una NCU se muere, nadie tiene la suya. COMPARAR CON... carea lo leido contra una copia y dice que ha cambiado. METER y SACAR editan los grupos, que es lo unico que por Modbus no se puede hacer de ninguna manera: antes de mandar nada se ensena TODO lo que cambia, se guarda copia, y la red de la NCU no se toca jamas. OJO: la NCU sirve su pagina en HTTP pelado, asi que usuario y contrasena viajan en claro por la red de planta.' 10 890 352
+$lblPANNota = LG $tabPAN 'Habla con la pagina web de la NCU por HTTP (puerto 80), con el mismo usuario y contrasena con los que se entra a mano; no se guardan en ningun sitio. LEER PANEL trae de una vez lo que el mapa Modbus no da: a que grupo pertenece cada seguidor -con eso la pestana Grupos ya dice a cuantos va la orden-, las HSUs de verdad con su esclavo y cuales son prestadas de otra NCU, la version de firmware, si "Allow writing on the modbus map" esta puesto, y los errores por equipo de donde salen las TCUs mudas. GUARDAR CONFIG deja la configuracion entera en un JSON con fecha: hoy, si una NCU se muere, nadie tiene la suya. COMPARAR CON... carea lo leido contra una copia y dice que ha cambiado. APLICAR AJUSTE cambia uno de los seis campos sueltos de la configuracion (timeouts, intervalos de sondeo y el permiso de escritura Modbus): al elegir el campo, el cuadro Valor ensena lo que la NCU lleva puesto ahora. METER y SACAR editan los grupos, que es lo unico que por Modbus no se puede hacer de ninguna manera: antes de mandar nada se ensena TODO lo que cambia, se guarda copia, y la red de la NCU no se toca jamas. OJO: la NCU sirve su pagina en HTTP pelado, asi que usuario y contrasena viajan en claro por la red de planta.' 10 890 352
 $lblPANNota.ForeColor = [System.Drawing.Color]::Gray
 
 # ============================ TAB GRUPOS NCU ============================
@@ -16903,7 +17003,7 @@ function Api-Pintar {
     # los de configuracion, solo con UNA NCU leida: estos cambian cosas y no se
     # mandan a ciegas a varias a la vez
     $uno = (@($script:ApiUltimo).Count -eq 1)
-    foreach ($b in @($btnPANCopia, $btnPANComparar, $btnPANMeter, $btnPANSacar, $btnPANReiniciar, $btnPANMacs, $btnPANHsuCfg)) { $b.Enabled = $uno }
+    foreach ($b in @($btnPANCopia, $btnPANComparar, $btnPANMeter, $btnPANSacar, $btnPANReiniciar, $btnPANMacs, $btnPANHsuCfg, $btnPANAjustar)) { $b.Enabled = $uno }
 }
 
 $cbPANVista.Add_SelectedIndexChanged({ if (@($script:ApiUltimo).Count -gt 0) { Api-Pintar } })
@@ -17102,6 +17202,33 @@ $btnPANSacar.Add_Click({ Lanzar {
     $g = 0; if (-not [int]::TryParse("$($txtPANGrupo.Text)".Trim(), [ref]$g)) { Con 'Pon el numero de grupo.' ([System.Drawing.Color]::Orange); return }
     $t = @(Parse-ListaNums "$($txtPANTcus.Text)")
     Api-AplicarCambio $n (Api-GrupoEditar $n.cfg $g $t $false) "SACAR del grupo $g los seguidores: $(Api-Rango $t)"
+} })
+
+# Al elegir campo, el cuadro se rellena con LO QUE LA NCU LLEVA PUESTO AHORA.
+# Asi el tecnico ve el valor actual antes de escribir encima -que es media
+# pregunta de "como lo cambio"- y no tiene que irse a la pagina a mirarlo.
+# Si no hay una sola NCU leida, se deja en blanco y no se inventa nada.
+$cbPANAjuste.Add_SelectedIndexChanged({
+    $campo = @($API_AJUSTES.Keys)[$cbPANAjuste.SelectedIndex]
+    $txtPANValor.Text = ''
+    $n = @($script:ApiUltimo)
+    if ($n.Count -ne 1 -or $null -eq $n[0].cfg) { return }
+    $prop = $n[0].cfg.PSObject.Properties[$campo]
+    if ($null -eq $prop) { return }
+    if ("$($API_AJUSTES[$campo].tipo)" -eq 'bool') {
+        $txtPANValor.Text = $(if ([bool]$prop.Value) { 'SI' } else { 'NO' })
+    } else {
+        $txtPANValor.Text = "$($prop.Value)"
+    }
+})
+
+$btnPANAjustar.Add_Click({ Lanzar {
+    $n = Api-UnaNcu; if ($null -eq $n) { return }
+    $campo = @($API_AJUSTES.Keys)[$cbPANAjuste.SelectedIndex]
+    $v = Api-AjusteTexto $campo "$($txtPANValor.Text)"
+    if (-not $v.ok) { Con $v.nota ([System.Drawing.Color]::Orange); return }
+    Api-AplicarCambio $n (Api-Ajuste $n.cfg $campo $v.valor) `
+        "Cambiar $($API_AJUSTES[$campo].que) ($campo) a: $($txtPANValor.Text)"
 } })
 
 $btnPANReiniciar.Add_Click({ Lanzar {
