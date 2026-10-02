@@ -4,6 +4,44 @@
 
 Es el complemento de **escritura** del SCADA de este repo: el SCADA es solo-lectura a propósito; cuando hay que *cambiar* algo en un TCU (configuración, reloj, NVM) se usa esta toolbox desde el portátil conectado a la LAN de planta.
 
+### Ajustes de la NCU desde la app, y dos fallos de campo (v12.4)
+
+Tres cosas, las tres salidas de probar la herramienta en planta el 02/10/2026.
+
+**1. `APLICAR AJUSTE`: los ajustes sueltos, por fin con botón.** Los seis campos
+que se saben cambiar de la configuración de la NCU —`tcu_timeout`, `hsu_timeout`,
+los tres intervalos de sondeo y `modbus_enable_writing`— estaban validados y con
+sus frenos **desde la v11.99, y sin botón ninguno**: inalcanzables. Para tocar un
+timeout había que seguir yendo a la página web de la NCU, que es justo lo que se
+quiere dejar de hacer. Un motor sin botón no cuenta. Al elegir el campo, el
+cuadro *Valor* enseña **lo que la NCU lleva puesto ahora**, y el cambio pasa por
+el mismo camino que los grupos: copia de seguridad antes, el diff entero en la
+ventana de confirmar, ida y vuelta por JSON, y relectura después.
+
+⚠️ **`[bool]'no'` es `$true` en PowerShell.** Cualquier cadena no vacía lo es. Si
+el texto del cuadro llegara crudo al motor, escribir `no` en *permitir escritura
+Modbus* la habría **activado** — lo contrario de lo pedido, en el campo más
+delicado de la lista. Así que los sí/no se parsean con lista cerrada y **lo que no
+está en la lista se rechaza** en vez de interpretarse: mejor un *«no te he
+entendido»* que un sí por accidente.
+
+**2. HSUs fantasma.** En El Burgo la pestaña Diagnóstico enseñaba HSUs que no
+existen, nueve de ellas en ALARMA. El bloque extendido (28000) de un hueco
+**vacío** tiene puesto el bit 15 de `al1` (*fallo com. HSU*): la NCU diciendo que
+no puede hablar con una estación que no está ahí. El filtro de huecos vacíos
+miraba los cuatro registros a cero y, con ese bit puesto, concluía que el hueco
+estaba ocupado — tomando **la prueba de que no hay nada como prueba de que hay
+algo roto**. Ahora ese bit se descuenta antes de decidir. La alarma legítima
+—*declarada en `plants.yml` y no contesta*— sigue saliendo, pero por `Hsu-Cuadre`,
+que es quien tiene con qué compararla.
+
+**3. La edad de origen de las HSUs, que se calculaba y se tiraba.** La pestaña
+Operación marcaba **toda HSU** como `EDAD DE ORIGEN DESCONOCIDA`. El dato existía:
+`Ncu-HsuCompat` calcula cuánto hace que la NCU oyó a esa estación y lo usa para
+decidir si está OFFLINE y para el texto… pero no lo ponía en la fila. Ahora va
+como `Edad_s`, igual que en las TCUs, y Operación puede juzgar si el dato es de
+ahora.
+
 ### Configuración de la HSU interna de la NCU (v12.3)
 
 `CONFIG HSU` lee `GET /private_api/internal_hsu_config`: **qué sensores lleva

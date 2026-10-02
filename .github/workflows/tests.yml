@@ -171,6 +171,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
           powershell -NoProfile -File test_hsu_cfg.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_hsu_fantasma.ps1 ──'
+          pwsh -NoProfile -File test_hsu_fantasma.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_hsu_fantasma.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_panel_ajustes.ps1 ──'
+          pwsh -NoProfile -File test_panel_ajustes.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_panel_ajustes.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
           Write-Host '── test_macs.ps1 ──'
           pwsh -NoProfile -File test_macs.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
