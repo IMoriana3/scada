@@ -299,7 +299,7 @@ _RE_TAG = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")      # ncu, tcu, hsu
 #: (`collector/main.py:tracker_points`). Lista BLANCA: un campo nuevo no entra
 #: solo, hay que añadirlo aquí, y así una `?fields=` inventada no llega a Flux.
 _TRACKER_FIELDS = (
-    "tilt_angle", "target_angle", "soc", "soh", "battery_voltage",
+    "tilt_angle", "target_angle", "desvio_vecinos", "soc", "soh", "battery_voltage",
     "battery_current", "temp_battery", "temp_pcb", "motor_current",
     "panel_voltage", "main_state", "bt_active", "safe_position",
     "system_ok", "alarms1", "alarms2", "comms_age_s",
