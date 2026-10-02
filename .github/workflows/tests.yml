@@ -245,6 +245,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
           powershell -NoProfile -File test_panel_ajustes.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_gw_filas.ps1 ──'
+          pwsh -NoProfile -File test_gw_filas.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_gw_filas.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
           Write-Host '── test_gw_reinicio.ps1 ──'
           pwsh -NoProfile -File test_gw_reinicio.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
