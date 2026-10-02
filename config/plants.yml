@@ -51,6 +51,12 @@ ncus:
     # los Digi en .53 (GW1) y .54 (GW2); los dos contestaron por RCI el
     # 16/09/2026 (CPU 19 % y 16 %, 16 MB). El .54 es el que escanea a diario el
     # recolector de cobertura.
+    # FIRMWARE DEL .53: el 16/09 daba 2.17.2.1 (82001536_H, de 2013); el
+    # 02/10/2026 su pagina ensena 2.27.4 (82002549_N, de 05/2023) con 15 dias
+    # de marcha, o sea que arranco hacia el 16-17/09: alguien le actualizo el
+    # firmware ese dia. Del .54 no se sabe si sigue en 2.17: IDENTIFICAR
+    # GATEWAYS lo dice. Y el Digi NO tiene reloj (fecha de 1970 "based on
+    # uptime"): sus logs llevan fecha falsa; los tiempos buenos son los de la NCU.
     gateways:
       - { puerto: 503, tcu_ini: 1,  tcu_fin: 56,  hsu_esclavo: 230, ip_gw: "10.100.1.53" }
       - { puerto: 504, tcu_ini: 57, tcu_fin: 108, hsu_esclavo: 231, ip_gw: "10.100.1.54" }
