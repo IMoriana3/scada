@@ -7,7 +7,7 @@ $fuente = Join-Path (Split-Path $PSScriptRoot -Parent) 'TCU_Toolbox.ps1'
 $tokens = $null; $errores = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($fuente, [ref]$tokens, [ref]$errores)
 if ($errores.Count) { throw "TCU_Toolbox.ps1 con errores de sintaxis: $($errores.Count)" }
-foreach ($n in @('Api-MacsFecha','Api-MacsParsear','Api-MacsResumen','Api-MacsPorMac','Api-MacsCareo')) {
+foreach ($n in @('Api-MacsGw','Api-MacsFecha','Api-MacsParsear','Api-MacsResumen','Api-MacsPorMac','Api-MacsCareo')) {
     $nodos = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $x.Name -eq $n }, $true))
     if ($nodos.Count -ne 1) { throw "Se esperaba una sola funcion $n (hay $($nodos.Count))" }
     . ([scriptblock]::Create($nodos[0].Extent.Text))
@@ -30,14 +30,23 @@ $f = @(Api-MacsParsear $csv)
 Igual $f.Count 19 'se leen las 19 filas del fichero real'
 Igual $f[0].TCU 185 'la primera es el esclavo 185'
 Igual $f[0].MAC '0013A200426D8E6E' 'con su MAC'
-Igual $f[0].Gateway '1' 'y su gateway'
+Igual $f[0].Gateway 'GW2' 'y su gateway, dicho como se habla en la planta'
+Igual $f[0].Gateway_id '1' 'guardando ademas el numero crudo de la NCU'
+
+# LA NCU CUENTA DESDE 0 Y NOSOTROS DESDE 1. Ensenar el crudo saca un "GW0" que no
+# existe en ninguna planta ni en ningun fichero nuestro.
+Igual (Api-MacsGw '0') 'GW1' 'el gateway 0 de la NCU es nuestro GW1'
+Igual (Api-MacsGw '1') 'GW2' 'y el 1 es el GW2'
+Igual (Api-MacsGw '2') 'GW3' 'y vale si algun dia hay tres'
+Igual (Api-MacsGw 'raro') 'raro' 'lo que no se entiende se deja crudo, no se inventa'
+Igual (Api-MacsGw '-1') '-1' 'ni un negativo se convierte en GW0'
 # la cabecera manda, no el orden: si la NCU mete una columna en medio, se sigue
 # leyendo bien en vez de poner fechas en la columna de MAC
 $revuelto = "zigbee_mac;modbus_id;gateway_id;discovered`n0013A200AAAA;7;0;16-12-2025 10:53:08"
 Igual ((Api-MacsParsear $revuelto)[0].TCU) 7 'las columnas se buscan por la cabecera, no por su sitio'
 Igual ((Api-MacsParsear $revuelto)[0].MAC) '0013A200AAAA' 'y la MAC va donde dice la cabecera'
 Igual ((Api-MacsParsear $revuelto)[0].Descubierta) '16-12-2025 10:53:08' 'y la fecha tambien: sin esto, una columna fija pondria la MAC en la fecha'
-Igual ((Api-MacsParsear $revuelto)[0].Gateway) '0' 'y el gateway'
+Igual ((Api-MacsParsear $revuelto)[0].Gateway) 'GW1' 'y el gateway, traducido'
 Igual (@(Api-MacsParsear "otra;cosa`n1;2").Count) 0 'un CSV que no es este no se interpreta a la fuerza'
 Igual (@(Api-MacsParsear '').Count) 0 'ni uno vacio'
 
