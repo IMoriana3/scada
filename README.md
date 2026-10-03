@@ -452,6 +452,7 @@ Backend Docker (`tracker-scada.tar.gz`) + frontend de un solo fichero (`index.ht
 | `tools/gen_trafico.py` | Hornea en `trafico.html` los bytes por ciclo de cada NCU (fuente: el modelo) |
 | `tools/test_trafico.py` | Banco del medidor: modelo de bytes, estimación ≡ medida, line protocol |
 | `tools/test_comms_age.py` | Banco del reloj: la resta NCU−NCU, medida en color de flota |
+| `tools/ncu_simulada.py` | Esclavo Modbus TCP con el mapa real; con `--gemelo`, la planta de `gemelo-digital` |
 | `tools/test_eventos.py` | Banco de eventos: flancos, hora del dato, ámbitos reales |
 | `tools/test_health_modo.py` | Banco del modo en `health`: OFF no puede verse como OK |
 | `tools/test_modbus_map.py` | Banco del mapa: el subconjunto contra el R7 publicado (bloques, offsets, tipos, alarmas) |
@@ -553,6 +554,45 @@ Respuesta de `/live` (resumen):
 - `ncu_status` — alarmas globales de viento/nieve, estado de gateways, UPS.
 - `traffic` — tags: `plant`, `ncu` · fields: `lan_up_b`, `lan_down_b`, `lan_b`, `modbus_tx`, `connections`, `cloud_raw_b`, `cloud_gz_b`, `cloud_points`, `cloud_writes`, `period_s`. Un punto por NCU y ciclo, con el coste de ESE ciclo (no acumulados): la proyección a día/mes la hace `/traffic` sobre el tiempo realmente medido, así un colector parado no infla la cuenta.
 - `meteo` — tags: `ncu`, `hsu` · fields: `wind_speed`, `wind_direction`, `snow_level`, `wind_level`, `alarm_wind`, `alarm_snow`.
+
+### La NCU simulada (`tools/ncu_simulada.py`)
+
+Un **esclavo Modbus TCP de verdad** que sirve el mapa desde el MISMO
+`config/modbus_map.yml` que lee el colector. No es un doble del driver: es un doble
+del **equipo**, así que por delante se le pone el driver de hierro y se recorre el
+camino entero —Modbus, troceado, decode—, que es justo lo que
+`drivers/simulated.py` no toca nunca.
+
+```bash
+python3 tools/ncu_simulada.py --tcus 60 --averias 3   # planta de juguete, sin dependencias
+python3 tools/ncu_simulada.py --autotest              # se lee con el driver real y sale
+```
+
+Con `--gemelo` deja de fabricarse los valores y los saca del motor de planta de
+`gemelo-digital`: jerarquía de posiciones seguras, banda muerta en pulsos,
+inclinómetro descalibrado, seta enclavada y batería con JEITA. La **escritura**
+vuelve por el mismo camino —un FC06/FC16 contra esta NCU entra por la misma puerta
+que usa la interfaz web del simulador—, así que un forzado de posición segura
+escrito desde la toolbox **mueve la planta simulada de verdad**.
+
+```bash
+node sim/servidor.mjs --tcus 200 --puerto 8787        # en el repo gemelo-digital
+python3 tools/ncu_simulada.py --gemelo http://127.0.0.1:8787 --autotest
+```
+
+Ese `--autotest` con gemelo comprueba lo que **sólo se puede comprobar con un motor
+detrás**, y las tres cosas se midieron al rescatarlo (3-oct-2026, 19 de 19):
+
+- que el **mismo ángulo** sale igual por el bloque compacto de la NCU (f32 en
+  radianes, 30500+) y por el mapa propio del TCU (s16 en grados×10, 30111) — medido
+  −5,07° contra −5,00°, y la diferencia es la **cuantización** del segundo, no un
+  error de conversión;
+- que una **orden escrita por Modbus llega hasta la planta** — 100 TCU pasaron a
+  posición segura 1 con un FC06 a 40001;
+- que un registro de **sólo lectura se rechaza con excepción 02**.
+
+Es ESCRITURA SOBRE UNA NCU SIMULADA: simulación y banco de pruebas, **nunca control
+real**.
 
 ### Mapa Modbus (`config/modbus_map.yml`)
 
