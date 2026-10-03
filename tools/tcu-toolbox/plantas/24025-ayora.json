@@ -7,7 +7,8 @@
       "ip": "192.168.4.10",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 63
+      "tcu_fin": 63,
+      "ip_gw": "192.168.4.11"
     },
     {
       "nombre": "Ayora NCU2",
@@ -22,7 +23,8 @@
       ],
       "hsu_esclavos": [
         230
-      ]
+      ],
+      "ip_gw": "192.168.4.21"
     },
     {
       "nombre": "Ayora NCU3",
@@ -37,7 +39,8 @@
       ],
       "hsu_esclavos": [
         230
-      ]
+      ],
+      "ip_gw": "192.168.4.31"
     },
     {
       "nombre": "Ayora NCU4",
@@ -50,7 +53,8 @@
           "nombre": "Repetidor 1",
           "esclavo": 200
         }
-      ]
+      ],
+      "ip_gw": "192.168.4.41"
     },
     {
       "nombre": "Ayora NCU5",
@@ -65,28 +69,32 @@
       ],
       "hsu_esclavos": [
         230
-      ]
+      ],
+      "ip_gw": "192.168.4.46"
     },
     {
       "nombre": "Ayora NCU6",
       "ip": "192.168.4.50",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 26
+      "tcu_fin": 26,
+      "ip_gw": "192.168.4.51"
     },
     {
       "nombre": "Ayora NCU7 (TCU 1-13)",
       "ip": "192.168.4.55",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 13
+      "tcu_fin": 13,
+      "ip_gw": "192.168.4.56"
     },
     {
       "nombre": "Ayora NCU7 (TCU 15-23)",
       "ip": "192.168.4.55",
       "puerto": 503,
       "tcu_ini": 15,
-      "tcu_fin": 23
+      "tcu_fin": 23,
+      "ip_gw": "192.168.4.56"
     },
     {
       "nombre": "Ayora NCU8",
@@ -101,21 +109,24 @@
       ],
       "hsu_esclavos": [
         230
-      ]
+      ],
+      "ip_gw": "192.168.4.61"
     },
     {
       "nombre": "Ayora NCU9",
       "ip": "192.168.4.65",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 41
+      "tcu_fin": 41,
+      "ip_gw": "192.168.4.66"
     },
     {
       "nombre": "Ayora NCU10",
       "ip": "192.168.4.70",
       "puerto": 503,
       "tcu_ini": 1,
-      "tcu_fin": 40
+      "tcu_fin": 40,
+      "ip_gw": "192.168.4.71"
     },
     {
       "nombre": "Ayora NCU11",
@@ -130,7 +141,8 @@
       ],
       "hsu_esclavos": [
         230
-      ]
+      ],
+      "ip_gw": "192.168.4.76"
     },
     {
       "nombre": "Ayora NCU12",
@@ -155,7 +167,8 @@
           "nombre": "Repetidor 3",
           "esclavo": 201
         }
-      ]
+      ],
+      "ip_gw": "192.168.4.81"
     },
     {
       "nombre": "Ayora NCU13",
@@ -170,7 +183,8 @@
       ],
       "hsu_esclavos": [
         230
-      ]
+      ],
+      "ip_gw": "192.168.4.91"
     },
     {
       "nombre": "Ayora NCU14",
@@ -183,7 +197,8 @@
           "nombre": "Repetidor 4",
           "esclavo": 200
         }
-      ]
+      ],
+      "ip_gw": "192.168.4.96"
     },
     {
       "nombre": "Ayora NCU15",
@@ -206,7 +221,8 @@
           "nombre": "Repetidor 5",
           "esclavo": 200
         }
-      ]
+      ],
+      "ip_gw": "192.168.4.101"
     },
     {
       "nombre": "Ayora NCU16",
@@ -221,7 +237,8 @@
       ],
       "hsu_esclavos": [
         230
-      ]
+      ],
+      "ip_gw": "192.168.4.111"
     }
   ]
 }

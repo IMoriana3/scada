@@ -16,13 +16,133 @@ jobs:
           python-version: '3.12'
       - name: Instalar dependencias de API y banco Modbus
         run: pip install -r api/requirements.txt 'pymodbus>=3.6' httpx
+
+      # EL REPO HERMANO, porque dos bancos lo necesitan y sin él uno falla y el
+      # otro —peor— PASA EN SILENCIO. Medido el 2026-10-02, con el hermano
+      # escondido: `test_plants_yml` sale con rc=2 (y puso este job en rojo),
+      # pero `test_modbus_map` sale con **rc=0** avisando de que no compara
+      # nada. Es deliberado para un portátil de campo y es veneno en una
+      # puerta: verde sin haber mirado el mapa.
+      #
+      # `cobertura-zigbee` es PÚBLICO, así que esto no necesita secreto ninguno.
+      # Va a `..` porque es donde los dos bancos lo buscan (`../cobertura-zigbee`).
+      - name: el repo hermano cobertura-zigbee (lo piden dos bancos)
+        run: git clone --depth 1 https://github.com/IMoriana3/cobertura-zigbee ../cobertura-zigbee
+
+      # Y QUE SU AUSENCIA CUESTE UN ROJO, no un verde callado. Si el clon falla
+      # o el hermano mueve esos ficheros, el banco del mapa seguiría saliendo 0:
+      # esto lo convierte en un fallo con nombre.
+      - name: el hermano trae lo que esos dos bancos necesitan
+        run: |
+          test -f ../cobertura-zigbee/tools/modbus_src/ncu_r7_hsu_r23.json || {
+            echo "ROJO · falta el mapa R7 del hermano: test_modbus_map pasaría EN SILENCIO"; exit 1; }
+          test -d ../cobertura-zigbee || {
+            echo "ROJO · falta el hermano: test_plants_yml no tiene layouts"; exit 1; }
+      # LOS BANCOS DE `tools/` EN BUCLE, Y NO UNO A UNO. La lista escrita a mano
+      # es exactamente lo que dejó CINCO bancos sin correr sin que nada lo
+      # dijera: `test_eventos`, `test_health_modo`, `test_modbus_map`,
+      # `test_plants_yml` y `test_trafico`. Un banco que no corre nadie es
+      # decoración, y lo dice la cabecera de este fichero — le pasaba a cinco.
+      #
+      # LO QUE SE ENCONTRÓ AL ENCENDERLOS, los dos podridos en silencio:
+      #   · `test_trafico` reventaba con `KeyError: 'tcu_ids'`. Los drivers
+      #     pasaron a leer la lista de bindings comisionados y sus tres fixtures
+      #     se quedaron en `tcu_count`. Producción nunca estuvo rota:
+      #     `load_cfg()` inyecta `tcu_ids` desde el inventario.
+      #   · y detrás, `trafico.html` desfasado de `plants.yml` (los gateways de
+      #     NCU2, 3 -> 2). Regenerado con `tools/gen_trafico.py --write`, que es
+      #     lo que manda el propio banco.
+      #
+      # El bucle recorre `tools/test_*.py`, así que un banco nuevo entra solo y
+      # ya no hay que acordarse de añadirlo. Lo que no se pueda correr así se
+      # DECLARA en EXENTOS con su motivo, y el guard de abajo exige que cada
+      # exención siga nombrando un fichero que existe: una excusa que sobrevive
+      # al fichero que excusaba miente con autoridad.
       - name: Histórico, identidad y compatibilidad API
         run: |
+          set -o pipefail
+          # Módulo unittest, no un script con veredicto propio: va aparte.
           python -m unittest tools.test_historical_milestone -v
-          python tools/test_api.py
-          python tools/test_comms_age.py
-          python tools/test_expected.py
-          python tools/test_expected_api.py
+
+          EXENTOS="test_historical_milestone"
+          for n in $EXENTOS; do
+            if [ ! -f "tools/$n.py" ]; then
+              echo "ROJO · exención huérfana: tools/$n.py ya no existe, borra su entrada"
+              exit 1
+            fi
+          done
+
+          rc=0
+          corridos=0
+          for f in tools/test_*.py; do
+            n=$(basename "$f" .py)
+            case " $EXENTOS " in *" $n "*) echo "── $n · exento (se lanza con unittest)"; continue;; esac
+            echo "── $f ──"
+            python "$f" || rc=1
+            corridos=$((corridos + 1))
+          done
+          echo "bancos corridos en bucle: $corridos"
+          # EL VACÍO ES ERROR, NO PASS: si el glob dejara de casar —un
+          # renombrado, un mv— este paso saldría verde sin haber probado nada.
+          if [ "$corridos" -lt 12 ]; then
+            echo "ROJO · solo $corridos bancos; el 2026-10-02 eran 12 en bucle + 1 por unittest"
+            exit 1
+          fi
+
+      # LA NCU SIMULADA, QUE NO CASA CON `test_*.py` Y POR ESO NO LA CORRÍA NADIE.
+      # No es un banco de una función: levanta un esclavo Modbus TCP de verdad con el
+      # mapa real y le pone el DRIVER DE HIERRO por delante, así que recorre Modbus +
+      # troceado + decode —el camino que `drivers/simulated.py` no toca nunca—.
+      #
+      # Se enciende aquí porque al rescatarla de `claude/simulador-tcu-24ubzk`
+      # (20-ago, nunca fusionada) reventó con `KeyError: 'tcu_ids'`, que es EL MISMO
+      # fallo de los tres fixtures de arriba: los drivers pasaron a exigir la lista de
+      # bindings comisionados y esto se quedó en `tcu_count`. O sea que es el cuarto
+      # sitio con la misma podredumbre, y lo único que lo distinguía es que nadie lo
+      # corría para verlo. Un banco que no corre nadie es decoración.
+      #
+      # El camino con `--gemelo` (planta de `gemelo-digital`, escritura incluida) NO
+      # entra aquí a propósito: necesita node y el repo hermano levantado. Se corrió a
+      # mano el 3-oct-2026 con 19 de 19, y lo que comprueba está en el README.
+      - name: la NCU simulada, con el driver real por delante
+        run: |
+          set -o pipefail
+          python3 tools/ncu_simulada.py --autotest | tee /tmp/sim.log
+          grep -q 'el camino entero' /tmp/sim.log || {
+            echo "ROJO · el autotest no llegó a su veredicto"; exit 1; }
+          # Y QUE CUENTE: un autotest que imprimiera su línea final sin haber
+          # comprobado nada saldría verde. El 3-oct-2026 eran 12 comprobaciones.
+          n=$(grep -c '^  ok ' /tmp/sim.log)
+          echo "comprobaciones de la simulada: $n"
+          [ "$n" -ge 12 ] || { echo "ROJO · solo $n comprobaciones, eran 12"; exit 1; }
+          exit $rc
+
+  # El banco de ficheros de planta de la toolbox (python) no corria en ningun
+  # workflow: por eso el fichero duplicado de El Burgo estuvo una semana en main.
+  plantas:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # openpyxl lo necesitan test_ip_gateway.py y test_tramos.py: el modo Excel
+      # de make_plantas.py lee la hoja «Direcciones IP» y esas dos le fabrican
+      # una. Falto en la primera pasada de este job y por eso nacio en rojo.
+      - name: Instalar dependencias
+        run: pip install pyyaml openpyxl
+      - name: Ficheros de planta de la toolbox
+        working-directory: tools/tcu-toolbox
+        run: |
+          set -o pipefail
+          rc=0
+          for f in test_plantas_unicas.py test_gateways_solape.py test_tramos.py \
+                   test_conservar.py test_tarjeta.py test_ip_gateway.py \
+                   test_columnas_rsu.py test_sanjose_ambitos.py; do
+            echo "── $f ──"
+            python "$f" || rc=1
+          done
+          exit $rc
 
   node:
     runs-on: ubuntu-latest
@@ -87,6 +207,26 @@ jobs:
             exit 1
           }
 
+          # y la maqueta de la API del panel web de la NCU: el lector se apoya en
+          # que la cookie del login viaje en la segunda llamada, y eso solo se
+          # comprueba contra un servidor que la exija
+          $api = Start-Process -FilePath python -ArgumentList 'api_server.py' -PassThru `
+                   -RedirectStandardOutput api.out -RedirectStandardError api.err
+          $apiArriba = $false
+          for ($i = 0; $i -lt 50 -and -not $apiArriba; $i++) {
+            Start-Sleep -Milliseconds 300
+            try {
+              $c = New-Object System.Net.Sockets.TcpClient
+              $c.Connect('127.0.0.1', 15080); $c.Close(); $apiArriba = $true
+            } catch {}
+          }
+          if (-not $apiArriba) {
+            Write-Host 'api_server.py no llego a escuchar en 15080'
+            if (Test-Path api.out) { Get-Content api.out }
+            if (Test-Path api.err) { Get-Content api.err }
+            exit 1
+          }
+
           function Test-Interfaz([string]$exe) {
             $p = Start-Process $exe -ArgumentList '-NoProfile','-File','test_sequences_ui.ps1' -PassThru -RedirectStandardOutput ui.out -RedirectStandardError ui.err
             $termino = $p.WaitForExit(60000)
@@ -101,6 +241,61 @@ jobs:
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
           Write-Host '── test_device_variables.ps1 ──'
           pwsh -NoProfile -File test_device_variables.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_viento_cache.ps1 ──'
+          pwsh -NoProfile -File test_viento_cache.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_viento_cache.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_panel_ncu.ps1 ──'
+          pwsh -NoProfile -File test_panel_ncu.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_panel_ncu.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_panel_cfg.ps1 ──'
+          pwsh -NoProfile -File test_panel_cfg.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_panel_cfg.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_hsu_cfg.ps1 ──'
+          pwsh -NoProfile -File test_hsu_cfg.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_hsu_cfg.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_hsu_fantasma.ps1 ──'
+          pwsh -NoProfile -File test_hsu_fantasma.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_hsu_fantasma.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_panel_ajustes.ps1 ──'
+          pwsh -NoProfile -File test_panel_ajustes.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_panel_ajustes.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_arranque.ps1 ──'
+          pwsh -NoProfile -File test_arranque.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_arranque.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_gw_filas.ps1 ──'
+          pwsh -NoProfile -File test_gw_filas.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_gw_filas.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_gw_reinicio.ps1 ──'
+          pwsh -NoProfile -File test_gw_reinicio.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_gw_reinicio.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_macs.ps1 ──'
+          pwsh -NoProfile -File test_macs.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_macs.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          Write-Host '── test_panel_ncu_red.ps1 (contra la maqueta de la API) ──'
+          pwsh -NoProfile -File test_panel_ncu_red.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_panel_ncu_red.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
           pwsh -NoProfile -File test_operations.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
@@ -135,6 +330,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
 
           Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
+          Stop-Process -Id $api.Id -Force -ErrorAction SilentlyContinue
           exit $rc
 
       - name: Capturas de interfaz de secuencias

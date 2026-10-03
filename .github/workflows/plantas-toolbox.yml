@@ -32,6 +32,16 @@ jobs:
         working-directory: tools/tcu-toolbox
         run: python make_plantas.py
 
+      # Este workflow hace commit a main EL SOLO, asi que lo que genere tiene que
+      # pasar por el banco antes. Sin esto, el 25/09/2026 se auto-commiteo un
+      # segundo fichero de El Burgo -la planta salia duplicada en el portatil- y
+      # no lo dijo nadie hasta que una de las dos copias se quedo atras.
+      - name: Comprobar lo generado
+        working-directory: tools/tcu-toolbox
+        run: |
+          python test_plantas_unicas.py
+          python test_gateways_solape.py
+
       - name: Commit si hay cambios
         run: |
           git add tools/tcu-toolbox/plantas

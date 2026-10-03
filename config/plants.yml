@@ -51,6 +51,12 @@ ncus:
     # los Digi en .53 (GW1) y .54 (GW2); los dos contestaron por RCI el
     # 16/09/2026 (CPU 19 % y 16 %, 16 MB). El .54 es el que escanea a diario el
     # recolector de cobertura.
+    # FIRMWARE DEL .53: el 16/09 daba 2.17.2.1 (82001536_H, de 2013); el
+    # 02/10/2026 su pagina ensena 2.27.4 (82002549_N, de 05/2023) con 15 dias
+    # de marcha, o sea que arranco hacia el 16-17/09: alguien le actualizo el
+    # firmware ese dia. Del .54 no se sabe si sigue en 2.17: IDENTIFICAR
+    # GATEWAYS lo dice. Y el Digi NO tiene reloj (fecha de 1970 "based on
+    # uptime"): sus logs llevan fecha falsa; los tiempos buenos son los de la NCU.
     gateways:
       - { puerto: 503, tcu_ini: 1,  tcu_fin: 56,  hsu_esclavo: 230, ip_gw: "10.100.1.53" }
       - { puerto: 504, tcu_ini: 57, tcu_fin: 108, hsu_esclavo: 231, ip_gw: "10.100.1.54" }
@@ -67,13 +73,24 @@ ncus:
     gateways:
       - { puerto: 503, tcu_ini: 1,  tcu_fin: 45,  hsu_esclavo: 230, ip_gw: "10.100.1.57" }
       - { puerto: 504, tcu_ini: 46, tcu_fin: 107, hsu_esclavo: 231, ip_gw: "10.100.1.58" }
-      # TCU 109 suelta en GW2 (rangos sacados de los .bat de Sunner; la 108
-      # no existe). Confirmar en campo. Va sin hsu_esclavo: la estación del
-      # GW2 ya está declarada arriba, en la fila del rango bueno.
-      # `fuera_de_dwg` lo dice como DATO y no solo en este comentario: el careo
-      # contra el layout (tools/test_plants_yml.py) lo informa en vez de darlo
-      # por divergencia, porque es un hecho conocido y no un despiste.
-      - { puerto: 504, tcu_ini: 109, tcu_fin: 109, fuera_de_dwg: [109], ip_gw: "10.100.1.58" }
+      # LA TCU 109 EXISTE Y NO SE LEE A PROPOSITO. Estaba declarada aquí como
+      # un rango suelto en el GW2, sacado de los .bat de Sunner y pendiente de
+      # confirmar; el 01/10/2026 se confirmó leyendo el panel web de la propia
+      # NCU2, que la tiene configurada (y no tiene la 108). Pero es un
+      # PROTOTIPO montado para certificaciones, no un seguidor de la planta, y
+      # Iñaki pidió sacarla: no cuenta como equipo, no se recoge su telemetría
+      # y la toolbox no la ofrece.
+      #
+      # Al quitarla, los tres números cuadran por primera vez: `tcu_count` 107,
+      # el DWG 107 y lo que se lee de verdad 1..107. Por eso tampoco hace falta
+      # ya ningún `fuera_de_dwg` en esta NCU.
+      #
+      # OJO, lo que esto NO arregla: la NCU2 la tiene metida en su GRUPO 10
+      # (98-107, 109), y eso vive en la NCU, no aquí. Mientras siga ahí, un
+      # comando al grupo 10 mueve también el prototipo. Para sacarla hay que
+      # editar el grupo en la página web de la NCU. La pestaña Panel NCU de la
+      # toolbox lo enseña tal cual: si algún día desaparece de ese grupo, se
+      # verá ahí.
 
 # Medidor de tráfico: el colector cuenta los bytes de cada ciclo (Modbus contra
 # la NCU y subida a InfluxDB) y los publica en la serie `traffic`. Cuesta un

@@ -151,10 +151,15 @@ Check 'la NCU con 2 gws sale una vez, con su nombre' ($PLANTAS.Contains('El Burg
 Check 'y no queda su entrada (auto)' ($PLANTAS.Contains("El Burgo I NCU1$sufAuto")) 'False'
 Check 'ni las de gateway sueltas' ($PLANTAS.Contains('El Burgo I NCU1 GW1')) 'False'
 Check 'auto NCU1 gws' (@($PLANTAS['El Burgo I NCU1'].gws).Count) 2
-# los dos tramos del GW2 -46-107 y la 109 suelta- son UN gateway desde la
-# v11.64: la entrada (auto) de la NCU2 tiene dos gateways, no tres
-Check 'auto NCU2 gws (los dos tramos del GW2 son uno)' (@($PLANTAS['El Burgo I NCU2'].gws).Count) 2
-Check 'auto NCU2 rango' "$($PLANTAS['El Burgo I NCU2'].ini)-$($PLANTAS['El Burgo I NCU2'].fin)" '1-109'
+# LA 109 YA NO ESTA, Y A PROPOSITO. Era un rango suelto en el GW2 que llego de
+# los .bat de Sunner; el 01/10/2026 se confirmo leyendo el panel de la NCU2 que
+# existe de verdad -y que la 108 no-, pero es un PROTOTIPO montado para
+# certificaciones y no un seguidor de la planta, asi que se saco de plants.yml.
+# Si alguien la ve faltar y la devuelve "porque la NCU la tiene", que lea esto:
+# no es un descuido. Ojo, lo que esto NO cambia: la NCU2 la sigue teniendo en su
+# GRUPO 10, y eso vive en la NCU.
+Check 'auto NCU2 gws' (@($PLANTAS['El Burgo I NCU2'].gws).Count) 2
+Check 'auto NCU2 rango (sin el prototipo 109)' "$($PLANTAS['El Burgo I NCU2'].ini)-$($PLANTAS['El Burgo I NCU2'].fin)" '1-107'
 
 # el desplegable va ORDENADO: por planta, NCU por numero (NCU2 antes que NCU14),
 # y dentro de cada NCU el base, GW1, GW2 y por ultimo (auto). Antes salia en
@@ -190,8 +195,11 @@ Check 'auto 40-47: 2 segmentos' ($segs.Count) 2
 Check 'auto seg1 = 503' ($segs[0].puerto) 503
 Check 'auto seg1 tcus' (@($segs[0].tcus) -join ',') '40,41,42,43,44,45'
 Check 'auto seg2 = 504' ($segs[1].puerto) 504
+# pedir el 105..109 ya no trae la 109: no esta declarada, asi que no se sondea.
+# Que un numero que el tecnico teclea se caiga del plan es correcto aqui -no hay
+# tal seguidor para nosotros- y es justo lo que pidio Inaki.
 $segs2 = @(Plan-Segmentos @(105..109) $cxAuto)
-Check 'auto 109 va al 504' (@($segs2[-1].tcus) -join ',') '105,106,107,109'
+Check 'auto 105-109 va al 504 y sin el prototipo' (@($segs2[-1].tcus) -join ',') '105,106,107'
 Check 'auto avisa huerfano 108' (($script:ConMsgs -join ';') -like '*108*') 'True'
 $cxFijo = @{ip='x'; puerto=503; gws=$null; etiqueta='503'; to=1000; reint=1}
 Check 'puerto fijo: 1 segmento' (@(Plan-Segmentos @(1..5) $cxFijo).Count) 1
@@ -203,11 +211,10 @@ Check 'planta ncus = 2' (@($pc.ncus).Count) 2
 Check 'planta ncu1 gws' (@($pc.ncus[0].gws).Count) 2
 Check 'planta ncu2 gws' (@($pc.ncus[1].gws).Count) 2
 Check 'planta ncu2 ip' ($pc.ncus[1].ip) '10.100.1.56'
-# la cuenta se hace con Tcus-DeGw, que es quien respeta los huecos: sumar
-# ini..fin a pelo se traga la 108, que no es de esta NCU
+# la cuenta se hace con Tcus-DeGw, que es quien respeta los huecos
 $ltNcu2 = @(); foreach ($g in $pc.ncus[1].gws) { $ltNcu2 += @(Tcus-DeGw $g) }
 $ltNcu2 = @($ltNcu2 | Sort-Object -Unique)
-Check 'planta ncu2 tcus (107+109, sin 108)' "$($ltNcu2.Count)/$($ltNcu2[-1])" '108/109'
+Check 'planta ncu2 tcus (1-107, sin el prototipo 109)' "$($ltNcu2.Count)/$($ltNcu2[-1])" '107/107'
 Check 'planta ncu2: la 108 no cuelga de la NCU2' ($ltNcu2 -contains 108) $false
 try { $null = Plan-Segmentos @(1..3) @{multi=$pc.ncus; ip='(planta)'; to=1000; reint=1}; Check 'multi en Plan-Segmentos lanza' 'no-lanzo' 'lanza' }
 catch { Check 'multi en Plan-Segmentos lanza' 'lanza' 'lanza' }
@@ -2586,7 +2593,11 @@ Check 'edad: columna en la tabla' ($src.Contains("lvG.Columns.Add('Edad s'")) $t
 Check 'edad: la calcula el bloque compacto' ($src.Contains('Edad_s = $(if ($edad -ge 0)')) $true
 Check 'edad: en blanco si no se sabe' ([regex]::IsMatch($src, 'Edad_s = \$\(if \(\$edad -ge 0\) \{ \$edad \} else \{ '''' \}\)')) $true
 # (la ultima casilla es la nota de la fila NCU: alarmas y, desde la v11.82, sus gateways)
-Check 'edad: la fila de la NCU no lleva' ($src.Contains("`$dn.SoC, '', (Diag-NotaNcu `$dn)")) $true
+# Hasta la v12.7 esto buscaba "$dn.SoC, '', (Diag-NotaNcu $dn)": la linea de NUEVE
+# casillas para diez columnas, que pintaba la fila de la NCU corrida una a la
+# izquierda en conexion simple. Ahora se exige la de diez, con la edad en blanco.
+Check 'edad: la fila de la NCU no lleva' ($src.Contains("@('', `$dn.TCU, `$dn.Salud, `$dn.Modo, '', '', '', '', '', (Diag-NotaNcu `$dn))")) $true
+Check 'edad: y la fila corrida de nueve casillas ya no esta' ($src.Contains("`$dn.SoC, '', (Diag-NotaNcu `$dn)")) $false
 # el bloque de TCUs ya no repite la edad en la nota (el de HSUs es otro sitio)
 $blqTcu = $src.Substring($src.IndexOf('function Ncu-DiagCompat'), 3000)
 Check 'edad: ya no se repite en la nota' ($blqTcu.Contains('datos de hace')) $false
@@ -3989,12 +4000,59 @@ Check 'nav: abre en el diagnostico de planta' ($src.Contains("@{txt='Diagnóstic
 # El arbol es lo unico que se lee en pantalla: va con tildes y con ñ.
 Check 'nav: las etiquetas van bien escritas' ($src.Contains("@{txt='Lectura de señales'; tab=`$tabH}")) $true
 Check 'nav: y sin "senales" sin ñ' ($src.Contains("Lectura de senales'; tab")) $false
-# y tienen que caber todas sin barra de scroll: 31 lineas a 20 px son 620, y el
-# arbol llega hasta abajo del todo (663). Con 400 px se veian 18 de 31.
+# LA CUENTA DEL ARBOL, que cambio de sentido y se quedo sin vigilar.
+#
+# Hasta la v11.90 el arbol se desplegaba entero siempre, asi que la regla era
+# "todas las lineas caben sin barra de scroll" (31 a 20 px = 620 en los 663 de
+# alto; con 400 px se veian 18 de 31 y los bloques de abajo quedaban escondidos).
+# La v11.91 lo hizo PLEGABLE: Nav-Filtrar abre solo el primer bloque. Con eso, el
+# total dejo de importar -42 lineas a 24 px son 1.008, no caben, y no pasa nada
+# porque un TreeView hace scroll- y la comprobacion se borro.
+#
+# Pero se borro a medias: quedaron tres regex calculando cosas que ya no usaba
+# nadie, y un comentario diciendo "31 lineas a 20 px" cuando ni eran 31 ni eran
+# 20. Un comentario que miente envejece peor que una comprobacion que falla.
+#
+# Esta es la regla que SI importa ahora: el bloque MAS GRANDE, desplegado y con
+# su cabecera, tiene que caber. Ese es el peor caso de una navegacion normal, y
+# si deja de caber vuelve el defecto de antes -hojas debajo del borde- solo que
+# dentro de un bloque.
+#
+# Y se exige UNA SOLA asignacion de ItemHeight. Habia dos (16 arriba, 24 mil
+# lineas mas abajo), la de arriba muerta, y el regex de esta suite encontraba
+# justo la muerta: la comprobacion habria hecho la cuenta con el valor que no
+# estaba en vigor. El regex acepta ahora con y sin espacios alrededor del igual.
 $mNav = [regex]::Match($src, '\$nav\.Size = New-Object System\.Drawing\.Size\(\d+, (?<h>\d+)\)')
-$mIt  = [regex]::Match($src, '\$nav\.ItemHeight = (?<h>\d+)')
+Check 'nav: se sabe el alto del arbol' $mNav.Success $true
+
+# LA ETIQUETA DEL MAPA, que va en el titulo de la ventana. Decia R7.1 desde la
+# v11.86, que es cuando entraron registros que solo existen en el R8: el angulo
+# de la posicion segura 7 por grupo (40030-40039) y los limites de recorrido por
+# TCU (50047/50048). Quien lo lee en campo lo lee para saber que da por bueno la
+# herramienta, asi que una etiqueta atrasada dice que no pregunta algo que si
+# pregunta. Esto la ata a los registros: si se usan los del R8, la etiqueta lo
+# dice; y si algun dia se quitan, esta comprobacion avisa de que sobra.
+$usaR8 = ($src -match '\$GR_SP7_BASE\s*=\s*40030') -and ($src -match '\$LIM_ESTE\s*=\s*47')
+Check 'mapa: se usan registros del R8' $usaR8 $true
+Check 'mapa: y la etiqueta del titulo lo dice' ($VERSION_MAPA -like '*NCU R8*') $true
+Check 'mapa: sin quedarse en el R7.1' ($VERSION_MAPA -like '*R7.1*') $false
+
+$itAsign = @([regex]::Matches($src, '\$nav\.ItemHeight\s*=\s*(?<h>\d+)'))
+Check 'nav: el alto de fila se asigna UNA vez (dos = una muerta)' $itAsign.Count 1
 $mArb = [regex]::Match($src, '\$NAV_ARBOL = @\((?<c>[\s\S]*?)\r?\n\)')
-$lineasNav = ([regex]::Matches($mArb.Groups['c'].Value, '@\{txt=')).Count + ([regex]::Matches($mArb.Groups['c'].Value, '@\{bloque')).Count
+$altoNav = [int]$mNav.Groups['h'].Value
+$altoFila = [int]$itAsign[0].Groups['h'].Value
+# una linea por hoja mas la cabecera del bloque
+$mayor = 0
+foreach ($b in [regex]::Matches($mArb.Groups['c'].Value, "@\{bloque = '(?<n>[^']+)'; hojas = @\((?<h>[\s\S]*?)\)\}")) {
+    $n = ([regex]::Matches($b.Groups['h'].Value, '@\{txt=')).Count + 1
+    if ($n -gt $mayor) { $mayor = $n }
+}
+Check 'nav: los bloques se leen' ($mayor -gt 1) $true
+Check "nav: el bloque mayor desplegado cabe ($mayor x $altoFila px en $altoNav)" (($mayor * $altoFila) -le $altoNav) $true
+# el arbol es plegable: si dejara de serlo, la cuenta que vale vuelve a ser el total
+Check 'nav: y es plegable, que es lo que hace valida esa cuenta' ($src -match '\$nav\.ShowPlusMinus\s*=\s*\$true') $true
+Check 'nav: con solo el primer bloque abierto al entrar' ($src.Contains('$nav.Nodes[0].Expand()')) $true
 Check 'nav: filtro disponible sin eliminar funciones' ($src.Contains('function Nav-Filtrar')) $true
 Check 'nav: el arbol sigue a los saltos del codigo' ($src.Contains('$tabs.Add_SelectedIndexChanged(')) $true
 # cada pestana tiene que ser alcanzable: una pestana sin hoja es una pestana a
@@ -4151,8 +4209,10 @@ Check 'tramos: ni el de una entrada normal' (Nombre-SinTramo 'Ayora NCU6') 'Ayor
 # ---- la invariante, sobre las plantas de verdad ----
 # Aqui es donde se vio el fallo: Measure-Object devuelve DOUBLE y las claves del
 # diccionario son int, asi que ContainsKey(46.0) no casaba y TODO el rango salia
-# hueco. El Burgo pasaba de 216 TCUs a 153 y San Jose de 2289 a 1686.
-foreach ($caso in @(@('elburgo.json', 153, 216), @('24025-ayora.json', 751, 751), @('24019-san-jose.json', 2289, 2289))) {
+# hueco. El Burgo pasaba de sus TCUs a 153 y San Jose de 2289 a 1686.
+# (El Burgo son 215 desde que se saco el prototipo 109: 108 de la NCU1 y 107
+# de la NCU2.)
+foreach ($caso in @(@('elburgo.json', 153, 215), @('24025-ayora.json', 751, 751), @('24019-san-jose.json', 2289, 2289))) {
     $PLANTAS = [ordered]@{}
     [void](Cargar-FicheroPlantas (Join-Path $raizTb "plantas/$($caso[0])"))
     $tot = 0
@@ -4887,7 +4947,10 @@ Check 'carga: y si no, todo el estado para ver el esquema' ($src.Contains('<quer
 Check 'carga: lo que no se reconoce se vuelca' ($src.Contains('respuesta cruda a query_state')) $true
 # el Digi puede pedir login: se manda, y la clave NO se guarda con la sesion
 Check 'carga: el login se manda al Digi' ($src.Substring($src.IndexOf('function Rci-Post'), 700).Contains('$p.Credential = $cred')) $true
-Check 'carga: y la identidad va con el mismo login' ($src.Contains('Gw-Identidad $g.ip ([int]$cx.to) $cred')) $true
+# desde la v12.7 la identidad se pide dentro de Gw-IdentificarUno, al que el boton
+# le pasa el mismo $cred que a la carga; se mira la llamada de dentro y la de fuera
+Check 'carga: y la identidad va con el mismo login' ($src.Contains('Gw-Identidad $g.ip $to $cred')) $true
+Check 'carga: y el boton se lo pasa a quien identifica' ($src.Contains('Gw-IdentificarUno $g ([int]$cx.to) $cred')) $true
 Check 'carga: la clave del Digi NO se guarda en config_local' ($src.Substring($src.IndexOf('function Config-Guardar'), 1500).Contains('txtIGPass')) $false
 # las topologias no llevan ip_gw todavia: con una IP a mano se pregunta a esa y solo a esa
 $gwsT = @(@{ncu='5'; nGw=1; ip='10.21.236.5'}, @{ncu='5'; nGw=2; ip=''}, @{ncu='6'; nGw=1; ip='10.21.236.6'}, @{ncu='6'; nGw=1; ip='10.21.236.6'})

@@ -5,4 +5,5 @@ COPY collector/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY collector/ .
 COPY scada_identity.py .
+COPY electrical_contract.py .
 CMD ["python", "main.py"]

@@ -1630,6 +1630,13 @@ function scadaTip(m){
      seguidor parado de uno operando, y el angulo no lo distingue. */
   if(scNoSigue(d)) h+=`<br><span style="color:#ffd35c;font-weight:600">${scModo(d)} \u00b7 no sigue</span>`;
   if(d.tilt_angle!=null) h+=`<br>\u00e1ngulo ${(+d.tilt_angle).toFixed(1)}\u00b0 / obj ${(+d.target_angle).toFixed(1)}\u00b0`;
+  /* EL DESVIO CONTRA VECINAS, que es el que explica un ambar que el angulo y el
+     objetivo no explican: una TCU puede estar clavada en SU objetivo y perseguir
+     la consigna de hace tres horas. Se pinta solo cuando el colector lo ha
+     podido calcular -con menos de cuatro vecinas comparables no viene- y en
+     ambar cuando pasa del umbral, para que el color tenga su numero al lado. */
+  if(d.desvio_vecinos!=null){ const dv=+d.desvio_vecinos, gordo=Math.abs(dv)>3.0;
+    h+=`<br><span${gordo?' style="color:#ffd35c;font-weight:600"':''}>vs vecinas ${dv>0?'+':''}${dv.toFixed(1)}\u00b0</span>`; }
   if(d.soc!=null) h+=`<br>SoC ${Math.round(d.soc)}%${d.battery_voltage!=null?' \u00b7 '+(d.battery_voltage/1000).toFixed(2)+' V':''}${d.temp_battery!=null?' \u00b7 '+d.temp_battery+' \u00b0C':''}`;
   if(d.alarms) h+=`<br><span style="color:#ff8a80">\u26a0 ${d.alarms}</span>`;
   return h;
@@ -1704,6 +1711,7 @@ function fiRender(r){
   h+=`<div class="eq-sub">Posicion</div><div class="fi-grid">`
    + fiStat("Angulo",fiNum(d.tilt_angle,1,"°"))+fiStat("Objetivo",fiNum(d.target_angle,1,"°"))
    + fiStat("Desviacion",(d.tilt_angle!=null&&d.target_angle!=null)?fiNum(d.tilt_angle-d.target_angle,1,"°"):null)
+   + fiStat("Vs vecinas",fiNum(d.desvio_vecinos,1,"°"))
    + fiStat("Modo",scModo(d))
    + fiStat("Backtracking",d.bt_active==null?null:(+d.bt_active?"activo":"no"))
    + fiStat("Posicion segura",d.safe_position==null?null:(+d.safe_position?"SI":"no"))+`</div>`;

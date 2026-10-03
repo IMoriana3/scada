@@ -92,9 +92,116 @@ def decode_alarms(alarms1: int, alarms2: int, alarm_bits: dict) -> list[str]:
     return active
 
 
+#: EL RESIDUO CONTRA VECINOS: qué ve, y qué NO ve aunque apetezca decir que sí.
+#:
+#: `tilt_angle` vs `target_angle` son los dos valores que publica el MISMO
+#: equipo, y el lazo cierra sobre la medida. O sea que mide si el seguidor
+#: ALCANZA su consigna, y nada sobre si la consigna es la correcta. Esa segunda
+#: pregunta está hoy sin vigilar, y es la que mira esto: a la misma marca de
+#: tiempo, todas las TCU de una NCU persiguen el mismo θ salvo por el terreno.
+#:
+#:   · fallo de LAZO       no llega a su consigna        -> tilt vs target (ya estaba)
+#:   · fallo de CONSIGNA   la alcanza, pero es la de
+#:                         otro instante o de otro sitio -> tilt vs VECINOS (esto)
+#:
+#: El caso que lo justifica y que hoy sale VERDE: una TCU cuyo seguimiento se
+#: queda congelado —objetivo clavado en el de hace tres horas— lo persigue
+#: fielmente, así que |tilt − target| ~ 0 y el mapa la pinta en verde mientras
+#: sus vecinas están 17° más allá. También lo ve con una TCU cuyas coordenadas,
+#: límites mecánicos o reloj propio divergen de los de su NCU, o con un forzado
+#: viejo que nadie retiró.
+#:
+#: LO QUE NO VE, Y VA DICHO PORQUE ES TENTADOR CREER LO CONTRARIO: un sesgo de
+#: calibración del encoder. Si la medida es m = real + sesgo y el lazo lleva m
+#: hasta el objetivo T, entonces m ~ T en TODAS, también en la descalibrada: su
+#: ángulo PUBLICADO coincide con el de sus vecinas y lo que difiere es el real,
+#: que no se publica. Ningún residuo calculado sobre los datos del equipo puede
+#: verlo —es el mismo dato que el lazo ya absorbió—, y por eso el ensayo D.1.1
+#: del Anexo 4 pide instrumento externo. Esto no sustituye a ese ensayo.
+#:
+#: UMBRAL ABSOLUTO EN GRADOS, Y NO UNA z ROBUSTA, a propósito: con vecinos casi
+#: idénticos la MAD tiende a cero y una diferencia de 0,01° sale como «3 sigma»
+#: —significativo en estadística, irrelevante en campo—. Lo que decide aquí es
+#: la relevancia práctica: cuántos grados justifican coger la furgoneta.
+#:
+#: 3,0° NO ESTÁ MEDIDO SOBRE ESTA PLANTA, y queda dicho en vez de disfrazado: es
+#: el orden de magnitud que documenta el simulador de planta, no la dispersión
+#: por terreno observada aquí. Para fijarlo de verdad hay que medir la dispersión
+#: de la propia flota en una ventana sin averías y poner el umbral por encima de
+#: ella. Mientras no se haga, un terreno muy quebrado puede dar avisos de más — y
+#: por eso esto es `warn` y nunca `alarm`.
+DESVIO_VECINOS_DEG = 3.0
+
+#: Con dos o tres vecinos la mediana no es una referencia, es una opinión. Por
+#: debajo de esto NO se juzga: el residuo devuelve None y la clasificación se
+#: comporta igual que antes de existir.
+MIN_VECINOS_COMPARABLES = 4
+
+
+def comparable_como_referencia(fields: dict, alarms: list[str], comms_age_s: float | None,
+                               stale_after_s: float = 300) -> bool:
+    """¿Sirve el ángulo de este TCU para decir dónde DEBERÍA estar la flota?
+
+    Solo si está siguiendo de verdad. Uno parado en OFF, sin comunicación o con
+    una alarma está donde está por otra razón, y meterlo en la mediana la
+    envenena: sería comparar a los sanos contra un parado.
+    """
+    if comms_age_s is None or comms_age_s > stale_after_s:
+        return False
+    if alarms:
+        return False
+    if not fields.get("system_ok", 1):
+        return False
+    if fields.get("main_state") != MAIN_STATE_AUTO:
+        return False
+    return fields.get("tilt_angle") is not None
+
+
+def mediana(valores: list[float]) -> float | None:
+    """Mediana y no media: con una descalibrada dentro, la media se va con ella."""
+    xs = sorted(v for v in valores if v is not None)
+    if not xs:
+        return None
+    n = len(xs)
+    return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2.0
+
+
+def desvios_entre_vecinos(trackers: list[dict], stale_after_s: float = 300) -> dict:
+    """{tcu: grados que su ángulo se separa de la mediana de SUS vecinos}.
+
+    `trackers` son los TCU de UNA NCU en UN ciclo —misma marca de tiempo—, que
+    es la única comparación que significa algo: el sol es el mismo para todos.
+
+    El propio TCU se excluye de su referencia. Con la mediana no haría mucha
+    falta, pero así «desvío contra los vecinos» quiere decir exactamente eso.
+    Devuelve None para los que no se pueden juzgar, y None no es cero.
+    """
+    refs = [(t.get("tcu"), t["fields"].get("tilt_angle")) for t in trackers
+            if comparable_como_referencia(t["fields"], t.get("alarms", []),
+                                          t.get("comms_age_s"), stale_after_s)]
+    out = {}
+    for t in trackers:
+        tcu = t.get("tcu")
+        tilt = t["fields"].get("tilt_angle")
+        vecinos = [a for (k, a) in refs if k != tcu]
+        if tilt is None or len(vecinos) < MIN_VECINOS_COMPARABLES:
+            out[tcu] = None
+            continue
+        ref = mediana(vecinos)
+        out[tcu] = None if ref is None else round(tilt - ref, 2)
+    return out
+
+
 def tracker_health(fields: dict, alarms: list[str], comms_age_s: float | None,
-                   stale_after_s: float = 300) -> str:
-    """Clasifica el estado para el mapa: ok / warn / alarm / offline."""
+                   stale_after_s: float = 300,
+                   desvio_vecinos: float | None = None) -> str:
+    """Clasifica el estado para el mapa: ok / warn / alarm / offline.
+
+    `desvio_vecinos` lo calcula `desvios_entre_vecinos()` sobre la flota de una
+    NCU; aquí llega ya resuelto porque esta función ve UN seguidor y la
+    referencia son los otros. None = no se ha podido juzgar, y entonces esto se
+    comporta exactamente como antes de que el residuo existiera.
+    """
     if comms_age_s is None or comms_age_s > stale_after_s:
         return "offline"
     critical = {"axis_blocked", "motor_overcurrent_hw", "motor_overcurrent_sw",
@@ -128,18 +235,27 @@ def tracker_health(fields: dict, alarms: list[str], comms_age_s: float | None,
     tilt, target = fields.get("tilt_angle"), fields.get("target_angle")
     if tilt is not None and target is not None and abs(tilt - target) > 5.0:
         return "warn"
+    # LA REFERENCIA, y va DESPUÉS del lazo a propósito. Si además de desviarse de
+    # sus vecinos no llega a su objetivo, lo que lo explica es el lazo: ése es el
+    # motivo más concreto y el que ya se daba. Lo que este orden añade es
+    # exactamente el caso que no se veía — EN su objetivo y fuera de sus
+    # vecinos—, así que esta línea solo puede convertir un `ok` en `warn` y no
+    # puede cambiar ningún veredicto anterior.
+    if desvio_vecinos is not None and abs(desvio_vecinos) > DESVIO_VECINOS_DEG:
+        return "warn"
     return "ok"
 
 
 def motivo_health(fields: dict, alarms: list[str], comms_age_s: float | None,
-                  stale_after_s: float = 300) -> str:
+                  stale_after_s: float = 300,
+                  desvio_vecinos: float | None = None) -> str:
     """Por qué salió ese `health`. Un color sin motivo obliga a adivinar.
 
     Mismo orden de decisión que `tracker_health()` — y a propósito NO reimplanta
     el criterio: pregunta por el estado y luego dice cuál de las condiciones lo
     explica, así no pueden separarse.
     """
-    estado = tracker_health(fields, alarms, comms_age_s, stale_after_s)
+    estado = tracker_health(fields, alarms, comms_age_s, stale_after_s, desvio_vecinos)
     if estado == "offline":
         return "sin comunicación" if comms_age_s is not None else "sin marca de comunicación"
     if estado == "alarm":
@@ -152,5 +268,10 @@ def motivo_health(fields: dict, alarms: list[str], comms_age_s: float | None,
         modo = fields.get("main_state")
         if modo is not None and modo != MAIN_STATE_AUTO:
             return f"en {MAIN_STATE.get(modo, '?')}: no está siguiendo"
-        return "desviado del objetivo más de 5°"
+        tilt, target = fields.get("tilt_angle"), fields.get("target_angle")
+        if tilt is not None and target is not None and abs(tilt - target) > 5.0:
+            return "desviado del objetivo más de 5°"
+        return (f"en su objetivo pero {abs(desvio_vecinos):.1f}° fuera de sus vecinos: "
+                "persigue una consigna distinta (¿seguimiento congelado, reloj o "
+                "configuración divergente?)")
     return "en AUTO, sin alarmas y en su objetivo"

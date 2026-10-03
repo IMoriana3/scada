@@ -17,6 +17,12 @@ function Op-Calidad($fila,$meta,[datetime]$ahora,[int]$umbral=300) {
     if(-not $meta -or $meta.origen -ne 'lectura'){return 'IMPORTADO / SIN ORIGEN'}
     $edadLectura=[math]::Max(0,($ahora-[datetime]$meta.fecha).TotalSeconds)
     if($edadLectura -gt $umbral){return 'LECTURA ANTIGUA'}
+    # La NCU y el gateway no tienen "edad de origen": son el origen. La edad de
+    # una TCU o una HSU es cuanto hace que la NCU la oyo; a la NCU se le acaba
+    # de preguntar y al Digi tambien. Sin esto salian siempre como "EDAD DE
+    # ORIGEN DESCONOCIDA" y toda la pestana parecia dudosa (visto en El Burgo
+    # el 02/10/2026).
+    if((Fila-Tipo $fila) -in @('NCU','GW')){return 'LECTURA RECIENTE'}
     $edad=0.0
     if([double]::TryParse("$($fila.Edad_s)",[Globalization.NumberStyles]::Float,[Globalization.CultureInfo]::InvariantCulture,[ref]$edad) -and $edad -ge 0){
         if(($edad+$edadLectura) -gt $umbral){return 'DATO ANTIGUO'}

@@ -4,6 +4,591 @@
 
 Es el complemento de **escritura** del SCADA de este repo: el SCADA es solo-lectura a propósito; cuando hay que *cambiar* algo en un TCU (configuración, reloj, NVM) se usa esta toolbox desde el portátil conectado a la LAN de planta.
 
+### Cuánto tarda en arrancar, medido por tramos (v12.8)
+
+Iñaki preguntó por qué tarda tanto en abrirse. **Lo que se pudo medir aquí** (pwsh 7 en
+un Linux rápido): parsear el fichero 0,7 s, cargar las plantas 0,6 s (San José son 82
+entradas), el resto de la lógica 0,5 s. O sea, **lo de antes de la ventana es barato**.
+Lo que no se puede medir desde fuera es lo que pasa en el Windows de planta:
+PowerShell 5.1 parseando 1,1 MB (su parser es varias veces más lento que el de pwsh 7),
+el **antivirus escaneando ese 1,1 MB** antes de dejar correr la primera línea (AMSI), y
+los 430 controles de la ventana construidos uno a uno.
+
+**Así que ahora se mide y se dice.** El `.bat` deja la hora del doble clic en
+`TOOLBOX_T0`; el script toma la hora en su primera línea, al cargar WinForms, tras las
+plantas, tras la lógica, al abrir la consola y al quedar la ventana lista. La consola
+lo imprime en gris al arrancar:
+
+```
+Arranque: powershell + parsear + antivirus 6.3 s, WinForms 0.4 s, plantas 0.9 s, logica 0.7 s, construir la ventana 3.1 s.
+Ventana lista a los 12.1 s del doble clic; el ajuste final de la ventana tardo 0.6 s.
+```
+
+El primer tramo es el que ningún cronómetro de dentro del script puede ver de otra
+manera, y es el que señala al parser y al antivirus. Con esos números delante se decide
+qué optimizar; sin ellos sería adivinar.
+
+**Y un arreglo que no necesita medirse:** la ventana se construía **sin suspender la
+disposición**. Cada control añadido y cada propiedad tocada disparaba un cálculo de
+disposición de toda la ventana: 430 controles, 430 veces. Ahora `$form` y el
+`TabControl` se construyen con `SuspendLayout()` y se reanudan una sola vez justo antes
+de `ShowDialog()`, que es el patrón de cualquier formulario del diseñador de Visual
+Studio. El ajuste de anchos y anclajes de `Shown` sigue igual, porque mide los
+contenedores ya dispuestos.
+
+Lo que **no** se ha hecho, a propósito, hasta ver los números: construir las pestañas al
+visitarlas (lazy) sería el gran ahorro si la ventana es el tramo gordo, pero es una
+reforma grande de un fichero de 20.000 líneas y no se emprende por una sospecha.
+
+### El gateway como equipo propio del Diagnóstico (v12.7)
+
+Lo pidió Iñaki el 02/10/2026: *"los GW los metería en la columna de la izquierda,
+como elemento propio como NCU, TCU, HSU y repetidor; y permitiría ver FW, ver
+estados y reiniciar desde ahí"*. Hasta aquí los datos del Digi colgaban de la
+fila de la NCU como campos `GW1_CPU_pct`, `GW2_Modelo`… y el gateway **no existía
+como equipo**.
+
+**Ahora es una fila más del Diagnóstico**, debajo de su NCU: `GW1` / `GW2` en la
+columna de equipo, su número en la columna GW, y en la nota el firmware, el
+modelo y la carga. Tiene su bloque **GATEWAYS** en el árbol de la izquierda (con
+la vista *solo gateways* y el acceso a *Identificar / reiniciar*), cuenta aparte
+en el resumen (*Gateways: 4 (4 OK)*) y, al seleccionarla, el panel lateral y el
+diálogo de detalle ofrecen **Identificar gateway** y **Reiniciar gateway** — el
+mismo flujo que el botón de Inventario, con la guardia de viento mirada en *su*
+NCU y la comprobación por uptime.
+
+**La salud sale de lo único que se le puede preguntar a un Digi.** No contestar
+por RCI es **ALARMA** (un gateway apagado o sin red deja a todas sus TCUs fuera del
+alcance de la NCU); la CPU alta es **AVISO**, y contestar sin que se reconozca nada
+también, porque no se puede decir que esté bien. Nunca OFFLINE: ese estado es de
+las TCUs.
+
+**La fila tiene exactamente la forma de la fila de la NCU**, con los campos del
+Digi añadidos (`IP_gw`, `Modelo`, `MAC`, `FW`, `CPU_pct`, `Mem_pct`, `Uptime_s`,
+`TCUs_gw`), así que Operación, el CSV y el informe no se enteran. Los campos
+`GWn_*` colgados de la NCU **se mantienen**: el SCADA y el Seguimiento PEM los leen
+del JSON.
+
+**Dos arreglos que salieron al hacerlo:**
+- En **Operación**, la NCU y el gateway **son el origen**: no tienen "edad de
+  origen" que desconocer. Salían siempre como `EDAD DE ORIGEN DESCONOCIDA` y toda
+  la pestaña parecía dudosa.
+- La fila de la NCU en **conexión a una sola NCU** se pintaba corrida una columna
+  (la salud bajo *TCU*, la nota bajo *Edad s*) hasta que un filtro la repintaba
+  bien. Tenía nueve subelementos para diez columnas. El barrido de planta ya iba
+  bien.
+
+### Todas las plantas saben ya la IP de sus Digi (v12.6)
+
+`IDENTIFICAR GATEWAYS` decía en Ayora *"ninguno de los 16 gateways declarados trae
+ip_gw"*: el fichero de planta se generó antes de que `make_plantas.py` leyera las
+columnas `IP GW` del Excel. La regla la dio Iñaki el 02/10/2026: **los dos Digi de
+cada NCU van en las dos direcciones siguientes a la de la NCU** (NCU1
+`192.168.4.10` → `.11` y `.12`), y `plantas/24025-ayora.json` lleva ya la del GW1
+en las 16 NCUs. Con eso, Diagnóstico e Inventario le preguntan solos a cada Digi
+y el inventario sale con modelo, MAC, firmware y carga de cada gateway.
+
+**El `.12` no es un gateway que falte.** En Ayora cada NCU tiene un solo gateway
+con TCUs (puerto 503, todas en él); el segundo Digi está montado **de reserva**,
+sin ninguna TCU colgando. Por eso el fichero declara uno por NCU y está bien así.
+No tiene hueco en la topología —un gateway sin TCUs no existe para el barrido—,
+así que hoy no se le pregunta nada; si algún día interesa saber si la reserva
+está viva y con qué firmware, es un botón aparte, no un gateway más.
+
+**La regla vale para todas las plantas** (Iñaki, 02/10/2026): gateway del puerto
+503 → NCU+1, gateway del puerto 504 → NCU+2. Es la misma que ya cumplía El Burgo
+(`.52` → `.53` y `.54`). Aplicada a San José (82 entradas, 21 NCUs), Fayón, Túnez
+y Bagnarelli, comprobando que ninguna IP de gateway coincide con la de otra NCU
+de la misma planta. `make_plantas.py` las conserva al regenerar sin Excel.
+
+⚠️ Son **regla, no lectura**: salvo los dos Digi de El Burgo NCU1, ninguna se ha
+preguntado aún por RCI. La comprobación es pulsar `IDENTIFICAR GATEWAYS` en cada
+planta; el que no conteste, se mira.
+
+También en esta versión: queda registrado en `plants.yml` que el Digi `.53` de El
+Burgo cambió de firmware hacia el 16-17/09 (2.17.2.1 → 2.27.4) y que no tiene
+reloj, y que `REINICIAR GATEWAY` **se vio funcionar en planta** el 02/10.
+
+### `REINICIAR GATEWAY`: reiniciar un Digi desde la app (v12.5)
+
+Lo pidió Iñaki el 02/10/2026. Botón en **Inventario global**, al lado de
+`IDENTIFICAR GATEWAYS`, con el mismo login y la misma casilla de IP. Manda un
+`<reboot/>` por RCI al Digi y espera a que vuelva.
+
+**Uno cada vez.** El de la IP escrita a mano o, sin IP, el único que declare la
+conexión. Con dos declarados y sin IP se pide la IP: reiniciar los dos a la vez
+deja la NCU sin ningún seguidor a la vista.
+
+**Los mismos frenos que `REINICIAR NCU`, a escala de medio campo.** Mientras el
+gateway arranca, la NCU no llega a ninguna de las TCUs que cuelgan de él: siguen
+al sol por su cuenta, pero **no hay quien les mande una posición segura**. De ahí
+la guardia de viento, que aquí mira **todas las NCUs de la conexión** (el viento
+es de la planta, y con una IP a mano no se sabe de qué NCU cuelga el Digi).
+Antes de mandar nada se enseña entero lo que se para y lo que no.
+
+**Y se le lee el uptime antes de tocarlo — si no lo da, no se manda nada.** Es
+la pieza central: un Digi que no contesta ahora no es un Digi al que mandarle
+cosas a ciegas, y sin su tiempo de marcha de antes no habría forma de comprobar
+después que reinició.
+
+✅ **Verificado en planta el 02/10/2026** (Iñaki, El Burgo): el Digi se fue abajo
+y volvió con menos tiempo de marcha. Hasta ese día el verbo `<reboot/>` era sólo
+lo que dice la referencia RCI de Digi, y la herramienta lo decía así. La forma de
+comprobarlo se mantiene porque no depende del firmware ni del esquema de la
+respuesta: la prueba de que funcionó no es el XML que conteste al reboot —que se
+vuelca crudo si no se reconoce— sino el uptime: después tiene que **(1) dejar de
+contestar y (2) volver con un uptime menor**. Un Digi que contesta todo el rato
+con el mismo tiempo de marcha no ha reiniciado, diga lo que diga el XML.
+
+### Ajustes de la NCU desde la app, y dos fallos de campo (v12.4)
+
+Tres cosas, las tres salidas de probar la herramienta en planta el 02/10/2026.
+
+**1. `APLICAR AJUSTE`: los ajustes sueltos, por fin con botón.** Los seis campos
+que se saben cambiar de la configuración de la NCU —`tcu_timeout`, `hsu_timeout`,
+los tres intervalos de sondeo y `modbus_enable_writing`— estaban validados y con
+sus frenos **desde la v11.99, y sin botón ninguno**: inalcanzables. Para tocar un
+timeout había que seguir yendo a la página web de la NCU, que es justo lo que se
+quiere dejar de hacer. Un motor sin botón no cuenta. Al elegir el campo, el
+cuadro *Valor* enseña **lo que la NCU lleva puesto ahora**, y el cambio pasa por
+el mismo camino que los grupos: copia de seguridad antes, el diff entero en la
+ventana de confirmar, ida y vuelta por JSON, y relectura después.
+
+⚠️ **`[bool]'no'` es `$true` en PowerShell.** Cualquier cadena no vacía lo es. Si
+el texto del cuadro llegara crudo al motor, escribir `no` en *permitir escritura
+Modbus* la habría **activado** — lo contrario de lo pedido, en el campo más
+delicado de la lista. Así que los sí/no se parsean con lista cerrada y **lo que no
+está en la lista se rechaza** en vez de interpretarse: mejor un *«no te he
+entendido»* que un sí por accidente.
+
+**2. HSUs fantasma.** En El Burgo la pestaña Diagnóstico enseñaba HSUs que no
+existen, nueve de ellas en ALARMA. El bloque extendido (28000) de un hueco
+**vacío** tiene puesto el bit 15 de `al1` (*fallo com. HSU*): la NCU diciendo que
+no puede hablar con una estación que no está ahí. El filtro de huecos vacíos
+miraba los cuatro registros a cero y, con ese bit puesto, concluía que el hueco
+estaba ocupado — tomando **la prueba de que no hay nada como prueba de que hay
+algo roto**. Ahora ese bit se descuenta antes de decidir. La alarma legítima
+—*declarada en `plants.yml` y no contesta*— sigue saliendo, pero por `Hsu-Cuadre`,
+que es quien tiene con qué compararla.
+
+**3. La edad de origen de las HSUs, que se calculaba y se tiraba.** La pestaña
+Operación marcaba **toda HSU** como `EDAD DE ORIGEN DESCONOCIDA`. El dato existía:
+`Ncu-HsuCompat` calcula cuánto hace que la NCU oyó a esa estación y lo usa para
+decidir si está OFFLINE y para el texto… pero no lo ponía en la fila. Ahora va
+como `Edad_s`, igual que en las TCUs, y Operación puede juzgar si el dato es de
+ahora.
+
+### Configuración de la HSU interna de la NCU (v12.3)
+
+`CONFIG HSU` lee `GET /private_api/internal_hsu_config`: **qué sensores lleva
+montados** la estación interna de la NCU y con qué parámetros — anemómetro
+sónico, veleta, anemómetro RS-485, piranómetro, nieve, temperatura, inundación,
+con sus tiempos de activación y umbrales.
+
+**Por qué hacía falta.** La toolbox ya lee y escribe umbrales de viento en la
+HSU por Modbus, pero **no sabía qué sensores declara cada estación**. Sin eso no
+se puede decir lo único que de verdad importa aquí: que una HSU **declare
+piranómetro y no dé irradiancia**, o que declare nieve y no haya sensor.
+
+**Se enseña genérico, y a propósito.** Del *bundle* de la página salen los
+nombres de campo (`flood_sensor`, `snow_sensor`, `pyranometer`, `anemometer`,
+`activation_time`, `activation_threshold`, `activation_speed`…) pero **no la
+forma del objeto**: cómo anidan y qué cuelga de qué. Reconstruir un esquema a
+partir de identificadores sueltos es exactamente lo que ya salió mal una vez con
+los rangos inventados del `tcu_timeout`, así que esto **aplana lo que venga** y
+lo enseña tal cual, con la ruta completa de cada campo.
+
+⚠️ **Lo que no aparece NO se da por ausente.** Un sensor que no se encuentre en
+la respuesta puede no estar… o llamarse de otra manera. Se dice *«no aparece»* y
+se explica que no es lo mismo que decir que no lo tiene. Y `snow_sensor_check` no
+se confunde con `snow_sensor`: la búsqueda es por campo completo, no por
+subcadena.
+
+Las filas salen **en orden alfabético y estable**, para que dos volcados de NCUs
+distintas se puedan carear.
+
+**Solo lee.** El `PUT` existe y es JSON —no un binario, así que no cae en la
+categoría del firmware— pero no se cablea hasta ver una escritura real, por lo
+mismo de siempre.
+
+Una NCU que todavía no haya detectado su estación interna contesta vacío; eso se
+dice como tal y no como un fallo.
+
+### Histórico de MAC: lo primero medido de la malla Zigbee (v12.0)
+
+`HISTÓRICO MAC` lee `GET /private_api/mac_history`, que la NCU sirve como **CSV**
+(`discovered;gateway_id;modbus_id;zigbee_mac`). En su página no tiene menú
+propio: vive como un fichero más dentro del visor de CSV, llamado *Mac History*.
+
+**Por qué importa.** Todo lo que medimos hoy —aquí y en el simulador de
+cobertura— va de **ángulos**: dónde apunta cada seguidor frente a dónde debería.
+De la malla Zigbee no se mide nada: se predice desde el terreno y no se comprueba
+contra nada. Esto es lo primero **observado** de la malla, dicho por la NCU y no
+deducido.
+
+Tres cosas salen de ahí, y las tres aparecieron a la primera con el fichero real
+de El Burgo:
+
+- **Una TCU con varias MACs ha sido sustituida, y dice cuándo.** Eso no lo apunta
+  nadie y después no hay forma de saberlo.
+- **El mismo aparato en varios esclavos.** En El Burgo, dos casos que no estaban
+  escritos en ningún sitio: una estación que pasó del **185** (el esclavo de
+  fábrica) al **210** —que es justo el esclavo sin declarar que nos descuadraba
+  el recuento de HSUs—, y una placa que **era la TCU 78 y acabó siendo la 30**.
+- **El careo con el inventario.** La toolbox ya lee por Zigbee la MAC que cada
+  TCU lleva hoy; si no es la última que la NCU vio, o se cambió el equipo sin que
+  se enterara, o ahí no contesta quien se cree.
+
+⚠️ **La NCU cuenta los gateways desde 0 y nosotros desde 1.** En su CSV el
+`gateway_id` vale `0` y `1`; en `plants.yml`, en los ficheros de planta, en esta
+herramienta y en la boca de cualquiera que esté en la planta son **GW1** (puerto
+503) y **GW2** (puerto 504). Enseñar el número crudo saca un «GW0» que no existe
+en ningún sitio, y quien lo lee o cree que es un fallo o se va a buscar un
+gateway que no hay. Se traduce `n → GW(n+1)` y el número original se guarda
+aparte, para que el CSV exportado no pierda nada. La equivalencia no es un
+supuesto: en El Burgo el `gateway_id` 0 trae los esclavos 1-45, que es
+exactamente el rango que `plants.yml` da al GW1.
+
+⚠️ **La fecha viene en `dd-MM-yyyy` y no se puede ordenar como texto.** Con el
+fichero real, ordenar alfabéticamente pone `01-06-2026` antes que `31-12-2025`:
+el resumen diría que la primera vez fue después que la última. Se parsea de
+verdad, y el banco lo comprueba con esas dos fechas exactas. Las columnas se
+buscan además **por la cabecera** y no por su posición, para que el día que la
+NCU meta una columna en medio no acabe una MAC en la casilla de la fecha.
+
+El banco (`tests/test_macs.ps1`) corre contra `tests/fixture_mac_history.csv`,
+que **son filas reales** de la NCU2 de El Burgo con sus dos rarezas dentro — no
+una maqueta inventada.
+
+## Dejar de entrar en la página de la NCU (v11.96)
+
+El objetivo es que la configuración de una NCU se haga desde aquí y no desde su
+página web. Esta versión pone la base: **copia, comparación y la edición de
+grupos**, que es lo único que por Modbus no se puede hacer de ninguna manera.
+
+### Lo que ya funciona
+
+- **GUARDAR CONFIG** deja la configuración entera de la NCU en un JSON con
+  planta, NCU, IP, versión de panel y fecha. Hoy, **si una NCU se muere, nadie
+  tiene su configuración**: hay que reconstruirla de memoria y de los `.bat` de
+  Sunner. Esto es el seguro que faltaba, y además es el paso previo obligatorio
+  de cualquier escritura.
+- **COMPARAR CON...** carea lo leído contra una copia guardada y dice qué ha
+  cambiado, línea a línea. Responde a «¿qué ha tocado alguien aquí desde el
+  viernes?», que hoy no tiene respuesta.
+- **METER / SACAR** editan a qué grupo pertenece cada seguidor.
+
+### Por qué una escritura de configuración no es como una escritura Modbus
+
+Una Modbus toca **un registro**: si sale mal, se reescribe. La API de la NCU
+manda la configuración **entera** en un solo envío, con la red dentro. El fallo
+no es «un valor raro»: es una NCU que ya no está en la red y alguien cogiendo el
+coche. De ahí tres reglas, y las tres se comprueban en el banco:
+
+1. **Nada se edita en sitio.** Cada cambio devuelve una copia nueva y lo leído de
+   la NCU se queda intacto, para que el diff sea siempre contra la verdad del
+   aparato.
+2. **Lista blanca, no lista negra.** Cada cambio declara qué rutas va a tocar;
+   antes de mandar se comparan las dos configuraciones **enteras** y se exige que
+   todo lo que cambie esté en lo declarado. Una lista negra solo protege de lo
+   que se nos ocurrió; ésta protege también de lo que no.
+3. **La red es intocable**, pase lo que pase. No hay casilla que lo abra: ni
+   `ip_config`, ni la IP, el puerto o el tipo de una red Modbus. Los esclavos de
+   dentro sí son configuración normal.
+
+Y el orden de una escritura no es negociable: **copia → diferencias → guarda →
+confirmar enseñando TODO lo que cambia → mandar → releer y comparar**. Lo último
+importa: que la NCU conteste bien no quiere decir que lo haya aplicado — eso ya
+lo sabemos del «Allow writing» del Modbus — así que lo que vale es releer.
+
+La edición de grupos además se niega a hacer dos cosas: meter en un grupo un
+seguidor que **esa NCU no tiene configurado** (daría un grupo que dice mover algo
+que no está), y meter uno que **ya está en otro grupo**, diciendo en cuál. Esto
+último es **regla nuestra**: la API no dice si admite estar en dos.
+
+### La petición ya se conoce (capturada el 01/10/2026)
+
+Con el DevTools de la página de la NCU2 de El Burgo (panel **v1.17.1**), guardar
+un cambio de configuración sale así:
+
+```
+PUT http://10.100.1.56/private_api/config
+Content-Type: text/plain          <- sí, text/plain para un JSON
+Content-Length: 10203             <- solo config, no el initial_data entero
+cuerpo: {plant_id:"ElBurgo", gateway_id:"NCU2", location:{...}, ...}
+                                  <- el objeto TAL CUAL, sin envolver
+-> 200 OK, application/json, 39 bytes
+```
+
+Verbo, ruta, tipo y forma son los que se habían deducido del JavaScript. Ahora
+están **confirmados**, y queda escrito con qué panel: si algún día una NCU lleva
+otro y no cuadra, que se sepa contra qué se comprobó.
+
+**Y la captura destapó dos fallos**, los dos del tipo que no quieres descubrir en
+campo:
+
+- **La lista de intocables se había quedado corta.** El cuerpo trae `http_port` y
+  `modbus_port` al mismo nivel que todo lo demás, más `gw1_config`/`gw2_config`
+  con la red de cada Digi. Cambiar `http_port` deja la página inalcanzable en
+  el `:80`; `modbus_port` deja al SCADA sin ver la planta. Es el mismo desastre
+  que la IP y no estaban.
+- **Un rango inventado rechazaba un valor real.** El límite del `tcu_timeout`
+  estaba en 30..3600 «porque suena razonable», y El Burgo lo tiene en **6000**:
+  la herramienta habría rechazado el valor que el aparato lleva puesto. Ahora son
+  límites de **dedazo** —anchos, solo para cazar un 10 donde iba un 10000— y se
+  dice que son nuestros, no documentación. Las unidades siguen sin estar claras
+  (6000 en TCU y 600 en HSU no cuadra con que ambos sean lo mismo), así que la
+  etiqueta ya no dice `[s]`.
+
+### La ida y vuelta por JSON, antes de mandar nada
+
+Lo que sale por el cable **no es el objeto que la NCU nos dio**: es lo que
+PowerShell escribe al reserializarlo. Si `ConvertTo-Json` perdiera un campo,
+redondeara una latitud o convirtiera un `null` en otra cosa, el `PUT` se llevaría
+esa pérdida — y como va el objeto **entero**, la NCU se quedaría con ella.
+
+Así que antes de salir se reserializa, se vuelve a leer y se compara contra lo
+que íbamos a mandar: **si no es idéntico, no sale**. Es la única comprobación
+posible *antes* de que sea tarde; después de un `PUT` a medias no hay vuelta.
+Probada contra una pérdida de verdad: una configuración más honda que la
+profundidad de serialización, que `ConvertTo-Json` trunca sin avisar.
+
+### ⚠️ ARMADA el 01/10/2026
+
+Estuvo desarmada mientras la forma de la petición era una deducción. Capturada y
+confirmada, lo que faltaba ya no era un dato sino **una decisión**, y ésa no es
+de quien escribe el código: la tomó Iñaki, que es quien responde de la planta.
+
+**Armar no quita frenos; deja que exista el último tramo.** Lo que sigue delante
+de cada escritura:
+
+1. Copia de seguridad **obligatoria** — si no se puede guardar, no se manda.
+2. El diff **entero** en la ventana de confirmar, no «3 cambios».
+3. La **lista blanca**: todo lo que cambie tiene que estar en lo que el cambio
+   declaró tocar.
+4. Los **intocables**: `ip_config`, `http_port`, `modbus_port`,
+   `gw1_config`/`gw2_config`. Sin excepción ni opción que lo abra.
+5. La **ida y vuelta por JSON**: si lo que PowerShell serializa no vuelve
+   idéntico, no sale.
+6. La **relectura** después, entrando de nuevo, y el diff contra lo que se mandó.
+
+Las seis están probadas ejecutándolas, y la quinta además **al revés**: con el
+freno quitado, el banco cae.
+
+**El primer uso real recomendado** es `SACAR` el seguidor 109 del grupo 10 de la
+NCU2: un solo campo, con copia previa, diff delante y relectura después. Si eso
+sale bien, lo demás va detrás.
+
+### Reiniciar la NCU, y por qué ésta sí va armada
+
+`REINICIAR NCU` manda el *soft restart*. Va **armada** mientras la escritura de
+configuración no, y la diferencia no es capricho — es **cómo falla cada una si
+nos hemos equivocado de ruta**:
+
+- El reinicio es un `POST` **sin cuerpo**. Ruta equivocada ⇒ **404 y no pasa
+  nada**. Falla seguro.
+- La configuración es un `PUT` con el objeto **entero**. Forma equivocada ⇒ **se
+  aplica a medias**, con la red dentro. Falla peligroso.
+
+Lo que hay que cuidar en el reinicio no es técnico, es **operativo**, y la
+ventana de confirmar lo dice entero: los seguidores **siguen al sol por su
+cuenta** —el seguimiento vive en la TCU, no en la NCU—, pero mientras esté abajo
+**no hay quien mande una posición segura**: ni por grupo, ni por viento, ni desde
+el SCADA, que además se queda sin ver la planta.
+
+Por eso lleva **guardia de viento** y aquí no es una formalidad: con viento, se
+niega. Lee fresco siempre, sin caché — el técnico acaba de pulsar.
+
+Y hay un matiz que no es cosmético: **que no conteste dentro de nuestra ventana
+de espera no quiere decir que esté mal**. Esa ventana es un número que pusimos
+nosotros sin saber cuánto tarda una NCU en arrancar, así que se dice lo que
+sabemos —*no ha contestado todavía*— y qué hacer antes de alarmarse: dale un
+minuto y vuelve a `LEER PANEL`. Cantar eso como fallo manda a alguien a la planta
+por nada, y se pinta en naranja y no en rojo.
+
+Distinto es **que la NCU conteste y no sea que haya reiniciado**: si no hizo caso, contesta
+igual de bien. Lo único que lo distingue es que su **tiempo de marcha haya ido
+hacia atrás**, así que se espera a que vuelva, se relee y se compara. Si vuelve
+con más marcha que antes, se dice que **no ha reiniciado** en vez de darlo por
+bueno.
+
+**El firmware de la NCU (OTA) se queda fuera. Es una decisión, no un pendiente.**
+
+Conviene decirlo bien, porque la primera versión de esta nota lo justificaba mal:
+el *TCU Updater* de Sunner actualiza el firmware de las **TCUs**, y el de la
+**NCU** no lo toca. O sea que el firmware de la NCU se sigue haciendo subiendo el
+fichero en su página web, y ésa es la única parte de la página que **no**
+pretendemos sustituir.
+
+El motivo es que rompe la red de seguridad sobre la que se apoya todo lo demás de
+esta pestaña: aquí se escribe y **se vuelve a leer para comprobarlo**. Con una
+imagen de firmware no hay nada que releer — si sube a medias o sube la que no es,
+la NCU se queda **inservible y fuera de alcance**, ni por web ni por Modbus ni
+desde aquí, y eso se arregla yendo a la planta con un cable. Subir una imagen es
+la única operación de esta herramienta que no se puede deshacer desde esta
+herramienta.
+
+El banco exige que el extremo **no aparezca ni escrito**, para que no entre por
+descuido.
+
+### Lo que esta versión NO sustituye todavía de la página
+
+Faltan los **logs y CSV** de la NCU, `internal_hsu_config` y el **websocket** de
+tiempo real.
+
+**Dos cosas no están en esa lista porque se quedan fuera a propósito**, y las dos
+por el mismo motivo: son **subir un fichero binario** a la NCU, y de un binario
+subido a medias **no hay nada que releer** para comprobarlo — que es la red de
+seguridad sobre la que se apoya todo lo demás de esta pestaña.
+
+- **El firmware de la NCU** (`ota`).
+- **La tabla de *fulltracking*** (`PUT /private_api/fulltracking/table`,
+  `application/octet-stream`, 10 minutos de *timeout* y un parámetro
+  `force_send` que, por su propio nombre, sirve para saltarse una comprobación).
+
+Para esas dos, la página de la NCU seguirá haciendo falta. El banco exige que
+ninguno de los dos extremos aparezca **ni escrito**.
+
+⚠️ Que la tabla no se suba desde aquí **no quita** que el `fulltracking_status`
+de cada TCU se lea: eso viene en el volcado y se sigue viendo.
+
+## Panel web de la NCU: leer lo que el Modbus no cuenta (v11.95)
+
+La pestaña **NCU › Panel web** lee la página de configuración de la NCU y saca de
+ahí lo que el mapa Modbus no tiene. Sobre todo una cosa:
+
+**Qué TCU está en qué grupo.** No hay registro que lo diga, ni en el R7.1 ni en
+el R8. Por eso la pestaña Grupos tenía que confesar, en la ventana de confirmar,
+que no sabía a cuántos seguidores iba a mandar la orden — y el técnico se quedaba
+mirándola. Con el panel leído, lo dice:
+
+```
+Pasar a AUTO
+
+Grupos: 1,3   -   NCU(s): 1
+
+LOS SEGUIDORES DE ESOS GRUPOS VUELVEN A SEGUIR AL SOL: se moverán, y dejan
+de estar protegidos por esa posición segura.
+
+SON 26 SEGUIDOR(ES) y son estos -lo dice la NCU, panel leído a las 11:22:33:
+  NCU2: 10 seguidor(es)  ->  1-10
+  NCU2: 16 seguidor(es)  ->  21-30, 98-107, 109
+```
+
+Tres cosas de esa ventana no son adorno:
+
+- **Dice de cuándo es el dato y que lo dice la NCU.** Un recuento sin fecha se
+  lee como una verdad permanente, y los grupos se reconfiguran.
+- **Si la orden va a varias NCUs y de alguna no se ha leído el panel, lo dice.**
+  Un total a medias es peor que ninguno.
+- **Si en esos grupos no hay ningún seguidor, lo dice.** Mandar una orden a un
+  grupo vacío no da error en ningún sitio: la NCU la acepta y no se mueve nada.
+  Sin este aviso, eso es un viaje al campo a ver por qué.
+
+Y lo otro que sale del panel:
+
+- **"Allow writing on the modbus map", antes de escribir y no después de fallar.**
+  Con esa casilla desmarcada la NCU acepta la conexión, acepta la escritura y no
+  la aplica: todo con pinta de haber ido bien. Es la explicación de media hora de
+  "pues no hace nada". Si el panel está leído, la ventana de confirmar lo avisa.
+- **Las HSUs de verdad**, con su esclavo, y **cuáles son prestadas de otra NCU**.
+  Es lo que resolvió el recuento de El Burgo: la NCU2 tiene tres suyas (esclavos
+  230, 231 y **210** — el GW2 lleva dos, contra lo que dice el comentario de
+  `config/plants.yml`) más dos que lee de la NCU1 por TCP. Cinco.
+- **La versión de firmware de la NCU**, que es lo que decide si tiene los
+  registros del R8 (ángulo de SP7 por grupo, límites de recorrido por TCU).
+- **Errores acumulados y latencia por equipo**, que el mapa Modbus no da. De ahí
+  salen las **TCUs mudas**: las que han fallado *todas* sus peticiones desde que
+  arrancó la NCU. No es "va regular", es que no está, y se distingue de una que
+  acaba de caerse.
+
+Siete vistas sobre **una sola lectura**: Resumen, Grupos, Equipos, HSUs,
+Topología, HSUs prestadas y Avisos. Cambiar de vista no vuelve a la NCU.
+
+**SOLO LEE.** Un `POST` de login y un `GET` del volcado, y nada más. Por esa misma
+API se puede reescribir la configuración **entera** de la NCU —red incluida— de un
+solo `PUT`, y también hay por dónde lanzar un firmware o reiniciarla; nada de eso
+está en el código, y `tests/test_panel_ncu.ps1` lo comprueba sobre el AST: exige
+exactamente dos llamadas HTTP contra el panel, una sola `POST`, ningún
+`PUT`/`PATCH`/`DELETE`, y que los extremos de configuración, OTA y reinicio no
+aparezcan ni escritos.
+
+**Dos avisos.** Las credenciales se teclean cada vez y **no se guardan**: ni en
+`config_local.json` ni en ningún otro sitio que pueda acabar en un repo o en un
+correo. Y la NCU sirve su página en **HTTP pelado**, así que el usuario y la
+contraseña viajan en claro por la LAN de planta — eso no lo arregla esta
+herramienta, pero conviene saberlo.
+
+### Dos huecos que se dicen en vez de rellenarse
+
+El volcado trae `tracker_status` y `hsu_status` como *arrays*, y no dice a qué
+equipo corresponde cada hueco. Todo apunta a que en `tracker_status` el índice es
+el esclavo Modbus, pero eso es una lectura nuestra y no algo que la API afirme,
+así que se **comprueba**: si los huecos con tráfico no son exactamente los
+esclavos que la propia NCU dice tener configurados, las filas salen **sin
+numerar**. Una fila mal numerada manda a un técnico a mirar el seguidor que no
+es, y eso es peor que no decirle cuál.
+
+En `hsu_status` no cuadra y por eso las estaciones van **por número de hueco**,
+sin afirmar cuál es: en El Burgo NCU2 hay **seis** huecos con tráfico y la
+configuración declara **cinco** estaciones. Mientras eso no se aclare, poner
+"HSU 3" encima de un hueco sería inventárselo. Sale como aviso, con los dos
+números delante.
+
+## Cuatro cosas que se habían quedado a medias (v11.94)
+
+Repaso de lo que entró entre la v11.87 y la v11.93. Nada de esto añade función:
+son cuatro cosas que decían algo que ya no era verdad, o que llegaron a un sitio
+y no al de al lado.
+
+**La etiqueta del mapa.** El título de la ventana decía `NCU R7.1` desde la
+v11.86, que es cuando entraron registros que solo existen en el **R8** — el
+ángulo de la posición segura 7 por grupo (`40030`-`40039`) y los límites de
+recorrido por TCU (`50047`/`50048`). Quien lee esa etiqueta en campo la lee para
+saber qué da por bueno la herramienta, así que atrasada dice que no pregunta algo
+que sí pregunta. Ahora dice `NCU R8`, y una comprobación la ata a los registros:
+si se usan los del R8, la etiqueta lo dice.
+
+**El alto de fila del árbol se asignaba dos veces** (16 px arriba, 24 px mil
+líneas más abajo) y la de arriba era código muerto con un comentario describiendo
+una geometría que no se veía. Peor: el regex de la suite encontraba justo la
+muerta, así que si alguien reactivaba la comprobación la habría hecho con el valor
+que no estaba en vigor. Una sola asignación, y la suite exige que siga siendo una.
+
+Y la cuenta del árbol cambió de sentido sin que nadie lo dijera. Cuando se
+desplegaba entero, la regla era «todas las líneas caben sin barra de scroll». Al
+hacerlo **plegable** (v11.91) el total dejó de importar —42 líneas a 24 px son
+1.008, no caben, y da igual porque un TreeView hace scroll— y la comprobación se
+borró… dejando tres regex calculando cosas que ya no usaba nadie y un comentario
+diciendo «31 líneas a 20 px». La regla que importa ahora es otra: **el bloque más
+grande, desplegado y con su cabecera, tiene que caber** (TCUs, 15 × 24 = 360 en
+663). Eso es lo que se vigila.
+
+**El *fallback* a FC06 no llegó a los límites de recorrido.** El arreglo de la
+v11.87 —hay NCUs que contestan `IllegalFunction` a FC16 y solo aceptan FC06— entró
+en los comandos de grupo y dejó fuera `Lim-EscribirTcu` y la escritura del `40080`,
+que seguían llamando a FC16 a pelo. El resultado sería que en la misma planta y
+con el mismo aparato los grupos se recuperan de esa NCU y los límites no. Ya van
+por el mismo camino, y el par sigue yendo de una sola petición cuando FC16 vale.
+Se prueba ejecutando la función de verdad, no buscando palabras en el fuente: ese
+bug pasó una vez por delante de un grep con todas las palabras en su sitio.
+
+**La guardia de viento reutiliza la lectura durante 30 s.** Que pasara a ser *por
+paso* (v11.90) arregló algo real: antes se consultaba una vez por NCU, así que una
+tirada de dos horas se apoyaba en una lectura de hace dos horas. Pero cada consulta
+es conectar al 502, leer el bloque de HSUs, cerrar y reconectar al gateway, y eso
+por cada paso que mueve y por cada TCU: en El Burgo, una receta con un paso de AUTO
+sobre 108 TCUs son 108 ciclos de conexión de más, cada uno con 5 s de presupuesto
+de *timeout*. El problema era el tráfico, no la frecuencia.
+
+La reutilización es **opt-in y con tres condiciones**: las guardias de botón (test
+de motor, comando de grupo) **siguen leyendo fresco siempre**, porque ahí el
+técnico acaba de pulsar y espera el dato de ahora —con caché podría quedarse
+bloqueado por un viento que ya paró—; **solo se guarda el éxito**, porque cachear
+un fallo bloquearía 30 s de TCUs por un hipo de red; y **cada tirada empieza
+limpiando** la reutilización anterior. Y lo que no hay que perder de vista: esto no
+es la protección. La protección es la alarma de viento del propio controlador, que
+es independiente de esta ventana.
 ## Edición piloto 11.94
 
 Nueva hoja **Inicio, planta y soporte**: alta de topología validada, informe HTML,
@@ -62,6 +647,7 @@ Cuando una NCU tiene varios gateways, el desplegable ofrece además una entrada 
 | **Leer variable** | **Varias variables a la vez** en una **tabla igual que la de Escribir** (v5.2: una fila por variable, con su registro y su tipo al lado; antes era combo + Añadir + lista, que no pegaba con la pestaña de al lado). Botón **Quitar** y tecla **Supr** para sacar de la lista las variables que ya no interesan, con las cabeceras de fila visibles para poder marcar varias a la vez (v6.4 — el botón existía con la lista anterior y se perdió al pasar a tabla). Lo mismo en Escribir. Admite además los registros de estado 3xxxx. Una columna por variable en el resultado en un rango de TCUs — o en la **Planta completa** (v4.1): recorre todas las NCUs en secuencia con sus rangos automáticos y añade la columna NCU a la vista y al CSV — con resumen de discrepancias por variable (cuántos TCU tienen cada valor, en toda la planta). Campo **Filtro** con contador de coincidencias (busca también en los registros `ESTADO …`), que reduce el desplegable sin perder nunca las filas ya elegidas. Si la **primera** variable de un TCU agota los reintentos sin respuesta, el TCU se da por mudo y no se prueban las demás (v5.2): con cinco variables, 8 s de timeout y 3 reintentos eso son ~24 s en vez de ~2 min por TCU muerto. Un fallo Modbus (dirección ilegal, etc.) no cuenta: ahí el equipo sí contesta y el resto se lee. Export CSV y, desde v4.8, la lectura entra también en el **INFORME HTML** con su resumen de discrepancias. |
 | **Volcar TCU** | Todas las variables de un TCU (config + estado + identidad opcional). Export CSV y **backup JSON** con metadatos (planta, IP, TCU, fecha, versión de mapa). Botón **Comparar con backup JSON**: marca en naranja las diferencias con un volcado anterior — ideal para verificar una TCU recién sustituida. **BACKUP NCU**: vuelca todas las TCUs de un rango a una carpeta, un JSON por TCU, con marca de completitud — el seguro antes de tocar nada. |
 | **Diagnóstico** | Por defecto en modo **"vía NCU" (rápido)**: lee el bloque compacto que la NCU cachea de sus TCUs (30500+, puerto 502) y sus HSUs (30200+) en lecturas TCP locales — segundos en vez de minutos, con `lastComm` como criterio de OFFLINE (igual que el SCADA) y **una fila por HSU** (viento, nieve, alarmas). Desmarcando "vía NCU" ataca los TCU en directo por Zigbee (más lento; añade las alarmas de hardware 30004/30005 que el bloque compacto no lleva). Escanea un rango de TCUs — o la **Planta completa**: al elegir la entrada "(Planta completa)" del desplegable recorre **todas sus NCUs en secuencia** (cada una con sus gateways y rangos propios; el campo **NCUs** filtra cuáles, p. ej. `1,3-5`) y añade la columna NCU a la vista y a los exports, incluyendo una **fila de salud por NCU** (GW1/GW2 desconectados, UPS, seta, reloj de la NCU — mapa R7.1, puerto 502) — y clasifica cada uno en `OK / AVISO / ALARMA / OFFLINE` con el **mismo criterio de salud que el SCADA** (eje bloqueado, sobrecorriente, batería crítica, seta, fuera de rango ⇒ alarma; resto de bits, `system_ok=0` o desviación >5° ⇒ aviso). El CSV exportado añade las **alarmas desglosadas en columnas 0/1** (filtrables en Excel). Botón **TEST COMM (rápido)** (v4.3): la prueba de campo más rápida — "¿quién habla y quién no?" de **todas las NCUs, TCUs y HSUs** de la selección (incluida la Planta completa). No lee el bloque compacto de cada TCU, solo los `lastComm` que la NCU cachea (2 registros por TCU, 50 TCUs por lectura) más la salud de la NCU: **4 lecturas Modbus por NCU de 75 TCUs en vez de 18**. Da OK / OFFLINE con la antigüedad del último dato, el listado de las mudas por NCU y el tiempo total; no da alarmas ni posiciones (para eso, DIAGNOSTICAR). Su export JSON se marca como `test_comm` para no confundirlo con un diagnóstico en el histórico. Tras el escaneo, la consola imprime el **resumen general por NCU** y la fila **Ver** permite **filtrar la vista del resultado** por NCU y por salud con **casillas que se pueden marcar a la vez** (p. ej. ALARMA + OFFLINE; ninguna marcada = todas) **sin relanzar lecturas** — los exports CSV/JSON llevan siempre el diagnóstico completo. La vista muestra lo esencial de campo: **modo (OFF/MANUAL/AUTO)**, **posición real/objetivo/desviación**, **SoC** y las **alarmas decodificadas bit a bit en texto** (registros 30002–30005). El resto (SoH, tensiones, temperaturas, registros hex) viaja igualmente en el export CSV/JSON. |
+| **Panel NCU** | Lee la **página web de la NCU** (HTTP, usuario y contraseña que no se guardan) y saca de ahí lo que el mapa Modbus no tiene, en siete vistas sobre una sola lectura: **qué TCU está en qué grupo** —con eso la pestaña Grupos ya dice a cuántos seguidores va la orden y cuáles—, las HSUs de verdad con su esclavo y cuáles son **prestadas de otra NCU**, la versión de firmware (que decide si tiene los registros del R8), si **"Allow writing on the modbus map"** está marcado —se ve *antes* de intentar escribir, no después de fallar— y los errores y latencia por equipo, de donde salen las **TCUs mudas**. **Solo lee**: un login y un volcado. Detalle más abajo.
 | **PEM** | La pestaña de puesta en marcha. **TEST DE MOTOR** por rango: cada TCU pasa a MANUAL, pulsa Oeste y Este midiendo Δángulo y corriente, vuelve a su modo, y da veredicto **PASA / FALLA (no se mueve, sin corriente, sentido invertido) / DUDOSO** — con **guardia de viento** (consulta las HSU vía NCU y se bloquea si hay nivel > 0), parada de motor garantizada y TCUs con alarma crítica saltados. **APLICAR MODO** (OFF/MANUAL/AUTO) y **LIMPIAR ALARMAS** (reset de las alarmas enclavadas, 40007 bit 13) masivos con verificación por efecto en 30001/30006. **STOW / QUITAR STOW** (42000) con verificación de la safe position activa. **Comisionado**: leer el estado (30001 bits 4:3: Factory → Configurado → Motor verificado → COMISIONADO) por rango — o de la **Planta completa vía NCU** (los bits van en el registro de estado que la NCU cachea en su bloque compacto: toda la planta en segundos, sin Zigbee, con columna NCU y los TCUs offline marcados) — y fijarlo (40000 bits 7:5). Todo exportable a CSV. |
 | **HSU** | La estación meteo. Botón **BUSCAR HSUs** (v4.0): escanea las NCUs de la selección (Planta completa, (auto) o una entrada suelta) leyendo el bloque compacto que cada NCU cachea (30200+, puerto 502) y lista **qué HSUs hay y de qué NCU cuelga cada una**, con su salud y su viento/nieve; el desplegable permite elegir una — fija su IP y su esclavo si la topología lo trae — o "(todas)" para ver el resumen conjunto. **LEER METEO** y **LEER CONFIG** funcionan sobre **todas las HSUs de la planta de una pasada** (v5.3): con "(todas)" en el desplegable recorren cada una por la IP y el gateway de su NCU, con una cabecera por HSU en la tabla, las mudas marcadas y un resumen de cuántas respondieron y cuántas tienen alarma o viento; LEER CONFIG avisa además si alguna HSU lleva **umbrales distintos** de las demás. Las escrituras (umbrales, reloj, nieve, NVM) siguen pidiendo una HSU concreta a propósito. Las operaciones directas van por su esclavo Modbus (default 185, editable; se preselecciona desde la topología si el fichero de plantas trae `hsu_esclavo`): **meteo en vivo** (viento m/s y km/h, dirección, nieve, lluvia, T/HR, irradiancia) con **alarmas decodificadas**; **config y umbrales de viento** (leer y escribir, con confirmación de seguridad y verificación); **reloj UTC**; **calibración del cero de nieve**; **NVM**; y la **caja negra de 24 h** (viento medio/máx, nieve e irradiancia minuto a minuto) descargada a CSV — para investigar un stow después de que pase. |
 | **Flota** | **Auditoría**: compara un rango de TCUs contra un *preset de referencia* (un preset o un backup completo) y lista **solo las desviaciones** (esperado vs leído), marcando en rojo las que además son **valores imposibles** para esa variable (v7.1), con export CSV — el "¿está toda la NCU igual?" en un clic. **Inventario**: FW principal/fábrica, nº de serie, MAC Xbee, HW y fecha de fabricación de todo el rango, con aviso si hay firmwares mezclados y export CSV. Ambas aceptan también la entrada **"(Planta completa)"**: recorren todas las NCUs en secuencia con sus rangos automáticos (los campos de TCU muestran NA) y añaden la columna NCU a la vista, al CSV y al informe HTML. |
@@ -2806,12 +3392,20 @@ Además, transversales a las pestañas (v3.1):
 
 ## Pruebas
 
-`tests/` lleva un simulador Modbus TCP y **325 comprobaciones** de toda la lógica no-GUI, para poder tocar el script sin planta delante:
+`tests/` lleva un simulador Modbus TCP y once bancos de pruebas de toda la lógica no-GUI, para poder tocar el script sin planta delante:
 
 ```bash
 cd tests && python3 mb_server.py &
 pwsh -NoProfile -File test_toolbox.ps1
+pwsh -NoProfile -File test_panel_ncu.ps1
 ```
+
+El del panel de la NCU corre contra `tests/fixture_panel_ncu.json`, una maqueta
+con la **estructura real** de un volcado de El Burgo: huecos vacíos, una TCU muda,
+otra recién caída, más huecos de HSU con tráfico que estaciones declaradas y un
+grupo de un solo seguidor. Cada guarda está comprobada al revés —revirtiendo el
+arreglo y exigiendo que el banco se caiga—, porque una prueba que pasa igual con
+el fallo puesto no prueba nada.
 
 Entre ellas, la regresión del fallo de las **respuestas descolocadas**: el esclavo 77 del simulador imita una NCU que va una respuesta por detrás, y sin la resincronización la lectura sale con los valores corridos. Detalle en `tests/README.md`.
 
@@ -2922,6 +3516,7 @@ Se coloca entre el updater y la NCU, **reenvía byte a byte sin modificar nada**
 - El guardado en **NVM** es una operación aparte, con su propia confirmación.
 - Los ángulos `f32` viajan en **radianes** por Modbus; la toolbox trabaja **siempre en grados** (tipo `f32deg`) y convierte en ambos sentidos, con guardarraíl (±360°). Lo que **no** es un ángulo no se convierte: `west_pitch`/`east_pitch` (separación entre ejes) y `panel_width` son metros (`f32`), y los pulsos, mV o Kelvin van tal cual. La unidad que ves entre corchetes en el nombre es siempre la unidad **mostrada**.
 - ⚠️ Errata del manual v6.1: la fila de **41106 east_pitch** dice "Radians 0..π/4", heredado de la fila de arriba; es una distancia como su gemela 41033 (Meters). Confirmado en campo — Ayora lee 6, que en radianes serían 344°, imposible en un campo cuyo máximo declarado es 45°.
+- El lector del **panel web de la NCU** solo lee: login y volcado. Las credenciales no se guardan en ningún sitio, y la página va por HTTP sin cifrar (usuario y contraseña viajan en claro por la LAN de planta). Los extremos de esa API que reescriben la configuración, lanzan firmware o reinician la NCU no están en el código, y hay una prueba estática que lo exige.
 - Los registros de configuración con nombre `[hex]` (máscaras de bits: `tracker_options`, `safe_pos_options`, `zigbee_config`…) se **muestran en hexadecimal** como los de estado, y al escribir admiten tanto `0x0A00` como `2560`.
 
 ## Notas técnicas

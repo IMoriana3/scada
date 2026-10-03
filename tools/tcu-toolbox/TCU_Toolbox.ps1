@@ -23,14 +23,59 @@
 
 param([switch]$Demo)
 
+# CUANTO TARDA EN ARRANCAR, medido y no supuesto (v12.8). Inaki pregunto por que
+# tarda tanto. Lo de antes de la ventana se midio en un Linux rapido y es poco
+# (parsear 0,7 s, plantas 0,6 s, resto 0,5 s); lo que no se puede medir desde
+# fuera es lo que pasa en SU Windows: PowerShell 5.1 parseando 1,1 MB, el
+# antivirus escaneando ese 1,1 MB antes de dejar correr la primera linea, y los
+# 400 y pico controles de la ventana. Asi que se mide por tramos y se dice en
+# la consola. El .bat deja la hora del doble clic en TOOLBOX_T0: la distancia
+# hasta ESTA linea es lo que cuesta arrancar powershell, parsear y pasar el
+# antivirus, que es justo el tramo que ningun cronometro de dentro del script
+# puede ver de otra manera.
+$script:T_arranque = Get-Date
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
+$script:T_winforms = Get-Date
 
-$VERSION_TOOLBOX = '11.94'
+$VERSION_TOOLBOX = '12.8'
 $script:ModoDemo = [bool]$Demo
-$VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R7.1 + HSU R23'
+
+# Segundos desde la hora que dejo el .bat (%TIME%: "12:34:56,78" en Windows en
+# castellano, "12:34:56.78" en ingles, a veces con un espacio delante si la
+# hora es de un digito) hasta $ahora. $null si no hay hora o no se entiende:
+# un numero inventado aqui seria peor que no dar ninguno. Si se cruza la
+# medianoche, se corrige. Pura.
+function Arranque-DesdeBat([string]$t0, [datetime]$ahora) {
+    $t = "$t0".Trim()
+    if ($t -eq '') { return $null }
+    $m = [regex]::Match($t, '^(\d{1,2}):(\d{2}):(\d{2})(?:[.,](\d{1,2}))?$')
+    if (-not $m.Success) { return $null }
+    $cent = $(if ($m.Groups[4].Success) { [int]$m.Groups[4].Value.PadRight(2, '0') } else { 0 })
+    $seg0 = [int]$m.Groups[1].Value * 3600 + [int]$m.Groups[2].Value * 60 + [int]$m.Groups[3].Value + $cent / 100.0
+    $seg1 = $ahora.TimeOfDay.TotalSeconds
+    $d = $seg1 - $seg0
+    if ($d -lt -43200) { $d += 86400 }      # el .bat arranco antes de medianoche y esto despues
+    if ($d -lt 0 -or $d -gt 3600) { return $null }   # un arranque de mas de una hora no es un arranque
+    return [math]::Round($d, 2)
+}
+
+# El texto del reparto de tiempos para la consola. Pura.
+function Arranque-Texto($bat, [double]$winforms, [double]$plantas, [double]$logica, [double]$ventana) {
+    $t = 'Arranque: '
+    if ($null -ne $bat) { $t += "powershell + parsear + antivirus $bat s, " } else { $t += 'powershell + parsear (sin hora del .bat), ' }
+    $t += "WinForms $winforms s, plantas $plantas s, logica $logica s, construir la ventana $ventana s."
+    return $t
+}
+# La etiqueta va en el titulo de la ventana: es lo que mira alguien en campo
+# para saber QUE MAPA da por bueno la herramienta. Decia R7.1 desde la v11.86,
+# que es cuando entraron registros que solo existen en el R8 (40030-40039, el
+# angulo de la posicion segura 7 por grupo, y 50047/50048, los limites de
+# recorrido por TCU). Una etiqueta que se queda atras no es un detalle: dice
+# que la herramienta no pregunta cosas que si pregunta.
+$VERSION_MAPA    = 'SUNNER TCU v6.1 (FW 1.4.3) + NCU R8 + HSU R23'
 
 # La propia NCU expone sus registros en el puerto 502, unit id 1 (mapa R7.1)
 $PUERTO_NCU = 502
@@ -417,6 +462,7 @@ if (Test-Path $dirPlantas) {
     }
 }
 Construir-EntradasAuto
+$script:T_plantas = Get-Date
 
 # ---------------------------------------------------------------------------
 #  Mapa de registros de ESTADO (solo lectura, 30xxx)
@@ -939,8 +985,45 @@ function Alarmas-Desglose([string]$hex1, [string]$hex2) {
 
 # Guardia de viento para tests de movimiento: consulta las HSU cacheadas por
 # la NCU. Devuelve @{nivel;alarma} o $null si no hay datos de HSU.
-function Viento-Seguro([string]$ipNcu, [int]$to, [int]$puerto = 0) {
+# Cuanto vale una lectura de viento para REPETIRLA, no para fiarse de ella.
+#
+# La guardia por paso de las recetas (v11.90) arreglo algo de verdad: antes se
+# consultaba una vez por NCU, asi que una tirada de dos horas se apoyaba en una
+# lectura de hace dos horas. Pero cada consulta es conectar al 502, leer el
+# bloque compacto de HSUs, cerrar y reconectar al gateway, y eso pasa por CADA
+# paso que mueve y por CADA TCU: en El Burgo, una receta con un paso de AUTO
+# sobre 108 TCUs son 108 ciclos de conexion de mas intercalados, cada uno con
+# 5 s de presupuesto de timeout y cada uno una ocasion de dar el "conexion
+# rechazada / la unica conexion esta cogida" que este mismo fichero ya sabe que
+# pasa. El trafico era el problema, no la frecuencia.
+#
+# Asi que se reutiliza la lectura DENTRO de una ventana corta, y con tres
+# condiciones que la hacen defendible:
+#
+#  1. Solo si quien llama lo pide ($cacheS). Las guardias de boton -test de
+#     motor, comando de grupo- siguen leyendo fresco SIEMPRE: ahi el tecnico
+#     acaba de pulsar y espera el dato de ahora, y con cache podria quedarse
+#     bloqueado por un viento que ya paro, o pasar por un "seguro" de hace 20 s.
+#  2. Solo se guarda el EXITO. Un fallo de lectura no se cachea, porque cachear
+#     un $null bloquearia 30 s de TCUs por un solo hipo de la red.
+#  3. Cada tirada de receta empieza limpiando la cache (Viento-OlvidarCache).
+#
+# Y lo que no hay que perder de vista: esto NO es la proteccion. La proteccion
+# es la alarma de viento del propio controlador, que es independiente de esta
+# ventana y no depende de que nosotros preguntemos. Esta guardia es para no
+# mandar nosotros a un seguidor a moverse con viento; 30 s de ventana valen
+# menos que los 108 reintentos de conexion que evitan.
+$VIENTO_CACHE_S = 30
+$script:VientoCache = @{}
+function Viento-OlvidarCache { $script:VientoCache = @{} }
+
+function Viento-Seguro([string]$ipNcu, [int]$to, [int]$puerto = 0, [int]$cacheS = 0) {
     if ($puerto -eq 0) { $puerto = $PUERTO_NCU }
+    $clave = "$ipNcu|$puerto"
+    if ($cacheS -gt 0 -and $script:VientoCache.ContainsKey($clave)) {
+        $c = $script:VientoCache[$clave]
+        if (((Get-Date) - $c.cuando).TotalSeconds -lt $cacheS) { return $c.v }
+    }
     try {
         Modbus-Conectar $ipNcu $puerto $to
         $hs = @(Ncu-HsuCompat)
@@ -957,7 +1040,10 @@ function Viento-Seguro([string]$ipNcu, [int]$to, [int]$puerto = 0) {
             }
         }
         if ($nivel -lt 0) { return $null }
-        return @{nivel=$nivel; alarma=$alarma}
+        $r = @{nivel=$nivel; alarma=$alarma}
+        # solo el exito: un $null cacheado bloquearia 30 s de TCUs por un hipo
+        if ($cacheS -gt 0) { $script:VientoCache[$clave] = @{cuando = (Get-Date); v = $r} }
+        return $r
     } catch { Modbus-Cerrar; return $null }
 }
 
@@ -1781,7 +1867,67 @@ function Gr-Cambiadas($antes, $despues) {
 # Lo que se le pregunta al tecnico antes de mover nada. Dice en que sentido se
 # mueven los seguidores -no es lo mismo irse a posicion segura que volver al
 # sol- y admite que no sabemos cuantos son. Pura.
-function Gr-TextoConfirmar($acc, [int]$bits, [int]$nNcus, [string]$ang = '', $segundos = $null) {
+# EL ALCANCE DE UNA ORDEN DE GRUPO, en seguidores y no en grupos. Esto es lo
+# que faltaba: por Modbus no hay registro que diga que TCU esta en que grupo
+# -ni en el R7.1 ni en el R8-, asi que la ventana de confirmar tenia que
+# admitir que no sabia a cuantos iba a mandar la orden. Con el panel leido, lo
+# sabe, lo cuenta y los nombra.
+#
+# Tres cosas que no se dan por supuestas:
+#   - Se dice DE CUANDO es el dato y que lo dice la NCU, no nosotros. Un
+#     recuento sin fecha se confunde con una verdad permanente, y los grupos se
+#     reconfiguran.
+#   - Si la orden va a varias NCUs y de alguna no se ha leido el panel, se dice
+#     cual: un total incompleto es peor que ninguno.
+#   - Si en esos grupos no hay NINGUN seguidor, se dice tambien. Mandar una
+#     orden a un grupo vacio no da error en ningun sitio, y el tecnico se iria
+#     al campo a ver por que no se ha movido nada.
+# Pura.
+function Gr-Alcance($cache, $ncus, [int]$bits) {
+    $sin = @(); $con = @(); $total = 0
+    foreach ($n in @($ncus)) {
+        $c = Api-DeNcu $cache "$n"
+        if ($null -eq $c) { $sin += "$n"; continue }
+        $t = @(Api-TcusDeGrupos $c.cfg $bits)
+        $total += $t.Count
+        $con += ,@{ncu = "$n"; n = $t.Count; rango = (Api-Rango $t); cuando = $c.cuando}
+    }
+    if ($con.Count -eq 0) {
+        return 'CUANTOS seguidores son, no se sabe: el mapa Modbus no dice que TCU esta en que grupo. Lee el panel de la NCU en la pestana Panel NCU y esta misma ventana te lo dira.'
+    }
+    $lineas = @($con | ForEach-Object {
+        "  NCU$($_.ncu): $($_.n) seguidor(es)" + $(if ("$($_.rango)" -ne '') { "  ->  $($_.rango)" } else { '  ->  NINGUNO en esos grupos' })
+    })
+    $viejo = @($con | Sort-Object { $_.cuando })[0].cuando
+    $t = $(if ($total -eq 0) {
+            "NINGUN seguidor esta en esos grupos segun la NCU, asi que la orden no movera nada (panel leido a las $($viejo.ToString('HH:mm:ss'))):"
+        } else {
+            "SON $total SEGUIDOR(ES) y son estos -lo dice la NCU, panel leido a las $($viejo.ToString('HH:mm:ss')):"
+        }) + "`r`n" + ($lineas -join "`r`n")
+    if ($sin.Count -gt 0) {
+        $t += "`r`n`r`nDe la(s) NCU $(@($sin | Sort-Object) -join ', ') NO se sabe: no se ha leido su panel, asi que esas NO estan contadas arriba."
+    }
+    return $t
+}
+
+# "Allow writing on the modbus map" ANTES de escribir, no despues de fallar.
+# Es una casilla de la pagina de la NCU, y con ella desmarcada la NCU acepta la
+# conexion, acepta la escritura y no la aplica: se queda todo con pinta de haber
+# ido bien. Es la respuesta a media hora de "pues no hace nada". Si el panel se
+# ha leido, aqui se dice; si no, no se inventa nada y no se dice. Pura.
+function Gr-AvisoEscritura($cache, $ncus) {
+    $bloq = @()
+    foreach ($n in @($ncus)) {
+        $c = Api-DeNcu $cache "$n"
+        if ($null -eq $c) { continue }
+        if (-not $c.cfg.modbus_enable_writing) { $bloq += "$n" }
+    }
+    if ($bloq.Count -eq 0) { return '' }
+    return "`r`n`r`nOJO: la(s) NCU $(@($bloq | Sort-Object) -join ', ') tiene(n) la escritura Modbus DESMARCADA en su pagina (Allow writing on the modbus map). Va a aceptar la orden y NO la va a aplicar. Marcala antes o esto no hara nada."
+}
+
+function Gr-TextoConfirmar($acc, [int]$bits, [int]$nNcus, [string]$ang = '', $segundos = $null, [string]$alcance = '') {
+    if ($alcance -eq '') { $alcance = 'CUANTOS seguidores son, no se sabe: el mapa no dice que TCU esta en que grupo, y el R8 tampoco lo arregla. Leelo en la pestana Panel NCU y esta ventana te lo dira.' }
     $t = "$($acc.n)`r`n`r`nGrupos: $(Ncu-Grupos $bits)   -   NCU(s): $nNcus"
     if ("$($acc.tipo)" -eq 'sp7ir') {
         $t += "`r`n`r`nAngulo: $ang"
@@ -1791,7 +1937,8 @@ function Gr-TextoConfirmar($acc, [int]$bits, [int]$nNcus, [string]$ang = '', $se
         } else {
             $t += "`r`n`r`nNO se toca la vuelta a automatico (40080): se quedaran ahi hasta que caduque el plazo que la NCU ya tenga puesto, o hasta que se les quite la peticion a mano."
         }
-        $t += "`r`n`r`nCUANTOS seguidores son, no se sabe: el mapa no dice que TCU esta en que grupo. Y el angulo que la NCU acepta lo limita el rango de tilt de cada seguidor, que por el puerto 502 no se puede consultar: se relee despues y se dice si lo ha recortado.`r`n`r`nContinuar?"
+        $t += "`r`n`r`n$alcance"
+        $t += "`r`n`r`nEl angulo que la NCU acepta lo limita el rango de tilt de cada seguidor, que por el puerto 502 no se puede consultar: se relee despues y se dice si lo ha recortado.`r`n`r`nContinuar?"
         return $t
     }
     if ("$($acc.tipo)" -eq 'sp7nada') {
@@ -1809,7 +1956,7 @@ function Gr-TextoConfirmar($acc, [int]$bits, [int]$nNcus, [string]$ang = '', $se
     } else {
         $t += "`r`n`r`nLOS SEGUIDORES DE ESOS GRUPOS VUELVEN A SEGUIR AL SOL: se moveran, y dejan de estar protegidos por esa posicion segura."
     }
-    $t += "`r`n`r`nCUANTOS seguidores son, no se sabe: el mapa no dice que TCU esta en que grupo, y el R8 tampoco lo arregla. Si no estas seguro, mirala en la pagina de la NCU antes.`r`n`r`nContinuar?"
+    $t += "`r`n`r`n$alcance`r`n`r`nContinuar?"
     return $t
 }
 
@@ -1822,6 +1969,1247 @@ function Ncu-Grupos([int]$w) {
     for ($i = 0; $i -lt 10; $i++) { if ($w -band (1 -shl $i)) { $g += ($i + 1) } }
     if ($g.Count -eq 0) { return ("0x{0:X4}" -f $w) }
     return ($g -join ',')
+}
+
+# ===================== EL PANEL WEB DE LA NCU (API privada) =====================
+# La pagina de la NCU no es un formulario: es una aplicacion contra una API REST
+# con sesion por cookie. Y por ahi sale, de UNA sola llamada, lo que el mapa
+# Modbus no da en ninguna:
+#
+#   - QUE TCU ESTA EN QUE GRUPO. Esto es lo gordo. Por Modbus no hay registro
+#     que lo diga -ni en el R7.1 ni en el R8-, asi que la pestana de grupos
+#     tenia que confesar que no sabia a cuantos seguidores iba a mover. Con el
+#     panel leido, lo sabe y lo dice.
+#   - Las HSUs de verdad, con su esclavo, y cuales son PRESTADAS de otra NCU.
+#   - La version de firmware de la NCU, que es lo que decide si tiene los
+#     registros del R8.
+#   - Si "Allow writing on the modbus map" esta puesto, ANTES de intentar
+#     escribir y que falle.
+#   - Errores acumulados y latencia por equipo, que el mapa Modbus no tiene.
+#
+# SOLO LEE. La API tiene por donde escribir -y hay un extremo acotado y
+# verificable para el modo por grupo- pero eso no entra aqui: se decide aparte.
+# Y las credenciales van como las del Digi: se teclean y no se guardan.
+$API_AUTH  = '/private_api/auth'
+$API_DATOS = '/private_api/initial_data'
+# A partir de aqui una estacion ya no es "ruido de Zigbee", es algo que mirar.
+# El suelo normal medido en El Burgo anda por el 3-4 %.
+$API_HSU_ERR_AVISO = 10.0
+$API_TCU_ERR_AVISO = 10.0
+
+# Una lista de numeros a tramos legibles: 1,2,3,10 -> "1-3, 10". La pestana de
+# grupos ensena 108 seguidores en una celda, y "98-107, 109" se lee de un
+# vistazo mientras que la lista entera no. Pura.
+function Api-Rango($numeros) {
+    $n = @(@($numeros) | ForEach-Object { [int]$_ } | Sort-Object -Unique)
+    if ($n.Count -eq 0) { return '' }
+    $tramos = @(); $ini = $n[0]; $ant = $n[0]
+    for ($i = 1; $i -lt $n.Count; $i++) {
+        if ($n[$i] -eq $ant + 1) { $ant = $n[$i]; continue }
+        $tramos += $(if ($ini -eq $ant) { "$ini" } else { "$ini-$ant" })
+        $ini = $n[$i]; $ant = $n[$i]
+    }
+    $tramos += $(if ($ini -eq $ant) { "$ini" } else { "$ini-$ant" })
+    return ($tramos -join ', ')
+}
+
+# Porcentaje de error, o $null si no se ha preguntado nunca. Un 0 % y un "no se
+# ha preguntado" no son lo mismo y no pueden salir igual en la tabla. Pura.
+function Api-Pct($errores, $peticiones) {
+    $p = [double]$peticiones
+    if ($p -le 0) { return $null }
+    return [math]::Round(100.0 * [double]$errores / $p, 1)
+}
+
+# Segundos desde la ultima lectura buena, contra el reloj de la PROPIA NCU y no
+# contra el del portatil: el panel da ncu_time y asi la edad no depende de que
+# el PC este en hora. $null si nunca contesto. Pura.
+function Api-Edad($ncuTime, $cuando) {
+    $c = [double]$cuando
+    if ($c -le 0) { return $null }
+    return [int][math]::Round(([double]$ncuTime - $c) / 1000.0)
+}
+
+# Los grupos, tal y como los tiene la NCU. hsu 255 es "cualquiera". Pura.
+function Api-Grupos($cfg) {
+    $r = @(); $g = 0
+    foreach ($x in @($cfg.tracker_groups)) {
+        $g++
+        $t = @(@($x.trackers) | ForEach-Object { [int]$_ })
+        $r += ,[pscustomobject]@{
+            Grupo = "$g"; Seguidores = $t.Count; TCUs = (Api-Rango $t)
+            HSU = $(if ([int]$x.hsu -eq 255) { 'cualquiera' } else { "$($x.hsu)" })
+            Stow_limit = $(if ($x.stow_limit_enable) { 'si' } else { 'NO' })
+            Difuso = $(if ($x.diffuse_tracking_enable) { 'SI' } else { '-' })
+        }
+    }
+    return @($r)
+}
+
+# A que grupo pertenece una TCU, o 0 si a ninguno. Pura.
+function Api-GrupoDe($cfg, [int]$tcu) {
+    $g = 0
+    foreach ($x in @($cfg.tracker_groups)) {
+        $g++
+        foreach ($n in @($x.trackers)) { if ([int]$n -eq $tcu) { return $g } }
+    }
+    return 0
+}
+
+# LAS TCUs QUE HAY DETRAS DE UN BITSET DE GRUPOS. Esta es la funcion por la que
+# merece la pena todo esto: convierte "grupos 1,3" en la lista de seguidores
+# que se van a mover, que es lo que hay que ensenar antes de mandar nada. Pura.
+function Api-TcusDeGrupos($cfg, [int]$bits) {
+    $t = @(); $g = 0
+    foreach ($x in @($cfg.tracker_groups)) {
+        $g++
+        if (-not ($bits -band (1 -shl ($g - 1)))) { continue }
+        foreach ($n in @($x.trackers)) { $t += [int]$n }
+    }
+    return @($t | Sort-Object -Unique)
+}
+
+# Los trackers que la NCU tiene configurados, por red Modbus (= por gateway).
+# Pura.
+function Api-TrackersCfg($cfg) {
+    $r = @()
+    foreach ($red in @($cfg.modbus_networks)) {
+        $r += ,@{ip = "$($red.ip)"; puerto = [int]$red.port
+                 tcus = @(@($red.trackers) | ForEach-Object { [int]$_.modbus_id })
+                 hsus = @(@($red.hsus) | ForEach-Object { @{id = [int]$_.id; esclavo = [int]$_.modbus_id} })}
+    }
+    return ,$r
+}
+
+# ---- el hueco de tracker_status, que NO se adivina ----
+# tracker_status es un array y la API no dice a que TCU corresponde cada hueco.
+# Todo apunta a que el indice ES el esclavo Modbus -el hueco 0 va vacio y los
+# esclavos empiezan en 1- pero eso es una LECTURA NUESTRA, no algo que la API
+# afirme. Asi que antes de poner numeros se comprueba contra los trackers
+# configurados: si los huecos con trafico no son exactamente los ids que la
+# propia NCU dice tener, las filas salen SIN numerar en vez de con el numero
+# equivocado. Una fila mal numerada manda a un tecnico a mirar el seguidor que
+# no es, y eso es peor que no decirle cual. Pura.
+function Api-Alineado($estado, $cfg) {
+    $ids = @()
+    foreach ($red in @($cfg.modbus_networks)) {
+        foreach ($t in @($red.trackers)) { $ids += [int]$t.modbus_id }
+    }
+    $ids = @($ids | Sort-Object -Unique)
+    if ($ids.Count -eq 0) { return @{ok = $false; nota = 'la NCU no declara ningun tracker'} }
+    $e = @($estado)
+    $fuera = 0      # huecos con trafico que NO son un id configurado
+    for ($i = 0; $i -lt $e.Count; $i++) {
+        if ([double]$e[$i].total_requests -le 0) { continue }
+        if ($ids -notcontains $i) { $fuera++ }
+    }
+    if ($fuera -gt 0) {
+        return @{ok = $false; nota = "$fuera hueco(s) de tracker_status con trafico no son ningun esclavo configurado: las filas van sin numerar"}
+    }
+    return @{ok = $true; nota = ''}
+}
+
+# Una fila por equipo. Si el alineamiento no cuadra, la columna TCU va vacia.
+function Api-Equipos($datos, $cfg) {
+    $al = Api-Alineado $datos.tracker_status $cfg
+    $ncuTime = $datos.ncu_time
+    $e = @($datos.tracker_status)
+    $r = @()
+    for ($i = 0; $i -lt $e.Count; $i++) {
+        $x = $e[$i]
+        # un hueco al que nunca se ha preguntado no es un equipo caido: es un
+        # hueco. comm_error viene en true de fabrica, asi que no sirve para
+        # distinguirlo y el que manda es total_requests.
+        if ([double]$x.total_requests -le 0) { continue }
+        $pct = Api-Pct $x.total_errors $x.total_requests
+        $edad = Api-Edad $ncuTime $x.last_successful_request
+        $r += ,[pscustomobject]@{
+            TCU = $(if ($al.ok) { "$i" } else { '' })
+            Grupo = $(if ($al.ok) { "$(Api-GrupoDe $cfg $i)" } else { '' })
+            Peticiones = [int]$x.total_requests
+            Errores = [int]$x.total_errors
+            Error_pct = $(if ($null -eq $pct) { '' } else { $pct })
+            Seguidos = [int]$x.consecutive_errors
+            Latencia_ms = [int]$x.latency
+            Edad_s = $(if ($null -eq $edad) { '' } else { $edad })
+            Estado = $(if ([int]$x.total_requests -gt 0 -and [int]$x.total_errors -ge [int]$x.total_requests) { 'MUDA' }
+                       elseif ($x.comm_error) { 'SIN COMUNICACION' }
+                       elseif ($null -ne $pct -and $pct -ge $API_TCU_ERR_AVISO) { 'muchos errores' }
+                       else { 'OK' })
+        }
+    }
+    return @($r)
+}
+
+# Las que no han contestado NUNCA: todas sus peticiones han fallado. No es "va
+# regular", es que no esta. Pura.
+function Api-Mudas($datos, $cfg) {
+    return @(@(Api-Equipos $datos $cfg) | Where-Object { "$($_.Estado)" -eq 'MUDA' })
+}
+
+# Lo que la NCU dice de si misma. Pura.
+function Api-Resumen($datos) {
+    $c = $datos.config_data.config
+    return [pscustomobject]@{
+        # NCU_id y no NCU: el nombre que la NCU se da a si misma -gateway_id- no
+        # es el numero con el que la planta la llama, y la tabla lleva los dos.
+        Planta = "$($c.plant_id)"; NCU_id = "$($c.gateway_id)"; FW = "$($datos.version)"
+        IP = "$($c.ip_config.ip)"; Uptime_h = [math]::Round([double]$datos.uptime / 3600000.0, 1)
+        Escritura_modbus = $(if ($c.modbus_enable_writing) { 'PERMITIDA' } else { 'BLOQUEADA' })
+        Seta = $(if ($datos.stop_button) { 'PULSADA' } else { '-' })
+        UPS = $(if (-not $datos.ups_status.power_ok) { 'SIN ALIMENTACION' }
+                elseif ($datos.ups_status.battery_low) { 'bateria baja' } else { 'OK' })
+        MQTT = $(if ($datos.mqtt_connected) { 'conectado' } else { 'SIN CONEXION' })
+        TCU_timeout_s = [int]$c.tcu_timeout; HSU_timeout_s = [int]$c.hsu_timeout
+        Sondeo_tcu_ms = [int]$c.tcu_interval_ms; Sondeo_hsu_ms = [int]$c.hsu_interval_ms
+    }
+}
+
+# Lo que la topologia DEBERIA decir de esta NCU, para carearlo con plants.yml
+# sin tener que mirarlo a ojo en una captura. Pura.
+function Api-Topologia($cfg) {
+    # OJO: Api-TrackersCfg devuelve con coma, asi que pasa por variable.
+    # Envolverla directamente en un @(...) deja UN elemento -el array entero- y
+    # la tabla saldria con un solo gateway sin quejarse de nada. (El ejemplo no
+    # va escrito tal cual porque el banco busca ese patron en el fuente.)
+    $redes = Api-TrackersCfg $cfg
+    $r = @(); $n = 0
+    foreach ($red in @($redes)) {
+        $n++
+        $hs = @($red.hsus | ForEach-Object { "id $($_.id) (esclavo $($_.esclavo))" })
+        $r += ,[pscustomobject]@{
+            Gateway = "GW$n"; Modbus_en = "$($red.ip):$($red.puerto)"
+            TCUs = $red.tcus.Count; Rango = (Api-Rango $red.tcus)
+            HSUs = $hs.Count; HSU_detalle = $(if ($hs.Count -eq 0) { 'ninguna' } else { ($hs -join '; ') })
+        }
+    }
+    return @($r)
+}
+
+# Las HSUs prestadas: no son equipos de esta NCU, los lee de otra por red. Que
+# salgan mezcladas con las suyas es lo que hacia que el recuento no cuadrase.
+# Pura.
+function Api-HsusExternas($cfg) {
+    $r = @()
+    foreach ($h in @($cfg.external_hsus)) {
+        $r += ,[pscustomobject]@{
+            Id = "$($h.id)"; De = "$($h.external_ip)"; Id_alla = "$($h.external_id)"
+            Via = $(if ($h.use_modbus) { 'Modbus' } else { 'MQTT' })
+        }
+    }
+    return @($r)
+}
+
+# ---- las HSUs, que van SIN numerar y por un motivo ----
+# hsu_status tambien es un array de huecos, y aqui el indice NO cuadra: en El
+# Burgo NCU2 hay SEIS huecos con trafico y la configuracion declara CINCO
+# estaciones (tres suyas y dos prestadas). Mientras eso no se aclare, poner
+# "HSU 3" sobre un hueco seria inventarselo, asi que van por su numero de hueco
+# y con lo que la propia NCU dice de cada uno: product_id, firmware y errores.
+# Las dos que vienen sin product_id son, casi con seguridad, las prestadas -se
+# leen de la otra NCU por TCP, rapido y sin errores, y de ahi no sale identidad
+# local-, pero eso tambien es una lectura nuestra y va dicho como tal. Pura.
+function Api-Hsus($datos) {
+    $ncuTime = $datos.ncu_time
+    $e = @($datos.hsu_status)
+    $r = @()
+    for ($i = 0; $i -lt $e.Count; $i++) {
+        $x = $e[$i]
+        if ([double]$x.total_requests -le 0) { continue }
+        $pct = Api-Pct $x.total_errors $x.total_requests
+        $edad = Api-Edad $ncuTime $x.last_successful_request
+        $r += ,[pscustomobject]@{
+            Hueco = "$i"
+            Producto = $(if ($null -eq $x.product_id) { '' } else { "$($x.product_id)" })
+            FW = $(if ($null -eq $x.firmware_version) { '' } else { "$($x.firmware_version)" })
+            Peticiones = [int]$x.total_requests; Errores = [int]$x.total_errors
+            Error_pct = $(if ($null -eq $pct) { '' } else { $pct })
+            Latencia_ms = [int]$x.latency
+            Edad_s = $(if ($null -eq $edad) { '' } else { $edad })
+            Nota = $(if ($null -eq $x.product_id) { 'sin identidad local: probablemente prestada de otra NCU' }
+                     elseif ($null -ne $pct -and $pct -ge $API_HSU_ERR_AVISO) { 'MUCHOS ERRORES' } else { '' })
+        }
+    }
+    return @($r)
+}
+
+# Lo que hay que mirar, sacado de los numeros y no de la impresion. Cada aviso
+# dice el dato que lo sostiene: sin el numero delante, un aviso es una opinion.
+# Pura.
+function Api-Avisos($datos, $cfg) {
+    $av = @()
+    $mudas = @(Api-Mudas $datos $cfg)
+    if ($mudas.Count -gt 0) {
+        $q = @($mudas | ForEach-Object { "$($_.TCU)" } | Where-Object { $_ })
+        $av += ,[pscustomobject]@{Que = 'TCUs mudas'; Cuantas = $mudas.Count
+            Detalle = ("ni una respuesta: " + $(if ($q.Count -gt 0) { "TCU " + (Api-Rango $q) } else { 'sin numerar' }))}
+    }
+    $caidas = @(@(Api-Equipos $datos $cfg) | Where-Object { "$($_.Estado)" -eq 'SIN COMUNICACION' })
+    if ($caidas.Count -gt 0) {
+        $av += ,[pscustomobject]@{Que = 'TCUs sin comunicacion ahora'; Cuantas = $caidas.Count
+            Detalle = (@($caidas | ForEach-Object { "$($_.TCU) (hace $($_.Edad_s) s)" }) -join ', ')}
+    }
+    $malas = @(@(Api-Equipos $datos $cfg) | Where-Object { "$($_.Estado)" -eq 'muchos errores' })
+    if ($malas.Count -gt 0) {
+        $av += ,[pscustomobject]@{Que = "TCUs por encima del $API_TCU_ERR_AVISO% de error"; Cuantas = $malas.Count
+            Detalle = (@($malas | ForEach-Object { "$($_.TCU) ($($_.Error_pct)%)" }) -join ', ')}
+    }
+    foreach ($h in @(Api-Hsus $datos)) {
+        if ("$($h.Nota)" -eq 'MUCHOS ERRORES') {
+            $av += ,[pscustomobject]@{Que = 'HSU con muchos errores'; Cuantas = 1
+                Detalle = "hueco $($h.Hueco) (producto $($h.Producto), fw $($h.FW)): $($h.Error_pct)% de $($h.Peticiones) peticiones"}
+        }
+    }
+    # las capacidades que la NCU no ve: casi siempre son las mudas, porque de
+    # una TCU que no contesta no se puede saber que soporta
+    foreach ($f in @($datos.tcu_feature_support)) {
+        $falta = [int]$f.total - [int]$f.supported
+        if ($falta -le 0) { continue }
+        $av += ,[pscustomobject]@{Que = "sin $($f.feature)"; Cuantas = $falta
+            Detalle = "$($f.supported) de $($f.total); si coincide con las mudas, es que no se sabe, no que no lo soporten"}
+    }
+    $c = $datos.config_data.config
+    if (-not $c.modbus_enable_writing) {
+        $av += ,[pscustomobject]@{Que = 'escritura Modbus BLOQUEADA'; Cuantas = 1
+            Detalle = 'con esto desmarcado la NCU acepta la conexion y no toma las escrituras'}
+    }
+    if ($datos.config_data.oudated) { $av += ,[pscustomobject]@{Que = 'configuracion sin aplicar'; Cuantas = 1; Detalle = 'la NCU dice que su config esta desfasada'} }
+    if ($datos.config_data.invalid) { $av += ,[pscustomobject]@{Que = 'configuracion INVALIDA'; Cuantas = 1; Detalle = 'la NCU dice que su config no es valida'} }
+    $ext = @(Api-HsusExternas $cfg)
+    $prop = 0
+    foreach ($red in @($cfg.modbus_networks)) { $prop += @($red.hsus).Count }
+    $huecos = @(Api-Hsus $datos).Count
+    if ($huecos -ne ($prop + $ext.Count)) {
+        $av += ,[pscustomobject]@{Que = 'el recuento de HSUs no cuadra'; Cuantas = $huecos
+            Detalle = "$huecos hueco(s) con trafico y la configuracion declara $prop propia(s) + $($ext.Count) prestada(s)"}
+    }
+    return @($av)
+}
+
+# ---- las vistas, declaradas como dato ----
+# Un volcado da siete tablas distintas y no caben en una. Van en una tabla de
+# definiciones, con sus columnas, y no cableadas en el pintador por un motivo
+# concreto: asi el banco puede carear las columnas declaradas contra las
+# propiedades que la funcion devuelve de verdad. Si alguien renombra un campo,
+# la prueba lo caza; sin esto saldria una columna vacia y nadie se enteraria.
+#
+# 'arg' dice que le hace falta a cada una: el estado, la configuracion o las
+# dos. 'uno' marca las que dan una sola fila por NCU.
+$API_VISTAS = @(
+    @{txt = 'Resumen';      fn = 'Api-Resumen';      arg = 'datos'; uno = $true
+      cols = @(@{t='Planta';w=80}, @{t='NCU_id';w=60}, @{t='FW';w=70}, @{t='IP';w=105},
+               @{t='Uptime_h';w=70}, @{t='Escritura_modbus';w=110}, @{t='Seta';w=60},
+               @{t='UPS';w=110}, @{t='MQTT';w=90}, @{t='TCU_timeout_s';w=90},
+               @{t='HSU_timeout_s';w=90}, @{t='Sondeo_tcu_ms';w=90}, @{t='Sondeo_hsu_ms';w=90})}
+    @{txt = 'Grupos';       fn = 'Api-Grupos';       arg = 'cfg'
+      cols = @(@{t='Grupo';w=55}, @{t='Seguidores';w=80}, @{t='TCUs';w=300},
+               @{t='HSU';w=90}, @{t='Stow_limit';w=80}, @{t='Difuso';w=60})}
+    @{txt = 'Equipos';      fn = 'Api-Equipos';      arg = 'ambos'
+      cols = @(@{t='TCU';w=55}, @{t='Grupo';w=55}, @{t='Peticiones';w=80},
+               @{t='Errores';w=70}, @{t='Error_pct';w=70}, @{t='Seguidos';w=70},
+               @{t='Latencia_ms';w=85}, @{t='Edad_s';w=70}, @{t='Estado';w=140})}
+    @{txt = 'HSUs';         fn = 'Api-Hsus';         arg = 'datos'
+      cols = @(@{t='Hueco';w=55}, @{t='Producto';w=70}, @{t='FW';w=50},
+               @{t='Peticiones';w=80}, @{t='Errores';w=70}, @{t='Error_pct';w=70},
+               @{t='Latencia_ms';w=85}, @{t='Edad_s';w=70}, @{t='Nota';w=290})}
+    @{txt = 'Topología';    fn = 'Api-Topologia';    arg = 'cfg'
+      cols = @(@{t='Gateway';w=65}, @{t='Modbus_en';w=135}, @{t='TCUs';w=55},
+               @{t='Rango';w=200}, @{t='HSUs';w=55}, @{t='HSU_detalle';w=240})}
+    @{txt = 'HSUs prestadas'; fn = 'Api-HsusExternas'; arg = 'cfg'
+      cols = @(@{t='Id';w=50}, @{t='De';w=120}, @{t='Id_alla';w=70}, @{t='Via';w=80})}
+    @{txt = 'Avisos';       fn = 'Api-Avisos';       arg = 'ambos'
+      cols = @(@{t='Que';w=230}, @{t='Cuantas';w=70}, @{t='Detalle';w=520})}
+)
+
+function Api-Vista([string]$txt) {
+    foreach ($v in $API_VISTAS) { if ("$($v.txt)" -eq $txt) { return $v } }
+    return $null
+}
+
+# Las filas de una vista para un volcado. Pura: el pintador no sabe de que
+# vista pinta, solo de filas y columnas.
+function Api-Filas($vista, $datos, $cfg) {
+    if ($null -eq $vista) { return @() }
+    $r = switch ("$($vista.arg)") {
+        'datos' { & $vista.fn $datos }
+        'cfg'   { & $vista.fn $cfg }
+        default { & $vista.fn $datos $cfg }
+    }
+    return @($r)
+}
+
+# La lectura cacheada de una NCU, o $null. Pura, y por eso el enganche con la
+# pestana de grupos se puede probar sin levantar la ventana.
+function Api-DeNcu($cache, [string]$ncu) {
+    foreach ($c in @($cache)) { if ("$($c.ncu)" -eq "$ncu") { return $c } }
+    return $null
+}
+
+# El color de una fila, dicho con PALABRAS y no con System.Drawing.Color. Asi
+# la regla -que es donde se equivoca uno- se prueba sin ventana, y el pintador
+# solo traduce. Pura.
+function Api-Gravedad($vista, $fila) {
+    switch ("$($vista.txt)") {
+        'Equipos' {
+            switch ("$($fila.Estado)") {
+                'MUDA'             { return 'mal' }
+                'SIN COMUNICACION' { return 'mal' }
+                'muchos errores'   { return 'aviso' }
+                default            { return 'bien' }
+            }
+        }
+        'HSUs' {
+            if ("$($fila.Nota)" -eq 'MUCHOS ERRORES') { return 'mal' }
+            if ("$($fila.Nota)" -ne '') { return 'gris' }
+            return 'bien'
+        }
+        'Avisos' { return 'aviso' }
+        'Resumen' {
+            if ("$($fila.Escritura_modbus)" -eq 'BLOQUEADA' -or "$($fila.Seta)" -eq 'PULSADA' -or
+                "$($fila.UPS)" -ne 'OK' -or "$($fila.MQTT)" -ne 'conectado') { return 'aviso' }
+            return 'normal'
+        }
+        default { return 'normal' }
+    }
+}
+
+# ============ LA CONFIGURACION DE LA NCU: COPIA, COMPARACION Y CAMBIO ============
+# El objetivo es dejar de entrar en la pagina web de la NCU y hacerlo todo desde
+# aqui. Eso cambia lo que hay que exigirle a esta parte: ya no es una comodidad,
+# es la herramienta con la que se va a configurar una planta, y tiene que ser
+# mas de fiar que la pagina a la que sustituye.
+#
+# TRES REGLAS, y las tres salen del mismo sitio: una escritura de configuracion
+# NO es como una escritura Modbus. Una Modbus toca un registro y se arregla
+# reescribiendolo. Esta manda la configuracion ENTERA, asi que el fallo no es un
+# valor raro: es una NCU que ya no esta en la red y alguien cogiendo el coche.
+#
+#   1. NADA SE EDITA EN SITIO. Cada cambio devuelve una copia nueva, y la que se
+#      leyo de la NCU se queda intacta. Asi el diff siempre es contra la verdad
+#      del aparato y no contra algo que ya hemos manoseado.
+#   2. LISTA BLANCA, NO LISTA NEGRA. Antes de mandar nada se comparan las dos
+#      configuraciones enteras y se exige que TODO lo que cambie este en lo que
+#      se pidio cambiar. Una lista negra -"no toques la red"- solo protege de lo
+#      que se nos ocurrio; esta protege tambien de lo que no.
+#   3. Y HAY UN TROZO INTOCABLE pase lo que pase: la red. No hay opcion, casilla
+#      ni parametro que lo abra. Un error en cualquier otro campo se arregla
+#      desde esta misma ventana; en ese, no.
+# Esta lista nacio corta y lo destapo la captura de una escritura real: el
+# cuerpo del PUT trae, al mismo nivel que todo lo demas, http_port y modbus_port
+# -y los bloques gw1_config/gw2_config con la red de cada Digi-. Cambiar
+# http_port deja la pagina de la NCU inalcanzable en el :80; cambiar modbus_port
+# deja al SCADA sin ver la planta; tocar gwN_config.network deja sin gateway.
+# Son exactamente el mismo desastre que la IP, y no estaban. Con la lista blanca
+# nunca habrian cambiado, pero esto es el cinturon ademas de los tirantes, y un
+# cinturon que no abarca lo peor no es un cinturon.
+$API_INTOCABLE = @('ip_config', 'http_port', 'modbus_port', 'gw1_config', 'gw2_config')
+# el direccionamiento de las redes Modbus es lo mismo: cambiarlo es dejar de ver
+# a los gateways. Los esclavos de dentro si son configuracion normal.
+$API_INTOCABLE_PATRON = '^modbus_networks\[\d+\]\.(ip|port|network_type)$'
+$API_COPIA_PROF = 30            # ConvertTo-Json corta en 2 niveles por omision
+
+# Una copia independiente de la configuracion. Por JSON y no por asignacion: un
+# PSCustomObject se pasa por referencia y "modificar la copia" acabaria
+# modificando lo que leimos de la NCU, que es justo contra lo que se compara.
+function Api-Clonar($o) {
+    if ($null -eq $o) { return $null }
+    return ($o | ConvertTo-Json -Depth $API_COPIA_PROF -Compress | ConvertFrom-Json)
+}
+
+function Api-Tipo($o) {
+    if ($null -eq $o) { return 'nulo' }
+    if ($o -is [string] -or $o -is [bool] -or $o -is [valuetype]) { return 'val' }
+    if ($o -is [System.Management.Automation.PSCustomObject]) { return 'obj' }
+    if ($o -is [System.Collections.IEnumerable]) { return 'lista' }
+    return 'val'
+}
+
+# Una lista de valores sueltos (numeros, textos) frente a una de objetos: las
+# primeras se comparan como CONJUNTO y no por posicion, y eso no es un detalle.
+# La lista de seguidores de un grupo comparada por posicion dice que han
+# cambiado once cosas cuando solo se ha quitado una del medio: todo lo de detras
+# se corre un sitio. Asi dice "quitado: 109", que es lo que ha pasado.
+function Api-ListaPlana($l) {
+    foreach ($x in @($l)) { if ((Api-Tipo $x) -ne 'val') { return $false } }
+    return $true
+}
+
+function Api-Breve($o) {
+    switch (Api-Tipo $o) {
+        'nulo'  { return '(nada)' }
+        'obj'   { return '(objeto)' }
+        'lista' { return "($(@($o).Count) elementos)" }
+        default { return "$o" }
+    }
+}
+
+# TODO lo que cambia entre dos configuraciones, con su ruta. Es la pieza de la
+# que cuelgan las otras dos: la comparacion que se ensena y la guarda que decide
+# si se puede mandar. Pura.
+function Api-Diferencias($a, $b, [string]$ruta = '') {
+    $ta = Api-Tipo $a; $tb = Api-Tipo $b
+    if ($ta -ne $tb) {
+        return @([pscustomobject]@{Ruta = $ruta; Antes = (Api-Breve $a); Ahora = (Api-Breve $b)})
+    }
+    $r = @()
+    switch ($ta) {
+        'obj' {
+            $nombres = @(@(@($a.PSObject.Properties.Name) + @($b.PSObject.Properties.Name)) | Sort-Object -Unique)
+            foreach ($n in $nombres) {
+                $sub = $(if ($ruta -eq '') { "$n" } else { "$ruta.$n" })
+                $r += @(Api-Diferencias $a.$n $b.$n $sub)
+            }
+        }
+        'lista' {
+            $la = @($a); $lb = @($b)
+            if ((Api-ListaPlana $la) -and (Api-ListaPlana $lb)) {
+                $sa = @($la | ForEach-Object { "$_" }); $sb = @($lb | ForEach-Object { "$_" })
+                $fuera = @($sa | Where-Object { $sb -notcontains $_ })
+                $dentro = @($sb | Where-Object { $sa -notcontains $_ })
+                if ($fuera.Count -or $dentro.Count) {
+                    $r += ,[pscustomobject]@{Ruta = $ruta
+                        Antes = $(if ($fuera.Count) { "quitado: " + ($fuera -join ', ') } else { '' })
+                        Ahora = $(if ($dentro.Count) { "metido: " + ($dentro -join ', ') } else { '' })}
+                }
+            } else {
+                $max = [math]::Max($la.Count, $lb.Count)
+                for ($i = 0; $i -lt $max; $i++) {
+                    $x = $(if ($i -lt $la.Count) { $la[$i] } else { $null })
+                    $y = $(if ($i -lt $lb.Count) { $lb[$i] } else { $null })
+                    $r += @(Api-Diferencias $x $y "$ruta[$i]")
+                }
+            }
+        }
+        default {
+            # -cne: en una configuracion un texto en mayusculas no es el mismo texto
+            if ("$a" -cne "$b") { $r += ,[pscustomobject]@{Ruta = $ruta; Antes = "$a"; Ahora = "$b"} }
+        }
+    }
+    return @($r)
+}
+
+# LA GUARDA. Recibe lo que se leyo, lo que se quiere mandar y la lista de rutas
+# que se tenia permiso para tocar. Si algo mas ha cambiado, no se manda y se
+# dice QUE. Pura, y por eso se puede probar sin NCU y sin red.
+function Api-CambioSeguro($antes, $despues, $permitidas) {
+    $difs = @(Api-Diferencias $antes $despues)
+    if ($difs.Count -eq 0) { return @{ok = $false; nota = 'no hay ningun cambio que mandar'; difs = @(); fuera = @()} }
+    $fuera = @()
+    foreach ($d in $difs) {
+        $ruta = "$($d.Ruta)"
+        # lo intocable lo es aunque alguien lo haya metido en las permitidas
+        $prohibido = $false
+        foreach ($p in $API_INTOCABLE) {
+            if ($ruta -eq $p -or $ruta.StartsWith("$p.") -or $ruta.StartsWith("$p[")) { $prohibido = $true; break }
+        }
+        if (-not $prohibido -and $ruta -match $API_INTOCABLE_PATRON) { $prohibido = $true }
+        if ($prohibido) { $fuera += ,$d; continue }
+        $vale = $false
+        foreach ($p in @($permitidas)) {
+            if ($ruta -eq $p -or $ruta.StartsWith("$p.") -or $ruta.StartsWith("$p[")) { $vale = $true; break }
+        }
+        if (-not $vale) { $fuera += ,$d }
+    }
+    if ($fuera.Count -gt 0) {
+        return @{ok = $false; difs = $difs; fuera = $fuera
+                 nota = "$($fuera.Count) cambio(s) fuera de lo que se pidio tocar: " +
+                        ((@($fuera | ForEach-Object { "$($_.Ruta)" }) | Select-Object -First 5) -join ', ') +
+                        $(if ($fuera.Count -gt 5) { ' ...' } else { '' })}
+    }
+    return @{ok = $true; nota = ''; difs = $difs; fuera = @()}
+}
+
+# ---- los cambios que se saben hacer ----
+# Cada uno devuelve @{ok; nota; cfg; permitidas}: la configuracion nueva Y las
+# rutas que decia ir a tocar, que es lo que luego se le exige a la guarda. Que
+# el propio cambio declare su alcance es lo que hace que la guarda sirva de
+# algo: si declara menos de lo que toca, no pasa.
+
+# Meter o sacar seguidores de un grupo. Es el cambio que el Modbus no puede
+# hacer de ninguna manera, y el que hizo falta el primer dia: la NCU2 de El
+# Burgo tiene en su grupo 10 un prototipo de certificaciones que no es un
+# seguidor de la planta. Pura.
+function Api-GrupoEditar($cfg, [int]$grupo, $tcus, [bool]$meter) {
+    $gs = @($cfg.tracker_groups)
+    if ($grupo -lt 1 -or $grupo -gt $gs.Count) {
+        return @{ok = $false; nota = "el grupo $grupo no existe: esta NCU tiene $($gs.Count)"; cfg = $null; permitidas = @()}
+    }
+    $lista = @(@($tcus) | ForEach-Object { [int]$_ } | Sort-Object -Unique)
+    if ($lista.Count -eq 0) { return @{ok = $false; nota = 'no se ha dicho ningun seguidor'; cfg = $null; permitidas = @()} }
+
+    $actual = @(@($gs[$grupo - 1].trackers) | ForEach-Object { [int]$_ })
+    $avisos = @()
+    if ($meter) {
+        # que el seguidor EXISTA en esta NCU. Meter en un grupo un numero que la
+        # NCU no tiene configurado no da error: da un grupo que dice mover algo
+        # que no esta, y una orden que parece hacer menos de lo que dice.
+        $conf = @()
+        foreach ($red in @($cfg.modbus_networks)) {
+            foreach ($t in @($red.trackers)) { $conf += [int]$t.modbus_id }
+        }
+        $noEstan = @($lista | Where-Object { $conf -notcontains $_ })
+        if ($noEstan.Count -gt 0) {
+            return @{ok = $false; cfg = $null; permitidas = @()
+                     nota = "esta NCU no tiene configurado el seguidor $(($noEstan | Sort-Object) -join ', '): no se mete en un grupo lo que no existe"}
+        }
+        # y que no este ya en otro. Que un seguidor pueda estar en dos grupos a
+        # la vez la API no lo dice ni que si ni que no; en las dos NCUs de El
+        # Burgo cada uno esta en exactamente uno. Asi que se rechaza y se dice
+        # donde esta: es REGLA NUESTRA, no algo que afirme el aparato.
+        foreach ($t in $lista) {
+            $otro = Api-GrupoDe $cfg $t
+            if ($otro -ne 0 -and $otro -ne $grupo) {
+                return @{ok = $false; cfg = $null; permitidas = @()
+                         nota = "el seguidor $t ya esta en el grupo $otro. Sacalo de ahi primero (regla nuestra: la API no dice si admite estar en dos)"}
+            }
+        }
+        $ya = @($lista | Where-Object { $actual -contains $_ })
+        if ($ya.Count -eq $lista.Count) { return @{ok = $false; nota = "ya estaban todos en el grupo $grupo"; cfg = $null; permitidas = @()} }
+        if ($ya.Count -gt 0) { $avisos += "ya estaban: $(($ya | Sort-Object) -join ', ')" }
+        $nuevos = @(@($actual + $lista) | Sort-Object -Unique)
+    } else {
+        $noEstan = @($lista | Where-Object { $actual -notcontains $_ })
+        if ($noEstan.Count -eq $lista.Count) { return @{ok = $false; nota = "ninguno de esos esta en el grupo $grupo"; cfg = $null; permitidas = @()} }
+        if ($noEstan.Count -gt 0) { $avisos += "no estaban: $(($noEstan | Sort-Object) -join ', ')" }
+        $nuevos = @($actual | Where-Object { $lista -notcontains $_ })
+    }
+
+    $nuevo = Api-Clonar $cfg
+    $nuevo.tracker_groups[$grupo - 1].trackers = @($nuevos | ForEach-Object { [int]$_ })
+    return @{ok = $true; nota = ($avisos -join '; '); cfg = $nuevo
+             permitidas = @("tracker_groups[$($grupo - 1)].trackers")}
+}
+
+# Las banderas de un grupo. 'hsu' es de que estacion toma el viento (255 =
+# cualquiera), 'stow' si respeta el limite de abanderamiento y 'difuso' el
+# seguimiento difuso. Pura.
+$API_BANDERAS = @{
+    stow   = @{campo = 'stow_limit_enable';       que = 'el limite de abanderamiento'}
+    difuso = @{campo = 'diffuse_tracking_enable'; que = 'el seguimiento difuso'}
+}
+function Api-GrupoBandera($cfg, [int]$grupo, [string]$cual, [bool]$valor) {
+    $gs = @($cfg.tracker_groups)
+    if ($grupo -lt 1 -or $grupo -gt $gs.Count) {
+        return @{ok = $false; nota = "el grupo $grupo no existe: esta NCU tiene $($gs.Count)"; cfg = $null; permitidas = @()}
+    }
+    if (-not $API_BANDERAS.ContainsKey($cual)) {
+        return @{ok = $false; nota = "no se sabe cambiar '$cual'"; cfg = $null; permitidas = @()}
+    }
+    $campo = $API_BANDERAS[$cual].campo
+    if ([bool]$gs[$grupo - 1].$campo -eq $valor) {
+        return @{ok = $false; nota = "$($API_BANDERAS[$cual].que) del grupo $grupo ya esta asi"; cfg = $null; permitidas = @()}
+    }
+    $nuevo = Api-Clonar $cfg
+    $nuevo.tracker_groups[$grupo - 1].$campo = $valor
+    return @{ok = $true; nota = ''; cfg = $nuevo
+             permitidas = @("tracker_groups[$($grupo - 1)].$campo")}
+}
+
+# Los ajustes sueltos de la NCU, con un limite cada uno para que un dedazo no
+# pase: un sondeo de 10 ms satura la Zigbee de la planta entera.
+#
+# PERO OJO CON LOS LIMITES, que ya me equivoque una vez. La primera version
+# ponia el timeout de TCU en 30..3600 "porque suena razonable", y la El Burgo
+# NCU2 lo tiene en 6000: o sea que la herramienta habria RECHAZADO el valor que
+# el aparato lleva puesto de verdad. Un limite inventado que rechaza lo que la
+# NCU acepta es peor que no tener limite, porque parece autoridad.
+#
+# Asi que son limites de DEDAZO y no de ingenieria: anchos a proposito, solo
+# para cazar un 10 donde iba un 10000. No salen de ninguna documentacion -no la
+# tenemos- y por eso no se presentan como si saliesen. Y las unidades no estan
+# claras: El Burgo lleva tcu_timeout 6000 y hsu_timeout 600, que no cuadra con
+# que los dos sean segundos de lo mismo. Mientras no se sepa, la etiqueta no
+# miente: no dice [s].
+$API_AJUSTES = [ordered]@{
+    tcu_timeout            = @{que = 'timeout de TCU';            min = 1;   max = 86400;  tipo = 'int'}
+    hsu_timeout            = @{que = 'timeout de HSU';            min = 1;   max = 86400;  tipo = 'int'}
+    tcu_interval_ms        = @{que = 'sondeo de TCU [ms]';        min = 250; max = 600000; tipo = 'int'}
+    hsu_interval_ms        = @{que = 'sondeo de HSU [ms]';        min = 250; max = 600000; tipo = 'int'}
+    ncu_interval_ms        = @{que = 'sondeo de NCU [ms]';        min = 250; max = 600000; tipo = 'int'}
+    modbus_enable_writing  = @{que = 'permitir escritura Modbus'; tipo = 'bool'}
+}
+function Api-Ajuste($cfg, [string]$campo, $valor) {
+    if (-not $API_AJUSTES.Contains($campo)) {
+        return @{ok = $false; nota = "no se sabe cambiar '$campo'"; cfg = $null; permitidas = @()}
+    }
+    $d = $API_AJUSTES[$campo]
+    if ("$($d.tipo)" -eq 'bool') {
+        $v = [bool]$valor
+    } else {
+        $n = 0
+        if (-not [int]::TryParse("$valor", [ref]$n)) {
+            return @{ok = $false; nota = "'$valor' no es un numero"; cfg = $null; permitidas = @()}
+        }
+        if ($n -lt [int]$d.min -or $n -gt [int]$d.max) {
+            return @{ok = $false; cfg = $null; permitidas = @()
+                     nota = "$($d.que): $n esta fuera de $($d.min)..$($d.max), no se manda"}
+        }
+        $v = $n
+    }
+    # Que el campo EXISTA en esta NCU. Sin esto, una NCU con otro panel que no lo
+    # traiga hacia reventar la asignacion con una excepcion en mitad del
+    # manejador, en vez de decir lo que pasa. No todas las NCUs tienen por que
+    # tener los mismos campos, y eso no es un fallo nuestro ni suyo.
+    if ($null -eq $cfg.PSObject.Properties[$campo]) {
+        return @{ok = $false; cfg = $null; permitidas = @()
+                 nota = "esta NCU no tiene el campo '$campo' en su configuracion: no se inventa"}
+    }
+    if ("$($cfg.$campo)" -ceq "$v") {
+        return @{ok = $false; nota = "$($d.que) ya vale eso"; cfg = $null; permitidas = @()}
+    }
+    $nuevo = Api-Clonar $cfg
+    $nuevo.$campo = $v
+    return @{ok = $true; nota = ''; cfg = $nuevo; permitidas = @($campo)}
+}
+
+# EL TEXTO QUE ESCRIBE EL TECNICO -> EL VALOR, y existe por una trampa concreta
+# de PowerShell: [bool]'no' es $true. Cualquier cadena no vacia lo es. O sea que
+# si el cuadro de texto llegara crudo a Api-Ajuste, escribir "no" en "permitir
+# escritura Modbus" la habria ACTIVADO, que es justo lo contrario de lo que el
+# tecnico queria y en el campo mas delicado de la lista. Asi que los si/no se
+# parsean a mano, con lista cerrada, y lo que no este en la lista NO se
+# interpreta: se rechaza. Mas vale un "no te he entendido" que un si por
+# accidente. Pura.
+# Las listas van SIN TILDES, y los acentos de lo que teclee el tecnico se quitan
+# antes de comparar. No es cosmetica: este fichero va en UTF-8 con BOM justo para
+# que PowerShell 5.1 no lea los acentos como ANSI, y si alguien lo guardara
+# alguna vez sin BOM, una 'sí' escrita aqui dentro quedaria corrupta y ya no
+# casaria con la 'sí' que llega del cuadro de texto -que si es Unicode de
+# verdad-. Comparando sin acentos, la respuesta correcta no depende de como se
+# haya guardado el fuente. Lo vio el CI de PowerShell 5.1 el 02/10/2026.
+$API_AJUSTE_SI = @('1', 'si', 'true', 'on', 'yes', 'activado', 'habilitado')
+$API_AJUSTE_NO = @('0', 'no', 'false', 'off', 'desactivado', 'deshabilitado')
+function Api-SinTildes([string]$t) {
+    $d = "$t".Normalize([System.Text.NormalizationForm]::FormD)
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($c in $d.ToCharArray()) {
+        if ([System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($c) -ne
+            [System.Globalization.UnicodeCategory]::NonSpacingMark) { [void]$sb.Append($c) }
+    }
+    return $sb.ToString().Normalize([System.Text.NormalizationForm]::FormC)
+}
+function Api-AjusteTexto([string]$campo, [string]$texto) {
+    if (-not $API_AJUSTES.Contains($campo)) {
+        return @{ok = $false; valor = $null; nota = "no se sabe cambiar '$campo'"}
+    }
+    $t = "$texto".Trim()
+    if ($t -eq '') { return @{ok = $false; valor = $null; nota = 'pon un valor'} }
+    if ("$($API_AJUSTES[$campo].tipo)" -ne 'bool') {
+        # los numeros los valida Api-Ajuste con su rango: aqui solo se pasan
+        return @{ok = $true; valor = $t; nota = ''}
+    }
+    $b = (Api-SinTildes $t).ToLowerInvariant()
+    if ($API_AJUSTE_SI -contains $b) { return @{ok = $true;  valor = $true;  nota = ''} }
+    if ($API_AJUSTE_NO -contains $b) { return @{ok = $true;  valor = $false; nota = ''} }
+    return @{ok = $false; valor = $null
+             nota = "'$texto' no es ni si ni no, y en este campo no se adivina: escribe SI o NO"}
+}
+
+# El texto de confirmar. Un cambio de configuracion se ensena ENTERO antes de
+# mandarlo -no "se van a aplicar 3 cambios", sino cuales-, porque es lo unico
+# que le da al tecnico la oportunidad de ver que esta tocando lo que no era.
+# Pura.
+function Api-TextoCambio([string]$ncu, [string]$que, $difs, [string]$copia) {
+    $t = "CAMBIAR LA CONFIGURACION DE LA NCU $ncu`r`n`r`n$que`r`n`r`nEsto es TODO lo que cambia:`r`n"
+    foreach ($d in @($difs)) {
+        $t += "`r`n  $($d.Ruta)"
+        if ("$($d.Antes)" -ne '' -or "$($d.Ahora)" -ne '') { $t += "`r`n      $($d.Antes)  ->  $($d.Ahora)" }
+    }
+    $t += "`r`n`r`nSe manda la configuracion ENTERA de la NCU, no solo esta linea: asi funciona su API (PUT /private_api/config, visto en el panel v1.17.1). Por eso se ha comprobado que no cambia nada mas, y por eso hay copia."
+    $t += "`r`n`r`nCopia de seguridad previa: $copia"
+    $t += "`r`n`r`nDespues se relee y se compara: si la NCU no lo ha tomado, se dice.`r`n`r`nContinuar?"
+    return $t
+}
+
+# ---- la escritura: QUE SE SABE YA, Y QUE FALTA ----
+# El 01/10/2026 se vio una escritura DE VERDAD con el DevTools de la pagina de
+# la NCU2 de El Burgo (panel v1.17.1). Sale asi:
+#
+#     PUT http://10.100.1.56/private_api/config
+#     Content-Type: text/plain          <- si, text/plain para un JSON
+#     Content-Length: 10203             <- solo config, no el initial_data entero
+#     cuerpo: {plant_id:"ElBurgo", gateway_id:"NCU2", location:{...}, ...}
+#                                       <- el objeto TAL CUAL, sin envolver
+#     -> 200 OK, application/json, 39 bytes
+#
+# O sea: verbo, ruta, tipo y forma son los que se habian deducido del JavaScript.
+# Queda escrito con que panel se vio: si algun dia una NCU lleva otro y no
+# cuadra, que se sepa contra que se comprobo esto.
+#
+# Y la captura corrigio dos cosas de aqui al lado: el cuerpo trae http_port y
+# modbus_port al mismo nivel que todo lo demas -mas gw1_config/gw2_config con la
+# red de los Digi-, que no estaban en $API_INTOCABLE; y el tcu_timeout real es
+# 6000, fuera del rango que $API_AJUSTES se habia inventado.
+#
+# ARMADA el 01/10/2026, y quien lo decidio fue Inaki, que es quien responde de la
+# planta. Estuvo desarmada mientras la forma de la peticion era una deduccion; se
+# confirmo con una captura del DevTools y entonces lo que faltaba ya no era un
+# dato sino una decision, que no es del que escribe el codigo.
+#
+# Lo que esto habilita: que la herramienta reescriba la configuracion de una NCU
+# EN PRODUCCION. Lo que sigue entre medias, y no es poco: la lista blanca, los
+# intocables, la copia obligatoria antes, el diff entero en la ventana de
+# confirmar, la ida y vuelta por JSON y la relectura posterior. Armar no es
+# quitar frenos, es dejar que el ultimo tramo exista.
+$API_CONFIG = '/private_api/config'
+$API_ESCRITURA_CONFIRMADA = $true
+$API_ESCRITURA_PANEL = 'v1.17.1'      # el panel contra el que se capturo la peticion
+$API_ESCRITURA_FALTA = 'la escritura esta armada; si ves este mensaje es que alguien la ha vuelto a desarmar en el fuente.'
+
+# LA IDA Y VUELTA POR JSON, ANTES DE MANDAR NADA. Lo que sale por el cable no es
+# el objeto que la NCU nos dio: es lo que PowerShell escribe al reserializarlo.
+# Si ConvertTo-Json perdiera un campo, redondeara una latitud o convirtiera un
+# null en otra cosa, el PUT se llevaria esa perdida -y como va el objeto ENTERO,
+# la NCU se quedaria con ella-. Asi que antes de salir se reserializa, se vuelve
+# a leer y se compara contra lo que ibamos a mandar: si no es identico, no sale.
+# Es la unica comprobacion posible ANTES de que sea tarde; despues de un PUT a
+# medias no hay vuelta. Pura.
+function Api-IdaYVuelta($cfg) {
+    try {
+        $txt = $cfg | ConvertTo-Json -Depth $API_COPIA_PROF
+        $otra = $txt | ConvertFrom-Json
+    } catch {
+        return @{ok = $false; nota = "no se puede serializar la configuracion: $($_.Exception.Message)"; texto = ''}
+    }
+    $d = @(Api-Diferencias $cfg $otra)
+    if ($d.Count -gt 0) {
+        return @{ok = $false; texto = ''
+                 nota = "la configuracion no sobrevive a la ida y vuelta por JSON en $($d.Count) campo(s) -el primero, $($d[0].Ruta)-: NO se manda, porque el PUT va con el objeto entero y se llevaria esa perdida"}
+    }
+    return @{ok = $true; nota = ''; texto = $txt}
+}
+
+function Api-Escribir([string]$ip, $sesion, $cfg, [int]$to) {
+    if (-not $API_ESCRITURA_CONFIRMADA) {
+        return @{ok = $false; nota = "escritura DESARMADA: $API_ESCRITURA_FALTA"}
+    }
+    $iv = Api-IdaYVuelta $cfg
+    if (-not $iv.ok) { return @{ok = $false; nota = $iv.nota} }
+    $seg = [math]::Max(5, [int]($to / 1000))
+    try {
+        [void](Invoke-RestMethod -Uri "http://${ip}:$API_PUERTO$API_CONFIG" -Method Put `
+                   -ContentType 'text/plain' -Body $iv.texto `
+                   -WebSession $sesion -TimeoutSec $seg)
+    } catch {
+        return @{ok = $false; nota = "la NCU no tomo la configuracion: $($_.Exception.Message)"}
+    }
+    return @{ok = $true; nota = ''}
+}
+
+# ---- el reinicio de la NCU, y por que ESTE si va armado ----
+# Al contrario que la escritura de configuracion, aqui no hay forma de cuerpo
+# que adivinar: es un POST sin cuerpo. Si la ruta estuviera mal, la NCU
+# contesta 404 y NO PASA NADA. Falla seguro, y por eso se puede armar sin haber
+# visto una captura; el PUT de configuracion falla peligroso -se aplica a
+# medias, con la red dentro- y por eso no.
+#
+# Lo que hay que cuidar aqui no es tecnico, es OPERATIVO: mientras la NCU
+# reinicia nadie supervisa la planta. Los seguidores siguen al sol por su
+# cuenta -el seguimiento vive en la TCU, no en la NCU-, pero durante esa
+# ventana NO HAY QUIEN MANDE UNA POSICION SEGURA: ni por grupo, ni por viento,
+# ni desde el SCADA. De ahi la guardia de viento, que aqui no es una formalidad.
+$API_REINICIO = '/private_api/commands/soft_restart'
+$API_REINICIO_ESPERA_S = 120     # cuanto se espera a que vuelva antes de rendirse
+$API_REINICIO_PASO_S   = 3
+
+# Si de verdad ha reiniciado, su reloj de marcha tiene que haber ido HACIA
+# ATRAS. Que conteste no basta: podria no haber hecho caso y seguir como
+# estaba, y eso se parece demasiado a haber funcionado. Pura.
+function Api-Reinicio-Volvio($uptimeAntes, $uptimeDespues) {
+    # OJO AL MATIZ, que no es cosmetico: que no conteste dentro de NUESTRA
+    # ventana no quiere decir que este mal. La ventana es un numero que pusimos
+    # nosotros sin saber cuanto tarda una NCU en arrancar. Decirlo como "no ha
+    # vuelto" a secas manda a alguien a la planta por nada, asi que se dice lo
+    # que sabemos -que no ha contestado AUN- y lo que hay que hacer.
+    if ($null -eq $uptimeDespues) {
+        return @{ok = $false; tarda = $true
+                 nota = "no ha contestado todavia. Puede que solo tarde mas que nuestra espera de $API_REINICIO_ESPERA_S s: dale un minuto y vuelve a LEER PANEL antes de pensar en ir a la planta"}
+    }
+    if ([double]$uptimeDespues -ge [double]$uptimeAntes) {
+        return @{ok = $false; tarda = $false; nota = "contesta, pero su tiempo de marcha NO ha bajado ($([math]::Round([double]$uptimeDespues/3600000.0,1)) h): no ha reiniciado"}
+    }
+    return @{ok = $true; tarda = $false; nota = "arriba otra vez, con $([math]::Round([double]$uptimeDespues/1000.0)) s de marcha"}
+}
+
+# Lo que se para y lo que no. Se dice entero antes de preguntar, porque quien
+# pulsa esto en una planta tiene que saber que deja a ciegas y durante cuanto
+# no se sabe. Pura.
+function Api-TextoReinicio([string]$ncu, [int]$nTcus, $viento) {
+    $t = "REINICIAR LA NCU $ncu`r`n`r`nSe para su supervision de $nTcus seguidor(es) hasta que vuelva."
+    $t += "`r`n`r`nLo que NO se para: los seguidores siguen al sol por su cuenta, porque el seguimiento vive en la TCU."
+    $t += "`r`nLo que SI se para, y es lo que importa: mientras este abajo NO HAY QUIEN MANDE UNA POSICION SEGURA. Ni por grupo, ni por viento, ni desde el SCADA. Tampoco responde Modbus, asi que el SCADA deja de ver la planta."
+    $t += "`r`n`r`nCuanto tarda en volver no lo sabemos: se espera hasta $API_REINICIO_ESPERA_S s y se dice lo que pase."
+    if ($null -eq $viento) {
+        $t += "`r`n`r`nOJO: no se ha podido leer el viento. Se continua a ciegas en ese punto."
+    } else {
+        $t += "`r`n`r`nViento ahora: nivel $($viento.nivel)" + $(if ($viento.alarma) { ' CON ALARMA' } else { ' (sin alarma)' })
+    }
+    $t += "`r`n`r`nContinuar?"
+    return $t
+}
+
+function Api-Reiniciar([string]$ip, $sesion, [int]$to) {
+    $seg = [math]::Max(5, [int]($to / 1000))
+    try {
+        [void](Invoke-RestMethod -Uri "http://${ip}:$API_PUERTO$API_REINICIO" -Method Post `
+                   -ContentType 'application/json' -Body '{}' -WebSession $sesion -TimeoutSec $seg)
+    } catch {
+        $m = "$($_.Exception.Message)"
+        # que corte la conexion es lo ESPERADO: se esta reiniciando mientras
+        # contesta, asi que un corte no es un fallo y no se canta como tal
+        if ($m -match '404') { return @{ok = $false; nota = "esta NCU no tiene $API_REINICIO : panel de otra version"} }
+        if ($m -match '401|403') { return @{ok = $false; nota = 'la sesion no vale para reiniciar'} }
+        return @{ok = $true; nota = "la conexion se corto al mandarlo ($m), que es lo normal si ha reiniciado: se comprueba abajo"}
+    }
+    return @{ok = $true; nota = ''}
+}
+
+# ===================== EL HISTORICO DE MAC DE LA NCU =====================
+# La NCU guarda cuando vio por primera vez cada MAC Zigbee, en que gateway y con
+# que esclavo Modbus. Es un CSV, no JSON, y en su pagina no tiene menu propio:
+# vive como un fichero mas dentro del visor de CSV, con el nombre "Mac History".
+#
+#     GET /private_api/mac_history
+#     cabecera:  discovered ; gateway_id ; modbus_id ; zigbee_mac
+#
+# POR QUE MERECE LA PENA, y no es un capricho. Todo lo que la herramienta y el
+# simulador de cobertura miden hoy va de ANGULOS: donde apunta cada seguidor
+# frente a donde deberia. De la malla Zigbee no se mide nada: se predice desde el
+# terreno y no se comprueba contra nada. Esto es lo primero OBSERVADO de la
+# malla, dicho por la NCU y no deducido:
+#
+#   - Una TCU con VARIAS MACs ha sido SUSTITUIDA, y dice cuando. Eso no lo apunta
+#     nadie y luego no hay manera de saberlo.
+#   - Una MAC que aparece en LOS DOS gateways es un nodo que se reasocio: esta en
+#     el borde de la cobertura. Hoy eso se ve como errores intermitentes y se le
+#     echa la culpa al equipo.
+#   - Y con el inventario que ya leemos por Zigbee (la MAC Xbee de cada TCU) se
+#     puede carear: si la MAC que lleva hoy no es la ultima que la NCU vio, algo
+#     no cuadra entre lo que hay montado y lo que la NCU cree.
+$API_MACS = '/private_api/mac_history'
+
+# LA NCU CUENTA LOS GATEWAYS DESDE 0 Y NOSOTROS DESDE 1. En su CSV el
+# gateway_id vale 0 y 1; en plants.yml, en los ficheros de planta, en esta
+# herramienta y en la boca de cualquiera que este en la planta son GW1 (puerto
+# 503) y GW2 (puerto 504). Ensenar el numero crudo saca un "GW0" que no existe
+# en ningun sitio, y quien lo lee o cree que es un fallo o se va a buscar un
+# gateway que no hay.
+#
+# La equivalencia no es un supuesto: en El Burgo el gateway_id 0 trae los
+# esclavos 1-45, que es EXACTAMENTE el rango que plants.yml da al GW1, y el 1
+# trae del 46 en adelante, que es el del GW2. Se traduce n -> GW(n+1), que vale
+# igual si algun dia una NCU tiene tres.
+#
+# Lo que no se entienda se deja CRUDO en vez de inventarse un nombre, y el
+# numero original se guarda aparte para que el CSV exportado no pierda nada.
+# Pura.
+function Api-MacsGw([string]$id) {
+    $n = 0
+    if ([int]::TryParse("$id".Trim(), [ref]$n) -and $n -ge 0) { return "GW$($n + 1)" }
+    return "$id".Trim()
+}
+
+# El CSV, a filas. Se mira la CABECERA para saber que columna es cual en vez de
+# fiarse del orden: el dia que la NCU meta una columna en medio, esto sigue
+# funcionando en lugar de poner fechas en la columna de MAC. Pura.
+function Api-MacsParsear([string]$texto) {
+    $lineas = @("$texto" -split "`r?`n" | Where-Object { "$_".Trim() -ne '' })
+    if ($lineas.Count -eq 0) { return @() }
+    $cab = @($lineas[0] -split ';' | ForEach-Object { "$_".Trim().ToLower() })
+    $iD = [array]::IndexOf($cab, 'discovered')
+    $iG = [array]::IndexOf($cab, 'gateway_id')
+    $iM = [array]::IndexOf($cab, 'modbus_id')
+    $iZ = [array]::IndexOf($cab, 'zigbee_mac')
+    if ($iD -lt 0 -or $iG -lt 0 -or $iM -lt 0 -or $iZ -lt 0) { return @() }
+    $r = @()
+    foreach ($l in @($lineas | Select-Object -Skip 1)) {
+        $c = @($l -split ';')
+        if ($c.Count -le [math]::Max([math]::Max($iD, $iG), [math]::Max($iM, $iZ))) { continue }
+        $tcu = 0
+        if (-not [int]::TryParse("$($c[$iM])".Trim(), [ref]$tcu)) { continue }
+        $r += ,[pscustomobject]@{
+            Descubierta = "$($c[$iD])".Trim()
+            Gateway     = (Api-MacsGw "$($c[$iG])")      # GW1/GW2, como se habla
+            Gateway_id  = "$($c[$iG])".Trim()            # y el crudo de la NCU, sin perderlo
+            TCU         = $tcu
+            MAC         = "$($c[$iZ])".Trim().ToUpper()
+        }
+    }
+    return @($r)
+}
+
+# LA FECHA, QUE NO SE PUEDE ORDENAR COMO TEXTO. Viene en dd-MM-yyyy HH:mm:ss, y
+# ordenar eso alfabeticamente pone "01-06-2026" antes que "31-12-2025": el
+# resumen diria que la primera vez fue despues que la ultima. Se vio con el
+# fichero real de El Burgo antes de que llegara a campo. Devuelve $null si no
+# cuadra, y entonces se ordena por texto, que es peor pero no miente. Pura.
+function Api-MacsFecha([string]$t) {
+    $d = [datetime]::MinValue
+    if ([datetime]::TryParseExact("$t".Trim(), 'dd-MM-yyyy HH:mm:ss',
+            [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$d)) { return $d }
+    return $null
+}
+
+# EL MISMO APARATO EN VARIOS ESCLAVOS. Esta es la vista que da las respuestas: si
+# una MAC aparece bajo dos modbus_id distintos, es el MISMO equipo re-direccionado
+# o movido de sitio. En El Burgo salieron dos casos de un vistazo -una estacion
+# que paso del 185 al 210, y una placa que de ser la TCU 78 paso a ser la 30-, y
+# ninguno de los dos estaba apuntado en ningun sitio. Pura.
+function Api-MacsPorMac($filas) {
+    $por = @{}
+    foreach ($f in @($filas)) {
+        $m = "$($f.MAC)"
+        if (-not $por.ContainsKey($m)) { $por[$m] = @() }
+        $por[$m] += ,$f
+    }
+    $r = @()
+    foreach ($m in @($por.Keys | Sort-Object)) {
+        $fs = @($por[$m] | Sort-Object { $(if ($null -ne (Api-MacsFecha $_.Descubierta)) { Api-MacsFecha $_.Descubierta } else { [datetime]::MinValue }) })
+        $ids = @($fs | ForEach-Object { [int]$_.TCU } | Select-Object -Unique)
+        if ($ids.Count -le 1) { continue }      # lo normal: una MAC, un esclavo
+        $r += ,[pscustomobject]@{
+            MAC = $m
+            Esclavos = ($ids -join ' -> ')
+            Cuando = (@($fs | ForEach-Object { "$($_.Descubierta)" }) -join '  |  ')
+            Nota = 'el MISMO aparato ha estado en mas de un esclavo: re-direccionado o movido de sitio'
+        }
+    }
+    return @($r)
+}
+
+# Lo que el CSV crudo no dice y es lo que se va a mirar: por TCU, cuantas MACs
+# distintas ha tenido y en cuantos gateways ha aparecido. Un CSV de mil lineas no
+# se lee; esta tabla si. Pura.
+function Api-MacsResumen($filas) {
+    # ordenadas por fecha ANTES de agrupar: asi "la MAC actual" es la de la ultima
+    # vez y no la que viniera la ultima en el fichero
+    $orden = @(@($filas) | Sort-Object { $(if ($null -ne (Api-MacsFecha $_.Descubierta)) { Api-MacsFecha $_.Descubierta } else { [datetime]::MinValue }) })
+    $por = @{}
+    foreach ($f in $orden) {
+        $k = [int]$f.TCU
+        if (-not $por.ContainsKey($k)) { $por[$k] = @{macs = @(); gws = @(); fechas = @()} }
+        if ($por[$k].macs -notcontains "$($f.MAC)") { $por[$k].macs += "$($f.MAC)" }
+        if ($por[$k].gws  -notcontains "$($f.Gateway)") { $por[$k].gws += "$($f.Gateway)" }
+        $por[$k].fechas += "$($f.Descubierta)"
+    }
+    $r = @()
+    foreach ($k in @($por.Keys | Sort-Object)) {
+        $d = $por[$k]
+        # por FECHA y no por texto: ver Api-MacsFecha
+        $fe = @($d.fechas | Sort-Object { $(if ($null -ne (Api-MacsFecha $_)) { Api-MacsFecha $_ } else { [datetime]::MinValue }) })
+        $r += ,[pscustomobject]@{
+            TCU = $k
+            MACs = $d.macs.Count
+            Gateways = ($d.gws -join ', ')
+            Primera = $fe[0]
+            Ultima = $fe[-1]
+            MAC_actual = $d.macs[-1]
+            Nota = $(if ($d.macs.Count -gt 1 -and $d.gws.Count -gt 1) { 'SUSTITUIDA y vista en varios gateways' }
+                     elseif ($d.macs.Count -gt 1) { "SUSTITUIDA: $($d.macs.Count) MACs distintas" }
+                     elseif ($d.gws.Count -gt 1) { 'vista en VARIOS gateways: nodo que se reasocia' }
+                     else { '' })
+        }
+    }
+    return @($r)
+}
+
+# EL CAREO CON EL INVENTARIO, que es donde esto deja de ser una curiosidad. El
+# inventario lee por Zigbee la MAC que cada TCU lleva HOY; el historico dice la
+# ultima que la NCU vio. Si no coinciden, una de las dos cosas esta mal y merece
+# una mirada: o se cambio el equipo sin que la NCU se enterase, o la TCU que
+# contesta en ese esclavo no es la que la NCU cree. Pura.
+function Api-MacsCareo($resumen, $inventario) {
+    # $porTcu y NO $inv: PowerShell no distingue mayusculas en los nombres de
+    # variable, asi que un $inv pisa $INV -la cultura invariante- y rompe el
+    # parseo de decimales de todo lo que se llame desde aqui. Ya paso una vez con
+    # Portada-Bloques y el banco lo prohibe desde entonces; lo acabo de volver a
+    # escribir y me ha cazado.
+    $porTcu = @{}
+    foreach ($i in @($inventario)) {
+        $m = "$($i.MAC)".Trim().ToUpper()
+        if ($m -ne '') { $porTcu[[int]$i.TCU] = $m }
+    }
+    $r = @()
+    foreach ($x in @($resumen)) {
+        $hoy = $(if ($porTcu.ContainsKey([int]$x.TCU)) { $porTcu[[int]$x.TCU] } else { '' })
+        if ($hoy -eq '') { continue }        # sin inventario de esa TCU no hay careo que hacer
+        if ($hoy -eq "$($x.MAC_actual)") { continue }
+        $r += ,[pscustomobject]@{
+            TCU = $x.TCU; En_la_NCU = "$($x.MAC_actual)"; En_el_equipo = $hoy
+            Nota = 'la MAC que lleva hoy no es la ultima que la NCU vio: o se cambio sin que se enterase, o ahi no contesta quien se cree'
+        }
+    }
+    return @($r)
+}
+
+# ============ LA CONFIGURACION DE LA HSU INTERNA DE LA NCU ============
+# La NCU guarda aparte que sensores lleva montados su estacion y con que
+# parametros: anemometro sonico, veleta, anemometro RS-485, piranometro, sensor
+# de nieve, de temperatura y de inundacion, con sus tiempos y umbrales.
+#
+#     GET /private_api/internal_hsu_config
+#
+# POR QUE HACE FALTA. La toolbox ya lee y escribe umbrales de viento en la HSU
+# por Modbus, pero no sabe QUE SENSORES declara cada estacion. Sin eso no se
+# puede decir lo unico que de verdad importa aqui: que una HSU declare
+# piranometro y no de irradiancia, o que declare nieve y no haya sensor.
+#
+# SE ENSENA GENERICO Y A PROPOSITO. Del bundle de la pagina salen los nombres de
+# campo -flood_sensor, snow_sensor, pyranometer, anemometer, activation_time,
+# activation_threshold, activation_speed...- pero NO la forma del objeto: como
+# anidan y que cuelga de que. Reconstruir un esquema a partir de identificadores
+# sueltos es exactamente lo que ya salio mal una vez con los rangos inventados
+# del tcu_timeout, asi que esto aplana lo que venga y lo ensena tal cual. Cuando
+# se vea un volcado de verdad se podra poner una vista con nombres bonitos; hasta
+# entonces, ensenar el dato sin interpretarlo es mas util que interpretarlo mal.
+#
+# SOLO LEE. El PUT existe -es JSON, no un binario- pero no se cablea hasta ver
+# una escritura real, por lo mismo de siempre.
+$API_HSU_CFG = '/private_api/internal_hsu_config'
+
+# Un objeto cualquiera a filas Ruta/Valor, sea cual sea su forma. Se apoya en
+# Api-Tipo y Api-Breve, que ya saben distinguir objeto, lista y valor. Pura.
+function Api-Aplanar($o, [string]$ruta = '') {
+    $r = @()
+    switch (Api-Tipo $o) {
+        'obj' {
+            foreach ($n in @($o.PSObject.Properties.Name | Sort-Object)) {
+                $r += @(Api-Aplanar $o.$n $(if ($ruta -eq '') { "$n" } else { "$ruta.$n" }))
+            }
+        }
+        'lista' {
+            $l = @($o)
+            if ($l.Count -eq 0) { $r += ,[pscustomobject]@{Ruta = $ruta; Valor = '(lista vacia)'} }
+            for ($i = 0; $i -lt $l.Count; $i++) { $r += @(Api-Aplanar $l[$i] "$ruta[$i]") }
+        }
+        default { $r += ,[pscustomobject]@{Ruta = $ruta; Valor = (Api-Breve $o)} }
+    }
+    return @($r)
+}
+
+# Lo poco que SI se puede afirmar sin conocer la forma: que sensores aparecen
+# nombrados y si estan puestos. Se busca por el nombre del campo en la ruta, no
+# por una posicion supuesta, y lo que no se encuentre NO se da por ausente: se
+# dice que no aparece, que no es lo mismo. Pura.
+$API_HSU_SENSORES = [ordered]@{
+    anemometer        = 'anemometro (RS-485)'
+    sonic_anemometer  = 'anemometro sonico'
+    vane              = 'veleta'
+    pyranometer       = 'piranometro'
+    snow_sensor       = 'sensor de nieve'
+    flood_sensor      = 'sensor de inundacion'
+    temperature_sensor = 'sensor de temperatura'
+}
+function Api-HsuSensores($filas) {
+    $r = @()
+    foreach ($k in @($API_HSU_SENSORES.Keys)) {
+        $m = @(@($filas) | Where-Object { "$($_.Ruta)" -match ("(^|\.)" + [regex]::Escape($k) + "($|\.|\[)") })
+        if ($m.Count -eq 0) {
+            $r += ,[pscustomobject]@{Sensor = $API_HSU_SENSORES[$k]; Campo = $k; Estado = 'no aparece'
+                                     Nota = 'esta NCU no nombra este sensor en su configuracion; no es lo mismo que decir que no lo tiene'}
+            continue
+        }
+        # el campo suelto (sin sub-rutas) es el que dice si esta puesto
+        $suelto = @($m | Where-Object { "$($_.Ruta)" -match ([regex]::Escape($k) + '$') })
+        $v = $(if ($suelto.Count -gt 0) { "$($suelto[0].Valor)" } else { '' })
+        $puesto = ($v -match '^(True|true|1|si|Si)$')
+        $r += ,[pscustomobject]@{
+            Sensor = $API_HSU_SENSORES[$k]; Campo = $k
+            Estado = $(if ($v -eq '') { 'con parametros' } elseif ($puesto) { 'SI' } else { 'no' })
+            Nota = $(if ($m.Count -gt 1) { "$($m.Count) campos bajo esta rama" } else { '' })
+        }
+    }
+    return @($r)
+}
+
+# ---- el transporte de LECTURA: dos llamadas ----
+# La sesion va por cookie, asi que hace falta el WebRequestSession del login
+# para la segunda llamada. Y SOLO estas dos: un GET de lectura y el POST del
+# login. Por esta API se puede escribir la configuracion ENTERA de la NCU -red
+# incluida- de un solo PUT, y eso no se toca desde aqui ni por descuido.
+#
+# Y va en HTTP pelado, que es lo que sirve la NCU: el usuario y la contrasena
+# viajan en claro por la red de planta. No es cosa nuestra arreglarlo, pero si
+# decirlo, y esta dicho en la pestana.
+$API_PUERTO = 80
+
+function Api-Entrar([string]$ip, [string]$usuario, [string]$clave, [int]$to) {
+    $seg = [math]::Max(3, [int]($to / 1000))
+    $cuerpo = (@{username = $usuario; password = $clave} | ConvertTo-Json -Compress)
+    $ses = $null
+    try {
+        [void](Invoke-RestMethod -Uri "http://${ip}:$API_PUERTO$API_AUTH" -Method Post `
+                   -ContentType 'application/json' -Body $cuerpo `
+                   -SessionVariable ses -TimeoutSec $seg)
+    } catch {
+        # el mensaje de la excepcion puede traer la respuesta del servidor, pero
+        # NUNCA el cuerpo que mandamos: la contrasena no entra en el log
+        $m = "$($_.Exception.Message)"
+        if ($m -match '401|403|[Uu]nauthor') { return @{ok = $false; nota = 'usuario o contrasena incorrectos'; sesion = $null} }
+        if ($m -match '404')                { return @{ok = $false; nota = "la NCU responde pero no tiene ${API_AUTH}: panel de otra version"; sesion = $null} }
+        return @{ok = $false; nota = "no se puede entrar en el panel: $m"; sesion = $null}
+    }
+    if ($null -eq $ses) { return @{ok = $false; nota = 'el panel acepto el login y no dio sesion'; sesion = $null} }
+    return @{ok = $true; nota = ''; sesion = $ses}
+}
+
+# El volcado entero de una tacada: unos 54 KB de JSON con la configuracion y el
+# estado de todos los equipos. Por eso se lee UNA vez y se reparte entre las
+# vistas, en vez de una llamada por pestana.
+# El historico viene en CSV, asi que Invoke-RestMethod lo devolveria parseado a
+# su manera; se pide como texto plano y se parsea aqui, que es donde se sabe lo
+# que hay. Pura de red: solo lee.
+function Api-LeerMacs([string]$ip, $sesion, [int]$to) {
+    $seg = [math]::Max(5, [int]($to / 1000))
+    try {
+        $r = Invoke-WebRequest -Uri "http://${ip}:$API_PUERTO$API_MACS" -Method Get `
+                 -WebSession $sesion -TimeoutSec $seg -UseBasicParsing
+    } catch {
+        $m = "$($_.Exception.Message)"
+        if ($m -match '401|403|[Uu]nauthor') { return @{ok = $false; nota = 'la sesion no vale: hay que volver a entrar'; texto = ''} }
+        if ($m -match '404') { return @{ok = $false; nota = "esta NCU no tiene ${API_MACS}: panel de otra version"; texto = ''} }
+        return @{ok = $false; nota = "no se puede leer el historico de MAC: $m"; texto = ''}
+    }
+    return @{ok = $true; nota = ''; texto = "$($r.Content)"}
+}
+
+function Api-LeerHsuCfg([string]$ip, $sesion, [int]$to) {
+    $seg = [math]::Max(5, [int]($to / 1000))
+    try {
+        $d = Invoke-RestMethod -Uri "http://${ip}:$API_PUERTO$API_HSU_CFG" -Method Get `
+                 -WebSession $sesion -TimeoutSec $seg
+    } catch {
+        $m = "$($_.Exception.Message)"
+        if ($m -match '401|403|[Uu]nauthor') { return @{ok = $false; nota = 'la sesion no vale: hay que volver a entrar'; datos = $null} }
+        if ($m -match '404') { return @{ok = $false; nota = "esta NCU no tiene ${API_HSU_CFG}: panel de otra version"; datos = $null} }
+        return @{ok = $false; nota = "no se puede leer la configuracion de la HSU: $m"; datos = $null}
+    }
+    if ($null -eq $d) {
+        # la pagina tiene un mensaje para esto: "An internal HSU has not yet been
+        # detected for configuration". O sea que una NCU sin estacion interna
+        # detectada contesta vacio, y eso no es un fallo nuestro.
+        return @{ok = $false; nota = 'la NCU no devuelve configuracion de HSU interna: puede que todavia no haya detectado ninguna'; datos = $null}
+    }
+    return @{ok = $true; nota = ''; datos = $d}
+}
+
+function Api-Leer([string]$ip, $sesion, [int]$to) {
+    $seg = [math]::Max(5, [int]($to / 1000))
+    try {
+        $d = Invoke-RestMethod -Uri "http://${ip}:$API_PUERTO$API_DATOS" -Method Get `
+                 -WebSession $sesion -TimeoutSec $seg
+    } catch {
+        $m = "$($_.Exception.Message)"
+        if ($m -match '401|403|[Uu]nauthor') { return @{ok = $false; nota = 'la sesion no vale: hay que volver a entrar'; datos = $null} }
+        return @{ok = $false; nota = "no se puede leer el panel: $m"; datos = $null}
+    }
+    if ($null -eq $d) { return @{ok = $false; nota = 'el panel contesto vacio'; datos = $null} }
+    # sin config no hay nada que contar: los grupos, las redes y las estaciones
+    # salen de ahi, y es justo lo que el mapa Modbus no da
+    if ($null -eq $d.config_data -or $null -eq $d.config_data.config) {
+        return @{ok = $false; nota = 'el volcado no trae config_data.config: version de panel no prevista'; datos = $null}
+    }
+    return @{ok = $true; nota = ''; datos = $d}
 }
 
 # ======================= LIMITES DE RECORRIDO POR TCU =======================
@@ -2363,6 +3751,15 @@ function Gw-Anotar($fila, [hashtable]$campos) {
 # en la tabla y como bloque `gateways` aparte en el JSON, nunca entre las TCUs
 # (Plan-Firmware y el Seguimiento PEM hacen [int] de la columna TCU).
 
+# Cuantas TCUs cuelgan de un tramo, o $null si no se sabe: es lo que el texto
+# de confirmar el reinicio dice que se queda sin posicion segura. Pura.
+function Gw-CuantasTcus($ini, $fin) {
+    $a = 0; $b = 0
+    if (-not [int]::TryParse("$ini", [ref]$a) -or -not [int]::TryParse("$fin", [ref]$b)) { return $null }
+    if ($b -lt $a) { return $null }
+    return ($b - $a + 1)
+}
+
 # Los gateways de UNA conexion como lista {ncu, nGw, ip}: con 'auto' los de la
 # NCU (gws); con puerto fijo, el de ese puerto y su ip_gw. Sin nulos: con
 # puerto fijo gws es $null, y @($null) en PS 5.1 es una lista de uno, que el
@@ -2370,9 +3767,9 @@ function Gw-Anotar($fila, [hashtable]$campos) {
 function Gws-DeCx($cx) {
     $l = @()
     if ($cx.gws) {
-        foreach ($g in @($cx.gws)) { if ($g) { $l += ,@{ncu = ''; nGw = (Gw-Numero ([int]$g.puerto)); ip = "$($g.ip_gw)".Trim()} } }
+        foreach ($g in @($cx.gws)) { if ($g) { $l += ,@{ncu = ''; nGw = (Gw-Numero ([int]$g.puerto)); ip = "$($g.ip_gw)".Trim(); tcus = (Gw-CuantasTcus $g.ini $g.fin)} } }
     } elseif ("$($cx.puerto)" -match '^\d+$') {
-        $l += ,@{ncu = ''; nGw = (Gw-Numero ([int]$cx.puerto)); ip = "$($cx.ip_gw)".Trim()}
+        $l += ,@{ncu = ''; nGw = (Gw-Numero ([int]$cx.puerto)); ip = "$($cx.ip_gw)".Trim(); tcus = (Gw-CuantasTcus $cx.ini $cx.fin)}
     }
     return @($l)
 }
@@ -2387,7 +3784,7 @@ function Gws-Objetivos-Topologia($gws) {
     foreach ($g in @($gws)) {
         if (-not $g) { continue }
         $ip = "$($g.ip_gw)".Trim(); if ($ip -eq '') { continue }
-        $l += ,@{ncu = ''; nGw = (Gw-Numero ([int]$g.puerto)); ip = $ip}
+        $l += ,@{ncu = ''; nGw = (Gw-Numero ([int]$g.puerto)); ip = $ip; tcus = (Gw-CuantasTcus $g.ini $g.fin)}
     }
     return @(Gw-Objetivos $l '')
 }
@@ -2434,6 +3831,43 @@ function Diag-NotaNcu($dn) {
     if ($g -eq '') { return $a }
     if ($a -eq '') { return $g }
     return "$a  |  $g"
+}
+
+# LA FILA DEL GATEWAY EN EL DIAGNOSTICO. Lo pidio Inaki el 02/10/2026: el
+# gateway como elemento propio, al lado de NCU, TCU, HSU y repetidor, y no como
+# un punado de campos colgados de la fila de la NCU. Misma forma que la fila de
+# la NCU (Diag-FilaNcu) para que Operacion, el CSV y el informe no se enteren,
+# y encima los campos del Digi -IP, modelo, MAC, firmware, carga- con su nombre.
+#
+# La salud sale de lo unico que se le puede preguntar a un Digi: si contesta y
+# como va de CPU. No contestar es ALARMA -un gateway apagado o sin red deja a
+# todas sus TCUs fuera del alcance de la NCU-, la CPU alta es AVISO, y contestar
+# sin que se reconozca nada tambien, porque no se puede decir que este bien.
+# Nunca OFFLINE: ese estado es de las TCUs y Diag-OffPorNcu lo cuenta. Pura.
+function Diag-FilaGw([string]$ncu, [int]$nGw, [string]$ip, $lect, $tcus = $null) {
+    $c = $(if ($lect -and $lect.ok -and $lect.carga -and $lect.carga.ok) { $lect.carga } else { $null })
+    $i = $(if ($lect -and $lect.ok -and $lect.ident) { $lect.ident } else { @{} })
+    $linea = Gw-Linea $nGw $ip $lect
+    $nota = $linea -replace '^GW\d+ \S+: ', ''
+    if (-not $lect -or -not $lect.ok) {
+        $salud = 'ALARMA'; $nota = 'sin respuesta por RCI (puerto 80): apagado, sin red, o pide usuario y contrasena'
+    } elseif ($null -eq $c -and "$($i['fw'])" -eq '' -and "$($i['producto'])" -eq '') {
+        $salud = 'AVISO'
+    } elseif ($c -and $c.cpu -ge $GW_CPU_ALTA) {
+        $salud = 'AVISO'; $nota = "CPU alta: $nota"
+    } else {
+        $salud = 'OK'
+    }
+    return [pscustomobject]@{
+        NCU=$ncu; GW="$nGw"; TCU="GW$nGw"; Salud=$salud; Modo='-'
+        Tilt=''; Objetivo=''; Dif=''; SoC=''; SoH=''; Vbat_mV=''; Ibat_mA=''; Vpanel_mV=''
+        Ientrada_mA=''; Imotor_mA=''; ImotorPico_mA=''; Dia=''; Tbat_C=''; Tpcb_C=''; Edad_s=''
+        Alarmas=$nota
+        main_status=''; alarmas_1=''; alarmas_2=''; alarmas_3=''; alarmas_4=''; system_status=''
+        IP_gw=$ip; Modelo="$($i['producto'])"; MAC="$($i['mac'])"; FW="$($i['fw'])"; Boot="$($i['boot'])"
+        CPU_pct=$(if ($c) { $c.cpu } else { $null }); Mem_pct=$(if ($c) { Gw-MemPct $c } else { $null })
+        Uptime_s=$(if ($c) { $c.uptime } else { $null }); TCUs_gw=$tcus
+    }
 }
 
 # La fila de un gateway en el inventario (bloque `gateways` del JSON). Pura.
@@ -2496,6 +3930,140 @@ function Gw-Carga([string]$xml) {
     }
     if ($null -ne $r.cpu -and $r.cpu -ge 0 -and $r.cpu -le 100) { $r.ok = $true } else { $r.cpu = $null }
     return $r
+}
+
+# ---- REINICIAR EL GATEWAY ----
+# Lo pidio Inaki el 02/10/2026: poder reiniciar un Digi desde aqui, sin ir a su
+# pagina. Es el mismo tipo de accion que REINICIAR NCU, con la misma pega
+# operativa a escala de medio campo: mientras el gateway arranca, la NCU no
+# llega a NINGUNA de las TCUs que cuelgan de el. Los seguidores siguen al sol
+# por su cuenta -el seguimiento vive en la TCU-, pero durante esa ventana no hay
+# quien les mande una posicion segura. De ahi la guardia de viento, otra vez.
+#
+# VERIFICADO EN PLANTA el 02/10/2026 por Inaki, en El Burgo: el Digi se fue
+# abajo y volvio con menos tiempo de marcha. Hasta ese dia el verbo <reboot/>
+# era solo lo que dice la referencia RCI de Digi -el transporte si estaba
+# probado, POST XML a /UE/rci-, y la herramienta lo decia asi. Se mantiene la
+# forma de comprobarlo porque no depende de acertar el esquema de la respuesta:
+# la prueba de que funciono NO es el XML que conteste al reboot -que se vuelca
+# crudo si no se reconoce- sino el uptime: antes de mandar nada se le lee el
+# tiempo de marcha, y despues tiene que (1) dejar de contestar y (2) volver con
+# un uptime MENOR. Si contesta todo el rato con el mismo uptime, no ha
+# reiniciado, diga lo que diga el XML. Un firmware distinto (El Burgo mezcla
+# uno de 2013 y uno de 2023) podria contestar otra cosa, y el uptime seguiria
+# siendo la verdad.
+#
+# Y UNO CADA VEZ. Nunca "los gateways": el de la IP escrita a mano o, sin IP,
+# el unico que declare la conexion. Con dos declarados y sin IP, se pide la IP.
+# Reiniciar los dos a la vez deja la NCU sin ningun seguidor a la vista.
+$RCI_REINICIO = '<rci_request version="1.1"><reboot/></rci_request>'
+$GW_REINICIO_ESPERA_S = 180    # cuanto se espera a que vuelva; nadie ha medido lo que tarda un X2D
+$GW_REINICIO_CAIDA_S  = 30     # cuanto se le da para DEJAR de contestar tras el reboot
+$GW_REINICIO_PASO_S   = 5
+
+# Que gateway se reinicia: el de la IP a mano o, sin ella, el unico declarado.
+# Pasa la entrada entera (ncu, nGw, ip, tcus) para que el texto de confirmar
+# diga lo que cuelga. Pura.
+function Gw-ObjetivoReinicio($gws, [string]$ipManual) {
+    $ip = "$ipManual".Trim()
+    if ($ip -ne '') {
+        # si la IP a mano es la de un gateway declarado, se aprovecha lo que se
+        # sabe de el; si no, se reinicia igual pero sin saber que cuelga
+        foreach ($g in @($gws)) { if ("$($g.ip)".Trim() -eq $ip) { return @{ok = $true; gw = $g; nota = ''} } }
+        return @{ok = $true; gw = @{ncu = '?'; nGw = 0; ip = $ip; tcus = $null}; nota = ''}
+    }
+    $conIp = @(); $vistas = @{}
+    foreach ($g in @($gws)) {
+        $gip = "$($g.ip)".Trim()
+        if ($gip -eq '' -or $vistas.ContainsKey($gip)) { continue }
+        $vistas[$gip] = $true; $conIp += ,$g
+    }
+    if ($conIp.Count -eq 1) { return @{ok = $true; gw = $conIp[0]; nota = ''} }
+    if ($conIp.Count -eq 0) {
+        return @{ok = $false; gw = $null; nota = 'ningun gateway declarado trae ip_gw: escribe la IP del Digi en la casilla "IP del gateway a mano"'}
+    }
+    return @{ok = $false; gw = $null
+             nota = "hay $($conIp.Count) gateways con IP y se reinicia UNO cada vez: escribe en la casilla la IP del que quieras ($(@($conIp | ForEach-Object { "GW$($_.nGw) $($_.ip)" }) -join ', '))"}
+}
+
+# Las NCUs a las que preguntar el viento antes de tocar un gateway: la de la
+# conexion o, en Planta completa, todas. El viento es de la planta, no del
+# gateway, y con una IP a mano no se sabe de que NCU cuelga. Pura.
+function Gw-NcusParaViento($cx) {
+    $l = @()
+    if ($cx.multi) { foreach ($n in @($cx.multi)) { if ("$($n.ip)" -ne '') { $l += "$($n.ip)" } } }
+    elseif ("$($cx.ip)" -ne '' -and "$($cx.ip)" -ne 'NA') { $l += "$($cx.ip)" }
+    return @($l)
+}
+
+# De varias lecturas de viento, la peor: el nivel mas alto y alarma si la hay
+# en cualquiera. $null si ninguna se pudo leer. Pura.
+function Gw-VientoPeor($lecturas) {
+    $peor = $null; $leidas = 0
+    foreach ($v in @($lecturas)) {
+        if ($null -eq $v) { continue }
+        $leidas++
+        if ($null -eq $peor) { $peor = @{nivel = [int]$v.nivel; alarma = [bool]$v.alarma}; continue }
+        if ([int]$v.nivel -gt $peor.nivel) { $peor.nivel = [int]$v.nivel }
+        if ($v.alarma) { $peor.alarma = $true }
+    }
+    return @{v = $peor; leidas = $leidas; total = @($lecturas).Count}
+}
+
+# Que dijo el Digi al reboot. 'aceptado' si contesta con <reboot>, 'error' si
+# trae <error>, 'silencio' si no contesta (puede haberse ido ya a reiniciar: no
+# es malo, se comprueba por el uptime) y 'raro' si contesta otra cosa, que se
+# vuelca para aprender el esquema. Pura.
+function Gw-ReinicioAceptado([string]$xml) {
+    $t = "$xml".Trim()
+    if ($t -eq '') { return @{estado = 'silencio'; nota = 'no ha contestado al reboot (puede haberse ido ya a reiniciar)'} }
+    if ($t -match '(?is)<error\b') {
+        $d = [regex]::Match($t, '(?is)<desc\b[^>]*>\s*([^<]+?)\s*<')
+        $hint = [regex]::Match($t, '(?is)<hint\b[^>]*>\s*([^<]+?)\s*<')
+        $m = 'el Digi ha contestado con error al reboot'
+        if ($d.Success) { $m += ": $($d.Groups[1].Value)" }
+        if ($hint.Success) { $m += " ($($hint.Groups[1].Value))" }
+        return @{estado = 'error'; nota = $m}
+    }
+    if ($t -match '(?is)<reboot\b') { return @{estado = 'aceptado'; nota = 'el Digi ha aceptado el reboot'} }
+    return @{estado = 'raro'; nota = 'el Digi ha contestado algo que no se reconoce; se vuelca'}
+}
+
+# Si de verdad reinicio: tiene que haber DEJADO de contestar y haber vuelto con
+# menos tiempo de marcha. Un Digi que contesta todo el rato con el mismo uptime
+# no ha reiniciado, diga lo que diga el XML. Pura.
+function Gw-ReinicioVolvio($uptimeAntes, $uptimeDespues, [bool]$cayo) {
+    if ($null -eq $uptimeDespues) {
+        if ($cayo) {
+            return @{ok = $false; tarda = $true
+                     nota = "se fue abajo y no ha vuelto a contestar en $GW_REINICIO_ESPERA_S s. Puede que solo tarde mas que nuestra espera: dale un minuto y pulsa IDENTIFICAR GATEWAYS antes de pensar en ir a la planta"}
+        }
+        return @{ok = $false; tarda = $false; nota = 'no ha contestado ni antes ni despues: no se puede decir nada de el'}
+    }
+    if ([double]$uptimeDespues -ge [double]$uptimeAntes) {
+        $m = "contesta, pero su tiempo de marcha NO ha bajado ($uptimeAntes -> $uptimeDespues): no ha reiniciado"
+        if (-not $cayo) { $m += ' (ni dejo de contestar en ningun momento)' }
+        return @{ok = $false; tarda = $false; nota = $m}
+    }
+    return @{ok = $true; tarda = $false; nota = "arriba otra vez, con $uptimeDespues s de marcha (tenia $uptimeAntes)"}
+}
+
+# Lo que se para y lo que no, entero, antes de preguntar. Pura.
+function Gw-TextoReinicio($gw, $viento, [int]$leidas, [int]$total) {
+    $quien = $(if ("$($gw.ncu)" -eq '?' -or "$($gw.ncu)" -eq '') { "el gateway $($gw.ip) (IP a mano)" } else { "el gateway GW$($gw.nGw) de la NCU$($gw.ncu), $($gw.ip)" })
+    $t = "REINICIAR $($quien.ToUpper())`r`n`r`n"
+    if ($null -ne $gw.tcus) { $t += "Mientras arranca, la NCU no llega a los $($gw.tcus) seguidores que cuelgan de el." }
+    else { $t += "Mientras arranca, la NCU no llega a NINGUN seguidor de los que cuelgan de el (IP a mano: no se cuantos son)." }
+    $t += "`r`n`r`nLo que NO se para: esos seguidores siguen al sol por su cuenta, porque el seguimiento vive en la TCU."
+    $t += "`r`nLo que SI se para: mientras este abajo NO HAY QUIEN LES MANDE UNA POSICION SEGURA, ni por grupo, ni por viento, ni desde el SCADA. El resto de la planta sigue como estaba."
+    $t += "`r`n`r`nCuanto tarda en volver no lo sabemos: se espera hasta $GW_REINICIO_ESPERA_S s y se dice lo que pase. Se comprueba por su tiempo de marcha, no por lo que conteste."
+    if ($null -eq $viento) {
+        $t += "`r`n`r`nOJO: no se ha podido leer el viento en ninguna NCU ($total consultadas). Se continua a ciegas en ese punto."
+    } else {
+        $t += "`r`n`r`nViento ahora (peor de $leidas NCU): nivel $($viento.nivel)" + $(if ($viento.alarma) { ' CON ALARMA' } else { ' (sin alarma)' })
+    }
+    $t += "`r`n`r`nContinuar?"
+    return $t
 }
 
 # A que gateways se pregunta. Con una IP dada a mano, a esa y solo a esa: las
@@ -2826,6 +4394,9 @@ function Fila-Tipo($f) {
     if ($t -eq 'NCU') { return 'NCU' }
     if ($t -like 'HSU*' -or $t -like 'RSU*') { return 'HSU' }
     if ($t -match '^\d+$') { return 'TCU' }
+    # el gateway, desde la v12.7: antes sus datos colgaban de la fila de la NCU
+    # como campos y no existia como equipo; ahora es fila propia, como la HSU
+    if ($t -match '^GW\d+$') { return 'GW' }
     return 'REP'
 }
 
@@ -2837,6 +4408,7 @@ function Diag-NivelNombre([string]$n) {
         'NCU' { return 'solo NCUs' }
         'HSU' { return 'solo HSUs' }
         'REP' { return 'solo repetidores' }
+        'GW'  { return 'solo gateways' }
         'TCU' { return 'solo TCUs' }
         default { return 'todo' }
     }
@@ -3791,6 +5363,13 @@ function Ncu-HsuCompat {
             # coma decimal o un cambio de redaccion lo dejaba sin dato. Numeros
             # de verdad, y $null -no cadena vacia- cuando la HSU no contesta:
             # un 0 en una curva de viento es un dato, y aqui no lo hay.
+            # LA EDAD DE ORIGEN, que se calculaba y se tiraba. Arriba sale el
+            # $edad -la NCU dice cuanto hace que oyo a esta estacion- y se usaba
+            # para la salud y para el texto, pero no se ponia en la fila. Sin
+            # ella, Operacion no puede saber si el dato es de ahora y marca
+            # TODA HSU como "EDAD DE ORIGEN DESCONOCIDA", teniendo el dato
+            # delante. Visto en campo el 02/10/2026 en El Burgo.
+            Edad_s=$(if ($edad -ge 0) { $edad } else { '' })
             Viento_ms=$(if ($salud -eq 'OFFLINE') { $null } else { [math]::Round($viento, 2) })
             Dir_deg=$(if ($salud -eq 'OFFLINE') { $null } else { [math]::Round($dir, 1) })
             Nieve_m=$(if ($salud -eq 'OFFLINE') { $null } else { [math]::Round($nieve, 3) })
@@ -3800,8 +5379,17 @@ function Ncu-HsuCompat {
             alarmas_2=$(if ($e) { "0x{0:X4}" -f [int]$e.al2 } else { '' }); alarmas_3=''; alarmas_4=''; system_status=''
         }
     }
-    # un hueco con el bloque ampliado poblado y el basico a cero se emite
-    # igualmente como su HSUn: que el aviso no se quede sin fila
+    # Un hueco con el bloque ampliado POBLADO y el basico a cero se emite
+    # igualmente como su HSUn: que el aviso no se quede sin fila.
+    #
+    # "Poblado" lo decide Hsu-ExtPoblado, y ahi esta la correccion: un hueco que
+    # solo dice "fallo com. HSU" ya no llega hasta aqui. Antes si, y por eso una
+    # NCU con dos estaciones sacaba cinco averiadas de la nada.
+    #
+    # Lo que NO se pierde: una estacion DECLARADA en la topologia que no
+    # conteste la sigue cantando Hsu-Cuadre, que carea esperadas contra
+    # halladas. Ese es el sitio bueno para ese aviso -sabe cuantas deberia
+    # haber- y este no, que solo ve huecos.
     foreach ($h in @($ext.Keys | Sort-Object)) {
         $e = $ext[$h]
         if (@($lista | Where-Object { "$($_.TCU)" -eq ("HSU{0}" -f ($h + 1)) }).Count) { continue }
@@ -3846,6 +5434,13 @@ $NCU_HSUEXT_AL1 = @{
 }
 $NCU_HSUEXT_AL1_PROPIAS = 0xE01F   # bits 0..4, 13, 14, 15: sensores y com
 $NCU_HSUEXT_AL1_METEO   = 0x0640   # bits 6, 9, 10: nieve, viento, racha
+# EL BIT QUE NO PRUEBA QUE HAYA NADA. Un hueco VACIO contesta con el 15 puesto:
+# la NCU esta diciendo "no puedo hablar con la estacion de este hueco", y de una
+# estacion que no existe eso es exactamente lo que se espera. Es prueba de
+# AUSENCIA, no de que haya una estacion rota. Si cuenta para decidir si el hueco
+# esta poblado, se inventan estaciones averiadas: El Burgo NCU1 -que tiene DOS-
+# salia en campo con DIEZ filas, cinco de ellas en ALARMA que no existia.
+$NCU_HSUEXT_AL1_SOLO_AUSENCIA = 0x8000   # bit 15, 'fallo com. HSU'
 $NCU_HSUEXT_AL2 = @{
   0='modo difusa activo'; 1='modulo de computo caido'; 2='com. piranometro tracking'
   3='com. piranometro difusa'; 4='irradiancia no casa con Solcast'; 5='error algoritmo difusa'
@@ -3854,6 +5449,14 @@ $NCU_HSUEXT_AL2_AVERIAS = 0x003E   # todos menos el bit 0, que es un estado y no
 
 # Lee el bloque ampliado entero y devuelve un diccionario hueco -> datos, para
 # que Ncu-HsuCompat lo funda en la fila de su HSUn. NO emite filas propias.
+# Si el bloque ampliado de un hueco dice algo o no. Aparte y pura a proposito:
+# es una decision de criterio -que cuenta como "hay una estacion aqui"- y se
+# equivoco una vez, asi que tiene que poder probarse sin una NCU delante.
+function Hsu-ExtPoblado([int]$w0, [int]$w1, [int]$w2, [int]$al1) {
+    $util = $al1 -band (-bnot $NCU_HSUEXT_AL1_SOLO_AUSENCIA)
+    return -not ($w0 -eq 0 -and $w1 -eq 0 -and $w2 -eq 0 -and $util -eq 0)
+}
+
 function Ncu-HsuExt {
     $r = @{}
     for ($h = 0; $h -lt 10; $h++) {
@@ -3861,7 +5464,7 @@ function Ncu-HsuExt {
         # devuelve lo que haya, sin arrastrar a los bloques basicos
         try { $w = FC03-Leer $UNIT_NCU (Dir-Trama (28000 + 100 * $h)) 30 }
         catch { break }
-        if ($w[0] -eq 0 -and $w[1] -eq 0 -and $w[2] -eq 0 -and $w[3] -eq 0) { continue }   # hueco vacio
+        if (-not (Hsu-ExtPoblado $w[0] $w[1] $w[2] $w[3])) { continue }   # hueco vacio
         $al1 = $w[3]; $al2 = $w[10]
         $sep = Hsu-AlarmasSeparadas $al1 $NCU_HSUEXT_AL1 $NCU_HSUEXT_AL1_PROPIAS $NCU_HSUEXT_AL1_METEO
         $irrH = ([int]$w[22] -shl 16) -bor [int]$w[21]
@@ -4916,7 +6519,14 @@ function Auditar([string]$accion, [string]$ncu, $tcu, [string]$detalle) {
 # ---------------------------------------------------------------------------
 #  Interfaz
 # ---------------------------------------------------------------------------
+$script:T_logica = Get-Date
 $form = New-Object System.Windows.Forms.Form
+# Sin esto, cada control que se anade y cada propiedad que se toca dispara un
+# calculo de disposicion de toda la ventana: 400 y pico controles, 400 y pico
+# veces. Con la disposicion suspendida se hace UNA, antes de ensenar la ventana
+# (ResumeLayout junto al ShowDialog). Es el patron de cualquier formulario
+# generado por el disenador de Visual Studio, y aqui no se hacia (v12.8).
+$form.SuspendLayout()
 $form.Text = "TCU Toolbox v$VERSION_TOOLBOX - Sunner  (mapa $VERSION_MAPA)"
 # 1142 y no 960: los 182 de mas son la columna de navegacion de la izquierda.
 # El interior de las pestanas no se ha tocado ni un pixel, asi que todo lo que
@@ -5051,17 +6661,30 @@ $gbCon.Controls.Add($btnCancelar)
 # es ese orden; las pestanas siguen existiendo por dentro (todo el codigo que
 # salta de una a otra sigue funcionando), pero su cabecera no se ve: quien
 # navega es el arbol.
-# Alto: hasta abajo del todo, a la altura de la consola. Con 400 px cabian 18 de
-# las 31 lineas del arbol y las demas quedaban debajo de una barra de scroll:
-# los bloques REPETIDORES y TCUs no se veian sin arrastrar, que es justo lo que
-# el arbol venia a evitar. La consola se corre a su derecha.
+# Alto: hasta abajo del todo, a la altura de la consola. La consola se corre a
+# su derecha.
+#
+# El arbol es PLEGABLE desde la v11.91: Nav-Filtrar despliega solo el primer
+# bloque, y con filtro escrito despliega todos. Eso cambia cual es la cuenta que
+# importa. Antes se desplegaba todo siempre y habia que meter las 31 lineas
+# enteras en el hueco -con 400 px cabian 18, y REPETIDORES y TCUs quedaban bajo
+# una barra de scroll, que es justo lo que el arbol venia a evitar-. Ahora las 42
+# lineas a 24 px son 1.008 y NO caben, ni tienen que caber: el TreeView hace
+# scroll y solo hay un bloque abierto. Lo que si tiene que caber es EL BLOQUE MAS
+# GRANDE desplegado con su cabecera (TCUs, 15 lineas x 24 = 360), porque ese es
+# el peor caso de una navegacion normal. La suite lo vigila asi.
+#
+# Y va todo aqui. Estas tres propiedades se estaban asignando DOS VECES -16 px,
+# sin +/- y con borde aqui; 24 px, con +/- y sin borde mil lineas mas abajo-, asi
+# que las de arriba eran codigo muerto y su comentario decia una geometria que no
+# era la que se veia. Peor: el regex de la suite encontraba la muerta.
 $nav = New-Object System.Windows.Forms.TreeView
 $nav.Location = New-Object System.Drawing.Point(10, 72)
 $nav.Size = New-Object System.Drawing.Size(176, 663)
 $nav.HideSelection = $false
-$nav.ShowLines = $false; $nav.ShowRootLines = $false; $nav.ShowPlusMinus = $false
-$nav.FullRowSelect = $true; $nav.ItemHeight = 16   # 40 lineas x 16 = 640 en los 663 de alto
-$nav.BorderStyle = 'FixedSingle'
+$nav.ShowLines = $false; $nav.ShowRootLines = $false
+$nav.FullRowSelect = $true
+$nav.ItemHeight = 24; $nav.ShowPlusMinus = $true; $nav.BorderStyle = 'None'
 $form.Controls.Add($nav)
 
 # El panel es el que RECORTA: la cabecera de pestanas no se puede ocultar con
@@ -5082,6 +6705,7 @@ $pnlCuerpo.Size = New-Object System.Drawing.Size(925, 400)
 $form.Controls.Add($pnlCuerpo)
 
 $tabs = New-Object System.Windows.Forms.TabControl
+$tabs.SuspendLayout()
 $tabs.Name = 'cuerpoTabs'
 $tabs.Location = New-Object System.Drawing.Point(0, 0)
 $tabs.Size = New-Object System.Drawing.Size(925, 400)
@@ -6906,6 +8530,156 @@ $tabLIM.Controls.Add($lvLIM)
 $lblLIMNota = LG $tabLIM 'Limite software de recorrido POR TCU, puesto desde la NCU: 50047 (este) y 50048 (oeste) del bloque 50000 + (TCU-1)*50, en el puerto 502. NO es el rango de tilt del seguidor (41111-41137, que es SU configuracion y hay que restaurar a mano): esto es temporal y se deshace con QUITAR LIMITE, que escribe el centinela 0x7FFF. Sirve para retener un seguidor mientras se trabaja debajo. Poner un limite NO mueve nada ahora: recorta hasta donde puede llegar, y si esta ya fuera se movera cuando le toque seguir. El limite este tiene que ser menor que el oeste o el seguidor se queda sin recorrido, y eso se rechaza antes de escribir. Cada valor se relee: si la NCU no lo toma -mira "Allow writing on the modbus map" en su pagina- se dice, no se da por bueno.' 10 890 318
 $lblLIMNota.ForeColor = [System.Drawing.Color]::Gray
 
+# ======================= TAB PANEL WEB DE LA NCU =======================
+# Lo que la NCU sabe de si misma y no cuenta por Modbus. Sobre todo: QUE TCU
+# ESTA EN QUE GRUPO, que es lo que le faltaba a la pestana de grupos para poder
+# decir a cuantos seguidores va a mandar la orden.
+#
+# SOLO LEE. Un login y un GET, nada mas.
+$tabPAN = New-Object System.Windows.Forms.TabPage
+$tabPAN.Text = 'Panel NCU'
+$tabs.TabPages.Add($tabPAN)
+
+$btnPANLeer = New-Object System.Windows.Forms.Button
+$btnPANLeer.Text = 'LEER PANEL'
+$btnPANLeer.Location = New-Object System.Drawing.Point(10, 18)
+$btnPANLeer.Size = New-Object System.Drawing.Size(150, 28)
+$btnPANLeer.BackColor = [System.Drawing.Color]::FromArgb(0,90,160)
+$btnPANLeer.ForeColor = [System.Drawing.Color]::White
+$tabPAN.Controls.Add($btnPANLeer)
+
+# Las credenciales se teclean y NO se guardan, igual que las del Digi: no van a
+# config_local.json ni a ningun sitio que luego acabe en un repo o en un correo.
+# Se pierden al cerrar, y eso es lo que tienen que hacer.
+[void](LG $tabPAN 'Usuario:' 172 56 25)
+$txtPANUser = TG $tabPAN '' 234 22 110
+[void](LG $tabPAN 'Contraseña:' 352 72 25)
+$txtPANPass = TG $tabPAN '' 430 22 110
+$txtPANPass.UseSystemPasswordChar = $true
+
+$btnPANCsv = New-Object System.Windows.Forms.Button
+$btnPANCsv.Text = 'CSV'
+$btnPANCsv.Location = New-Object System.Drawing.Point(838, 18)
+$btnPANCsv.Size = New-Object System.Drawing.Size(70, 28)
+$btnPANCsv.Enabled = $false
+$tabPAN.Controls.Add($btnPANCsv)
+
+# Un volcado trae siete tablas. Se lee UNA vez y el desplegable solo cambia lo
+# que se pinta: cambiar de vista no vuelve a la NCU.
+[void](LG $tabPAN 'Vista:' 10 46 56)
+$cbPANVista = New-Object System.Windows.Forms.ComboBox
+$cbPANVista.Location = New-Object System.Drawing.Point(60, 52)
+$cbPANVista.Size = New-Object System.Drawing.Size(150, 22)
+$cbPANVista.DropDownStyle = 'DropDownList'
+foreach ($v in $API_VISTAS) { [void]$cbPANVista.Items.Add("$($v.txt)") }
+$cbPANVista.SelectedIndex = 0
+$tabPAN.Controls.Add($cbPANVista)
+
+# a la derecha de la contrasena, en la fila de arriba: la de abajo es ahora
+# toda de botones de configuracion
+$lblPANRes = LG $tabPAN '' 548 284 25
+$lblPANRes.ForeColor = [System.Drawing.Color]::DimGray
+
+# Segunda fila: la configuracion. Separada de la de arriba a proposito -arriba
+# se lee, aqui se cambia- y con el boton de mandar en naranja, como los demas
+# que mueven algo.
+$btnPANCopia = New-Object System.Windows.Forms.Button
+$btnPANCopia.Text = 'GUARDAR CONFIG'
+$btnPANCopia.Location = New-Object System.Drawing.Point(222, 52)
+$btnPANCopia.Size = New-Object System.Drawing.Size(140, 28)
+$btnPANCopia.Enabled = $false
+$tabPAN.Controls.Add($btnPANCopia)
+
+$btnPANComparar = New-Object System.Windows.Forms.Button
+$btnPANComparar.Text = 'COMPARAR CON...'
+$btnPANComparar.Location = New-Object System.Drawing.Point(368, 52)
+$btnPANComparar.Size = New-Object System.Drawing.Size(140, 28)
+$btnPANComparar.Enabled = $false
+$tabPAN.Controls.Add($btnPANComparar)
+
+$btnPANHsuCfg = New-Object System.Windows.Forms.Button
+$btnPANHsuCfg.Text = 'CONFIG HSU'
+$btnPANHsuCfg.Location = New-Object System.Drawing.Point(292, 318)
+$btnPANHsuCfg.Size = New-Object System.Drawing.Size(120, 28)
+$btnPANHsuCfg.Enabled = $false
+$tabPAN.Controls.Add($btnPANHsuCfg)
+
+$btnPANMacs = New-Object System.Windows.Forms.Button
+$btnPANMacs.Text = 'HISTORICO MAC'
+$btnPANMacs.Location = New-Object System.Drawing.Point(146, 318)
+$btnPANMacs.Size = New-Object System.Drawing.Size(140, 28)
+$btnPANMacs.Enabled = $false
+$tabPAN.Controls.Add($btnPANMacs)
+
+[void](LG $tabPAN 'Grupo:' 518 44 58)
+$txtPANGrupo = TG $tabPAN '' 562 52 36
+[void](LG $tabPAN 'TCUs:' 604 40 58)
+$txtPANTcus = TG $tabPAN '' 646 52 86
+
+$btnPANMeter = New-Object System.Windows.Forms.Button
+$btnPANMeter.Text = 'METER'
+$btnPANMeter.Location = New-Object System.Drawing.Point(738, 52)
+$btnPANMeter.Size = New-Object System.Drawing.Size(80, 28)
+$btnPANMeter.BackColor = [System.Drawing.Color]::FromArgb(150,60,0)
+$btnPANMeter.ForeColor = [System.Drawing.Color]::White
+$btnPANMeter.Enabled = $false
+$tabPAN.Controls.Add($btnPANMeter)
+
+$btnPANSacar = New-Object System.Windows.Forms.Button
+$btnPANSacar.Text = 'SACAR'
+$btnPANSacar.Location = New-Object System.Drawing.Point(824, 52)
+$btnPANSacar.Size = New-Object System.Drawing.Size(84, 28)
+$btnPANSacar.BackColor = [System.Drawing.Color]::FromArgb(150,60,0)
+$btnPANSacar.ForeColor = [System.Drawing.Color]::White
+$btnPANSacar.Enabled = $false
+$tabPAN.Controls.Add($btnPANSacar)
+
+# En rojo y no naranja como METER/SACAR: es lo unico de esta pestana que para
+# la supervision de la planta entera, no un seguidor ni un grupo.
+$btnPANReiniciar = New-Object System.Windows.Forms.Button
+$btnPANReiniciar.Text = 'REINICIAR NCU'
+$btnPANReiniciar.Location = New-Object System.Drawing.Point(10, 318)
+$btnPANReiniciar.Size = New-Object System.Drawing.Size(130, 28)
+$btnPANReiniciar.BackColor = [System.Drawing.Color]::Firebrick
+$btnPANReiniciar.ForeColor = [System.Drawing.Color]::White
+$btnPANReiniciar.Enabled = $false
+$tabPAN.Controls.Add($btnPANReiniciar)
+
+# AJUSTES: los seis campos sueltos de la configuracion que se saben cambiar.
+# Estaban en el motor desde la 11.99 -validados, con rango y con frenos- y sin
+# boton, o sea inalcanzables: el tecnico tenia que seguir yendo a la pagina web
+# para tocar un timeout. Si el objetivo es quitarse de la pagina, un motor sin
+# boton no cuenta.
+[void](LG $tabPAN 'Ajuste:' 418 46 324)
+$cbPANAjuste = New-Object System.Windows.Forms.ComboBox
+$cbPANAjuste.Location = New-Object System.Drawing.Point(468, 320)
+$cbPANAjuste.Size = New-Object System.Drawing.Size(150, 22)
+$cbPANAjuste.DropDownStyle = 'DropDownList'
+foreach ($k in @($API_AJUSTES.Keys)) { [void]$cbPANAjuste.Items.Add("$($API_AJUSTES[$k].que)") }
+$cbPANAjuste.SelectedIndex = 0
+$tabPAN.Controls.Add($cbPANAjuste)
+
+[void](LG $tabPAN 'Valor:' 626 42 324)
+$txtPANValor = TG $tabPAN '' 670 322 56
+
+$btnPANAjustar = New-Object System.Windows.Forms.Button
+$btnPANAjustar.Text = 'APLICAR AJUSTE'
+$btnPANAjustar.Location = New-Object System.Drawing.Point(734, 318)
+$btnPANAjustar.Size = New-Object System.Drawing.Size(150, 28)
+$btnPANAjustar.BackColor = [System.Drawing.Color]::FromArgb(150,60,0)
+$btnPANAjustar.ForeColor = [System.Drawing.Color]::White
+$btnPANAjustar.Enabled = $false
+$tabPAN.Controls.Add($btnPANAjustar)
+
+$lvPAN = New-Object System.Windows.Forms.ListView
+$lvPAN.Location = New-Object System.Drawing.Point(10, 86)
+$lvPAN.Size = New-Object System.Drawing.Size(898, 222)
+$lvPAN.View = 'Details'; $lvPAN.FullRowSelect = $true; $lvPAN.GridLines = $true
+$tabPAN.Controls.Add($lvPAN)
+
+$lblPANNota = LG $tabPAN 'Habla con la pagina web de la NCU por HTTP (puerto 80), con el mismo usuario y contrasena con los que se entra a mano; no se guardan en ningun sitio. LEER PANEL trae de una vez lo que el mapa Modbus no da: a que grupo pertenece cada seguidor -con eso la pestana Grupos ya dice a cuantos va la orden-, las HSUs de verdad con su esclavo y cuales son prestadas de otra NCU, la version de firmware, si "Allow writing on the modbus map" esta puesto, y los errores por equipo de donde salen las TCUs mudas. GUARDAR CONFIG deja la configuracion entera en un JSON con fecha: hoy, si una NCU se muere, nadie tiene la suya. COMPARAR CON... carea lo leido contra una copia y dice que ha cambiado. APLICAR AJUSTE cambia uno de los seis campos sueltos de la configuracion (timeouts, intervalos de sondeo y el permiso de escritura Modbus): al elegir el campo, el cuadro Valor ensena lo que la NCU lleva puesto ahora. METER y SACAR editan los grupos, que es lo unico que por Modbus no se puede hacer de ninguna manera: antes de mandar nada se ensena TODO lo que cambia, se guarda copia, y la red de la NCU no se toca jamas. OJO: la NCU sirve su pagina en HTTP pelado, asi que usuario y contrasena viajan en claro por la red de planta.' 10 890 352
+$lblPANNota.ForeColor = [System.Drawing.Color]::Gray
+
 # ============================ TAB GRUPOS NCU ============================
 # El "Group Control" de la pagina de la NCU, por Modbus. Ver el bloque de
 # logica de grupos para lo que el mapa NO dice (que TCU esta en que grupo) y
@@ -7313,9 +9087,22 @@ $txtIGGwIp.Location = New-Object System.Drawing.Point(778, 336)
 $txtIGGwIp.Size = New-Object System.Drawing.Size(120, 22)
 $tabIG.Controls.Add($txtIGGwIp)
 
+# REINICIAR GATEWAY: en rojo como REINICIAR NCU, porque deja a medio campo sin
+# quien le mande una posicion segura. Reinicia UNO: el de la IP a mano o el
+# unico declarado. Login y IP, los mismos que IDENTIFICAR GATEWAYS.
+$btnIGGwReinicio = New-Object System.Windows.Forms.Button
+$btnIGGwReinicio.Text = 'REINICIAR GATEWAY'
+$btnIGGwReinicio.Location = New-Object System.Drawing.Point(190, 50)
+$btnIGGwReinicio.Size = New-Object System.Drawing.Size(170, 28)
+$btnIGGwReinicio.BackColor = [System.Drawing.Color]::Firebrick
+$btnIGGwReinicio.ForeColor = [System.Drawing.Color]::White
+$tabIG.Controls.Add($btnIGGwReinicio)
+$lblIGGwReinicio = LG $tabIG 'Reinicia UN Digi: el de la IP a mano o, sin IP, el unico que declare la conexion. Con guardia de viento, y se comprueba por su tiempo de marcha.' 372 536 54
+$lblIGGwReinicio.ForeColor = [System.Drawing.Color]::DimGray
+
 $lvIG = New-Object System.Windows.Forms.ListView
-$lvIG.Location = New-Object System.Drawing.Point(10, 56)
-$lvIG.Size = New-Object System.Drawing.Size(898, 274)
+$lvIG.Location = New-Object System.Drawing.Point(10, 86)
+$lvIG.Size = New-Object System.Drawing.Size(898, 244)
 $lvIG.View = 'Details'; $lvIG.FullRowSelect = $true; $lvIG.GridLines = $true
 foreach ($c in @(@('Tipo',80), @('NCU',45), @('GW',40), @('Id',110), @('Num. serie',130),
                  @('MAC',140), @('FW',110), @('FW fabrica',95), @('HW',55),
@@ -7323,7 +9110,7 @@ foreach ($c in @(@('Tipo',80), @('NCU',45), @('GW',40), @('Id',110), @('Num. ser
     [void]$lvIG.Columns.Add($c[0], $c[1])
 }
 $tabIG.Controls.Add($lvIG)
-$lblIGNota = LG $tabIG 'Los huecos son reales: la NCU no da serie ni MAC (el mapa R7.1 no los tiene y sus ids estan NOT READY), la HSU no da serie ni fecha, y el gateway no habla Modbus. IDENTIFICAR GATEWAYS le pregunta por HTTP/RCI al Digi su identidad y su carga (CPU y memoria, verificado en El Burgo): necesita ip_gw en el fichero de planta o la IP escrita a mano aqui abajo. Con ip_gw, el Diagnostico y el Inventario ya lo leen solos; el login de aqui vale para los tres.' 10 890 364
+$lblIGNota = LG $tabIG 'Los huecos son reales: la NCU no da serie ni MAC (el mapa R7.1 no los tiene y sus ids estan NOT READY), la HSU no da serie ni fecha, y el gateway no habla Modbus. IDENTIFICAR GATEWAYS le pregunta por HTTP/RCI al Digi su identidad y su carga (CPU y memoria, verificado en El Burgo): necesita ip_gw en el fichero de planta o la IP escrita a mano aqui abajo. Con ip_gw, el Diagnostico y el Inventario ya lo leen solos; el login de aqui vale para los tres. REINICIAR GATEWAY manda un reboot por RCI a UN Digi, con guardia de viento, y comprueba que lo hizo por su tiempo de marcha.' 10 890 364
 $lblIGNota.ForeColor = [System.Drawing.Color]::Gray
 
 # ============================ TAB ANALIZADOR DE BATERIAS ============================
@@ -10620,6 +12407,7 @@ function Diag-Correr {
     }
     $nOk = 0; $nAviso = 0; $nAlarma = 0; $nOff = 0
     $nHOk = 0; $nHMal = 0        # las HSUs van aparte de la cuenta de TCUs
+    $nGwOk = 0; $nGwMal = 0      # y los gateways tambien (v12.7)
     $nDiagTot = 0; foreach ($tr in $trabajos) { $nDiagTot += @($tr.tcus).Count }
     Prog-Iniciar $nDiagTot
     # Planta completa por el bloque compacto: cada NCU es una conexion propia y
@@ -10642,7 +12430,7 @@ function Diag-Correr {
                 # dato. El barrido en serie ya lo hacia; el paralelo no, y es el
                 # modo por defecto.
                 $dnP = Diag-FilaNcu $eti $(if ($o) { $o.salud } else { $null }) $(if ($o) { "$($o.error)" } else { "$($r.error)" })
-                Diag-AnotarGws $dnP (Gws-Objetivos-Topologia $r.tarea.gws) ([int]$r.tarea.to)
+                $gwsP = @(Diag-AnotarGws $dnP (Gws-Objetivos-Topologia $r.tarea.gws) ([int]$r.tarea.to))
                 $itemNP = New-Object System.Windows.Forms.ListViewItem($eti)
                 foreach ($c in @('', $dnP.TCU, $dnP.Salud, $dnP.Modo, '', '', '', '', '', (Diag-NotaNcu $dnP))) { [void]$itemNP.SubItems.Add("$c") }
                 switch ("$($dnP.Salud)") {
@@ -10652,6 +12440,12 @@ function Diag-Correr {
                 }
                 $lvG.Items.Add($itemNP) | Out-Null
                 $script:UltimoDiag += $dnP
+                # los gateways, debajo de su NCU y como equipo propio
+                foreach ($fg in $gwsP) {
+                    $lvG.Items.Add((Diag-ItemGw $fg)) | Out-Null
+                    $script:UltimoDiag += $fg
+                    if ("$($fg.Salud)" -eq 'OK') { $nGwOk++ } else { $nGwMal++ }
+                }
                 if ("$($dnP.Salud)" -ne 'OK') { Con ("NCU{0}  {1,-8} {2}" -f $eti, $dnP.Salud, $dnP.Alarmas) ([System.Drawing.Color]::Orange) }
                 if ($null -eq $o -or "$($o.error)" -ne '') {
                     $msg = $(if ($o) { "$($o.error)" } else { "$($r.error)" })
@@ -10709,9 +12503,14 @@ function Diag-Correr {
         # El reloj solo se menciona si de verdad esta desviado (Reloj-Nota):
         # colgado de cada fila parecia un problema y no lo era.
         $dn = Diag-FilaNcu "$($tr.ncu)" $ns $nsErr
-        Diag-AnotarGws $dn (Gws-Objetivos-Cx $tr.cx) ([int]$tr.cx.to)
+        $gwsN = @(Diag-AnotarGws $dn (Gws-Objetivos-Cx $tr.cx) ([int]$tr.cx.to))
         $itemN = New-Object System.Windows.Forms.ListViewItem("$($tr.ncu)")
-        foreach ($c in @($dn.TCU, $dn.Salud, $dn.Modo, $dn.Tilt, $dn.Objetivo, $dn.Dif, $dn.SoC, '', (Diag-NotaNcu $dn))) { [void]$itemN.SubItems.Add("$c") }
+        # DIEZ subelementos, como las demas filas: esta linea tenia nueve y la
+        # fila de la NCU salia corrida una columna a la izquierda -la salud bajo
+        # TCU, la nota bajo 'Edad s'- hasta que se tocaba un filtro y
+        # Diag-Refrescar la repintaba bien. Solo en conexion a una NCU; el
+        # barrido de planta ya iba bien. Visto al meter los gateways (v12.7).
+        foreach ($c in @('', $dn.TCU, $dn.Salud, $dn.Modo, '', '', '', '', '', (Diag-NotaNcu $dn))) { [void]$itemN.SubItems.Add("$c") }
         switch ($dn.Salud) {
             'OK'     { $itemN.ForeColor = [System.Drawing.Color]::DarkGreen }
             'AVISO'  { $itemN.ForeColor = [System.Drawing.Color]::DarkOrange }
@@ -10719,6 +12518,11 @@ function Diag-Correr {
         }
         $lvG.Items.Add($itemN) | Out-Null
         $script:UltimoDiag += $dn
+        foreach ($fg in $gwsN) {
+            $lvG.Items.Add((Diag-ItemGw $fg)) | Out-Null
+            $script:UltimoDiag += $fg
+            if ("$($fg.Salud)" -eq 'OK') { $nGwOk++ } else { $nGwMal++ }
+        }
         if ($dn.Salud -ne 'OK') { Con ("NCU{0}  {1,-8} {2}" -f $tr.ncu, $dn.Salud, $dn.Alarmas) ([System.Drawing.Color]::Orange) }
         [System.Windows.Forms.Application]::DoEvents()
     }
@@ -10938,6 +12742,7 @@ function Diag-Correr {
     Cierre-Guardar (Nombre-Planta); Cierre-Pintar
     $lblGResumen.Text = "TCUs -> OK: $nOk  Aviso: $nAviso  Alarma: $nAlarma  Off: $nOff" +
         $(if (($nHOk + $nHMal) -gt 0) { "   |   HSUs: $($nHOk + $nHMal) ($nHOk OK)" } else { '' }) +
+        $(if (($nGwOk + $nGwMal) -gt 0) { "   |   Gateways: $($nGwOk + $nGwMal) ($nGwOk OK)" } else { '' }) +
         $(if ($reps.Count -gt 0) { "   |   Repetidores: $($reps.Count) ($nROk OK)" } else { '' })
     Con ('-' * 96) ([System.Drawing.Color]::SteelBlue)
     # Un OFFLINE no vale lo mismo que otro: los de una NCU que no contesta por la
@@ -11078,6 +12883,24 @@ function Diag-PrepararAccion($destino, [string]$accion) {
     }
     Con "Accion preparada desde diagnostico: NCU$($destino.ncu) / $($destino.tipo) $($destino.tcu) / $($destino.ip):$($destino.puerto). Revisa y ejecuta en la pantalla de destino." ([Drawing.Color]::SteelBlue)
 }
+# LAS ACCIONES DE UNA FILA DE GATEWAY, para el dialogo de detalle y para el
+# panel lateral: las dos ventanas ofrecen lo mismo y despachan por aqui. Lo que
+# se le puede pedir a un Digi: identificarlo (modelo, firmware, carga) y
+# reiniciarlo, con los mismos frenos que el boton de Inventario. $true si la
+# accion era de gateway (y ya esta hecha o explicada), $false si no es cosa suya.
+function Diag-AccionGw($fila, $destino, [string]$accion) {
+    if ($accion -ne 'Identificar gateway' -and $accion -ne 'Reiniciar gateway') { return $false }
+    $gwFila = @{ncu = "$($fila.NCU)"; nGw = [int]("0" + "$($fila.GW)"); ip = "$($fila.IP_gw)"; tcus = $fila.TCUs_gw}
+    if ("$($gwFila.ip)" -eq '') { Con 'Esta fila de gateway no trae la IP del Digi: repite el diagnostico.' ([System.Drawing.Color]::Orange); return $true }
+    if ($accion -eq 'Identificar gateway') {
+        Lanzar { Con ('=' * 96) ([System.Drawing.Color]::SteelBlue); [void](Gw-IdentificarUno $gwFila ([int]$destino.to) (Gw-CredencialUI)) }
+    } else {
+        # el viento se mira en LA NCU de este gateway, que es la que lo tiene
+        Lanzar { Gw-ReiniciarFlujo $gwFila @{ip = "$($destino.ip)"; multi = $null; to = $destino.to} }
+    }
+    return $true
+}
+
 function Diag-Acciones($tag=$null) {
     if($script:Ocupado){return}
     if(-not $tag){if($lvG.SelectedItems.Count -ne 1){return};$tag=$lvG.SelectedItems[0].Tag}
@@ -11097,13 +12920,15 @@ function Diag-Acciones($tag=$null) {
         $destino=Diag-Objetivo $fila $tag.trabajos
         $acciones=@('Diagnostico NCU','Estaciones meteo')
         if($destino.tipo -eq 'TCU'){$acciones=@('Leer variables','Configurar variables','Copia de seguridad','Modo / alarmas / stow','Receta secuencial')}
-        $acciones+=@('Historico CSV')
+        # el gateway (v12.7): lo que se le puede pedir a un Digi y nada mas; sin
+        # historico CSV, que es de las TCUs. El login del Digi es el de Inventario.
+        if($destino.tipo -eq 'GW'){$acciones=@('Identificar gateway','Reiniciar gateway')} else {$acciones+=@('Historico CSV')}
         foreach($a in $acciones){
             $b=Sec-Boton $barra $a
             $b.Add_Click({$d.Tag=$a;$d.DialogResult='OK';$d.Close()}.GetNewClosure())
         }
     }catch{$detalle.Text+="`r`n`r`n$_"}
-    try { if($d.ShowDialog($form) -eq 'OK'){if($d.Tag -eq 'Historico CSV'){Hist-Abrir $tag}else{Diag-PrepararAccion $destino "$($d.Tag)"}} } finally {$d.Dispose()}
+    try { if($d.ShowDialog($form) -eq 'OK'){if($d.Tag -eq 'Historico CSV'){Hist-Abrir $tag}elseif(Diag-AccionGw $fila $destino "$($d.Tag)"){}else{Diag-PrepararAccion $destino "$($d.Tag)"}} } finally {$d.Dispose()}
 }
 # Diagnostico SOLO de las estaciones meteo. Las HSUs viven en un bloque aparte
 # de la NCU (30200+, diez huecos): UNA lectura por NCU. Diagnosticar las diez de
@@ -13078,12 +14903,17 @@ function Gw-Leer([string]$ip, [int]$to, $cred = $null) {
 }
 
 # En el barrido de diagnostico: los gateways de la NCU, colgados de su fila.
+# Desde la v12.7 ADEMAS devuelve una fila por gateway (Diag-FilaGw), que el
+# barrido pinta debajo de la NCU y mete en el diagnostico como equipo propio.
+# Los campos GWn_* colgados de la NCU se mantienen: el SCADA y el Seguimiento
+# PEM los leen del JSON y no tienen por que enterarse del cambio.
 function Diag-AnotarGws($dn, $objetivos, [int]$to) {
-    $lineas = @()
+    $lineas = @(); $filas = @()
     foreach ($g in @($objetivos)) {
         if ($script:Cancelar) { break }
         $l = Gw-Leer $g.ip $to (Gw-CredencialUI)
         [void](Gw-Anotar $dn (Gw-Campos $g.nGw $g.ip $l))
+        $filas += ,(Diag-FilaGw "$($dn.NCU)" ([int]$g.nGw) "$($g.ip)" $l $(if ($g.ContainsKey('tcus')) { $g.tcus } else { $null }))
         $linea = Gw-Linea $g.nGw $g.ip $l
         $lineas += $linea
         $col = $(if (-not $l.ok) { [System.Drawing.Color]::Salmon }
@@ -13092,6 +14922,20 @@ function Diag-AnotarGws($dn, $objetivos, [int]$to) {
         Con "   $linea" $col
     }
     if ($lineas.Count -gt 0) { $dn | Add-Member -NotePropertyName Gateways -NotePropertyValue ($lineas -join '; ') -Force }
+    return @($filas)
+}
+
+# La fila del gateway en la tabla del Diagnostico, con el mismo reparto de
+# columnas que las demas (GW, TCU, Salud, Modo, ..., Alarmas).
+function Diag-ItemGw($fg) {
+    $item = New-Object System.Windows.Forms.ListViewItem("$($fg.NCU)")
+    foreach ($c in @($fg.GW, $fg.TCU, $fg.Salud, $fg.Modo, '', '', '', '', '', $fg.Alarmas)) { [void]$item.SubItems.Add("$c") }
+    switch ("$($fg.Salud)") {
+        'OK'     { $item.ForeColor = [System.Drawing.Color]::DarkGreen }
+        'AVISO'  { $item.ForeColor = [System.Drawing.Color]::DarkOrange }
+        'ALARMA' { $item.ForeColor = [System.Drawing.Color]::Firebrick }
+    }
+    return $item
 }
 
 # La carga del gateway: primero device_stats; si no se reconoce, TODO el estado
@@ -13105,6 +14949,165 @@ function Gw-Carga-Leer([string]$ip, [int]$to, $cred = $null) {
     $c = Gw-Carga $t2
     if ($c.ok) { return @{ok = $true; carga = $c; consulta = 'query_state (todo el estado)'; crudo = $t2} }
     return @{ok = $false; carga = $null; consulta = ''; crudo = ("$t1`n$t2").Trim()}
+}
+
+# EL FLUJO DE REINICIAR UN GATEWAY, separado del boton para que el Diagnostico
+# lo pueda lanzar desde la fila del gateway (v12.7). $gw es {ncu, nGw, ip,
+# tcus}; $cx da las NCUs a las que mirar el viento y el timeout.
+function Gw-ReiniciarFlujo($gw, $cx) {
+    $clave = $(if ("$($gw.ncu)" -eq '?' -or "$($gw.ncu)" -eq '') { "GW $($gw.ip) (IP a mano)" } else { "NCU$($gw.ncu) GW$($gw.nGw) $($gw.ip)" })
+    $cred = Gw-CredencialUI
+    $to = [int]$cx.to
+
+    # PRIMERO SU UPTIME, y si no lo da, no se manda nada: sin el tiempo de
+    # marcha de antes no habria forma de comprobar despues que reinicio, y un
+    # Digi que no contesta ahora no es un Digi al que mandarle cosas a ciegas.
+    $k0 = Gw-Carga-Leer $gw.ip $to $cred
+    if (-not $k0.ok -or $null -eq $k0.carga.uptime) {
+        Con "NO se reinicia ${clave}: no contesta a device_stats (o no da uptime), y sin su tiempo de marcha de ANTES no se podria comprobar despues que ha reiniciado." ([System.Drawing.Color]::Firebrick)
+        if ("$($k0.crudo)" -ne '') { Con ("  respuesta cruda: " + ("$($k0.crudo)" -replace '\s+', ' ')) ([System.Drawing.Color]::Gainsboro) }
+        return
+    }
+    $antes = $k0.carga.uptime
+    Con "$clave contesta: $(Gw-CargaResumen $k0.carga)" ([System.Drawing.Color]::SteelBlue)
+
+    # GUARDIA DE VIENTO, en todas las NCUs de la conexion: el viento es de la
+    # planta, y con una IP a mano no se sabe de que NCU cuelga este Digi.
+    $ncus = @(Gw-NcusParaViento $cx)
+    $lect = @(); foreach ($ipN in $ncus) { $lect += ,(Viento-Seguro $ipN $to) }
+    $vp = Gw-VientoPeor $lect
+    if ($null -ne $vp.v -and ([int]$vp.v.nivel -gt 0 -or $vp.v.alarma)) {
+        Con "NO se reinicia: hay viento (nivel $($vp.v.nivel)$(if ($vp.v.alarma) { ', CON ALARMA' })). Mientras el gateway este abajo nadie puede mandar una posicion segura a sus seguidores." ([System.Drawing.Color]::Firebrick)
+        return
+    }
+    if ($null -eq $vp.v) { Con "No se ha podido leer el viento en ninguna de las $($vp.total) NCU: se avisa en la ventana y decides tu." ([System.Drawing.Color]::Orange) }
+
+    $resp = [System.Windows.Forms.MessageBox]::Show((Gw-TextoReinicio $gw $vp.v $vp.leidas $vp.total),
+                'Reiniciar el gateway', 'YesNo', 'Warning')
+    if ($resp -ne [System.Windows.Forms.DialogResult]::Yes) { Con 'Cancelado.' ([System.Drawing.Color]::Gray); return }
+
+    $txt = Rci-Post $gw.ip $to $RCI_REINICIO $cred
+    $ac = Gw-ReinicioAceptado $txt
+    switch ($ac.estado) {
+        'error' { Con "${clave}: $($ac.nota)" ([System.Drawing.Color]::Firebrick); Con ("  " + ("$txt" -replace '\s+', ' ')) ([System.Drawing.Color]::Gainsboro); return }
+        'raro'  { Con "${clave}: $($ac.nota)" ([System.Drawing.Color]::Orange); Con ("  " + ("$txt" -replace '\s+', ' ')) ([System.Drawing.Color]::Gainsboro) }
+        default { Con "${clave}: $($ac.nota)." ([System.Drawing.Color]::Gray) }
+    }
+    Con "Esperando a que $clave se vaya abajo y vuelva (hasta $GW_REINICIO_ESPERA_S s)..." ([System.Drawing.Color]::SteelBlue)
+
+    # FASE 1: que DEJE de contestar. Un Digi suele contestar al reboot y tardar
+    # un par de segundos en irse; si se mirase el uptime en ese hueco saldria el
+    # de antes y se diria "no ha reiniciado" sin razon. Asi que primero se
+    # espera a la caida, con su propio tope.
+    $t0 = Get-Date; $cayo = $false; $ultimo = $null
+    while (((Get-Date) - $t0).TotalSeconds -lt $GW_REINICIO_CAIDA_S) {
+        Start-Sleep -Seconds 2
+        [System.Windows.Forms.Application]::DoEvents()
+        if (Chequear-Cancelado) { break }
+        $k = Gw-Carga-Leer $gw.ip $to $cred
+        if (-not $k.ok) { $cayo = $true; break }
+        $ultimo = $k.carga.uptime
+    }
+    # FASE 2: que vuelva, con un uptime menor.
+    $vuelta = $null
+    if ($cayo) {
+        while (((Get-Date) - $t0).TotalSeconds -lt $GW_REINICIO_ESPERA_S) {
+            Start-Sleep -Seconds $GW_REINICIO_PASO_S
+            [System.Windows.Forms.Application]::DoEvents()
+            if (Chequear-Cancelado) { break }
+            $k = Gw-Carga-Leer $gw.ip $to $cred
+            if ($k.ok -and $null -ne $k.carga.uptime) { $vuelta = $k.carga.uptime; break }
+        }
+    } else {
+        # nunca cayo: lo que haya contestado al final es lo que se juzga
+        $vuelta = $ultimo
+    }
+    $segs = [int]((Get-Date) - $t0).TotalSeconds
+    $ver = Gw-ReinicioVolvio $antes $vuelta $cayo
+    if ($ver.ok) {
+        Con "${clave}: $($ver.nota). Tardo $segs s." ([System.Drawing.Color]::DarkGreen)
+    } else {
+        $color = $(if ($ver.tarda) { [System.Drawing.Color]::DarkOrange } else { [System.Drawing.Color]::Firebrick })
+        Con "${clave}: $($ver.nota) (tras $segs s)." $color
+        if (-not $ver.tarda) { Con 'Compruebalo antes de irte.' ([System.Drawing.Color]::Firebrick) }
+    }
+}
+
+$btnIGGwReinicio.Add_Click({ Lanzar {
+    $cx = Params-Conexion
+    # los gateways de la conexion con lo que cuelga de cada uno, para el texto
+    $gws = @()
+    if ($cx.multi) {
+        foreach ($n in $cx.multi) { foreach ($g in @($n.gws)) { if ($g) {
+            $gws += ,@{ncu = "$($n.ncu)"; nGw = (Gw-Numero ([int]$g.puerto)); ip = "$($g.ip_gw)".Trim(); tcus = ([int]$g.fin - [int]$g.ini + 1)} } } }
+    } elseif ($cx.gws) {
+        foreach ($g in @($cx.gws)) { if ($g) {
+            $gws += ,@{ncu = (Ncu-DeNombre $cx.nombre); nGw = (Gw-Numero ([int]$g.puerto)); ip = "$($g.ip_gw)".Trim(); tcus = ([int]$g.fin - [int]$g.ini + 1)} } }
+    } elseif ("$($cx.puerto)" -match '^\d+$') {
+        $gws += ,@{ncu = (Ncu-DeNombre $cx.nombre); nGw = (Gw-Numero ([int]$cx.puerto)); ip = "$($cx.ip_gw)".Trim(); tcus = ([int]$cx.fin - [int]$cx.ini + 1)}
+    }
+    $o = Gw-ObjetivoReinicio $gws $txtIGGwIp.Text
+    if (-not $o.ok) { Con "NO se reinicia: $($o.nota)." ([System.Drawing.Color]::Orange); return }
+    Gw-ReiniciarFlujo $o.gw $cx
+} })
+
+# IDENTIFICAR UN GATEWAY: identidad y carga, con los volcados crudos cuando no
+# se reconoce algo. Separado del boton para que el Diagnostico lo lance desde
+# la fila del gateway (v12.7). Devuelve @{ident; carga} con si se reconocio.
+function Gw-IdentificarUno($g, [int]$to, $cred) {
+    $okId = $false; $okCarga = $false
+    $r = Gw-Identidad $g.ip $to $cred
+    $clave = $(if ("$($g.ncu)" -eq '?') { 'GW (IP a mano)' } else { "NCU$($g.ncu) GW$($g.nGw)" })
+    if ($r.ok) {
+        $okId = $true
+        Con ("{0}  {1}  ->  {2}  MAC {3}  FW {4}  boot {5}  POST {6}  HW {7}  PAN {8}  canal {9}   (por '{10}')" -f $clave, $g.ip,
+             $r.ext.producto, $r.ext.mac, $r.ext.fw, $r.ext.boot, $r.ext.post, $r.ext.hw, $r.ext.pan, $r.ext.canal, $r.consulta) ([System.Drawing.Color]::LightGreen)
+        foreach ($f in @($script:UltimoInvG)) {
+            if ("$($f.Tipo)" -eq 'GW' -and "$($f.NCU)" -eq "$($g.ncu)" -and "$($f.GW)" -eq "$($g.nGw)") {
+                $f.MAC = "$($r.ext.mac)"; $f.FW = "$($r.ext.fw)"; $f.FW_fabrica = "$($r.ext.boot)"; $f.HW = "$($r.ext.hw)"
+                $f.Nota = (Gw-NotaIdentidad $r.ext) + "$($f.Nota)"
+                [void](Gw-Anotar $f @{IP_gw = $g.ip; Modelo = $r.ext.producto; Boot = $r.ext.boot; POST = $r.ext.post
+                                      ProductId = $r.ext.pid; PAN = $r.ext.pan; Canal = $r.ext.canal})
+            }
+        }
+    } else {
+        Con "$clave  $($g.ip): no se ha reconocido la identidad en la respuesta." ([System.Drawing.Color]::Salmon)
+    }
+    # con un campo que falte se vuelca TODO lo que contesto, consulta por
+    # consulta: es lo que dice como se llama de verdad lo que falta
+    if (-not $r.completo) {
+        if (@($r.crudos).Count -gt 0) {
+            Con "  --- respuesta cruda, para saber que consulta hay que hacer de verdad ---" ([System.Drawing.Color]::Gainsboro)
+            foreach ($c in @($r.crudos)) { Con ("  [{0}]  {1}" -f $c.n, ("$($c.xml)" -replace '\s+', ' ')) ([System.Drawing.Color]::Gainsboro) }
+        } else {
+            Con "  el gateway no ha contestado en el puerto 80 (o pide usuario y contrasena)." ([System.Drawing.Color]::Gainsboro)
+        }
+    }
+    # la carga del propio Digi, aparte de la identidad: puede salir una sin la otra
+    $k = Gw-Carga-Leer $g.ip $to $cred
+    if ($k.ok) {
+        $okCarga = $true
+        $res = Gw-CargaResumen $k.carga
+        $col = $(if ($k.carga.cpu -ge $GW_CPU_ALTA) { [System.Drawing.Color]::Orange } else { [System.Drawing.Color]::LightGreen })
+        Con ("{0}  {1}  ->  {2}   (por '{3}')" -f $clave, $g.ip, $res, $k.consulta) $col
+        foreach ($f in @($script:UltimoInvG)) {
+            if ("$($f.Tipo)" -eq 'GW' -and "$($f.NCU)" -eq "$($g.ncu)" -and "$($f.GW)" -eq "$($g.nGw)") {
+                $f.Nota = "$res  |  " + "$($f.Nota)"
+                [void](Gw-Anotar $f @{IP_gw = $g.ip; CPU_pct = $k.carga.cpu; Mem_pct = (Gw-MemPct $k.carga)
+                                      Mem_total_MB = $(if ($null -ne $k.carga.mem_total) { Gw-Mb $k.carga.mem_total } else { $null })
+                                      Uptime_s = $k.carga.uptime})
+            }
+        }
+    } else {
+        Con "$clave  $($g.ip): no se ha reconocido la CPU en la respuesta." ([System.Drawing.Color]::Salmon)
+        if ("$($k.crudo)" -ne '') {
+            Con "  --- respuesta cruda a query_state, para saber que consulta hay que hacer de verdad ---" ([System.Drawing.Color]::Gainsboro)
+            Con ("  " + ("$($k.crudo)" -replace '\s+', ' ')) ([System.Drawing.Color]::Gainsboro)
+        } else {
+            Con "  el gateway no ha contestado a query_state en el puerto 80 (o pide usuario y contrasena)." ([System.Drawing.Color]::Gainsboro)
+        }
+    }
+    return @{ident = $okId; carga = $okCarga}
 }
 
 $btnIGGw.Add_Click({ Lanzar {
@@ -13130,57 +15133,9 @@ $btnIGGw.Add_Click({ Lanzar {
     $n = 0; $nCarga = 0
     foreach ($g in $conIp) {
         if (Chequear-Cancelado) { break }
-        $r = Gw-Identidad $g.ip ([int]$cx.to) $cred
-        $clave = $(if ("$($g.ncu)" -eq '?') { 'GW (IP a mano)' } else { "NCU$($g.ncu) GW$($g.nGw)" })
-        if ($r.ok) {
-            $n++
-            Con ("{0}  {1}  ->  {2}  MAC {3}  FW {4}  boot {5}  POST {6}  HW {7}  PAN {8}  canal {9}   (por '{10}')" -f $clave, $g.ip,
-                 $r.ext.producto, $r.ext.mac, $r.ext.fw, $r.ext.boot, $r.ext.post, $r.ext.hw, $r.ext.pan, $r.ext.canal, $r.consulta) ([System.Drawing.Color]::LightGreen)
-            foreach ($f in @($script:UltimoInvG)) {
-                if ("$($f.Tipo)" -eq 'GW' -and "$($f.NCU)" -eq "$($g.ncu)" -and "$($f.GW)" -eq "$($g.nGw)") {
-                    $f.MAC = "$($r.ext.mac)"; $f.FW = "$($r.ext.fw)"; $f.FW_fabrica = "$($r.ext.boot)"; $f.HW = "$($r.ext.hw)"
-                    $f.Nota = (Gw-NotaIdentidad $r.ext) + "$($f.Nota)"
-                    [void](Gw-Anotar $f @{IP_gw = $g.ip; Modelo = $r.ext.producto; Boot = $r.ext.boot; POST = $r.ext.post
-                                          ProductId = $r.ext.pid; PAN = $r.ext.pan; Canal = $r.ext.canal})
-                }
-            }
-        } else {
-            Con "$clave  $($g.ip): no se ha reconocido la identidad en la respuesta." ([System.Drawing.Color]::Salmon)
-        }
-        # con un campo que falte se vuelca TODO lo que contesto, consulta por
-        # consulta: es lo que dice como se llama de verdad lo que falta
-        if (-not $r.completo) {
-            if (@($r.crudos).Count -gt 0) {
-                Con "  --- respuesta cruda, para saber que consulta hay que hacer de verdad ---" ([System.Drawing.Color]::Gainsboro)
-                foreach ($c in @($r.crudos)) { Con ("  [{0}]  {1}" -f $c.n, ("$($c.xml)" -replace '\s+', ' ')) ([System.Drawing.Color]::Gainsboro) }
-            } else {
-                Con "  el gateway no ha contestado en el puerto 80 (o pide usuario y contrasena)." ([System.Drawing.Color]::Gainsboro)
-            }
-        }
-        # la carga del propio Digi, aparte de la identidad: puede salir una sin la otra
-        $k = Gw-Carga-Leer $g.ip ([int]$cx.to) $cred
-        if ($k.ok) {
-            $nCarga++
-            $res = Gw-CargaResumen $k.carga
-            $col = $(if ($k.carga.cpu -ge $GW_CPU_ALTA) { [System.Drawing.Color]::Orange } else { [System.Drawing.Color]::LightGreen })
-            Con ("{0}  {1}  ->  {2}   (por '{3}')" -f $clave, $g.ip, $res, $k.consulta) $col
-            foreach ($f in @($script:UltimoInvG)) {
-                if ("$($f.Tipo)" -eq 'GW' -and "$($f.NCU)" -eq "$($g.ncu)" -and "$($f.GW)" -eq "$($g.nGw)") {
-                    $f.Nota = "$res  |  " + "$($f.Nota)"
-                    [void](Gw-Anotar $f @{IP_gw = $g.ip; CPU_pct = $k.carga.cpu; Mem_pct = (Gw-MemPct $k.carga)
-                                          Mem_total_MB = $(if ($null -ne $k.carga.mem_total) { Gw-Mb $k.carga.mem_total } else { $null })
-                                          Uptime_s = $k.carga.uptime})
-                }
-            }
-        } else {
-            Con "$clave  $($g.ip): no se ha reconocido la CPU en la respuesta." ([System.Drawing.Color]::Salmon)
-            if ("$($k.crudo)" -ne '') {
-                Con "  --- respuesta cruda a query_state, para saber que consulta hay que hacer de verdad ---" ([System.Drawing.Color]::Gainsboro)
-                Con ("  " + ("$($k.crudo)" -replace '\s+', ' ')) ([System.Drawing.Color]::Gainsboro)
-            } else {
-                Con "  el gateway no ha contestado a query_state en el puerto 80 (o pide usuario y contrasena)." ([System.Drawing.Color]::Gainsboro)
-            }
-        }
+        $u = Gw-IdentificarUno $g ([int]$cx.to) $cred
+        if ($u.ident) { $n++ }
+        if ($u.carga) { $nCarga++ }
         Prog-Paso
         [System.Windows.Forms.Application]::DoEvents()
     }
@@ -14665,7 +16620,7 @@ function Sec-Plan($trabajos) {
 # de socket al 502; restaurar SIEMPRE el gateway antes del siguiente paso TCU.
 function Sec-PrepararPaso($destino, $paso, [bool]$simular) {
     if ($simular -or -not (Sec-Mueve @($paso))) { return }
-    $v = Viento-Seguro $destino.ip $destino.to
+    $v = Viento-Seguro $destino.ip $destino.to 0 $VIENTO_CACHE_S
     if ($null -eq $v -or $v.alarma -or $v.nivel -gt 0) { throw 'movimiento bloqueado: viento activo o sin datos actuales de HSU' }
     Modbus-Conectar $destino.ip $destino.puerto $destino.to
 }
@@ -14698,6 +16653,8 @@ function Sec-RecetaTcu($destino, $pasos, [bool]$simular) {
     return 'VERIFICADO'
 }
 function Sec-Correr([bool]$simular, $planReintento = $null) {
+    # una tirada nunca arranca con una lectura de viento heredada de la anterior
+    Viento-OlvidarCache
     $pasos = @($script:SecPasos | ForEach-Object { @{tipo="$($_.tipo)"; valor="$($_.valor)"} })
     $val = Sec-Validar $pasos $VARIABLES
     if (@($val.errores).Count -gt 0) { throw ('La receta tiene errores y no se lanza: ' + ($val.errores -join '; ')) }
@@ -15116,11 +17073,24 @@ function Lim-LeerTcu([int]$tcu) {
 # no se toca: escribir el par entero obligaria a saber el que no quieres cambiar
 # y un valor de mas es un limite que nadie pidio.
 function Lim-EscribirTcu([int]$tcu, $este, $oeste) {
+    # Por Gr-EscribirPalabra y no con FC16 a pelo: hay NCUs que contestan
+    # IllegalFunction a FC16 y solo aceptan FC06 -es la razon por la que existe
+    # ese camino-, y cuando se arreglo para los comandos de grupo (v11.87) estas
+    # dos escrituras se quedaron fuera. El resultado era que los grupos se
+    # recuperaban de esa NCU y los limites de recorrido no, en la misma planta y
+    # con el mismo aparato. El par junto sigue yendo de una sola peticion cuando
+    # FC16 vale, que es lo normal.
     if ($null -ne $este -and $null -ne $oeste) {
-        FC16-Escribir $UNIT_NCU (Lim-Dir $tcu $LIM_ESTE) @([int]$este, [int]$oeste)
+        try { FC16-Escribir $UNIT_NCU (Lim-Dir $tcu $LIM_ESTE) @([int]$este, [int]$oeste) }
+        catch {
+            if ("$_" -notmatch 'IllegalFunction') { throw }
+            # sin FC16 no hay escritura multiple: uno y luego el otro
+            [void](Gr-EscribirPalabra (Lim-Dir $tcu $LIM_ESTE)  ([int]$este))
+            [void](Gr-EscribirPalabra (Lim-Dir $tcu $LIM_OESTE) ([int]$oeste))
+        }
     } else {
-        if ($null -ne $este)  { FC16-Escribir $UNIT_NCU (Lim-Dir $tcu $LIM_ESTE)  @([int]$este) }
-        if ($null -ne $oeste) { FC16-Escribir $UNIT_NCU (Lim-Dir $tcu $LIM_OESTE) @([int]$oeste) }
+        if ($null -ne $este)  { [void](Gr-EscribirPalabra (Lim-Dir $tcu $LIM_ESTE)  ([int]$este)) }
+        if ($null -ne $oeste) { [void](Gr-EscribirPalabra (Lim-Dir $tcu $LIM_OESTE) ([int]$oeste)) }
     }
     Start-Sleep -Milliseconds 150
     $l = Lim-LeerTcu $tcu
@@ -15279,7 +17249,8 @@ $btnGRAplicar.Add_Click({ Lanzar {
     if ("$($acc.tipo)" -eq 'sp7nada') { $angW = $ANG_NADA; $angTxt = 'sin angulo' }
     $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
     if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU (mira el cuadro NCUs).' ([System.Drawing.Color]::Orange); return }
-    $r = [System.Windows.Forms.MessageBox]::Show((Gr-TextoConfirmar $acc $bits $trabajos.Count $angTxt $segundos), 'Comando de grupo a la NCU', 'YesNo', 'Warning')
+    $script:GrNcus = @($trabajos | ForEach-Object { "$($_.ncu)" })
+    $r = [System.Windows.Forms.MessageBox]::Show((Gr-TextoConfirmar $acc $bits $trabajos.Count $angTxt $segundos ((Gr-Alcance $script:ApiUltimo $script:GrNcus $bits) + (Gr-AvisoEscritura $script:ApiUltimo $script:GrNcus))), 'Comando de grupo a la NCU', 'YesNo', 'Warning')
     if ($r -ne 'Yes') { return }
     $lvGR.Items.Clear(); $script:UltimoGrupos = @(); $lblGRRes.Text = ''; $btnGRCsv.Enabled = $false; Sellar 'grupos'
     Ctx-Guardar 'grupos' $cx $trabajos
@@ -15306,7 +17277,7 @@ $btnGRAplicar.Add_Click({ Lanzar {
                     # el plazo hay un rato en el que los seguidores estan fuera
                     # con el plazo viejo, que puede ser 0 (o sea, nunca vuelven)
                     if ($null -ne $segundos) {
-                        FC16-Escribir $UNIT_NCU 40080 @([int]$segundos)
+                        [void](Gr-EscribirPalabra 40080 ([int]$segundos))
                         $via = "40080 = $segundos s"
                     }
                     $e = Gr-EscribirAngulo $bits $angW
@@ -15438,6 +17409,415 @@ $btnNDCsv.Add_Click({
     if (@($script:UltimoNcuDiag).Count -eq 0) { return }
     [void](Exportar-Csv $script:UltimoNcuDiag 'diagnostico_ncu' 'Diagnostico NCU' -bloque 'diagncu')
 })
+# ======================= PANEL WEB DE LA NCU (botones) =======================
+# Una lectura por NCU y las siete vistas salen de ella. Cambiar de vista NO
+# vuelve a la NCU: repinta lo leido, y la etiqueta dice de cuando es.
+$script:ApiUltimo = @()     # una entrada por NCU leida, en el orden en que se leyeron
+$script:ApiFilas  = @()     # lo que hay pintado ahora, para el CSV
+
+function Api-Pintar {
+    $v = Api-Vista "$($cbPANVista.SelectedItem)"
+    if ($null -eq $v) { return }
+    Lv-Columnas $lvPAN (@(@{t='NCU'; w=45}) + @($v.cols))
+    $lvPAN.Items.Clear()
+    $script:ApiFilas = @()
+    foreach ($c in @($script:ApiUltimo)) {
+        foreach ($f in @(Api-Filas $v $c.datos $c.cfg)) {
+            $it = New-Object System.Windows.Forms.ListViewItem("$($c.ncu)")
+            $fila = [ordered]@{NCU = "$($c.ncu)"}
+            foreach ($col in @($v.cols)) {
+                $t = "$($f.($col.t))"
+                [void]$it.SubItems.Add($t)
+                $fila["$($col.t)"] = $t
+            }
+            switch (Api-Gravedad $v $f) {
+                'mal'   { $it.ForeColor = [System.Drawing.Color]::Firebrick }
+                'aviso' { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
+                'bien'  { $it.ForeColor = [System.Drawing.Color]::DarkGreen }
+                'gris'  { $it.ForeColor = [System.Drawing.Color]::Gray }
+            }
+            [void]$lvPAN.Items.Add($it)
+            $script:ApiFilas += ,[pscustomobject]$fila
+        }
+    }
+    Lv-Sincronizar $lvPAN
+    $btnPANCsv.Enabled = (@($script:ApiFilas).Count -gt 0)
+    # los de configuracion, solo con UNA NCU leida: estos cambian cosas y no se
+    # mandan a ciegas a varias a la vez
+    $uno = (@($script:ApiUltimo).Count -eq 1)
+    foreach ($b in @($btnPANCopia, $btnPANComparar, $btnPANMeter, $btnPANSacar, $btnPANReiniciar, $btnPANMacs, $btnPANHsuCfg, $btnPANAjustar)) { $b.Enabled = $uno }
+}
+
+$cbPANVista.Add_SelectedIndexChanged({ if (@($script:ApiUltimo).Count -gt 0) { Api-Pintar } })
+
+$btnPANLeer.Add_Click({ Lanzar {
+    $usuario = "$($txtPANUser.Text)".Trim()
+    $clave   = "$($txtPANPass.Text)"
+    if ($usuario -eq '' -or $clave -eq '') {
+        Con 'El panel de la NCU pide usuario y contrasena: los mismos con los que se entra a su pagina. No se guardan.' ([System.Drawing.Color]::Orange)
+        return
+    }
+    $cx = Params-Conexion
+    $trabajos = @(Trabajos-Planta $cx $null (Ncus-Filtro))
+    if ($trabajos.Count -eq 0) { Con 'La seleccion no deja ninguna NCU.' ([System.Drawing.Color]::Orange); return }
+    $script:ApiUltimo = @(); $lvPAN.Items.Clear(); $lblPANRes.Text = ''
+    $btnPANCsv.Enabled = $false; Sellar 'panelncu'
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Panel web de $($trabajos.Count) NCU(s) por HTTP:${API_PUERTO}. Solo lectura: un login y un volcado por NCU." ([System.Drawing.Color]::SteelBlue)
+    Prog-Iniciar $trabajos.Count
+    $nOk = 0; $nMal = 0
+    foreach ($tr in $trabajos) {
+        if (Chequear-Cancelado) { break }
+        $script:NcuLog = "$($tr.ncu)"
+        $e = Api-Entrar "$($tr.ip)" $usuario $clave $tr.cx.to
+        if (-not $e.ok) {
+            $nMal++
+            Con ("NCU{0,-3} {1,-15} {2}" -f $tr.ncu, $tr.ip, $e.nota) ([System.Drawing.Color]::Orange)
+            Prog-Paso; [System.Windows.Forms.Application]::DoEvents(); continue
+        }
+        $l = Api-Leer "$($tr.ip)" $e.sesion $tr.cx.to
+        if (-not $l.ok) {
+            $nMal++
+            Con ("NCU{0,-3} {1,-15} {2}" -f $tr.ncu, $tr.ip, $l.nota) ([System.Drawing.Color]::Orange)
+            Prog-Paso; [System.Windows.Forms.Application]::DoEvents(); continue
+        }
+        $nOk++
+        $script:ApiUltimo += ,@{ncu = "$($tr.ncu)"; ip = "$($tr.ip)"; cuando = (Get-Date)
+                                datos = $l.datos; cfg = $l.datos.config_data.config}
+        # lo que importa del volcado, en una linea, sin tener que cambiar de vista
+        $rs = Api-Resumen $l.datos
+        $av = @(Api-Avisos $l.datos $l.datos.config_data.config)
+        Con ("NCU{0,-3} {1,-15} {2,-9} escritura Modbus {3,-9} {4} grupo(s), {5} aviso(s)" -f `
+                $tr.ncu, $tr.ip, $rs.FW, $rs.Escritura_modbus,
+                @(Api-Grupos $l.datos.config_data.config).Count, $av.Count) ([System.Drawing.Color]::Gray)
+        foreach ($a in $av) {
+            Con ("NCU{0,-3} {1}: {2}" -f $tr.ncu, $a.Que, $a.Detalle) ([System.Drawing.Color]::Orange)
+        }
+        Prog-Paso
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    $script:NcuLog = ''
+    # la contrasena no se queda en una variable del script ni un segundo mas de
+    # lo que hace falta: la caja la sigue teniendo, el resto no
+    $clave = $null
+    Api-Pintar
+    $lblPANRes.Text = "NCUs leidas: $nOk" + $(if ($nMal -gt 0) { "   |   sin leer: $nMal" } else { '' }) +
+                      $(if ($nOk -gt 0) { "   |   volcado de las $((Get-Date).ToString('HH:mm:ss'))" } else { '' })
+    Con "Panel web: $nOk NCU(s) leidas, $nMal sin leer." ([System.Drawing.Color]::SteelBlue)
+    if ($nOk -gt 0) { Con 'Con esto la pestana Grupos ya dice a cuantos seguidores va cada orden y cuales son.' ([System.Drawing.Color]::SteelBlue) }
+} })
+
+
+# ---- la configuracion: copia, comparacion y cambio ----
+# EL ORDEN NO ES NEGOCIABLE, y es lo que hace que esto se pueda usar en una
+# planta: copia -> diferencias -> guarda -> confirmar enseñando TODO -> mandar
+# -> releer y comparar. Saltarse cualquiera de los seis deja una NCU en la que
+# no se sabe que hay.
+function Api-UnaNcu {
+    $c = @($script:ApiUltimo)
+    if ($c.Count -eq 0) { Con 'Primero hay que leer el panel.' ([System.Drawing.Color]::Orange); return $null }
+    if ($c.Count -gt 1) {
+        Con "Hay $($c.Count) NCUs leidas y esto va de una en una: deja una sola en el cuadro NCUs y vuelve a leer." ([System.Drawing.Color]::Orange)
+        return $null
+    }
+    return $c[0]
+}
+
+function Api-GuardarCopia($n, [string]$que) {
+    $doc = [pscustomobject]@{
+        tipo = 'config_ncu'; planta = "$($cbPlanta.Text)"; ncu = "$($n.ncu)"; ip = "$($n.ip)"
+        panel = "$($n.datos.version)"; cuando = (Get-Date).ToString('s'); motivo = "$que"
+        toolbox = $VERSION_TOOLBOX; config = $n.cfg
+    }
+    return (Exportar-Json $doc "config_ncu$($n.ncu)" 'Configuracion de la NCU' $API_COPIA_PROF -bloque 'panelncu')
+}
+
+$btnPANCopia.Add_Click({ Lanzar {
+    $n = Api-UnaNcu; if ($null -eq $n) { return }
+    $f = Api-GuardarCopia $n 'copia a mano'
+    if ("$f" -ne '') { Con "Configuracion de la NCU $($n.ncu) guardada en $f" ([System.Drawing.Color]::SteelBlue) }
+} })
+
+$btnPANComparar.Add_Click({ Lanzar {
+    $n = Api-UnaNcu; if ($null -eq $n) { return }
+    $d = New-Object System.Windows.Forms.OpenFileDialog
+    $d.Filter = 'Configuracion de NCU (*.json)|*.json'
+    if ($d.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
+    try { $doc = Get-Content $d.FileName -Raw | ConvertFrom-Json } catch { Con "No se puede leer ese fichero: $($_.Exception.Message)" ([System.Drawing.Color]::Firebrick); return }
+    $viejo = $(if ($doc.config) { $doc.config } else { $doc })
+    if ($null -eq $viejo.tracker_groups) { Con 'Ese JSON no parece una configuracion de NCU: no trae tracker_groups.' ([System.Drawing.Color]::Orange); return }
+    if ($doc.ncu -and "$($doc.ncu)" -ne "$($n.ncu)") {
+        Con "OJO: esa copia es de la NCU $($doc.ncu) y lo leido es de la $($n.ncu). Se compara igual, pero casi todo saldra distinto." ([System.Drawing.Color]::Orange)
+    }
+    $difs = @(Api-Diferencias $viejo $n.cfg)
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Copia de $(if ($doc.cuando) { $doc.cuando } else { 'fecha desconocida' })  ->  NCU $($n.ncu) leida ahora" ([System.Drawing.Color]::SteelBlue)
+    if ($difs.Count -eq 0) {
+        Con 'La configuracion es IDENTICA: no ha cambiado nada.' ([System.Drawing.Color]::DarkGreen)
+    } else {
+        Con "$($difs.Count) diferencia(s):" ([System.Drawing.Color]::DarkOrange)
+        foreach ($x in $difs) { Con ("  {0,-54} {1}  ->  {2}" -f $x.Ruta, $x.Antes, $x.Ahora) ([System.Drawing.Color]::DarkOrange) }
+    }
+    Lv-Columnas $lvPAN @(@{t='Ruta';w=420}, @{t='En la copia';w=230}, @{t='En la NCU ahora';w=230})
+    $lvPAN.Items.Clear(); $script:ApiFilas = @()
+    foreach ($x in $difs) {
+        $it = New-Object System.Windows.Forms.ListViewItem("$($x.Ruta)")
+        [void]$it.SubItems.Add("$($x.Antes)"); [void]$it.SubItems.Add("$($x.Ahora)")
+        $it.ForeColor = [System.Drawing.Color]::DarkOrange
+        [void]$lvPAN.Items.Add($it)
+        $script:ApiFilas += ,[pscustomobject]@{NCU = "$($n.ncu)"; Ruta = "$($x.Ruta)"; En_la_copia = "$($x.Antes)"; En_la_NCU = "$($x.Ahora)"}
+    }
+    Lv-Sincronizar $lvPAN
+    $btnPANCsv.Enabled = ($script:ApiFilas.Count -gt 0)
+} })
+
+function Api-AplicarCambio($n, $r, [string]$que) {
+    if (-not $r.ok) { Con $r.nota ([System.Drawing.Color]::Orange); return }
+    if ("$($r.nota)" -ne '') { Con $r.nota ([System.Drawing.Color]::DarkOrange) }
+
+    # LA GUARDA, antes que nada: que lo que se va a mandar no toque mas de lo
+    # que este cambio dijo que iba a tocar, y que la red no este ahi ni de lejos
+    $s = Api-CambioSeguro $n.cfg $r.cfg $r.permitidas
+    if (-not $s.ok) {
+        Con "NO SE MANDA: $($s.nota)" ([System.Drawing.Color]::Firebrick)
+        foreach ($x in @($s.fuera)) { Con ("  fuera de lo pedido: {0}   {1} -> {2}" -f $x.Ruta, $x.Antes, $x.Ahora) ([System.Drawing.Color]::Firebrick) }
+        return
+    }
+    # la copia va ANTES de preguntar, no despues de aceptar: si algo sale mal a
+    # partir de aqui, ya existe
+    $copia = Api-GuardarCopia $n "antes de: $que"
+    if ("$copia" -eq '') { Con 'No se ha podido guardar la copia de seguridad, asi que no se manda nada.' ([System.Drawing.Color]::Firebrick); return }
+    Con "Copia previa en $copia" ([System.Drawing.Color]::SteelBlue)
+
+    $resp = [System.Windows.Forms.MessageBox]::Show((Api-TextoCambio "$($n.ncu)" $que $s.difs "$copia"),
+                'Cambiar la configuracion de la NCU', 'YesNo', 'Warning')
+    if ($resp -ne [System.Windows.Forms.DialogResult]::Yes) { Con 'Cancelado.' ([System.Drawing.Color]::Gray); return }
+
+    $usuario = "$($txtPANUser.Text)".Trim(); $clave = "$($txtPANPass.Text)"
+    if ($usuario -eq '' -or $clave -eq '') { Con 'Hacen falta el usuario y la contrasena del panel.' ([System.Drawing.Color]::Orange); return }
+    $cx = Params-Conexion
+    $e = Api-Entrar "$($n.ip)" $usuario $clave $cx.to
+    if (-not $e.ok) { Con $e.nota ([System.Drawing.Color]::Firebrick); return }
+    $w = Api-Escribir "$($n.ip)" $e.sesion $r.cfg $cx.to
+    $clave = $null
+    if (-not $w.ok) { Con $w.nota ([System.Drawing.Color]::Firebrick); return }
+
+    # Y SE RELEE. Que la NCU conteste bien a la escritura no quiere decir que la
+    # haya aplicado -eso ya se sabe del "Allow writing" del Modbus-, asi que lo
+    # que vale es volver a leer y comparar.
+    #
+    # ENTRANDO OTRA VEZ, y conviene decir por que con precision. En el DevTools
+    # de la propia pagina se ve que al guardar la configuracion RECARGA y vuelve
+    # a pasar por /private_api/auth; ese auth es un GET que devuelve 200, o sea
+    # una COMPROBACION de sesion, no un login nuevo: con el firmware v1.17.1 la
+    # sesion SOBREVIVE al guardado. Asi que esto no arregla un problema visto,
+    # es un seguro barato -una peticion- contra que otra version se comporte
+    # distinto. Si la sesion siguiera valiendo, el login de mas no estorba; si
+    # no valiese, sin esto diriamos "se mando pero no se ha podido comprobar"
+    # sin que pase nada, y eso cuesta un viaje a la planta.
+    $e2 = Api-Entrar "$($n.ip)" $usuario $clave $cx.to
+    $ses = $(if ($e2.ok) { $e2.sesion } else { $e.sesion })
+    $l = Api-Leer "$($n.ip)" $ses $cx.to
+    if (-not $l.ok) { Con "Se mando, pero no se ha podido releer para comprobarlo: $($l.nota)" ([System.Drawing.Color]::Orange); return }
+    $quedan = @(Api-Diferencias $r.cfg $l.datos.config_data.config)
+    $script:ApiUltimo = @(,@{ncu = "$($n.ncu)"; ip = "$($n.ip)"; cuando = (Get-Date)
+                             datos = $l.datos; cfg = $l.datos.config_data.config})
+    Api-Pintar
+    if ($quedan.Count -eq 0) {
+        Con "HECHO y comprobado releyendo: la NCU $($n.ncu) tiene lo que se le mando." ([System.Drawing.Color]::DarkGreen)
+    } else {
+        Con "OJO: se mando, pero al releer NO coincide en $($quedan.Count) cosa(s). La NCU no lo ha tomado entero:" ([System.Drawing.Color]::Firebrick)
+        foreach ($x in $quedan) { Con ("  {0}   se mando {1}, tiene {2}" -f $x.Ruta, $x.Antes, $x.Ahora) ([System.Drawing.Color]::Firebrick) }
+        Con "La copia de antes esta en $copia" ([System.Drawing.Color]::Firebrick)
+    }
+}
+
+$btnPANMeter.Add_Click({ Lanzar {
+    $n = Api-UnaNcu; if ($null -eq $n) { return }
+    $g = 0; if (-not [int]::TryParse("$($txtPANGrupo.Text)".Trim(), [ref]$g)) { Con 'Pon el numero de grupo.' ([System.Drawing.Color]::Orange); return }
+    $t = @(Parse-ListaNums "$($txtPANTcus.Text)")
+    Api-AplicarCambio $n (Api-GrupoEditar $n.cfg $g $t $true) "Meter en el grupo $g los seguidores: $(Api-Rango $t)"
+} })
+
+$btnPANSacar.Add_Click({ Lanzar {
+    $n = Api-UnaNcu; if ($null -eq $n) { return }
+    $g = 0; if (-not [int]::TryParse("$($txtPANGrupo.Text)".Trim(), [ref]$g)) { Con 'Pon el numero de grupo.' ([System.Drawing.Color]::Orange); return }
+    $t = @(Parse-ListaNums "$($txtPANTcus.Text)")
+    Api-AplicarCambio $n (Api-GrupoEditar $n.cfg $g $t $false) "SACAR del grupo $g los seguidores: $(Api-Rango $t)"
+} })
+
+# Al elegir campo, el cuadro se rellena con LO QUE LA NCU LLEVA PUESTO AHORA.
+# Asi el tecnico ve el valor actual antes de escribir encima -que es media
+# pregunta de "como lo cambio"- y no tiene que irse a la pagina a mirarlo.
+# Si no hay una sola NCU leida, se deja en blanco y no se inventa nada.
+$cbPANAjuste.Add_SelectedIndexChanged({
+    $campo = @($API_AJUSTES.Keys)[$cbPANAjuste.SelectedIndex]
+    $txtPANValor.Text = ''
+    $n = @($script:ApiUltimo)
+    if ($n.Count -ne 1 -or $null -eq $n[0].cfg) { return }
+    $prop = $n[0].cfg.PSObject.Properties[$campo]
+    if ($null -eq $prop) { return }
+    if ("$($API_AJUSTES[$campo].tipo)" -eq 'bool') {
+        $txtPANValor.Text = $(if ([bool]$prop.Value) { 'SI' } else { 'NO' })
+    } else {
+        $txtPANValor.Text = "$($prop.Value)"
+    }
+})
+
+$btnPANAjustar.Add_Click({ Lanzar {
+    $n = Api-UnaNcu; if ($null -eq $n) { return }
+    $campo = @($API_AJUSTES.Keys)[$cbPANAjuste.SelectedIndex]
+    $v = Api-AjusteTexto $campo "$($txtPANValor.Text)"
+    if (-not $v.ok) { Con $v.nota ([System.Drawing.Color]::Orange); return }
+    Api-AplicarCambio $n (Api-Ajuste $n.cfg $campo $v.valor) `
+        "Cambiar $($API_AJUSTES[$campo].que) ($campo) a: $($txtPANValor.Text)"
+} })
+
+$btnPANReiniciar.Add_Click({ Lanzar {
+    $n = Api-UnaNcu; if ($null -eq $n) { return }
+    $usuario = "$($txtPANUser.Text)".Trim(); $clave = "$($txtPANPass.Text)"
+    if ($usuario -eq '' -or $clave -eq '') { Con 'Hacen falta el usuario y la contrasena del panel.' ([System.Drawing.Color]::Orange); return }
+    $cx = Params-Conexion
+
+    # GUARDIA DE VIENTO, y aqui no es una formalidad: dejar la planta sin quien
+    # mande una posicion segura es exactamente lo que no se hace con viento.
+    # Fresca siempre, sin cache: el tecnico acaba de pulsar.
+    $v = Viento-Seguro "$($n.ip)" $cx.to
+    if ($null -ne $v -and ([int]$v.nivel -gt 0 -or $v.alarma)) {
+        Con "NO se reinicia: hay viento (nivel $($v.nivel)$(if ($v.alarma) { ', CON ALARMA' })). Mientras la NCU este abajo nadie puede mandar una posicion segura." ([System.Drawing.Color]::Firebrick)
+        return
+    }
+    if ($null -eq $v) { Con 'No se ha podido leer el viento: se avisa en la ventana y decides tu.' ([System.Drawing.Color]::Orange) }
+
+    $nT = 0
+    foreach ($red in @($n.cfg.modbus_networks)) { $nT += @($red.trackers).Count }
+    $resp = [System.Windows.Forms.MessageBox]::Show((Api-TextoReinicio "$($n.ncu)" $nT $v),
+                'Reiniciar la NCU', 'YesNo', 'Warning')
+    if ($resp -ne [System.Windows.Forms.DialogResult]::Yes) { Con 'Cancelado.' ([System.Drawing.Color]::Gray); return }
+
+    # la copia tambien aqui: es gratis y es justo cuando se quiere tener
+    [void](Api-GuardarCopia $n 'antes de reiniciar')
+    $antes = [double]$n.datos.uptime
+    $e = Api-Entrar "$($n.ip)" $usuario $clave $cx.to
+    if (-not $e.ok) { Con $e.nota ([System.Drawing.Color]::Firebrick); return }
+    $r = Api-Reiniciar "$($n.ip)" $e.sesion $cx.to
+    if (-not $r.ok) { Con $r.nota ([System.Drawing.Color]::Firebrick); $clave = $null; return }
+    if ("$($r.nota)" -ne '') { Con $r.nota ([System.Drawing.Color]::Gray) }
+    Con "Mandado. Esperando a que la NCU $($n.ncu) vuelva (hasta $API_REINICIO_ESPERA_S s)..." ([System.Drawing.Color]::SteelBlue)
+
+    $t0 = Get-Date; $vuelta = $null
+    while (((Get-Date) - $t0).TotalSeconds -lt $API_REINICIO_ESPERA_S) {
+        Start-Sleep -Seconds $API_REINICIO_PASO_S
+        [System.Windows.Forms.Application]::DoEvents()
+        if (Chequear-Cancelado) { break }
+        $e2 = Api-Entrar "$($n.ip)" $usuario $clave $cx.to
+        if (-not $e2.ok) { continue }
+        $l2 = Api-Leer "$($n.ip)" $e2.sesion $cx.to
+        if ($l2.ok) { $vuelta = $l2.datos; break }
+    }
+    $clave = $null
+    $segs = [int]((Get-Date) - $t0).TotalSeconds
+    $ver = Api-Reinicio-Volvio $antes $(if ($null -eq $vuelta) { $null } else { $vuelta.uptime })
+    if ($ver.ok) {
+        $script:ApiUltimo = @(,@{ncu = "$($n.ncu)"; ip = "$($n.ip)"; cuando = (Get-Date)
+                                 datos = $vuelta; cfg = $vuelta.config_data.config})
+        Api-Pintar
+        Con "NCU $($n.ncu): $($ver.nota). Tardo $segs s." ([System.Drawing.Color]::DarkGreen)
+    } else {
+        $color = $(if ($ver.tarda) { [System.Drawing.Color]::DarkOrange } else { [System.Drawing.Color]::Firebrick })
+        Con "NCU $($n.ncu): $($ver.nota) (tras $segs s)." $color
+        if (-not $ver.tarda) { Con 'Compruebala antes de irte.' ([System.Drawing.Color]::Firebrick) }
+    }
+} })
+
+$btnPANMacs.Add_Click({ Lanzar {
+    $n = Api-UnaNcu; if ($null -eq $n) { return }
+    $usuario = "$($txtPANUser.Text)".Trim(); $clave = "$($txtPANPass.Text)"
+    if ($usuario -eq '' -or $clave -eq '') { Con 'Hacen falta el usuario y la contrasena del panel.' ([System.Drawing.Color]::Orange); return }
+    $cx = Params-Conexion
+    $e = Api-Entrar "$($n.ip)" $usuario $clave $cx.to
+    $clave = $null
+    if (-not $e.ok) { Con $e.nota ([System.Drawing.Color]::Firebrick); return }
+    $h = Api-LeerMacs "$($n.ip)" $e.sesion $cx.to
+    if (-not $h.ok) { Con $h.nota ([System.Drawing.Color]::Firebrick); return }
+    $filas = @(Api-MacsParsear $h.texto)
+    if ($filas.Count -eq 0) { Con 'El historico de MAC vino vacio o con otro formato del esperado.' ([System.Drawing.Color]::Orange); return }
+
+    $res = @(Api-MacsResumen $filas)
+    $pm  = @(Api-MacsPorMac $filas)
+    $car = @(Api-MacsCareo $res $script:UltimoInv)
+
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Historico de MAC de la NCU $($n.ncu): $($filas.Count) apuntes, $($res.Count) esclavos." ([System.Drawing.Color]::SteelBlue)
+    foreach ($x in @($res | Where-Object { "$($_.Nota)" -ne '' })) {
+        Con ("  TCU {0,-5} {1}" -f $x.TCU, $x.Nota) ([System.Drawing.Color]::DarkOrange)
+    }
+    foreach ($x in $pm) {
+        Con ("  MISMO APARATO  {0}  esclavos {1}" -f $x.MAC, $x.Esclavos) ([System.Drawing.Color]::DarkOrange)
+    }
+    if ($car.Count -gt 0) {
+        foreach ($x in $car) { Con ("  NO CUADRA  TCU {0}: la NCU vio {1}, el equipo lleva {2}" -f $x.TCU, $x.En_la_NCU, $x.En_el_equipo) ([System.Drawing.Color]::Firebrick) }
+    } elseif (@($script:UltimoInv).Count -eq 0) {
+        Con '  (sin careo con el inventario: no se ha hecho ninguno en esta sesion)' ([System.Drawing.Color]::Gray)
+    }
+
+    Lv-Columnas $lvPAN @(@{t='NCU';w=45}, @{t='TCU';w=55}, @{t='MACs';w=50}, @{t='Gateways';w=80},
+                        @{t='Primera';w=140}, @{t='Ultima';w=140}, @{t='MAC_actual';w=150}, @{t='Nota';w=260})
+    $lvPAN.Items.Clear(); $script:ApiFilas = @()
+    foreach ($x in $res) {
+        $it = New-Object System.Windows.Forms.ListViewItem("$($n.ncu)")
+        foreach ($c in @($x.TCU, $x.MACs, $x.Gateways, $x.Primera, $x.Ultima, $x.MAC_actual, $x.Nota)) { [void]$it.SubItems.Add("$c") }
+        if ("$($x.Nota)" -ne '') { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
+        [void]$lvPAN.Items.Add($it)
+        $script:ApiFilas += ,[pscustomobject]@{NCU = "$($n.ncu)"; TCU = $x.TCU; MACs = $x.MACs; Gateways = "$($x.Gateways)"
+                                               Primera = "$($x.Primera)"; Ultima = "$($x.Ultima)"
+                                               MAC_actual = "$($x.MAC_actual)"; Nota = "$($x.Nota)"}
+    }
+    Lv-Sincronizar $lvPAN
+    $btnPANCsv.Enabled = ($script:ApiFilas.Count -gt 0)
+} })
+
+$btnPANHsuCfg.Add_Click({ Lanzar {
+    $n = Api-UnaNcu; if ($null -eq $n) { return }
+    $usuario = "$($txtPANUser.Text)".Trim(); $clave = "$($txtPANPass.Text)"
+    if ($usuario -eq '' -or $clave -eq '') { Con 'Hacen falta el usuario y la contrasena del panel.' ([System.Drawing.Color]::Orange); return }
+    $cx = Params-Conexion
+    $e = Api-Entrar "$($n.ip)" $usuario $clave $cx.to
+    $clave = $null
+    if (-not $e.ok) { Con $e.nota ([System.Drawing.Color]::Firebrick); return }
+    $h = Api-LeerHsuCfg "$($n.ip)" $e.sesion $cx.to
+    if (-not $h.ok) { Con $h.nota ([System.Drawing.Color]::Orange); return }
+
+    $filas = @(Api-Aplanar $h.datos)
+    $sens = @(Api-HsuSensores $filas)
+    Con ('=' * 96) ([System.Drawing.Color]::SteelBlue)
+    Con "Configuracion de la HSU interna de la NCU $($n.ncu): $($filas.Count) campos." ([System.Drawing.Color]::SteelBlue)
+    foreach ($x in $sens) {
+        $c = $(if ("$($x.Estado)" -eq 'SI') { [System.Drawing.Color]::DarkGreen }
+               elseif ("$($x.Estado)" -eq 'no aparece') { [System.Drawing.Color]::Gray }
+               else { [System.Drawing.Color]::DimGray })
+        Con ("  {0,-24} {1,-16} {2}" -f $x.Sensor, $x.Estado, $x.Nota) $c
+    }
+
+    Lv-Columnas $lvPAN @(@{t='NCU';w=45}, @{t='Campo';w=420}, @{t='Valor';w=420})
+    $lvPAN.Items.Clear(); $script:ApiFilas = @()
+    foreach ($x in $filas) {
+        $it = New-Object System.Windows.Forms.ListViewItem("$($n.ncu)")
+        [void]$it.SubItems.Add("$($x.Ruta)"); [void]$it.SubItems.Add("$($x.Valor)")
+        [void]$lvPAN.Items.Add($it)
+        $script:ApiFilas += ,[pscustomobject]@{NCU = "$($n.ncu)"; Campo = "$($x.Ruta)"; Valor = "$($x.Valor)"}
+    }
+    Lv-Sincronizar $lvPAN
+    $btnPANCsv.Enabled = ($script:ApiFilas.Count -gt 0)
+    Con 'Se ensena tal cual lo da la NCU: los nombres de campo son suyos. Si quieres que esto tenga una vista con nombres y unidades, pasame este volcado.' ([System.Drawing.Color]::Gray)
+} })
+
+$btnPANCsv.Add_Click({
+    if (@($script:ApiFilas).Count -eq 0) { return }
+    $v = "$($cbPANVista.SelectedItem)" -replace '[^A-Za-z0-9]', '_'
+    [void](Exportar-Csv $script:ApiFilas "panel_ncu_$($v.ToLower())" "Panel NCU - $($cbPANVista.SelectedItem)" -bloque 'panelncu')
+})
+
 
 $btnNCsv.Add_Click({
     if (@($script:UltimoComm).Count -eq 0) { return }
@@ -16398,6 +18778,13 @@ Con 'INFORME HTML: volcado de la sesion (diagnostico, PEM, auditoria, inventario
 Con 'Escritura masiva (>3 TCUs): se crea antes un rollback en backups/ restaurable con "CSV por TCU...".' ([System.Drawing.Color]::Gainsboro)
 Con 'PEM > SEGUIMIENTO JSON: exporta la ficha de seguimiento (comisionado + auditoria + motor) para subirla al Historico de la plataforma.' ([System.Drawing.Color]::Gainsboro)
 foreach ($m in $script:MsgsInicio) { Con $m ([System.Drawing.Color]::SteelBlue) }
+# el reparto de tiempos del arranque hasta aqui; la ventana visible se dice en Shown
+$script:T_consola = Get-Date
+Con (Arranque-Texto (Arranque-DesdeBat "$env:TOOLBOX_T0" $script:T_arranque) `
+        ([math]::Round(($script:T_winforms - $script:T_arranque).TotalSeconds, 2)) `
+        ([math]::Round(($script:T_plantas - $script:T_winforms).TotalSeconds, 2)) `
+        ([math]::Round(($script:T_logica - $script:T_plantas).TotalSeconds, 2)) `
+        ([math]::Round(($script:T_consola - $script:T_logica).TotalSeconds, 2))) ([System.Drawing.Color]::Gray)
 if ($PLANTAS.Count -le 1) {
     Con 'Sin plantas cargadas: usa el boton Cargar... (o copia los JSON de la plataforma en la subcarpeta plantas/).' ([System.Drawing.Color]::Orange)
 }
@@ -17324,12 +19711,16 @@ $NAV_ARBOL = @(
     @{bloque = 'NCU'; hojas = @(
         @{txt='Diagnóstico propio'; tab=$tabND}
         @{txt='Grupos';             tab=$tabGR}
+        @{txt='Panel web';          tab=$tabPAN}
         @{txt='Leer variable';      tab=$tabNcuLeer}
         @{txt='Escribir variable';  tab=$tabNcuEscribir}
         @{txt='Comm esclavos';      tab=$tabN}
         @{txt='Estabilidad';        tab=$tabE}
         @{txt='Auditoría';          tab=$tabAN}
         @{txt='Firmware';           tab=$tabFN})}
+    @{bloque = 'GATEWAYS'; hojas = @(
+        @{txt='Diagnóstico';             tab=$tabG; vista='GW'}
+        @{txt='Identificar / reiniciar'; tab=$tabIG})}
     @{bloque = 'HSU'; hojas = @(
         @{txt='Diagnóstico';        tab=$tabG; vista='HSU'}
         @{txt='Auditoría';          tab=$tabAH}
@@ -17426,7 +19817,7 @@ if ($nav.Nodes.Count -gt 0 -and $nav.Nodes[0].Nodes.Count -gt 0) { $nav.Selected
 
 # Todas las tablas de resultados filtran y ordenan al pulsar su cabecera.
 foreach ($tabla in @($lvL, $lvD, $lvG, $lvA, $lvV, $lvP, $lvFW, $lvFWd, $lvSat, $lvND, $lvH, $lvN, $lvE, $lvI, $lvC, $lvB, $lvT,
-                     $lvAN, $lvFN, $lvAH, $lvFH, $lvRA, $lvRF, $lvRB, $lvIG, $lvBA, $lvGR, $lvSECR, $lvLIM)) { Lv-Filtrable $tabla }
+                     $lvAN, $lvFN, $lvAH, $lvFH, $lvRA, $lvRF, $lvRB, $lvIG, $lvBA, $lvGR, $lvSECR, $lvLIM, $lvPAN)) { Lv-Filtrable $tabla }
 
 # La cabecera de pestanas no se puede ocultar con una propiedad: no existe. Lo
 # que si se puede es sacarla fuera del panel, que recorta lo que se sale. La
@@ -17463,7 +19854,6 @@ $form.Controls.Add($txtNav);$ttW.SetToolTip($txtNav,'Filtrar funciones por nombr
 $lblVista=New-Object Windows.Forms.Label
 $lblVista.Font=New-Object Drawing.Font('Segoe UI',12,[Drawing.FontStyle]::Bold)
 $lblVista.AutoEllipsis=$true;$lblVista.TextAlign='MiddleLeft';$form.Controls.Add($lblVista)
-$nav.ItemHeight=24;$nav.ShowPlusMinus=$true;$nav.BorderStyle='None'
 $txtNav.Add_TextChanged({Nav-Filtrar})
 function Nav-Filtrar {
     $consulta=Buscar-Norm $txtNav.Text
@@ -17517,12 +19907,12 @@ $accionesDetalle=New-Object Windows.Forms.FlowLayoutPanel
 $accionesDetalle.AutoSize=$true;$accionesDetalle.Dock='Fill';$accionesDetalle.FlowDirection='TopDown';$accionesDetalle.WrapContents=$false
 $detalleLayout.Controls.Add($accionesDetalle)
 $script:BotonesDetalle=@()
-foreach($accion in @('Leer variables','Configurar variables','Copia de seguridad','Modo / alarmas / stow','Receta secuencial','Diagnostico NCU','Estaciones meteo','Historico CSV')){
+foreach($accion in @('Leer variables','Configurar variables','Copia de seguridad','Modo / alarmas / stow','Receta secuencial','Diagnostico NCU','Estaciones meteo','Historico CSV','Identificar gateway','Reiniciar gateway')){
     $b=New-Object Windows.Forms.Button;$b.Text=$accion;$b.Tag=$accion;$b.Width=216;$b.Height=28;$b.FlatStyle='Flat'
     $b.Add_Click({param($s,$e)
         if($script:Ocupado -or $lvG.SelectedItems.Count -ne 1){return}
         $tag=$lvG.SelectedItems[0].Tag
-        try{if(-not $tag.trabajos){throw 'Repite el diagnóstico para recuperar el alcance de conexión.'};$destino=Diag-Objetivo $tag.fila $tag.trabajos;if($s.Tag -eq 'Historico CSV'){Hist-Abrir $tag}else{Diag-PrepararAccion $destino $s.Tag}}
+        try{if(-not $tag.trabajos){throw 'Repite el diagnóstico para recuperar el alcance de conexión.'};$destino=Diag-Objetivo $tag.fila $tag.trabajos;if($s.Tag -eq 'Historico CSV'){Hist-Abrir $tag}elseif(Diag-AccionGw $tag.fila $destino $s.Tag){}else{Diag-PrepararAccion $destino $s.Tag}}
         catch{$txtDetalle.AppendText("`r`n$_")}
     })
     $accionesDetalle.Controls.Add($b);$script:BotonesDetalle+=,$b
@@ -17541,7 +19931,7 @@ function Diag-Detalle {
         $destino=Diag-Objetivo $fila $tag.trabajos
         $acciones=@('Diagnostico NCU','Estaciones meteo')
         if($destino.tipo -eq 'TCU'){$acciones=@('Leer variables','Configurar variables','Copia de seguridad','Modo / alarmas / stow','Receta secuencial')}
-        $acciones+=@('Historico CSV')
+        if($destino.tipo -eq 'GW'){$acciones=@('Identificar gateway','Reiniciar gateway')} else {$acciones+=@('Historico CSV')}
         foreach($b in $script:BotonesDetalle){$b.Visible=$acciones -contains $b.Tag}
     }catch{$txtDetalle.AppendText("`r`n`r`n$_")}
 }
@@ -17603,6 +19993,9 @@ $form.Add_Shown({
         # lo ultimo: Layout-Rescatar mide contenedores y esto deja el TabControl
         # a proposito fuera del suyo
         Nav-OcultarCabecera
+        $desdeBat = Arranque-DesdeBat "$env:TOOLBOX_T0" $script:T_arranque
+        $total = [math]::Round(((Get-Date) - $script:T_arranque).TotalSeconds + $(if ($null -ne $desdeBat) { $desdeBat } else { 0 }), 1)
+        Con "Ventana lista a los $total s$(if ($null -eq $desdeBat) { ' desde la primera linea del script (sin la hora del .bat)' } else { ' del doble clic' }); el ajuste final de la ventana tardo $([math]::Round(((Get-Date) - $script:T_consola).TotalSeconds, 2)) s." ([System.Drawing.Color]::Gray)
     } catch {
         Con "AVISO: no se pudo ajustar el diseno de la ventana ($_)" ([System.Drawing.Color]::Orange)
     }
@@ -17825,6 +20218,9 @@ Cierre-Cargar (Nombre-Planta)
 Cierre-Pintar
 Cierre-Avisar
 Trabajos-Pintar
+# una sola disposicion, ahora que esta todo construido (ver $form.SuspendLayout)
+$tabs.ResumeLayout($false)
+$form.ResumeLayout($true)
 if($script:ModoDemo){Cliente-Demo}
 [void]$form.ShowDialog()
 Modbus-Cerrar

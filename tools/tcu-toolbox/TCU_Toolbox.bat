@@ -8,6 +8,8 @@ if not exist "%SCRIPT%" (
   pause
   exit /b 1
 )
+REM la hora del doble clic: la herramienta la usa para decir cuanto tardo en arrancar
+set "TOOLBOX_T0=%TIME%"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File "%SCRIPT%"
 if errorlevel 1 (
   echo.

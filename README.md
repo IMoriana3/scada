@@ -79,8 +79,8 @@ El colector clasifica cada TCU en uno de cinco estados, que determinan el color 
 
 | Estado | Color | Significado |
 |---|---|---|
-| `ok` | Verde | Comunica, sin alarmas, ángulo real ≈ objetivo |
-| `warn` | Ámbar | Alarma no crítica, `system_ok`=0, **no está en AUTO**, o desviación >5° entre ángulo real y objetivo |
+| `ok` | Verde | Comunica, sin alarmas, ángulo **medido** ≈ objetivo **y** ≈ el de sus vecinas |
+| `warn` | Ámbar | Alarma no crítica, `system_ok`=0, **no está en AUTO**, desviación >5° entre ángulo **medido** y objetivo, o >3° contra la mediana de sus vecinas de NCU |
 | `alarm` | Rojo | Alarma crítica: eje bloqueado, sobrecorriente de motor, batería crítica, stop, fuera de rango |
 | `offline` | Gris | Sin `lastComm` o antigüedad >5 min |
 | sin datos | Gris claro | El seguidor existe en el plano pero la API no devolvió telemetría suya |
@@ -106,6 +106,59 @@ dice cuál de las condiciones lo explica, así los dos no pueden separarse.
 **Banco:** `python tools/test_health_modo.py` — 17 comprobaciones, con el caso de campo tal cual, el
 mutante (mover el criterio de AUTO devuelve la 14·14 a `ok`) y la medida de cuánto cambia el color de
 flota: **solo los que no están en AUTO**; los que sí, no se mueven.
+
+**«Medido», no «real», y la corrección importa.** Esta tabla decía «ángulo real ≈ objetivo». No hay
+ningún ángulo real en esa comparación: `tilt_angle` es lo que el TCU **mide**, y el lazo se cierra
+sobre esa medida. De ahí sale lo de abajo.
+
+### El residuo contra vecinas: fallo de LAZO y fallo de CONSIGNA
+
+`tilt_angle` y `target_angle` los publica **el mismo equipo**. Comparándolos se mide si el seguidor
+**alcanza** su consigna, y nada sobre si la consigna es la correcta. Esa segunda pregunta estaba sin
+vigilar, y el caso que por eso salía **verde**:
+
+> una TCU con el seguimiento congelado persigue **fielmente** el objetivo de hace tres horas, así que
+> `|tilt − target| ≈ 0` y el mapa la pinta igual que a sus vecinas, que están 17° más allá.
+
+Es la misma forma del fallo del modo de arriba: cuando los dos valores coinciden, silencio.
+
+| residuo | detecta | NO detecta |
+|---|---|---|
+| `tilt_angle` vs `target_angle` | fallo de **lazo**: no llega a su consigna | fallo de **consigna** |
+| `tilt_angle` vs **mediana de sus vecinas** | consigna de otro instante o de otro sitio (seguimiento congelado, reloj o configuración divergente, forzado viejo) | un desajuste común a toda la NCU |
+
+A la misma marca de tiempo, todas las TCU de una NCU persiguen el mismo θ salvo por el terreno. El
+desvío sale como campo `desvio_vecinos` —en InfluxDB, en `/live` y en el visor, junto a la desviación
+de lazo—, porque un ámbar cuyo número no se puede leer obliga a creerse la clasificación.
+
+**Lo que NO ve, y va dicho porque es tentador creer lo contrario:** un **sesgo de calibración del
+encoder**. Si la medida es `m = real + sesgo` y el lazo lleva `m` hasta `T`, entonces `m ≈ T` en
+**todas**, también en la descalibrada: su ángulo *publicado* coincide con el de sus vecinas y lo que
+difiere es el real, que no se publica. **Ningún residuo calculado sobre los datos del equipo puede
+verlo** — es el mismo dato que el lazo ya absorbió. Para eso está el ensayo **D.1.1 del Anexo 4**,
+que pide instrumento externo; esto no lo sustituye.
+
+Tres decisiones con su motivo:
+
+- **Umbral absoluto en grados (3,0°), no una z robusta.** Con vecinas casi idénticas la MAD tiende a
+  cero y una diferencia de 0,01° sale como «3 sigma»: significativo en estadística, irrelevante en
+  campo. Decide la relevancia práctica — cuántos grados justifican coger la furgoneta.
+- **Los 3,0° NO están medidos sobre esta planta.** Son el orden de magnitud que documenta el
+  simulador de planta, no la dispersión por terreno observada aquí. Para fijarlo de verdad hay que
+  medir la dispersión de la propia flota en una ventana sin averías. Mientras no se haga, un terreno
+  quebrado puede dar avisos de más — y por eso es `warn` y nunca `alarm`.
+- **Con menos de cuatro vecinas comparables no se juzga.** Con dos o tres la mediana no es una
+  referencia, es una opinión. Y «comparable» excluye a quien no está siguiendo —parada, sin
+  comunicación, con alarma, `system_ok`=0—: meter a una aparcada en la mediana sería comparar a las
+  sanas contra un parado.
+
+Va **después** de la desviación de lazo a propósito, así que solo puede convertir un `ok` en `warn` y
+no puede cambiar ningún veredicto anterior. Está comprobado como tal.
+
+**Banco:** `python tools/test_health_vecinos.py` — 39 comprobaciones. Seis mutantes, los seis
+verificados aplicados y las seis predicciones clavadas (23 bajas): aflojar el umbral a 30° mata 6,
+quitar la exclusión de sí mismo 3, media en vez de mediana 4, quitar el filtro de comparables 5,
+bajar el mínimo de vecinas a 1 mata 3, y poner el residuo antes del lazo 2.
 
 ### Histórico de eventos
 
@@ -384,7 +437,7 @@ Backend Docker (`tracker-scada.tar.gz`) + frontend de un solo fichero (`index.ht
 | `config/modbus_map.yml` | Mapa de registros (derivado de `NCU_Modbus_Map_R7.xlsx`) |
 | `collector/main.py` | Loop asíncrono por NCU + escritura a InfluxDB |
 | `collector/traffic.py` | Medidor de tráfico: modelo de bytes, contador por ciclo y estimación por planta |
-| `collector/decode.py` | Decodificación U16/S16/F32/U32, bitsets de alarmas y clasificación `health` |
+| `collector/decode.py` | Decodificación U16/S16/F32/U32, bitsets de alarmas, clasificación `health` y el residuo contra vecinas |
 | `collector/drivers/modbus_ncu.py` | Driver Modbus TCP real (solo lectura) |
 | `collector/drivers/simulated.py` | Driver simulado con pvlib |
 | `collector/Dockerfile`, `requirements.txt` | Imagen del colector |
@@ -399,6 +452,7 @@ Backend Docker (`tracker-scada.tar.gz`) + frontend de un solo fichero (`index.ht
 | `tools/gen_trafico.py` | Hornea en `trafico.html` los bytes por ciclo de cada NCU (fuente: el modelo) |
 | `tools/test_trafico.py` | Banco del medidor: modelo de bytes, estimación ≡ medida, line protocol |
 | `tools/test_comms_age.py` | Banco del reloj: la resta NCU−NCU, medida en color de flota |
+| `tools/ncu_simulada.py` | Esclavo Modbus TCP con el mapa real; con `--gemelo`, la planta de `gemelo-digital` |
 | `tools/test_eventos.py` | Banco de eventos: flancos, hora del dato, ámbitos reales |
 | `tools/test_health_modo.py` | Banco del modo en `health`: OFF no puede verse como OK |
 | `tools/test_modbus_map.py` | Banco del mapa: el subconjunto contra el R7 publicado (bloques, offsets, tipos, alarmas) |
@@ -500,6 +554,45 @@ Respuesta de `/live` (resumen):
 - `ncu_status` — alarmas globales de viento/nieve, estado de gateways, UPS.
 - `traffic` — tags: `plant`, `ncu` · fields: `lan_up_b`, `lan_down_b`, `lan_b`, `modbus_tx`, `connections`, `cloud_raw_b`, `cloud_gz_b`, `cloud_points`, `cloud_writes`, `period_s`. Un punto por NCU y ciclo, con el coste de ESE ciclo (no acumulados): la proyección a día/mes la hace `/traffic` sobre el tiempo realmente medido, así un colector parado no infla la cuenta.
 - `meteo` — tags: `ncu`, `hsu` · fields: `wind_speed`, `wind_direction`, `snow_level`, `wind_level`, `alarm_wind`, `alarm_snow`.
+
+### La NCU simulada (`tools/ncu_simulada.py`)
+
+Un **esclavo Modbus TCP de verdad** que sirve el mapa desde el MISMO
+`config/modbus_map.yml` que lee el colector. No es un doble del driver: es un doble
+del **equipo**, así que por delante se le pone el driver de hierro y se recorre el
+camino entero —Modbus, troceado, decode—, que es justo lo que
+`drivers/simulated.py` no toca nunca.
+
+```bash
+python3 tools/ncu_simulada.py --tcus 60 --averias 3   # planta de juguete, sin dependencias
+python3 tools/ncu_simulada.py --autotest              # se lee con el driver real y sale
+```
+
+Con `--gemelo` deja de fabricarse los valores y los saca del motor de planta de
+`gemelo-digital`: jerarquía de posiciones seguras, banda muerta en pulsos,
+inclinómetro descalibrado, seta enclavada y batería con JEITA. La **escritura**
+vuelve por el mismo camino —un FC06/FC16 contra esta NCU entra por la misma puerta
+que usa la interfaz web del simulador—, así que un forzado de posición segura
+escrito desde la toolbox **mueve la planta simulada de verdad**.
+
+```bash
+node sim/servidor.mjs --tcus 200 --puerto 8787        # en el repo gemelo-digital
+python3 tools/ncu_simulada.py --gemelo http://127.0.0.1:8787 --autotest
+```
+
+Ese `--autotest` con gemelo comprueba lo que **sólo se puede comprobar con un motor
+detrás**, y las tres cosas se midieron al rescatarlo (3-oct-2026, 19 de 19):
+
+- que el **mismo ángulo** sale igual por el bloque compacto de la NCU (f32 en
+  radianes, 30500+) y por el mapa propio del TCU (s16 en grados×10, 30111) — medido
+  −5,07° contra −5,00°, y la diferencia es la **cuantización** del segundo, no un
+  error de conversión;
+- que una **orden escrita por Modbus llega hasta la planta** — 100 TCU pasaron a
+  posición segura 1 con un FC06 a 40001;
+- que un registro de **sólo lectura se rechaza con excepción 02**.
+
+Es ESCRITURA SOBRE UNA NCU SIMULADA: simulación y banco de pruebas, **nunca control
+real**.
 
 ### Mapa Modbus (`config/modbus_map.yml`)
 

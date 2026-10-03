@@ -83,7 +83,14 @@ def test_estimacion_vs_driver():
         mmap = yaml.safe_load(f)
     from drivers.simulated import SimulatedNCUDriver
 
-    ncu = {"id": "NCU1", "tcu_count": 108, "hsu_count": 2}
+    # `tcu_ids` y no solo `tcu_count`: los drivers leen la lista de bindings
+    # comisionados —`tcu_count` es metadato heredado— y `load_cfg()` la inyecta
+    # desde el inventario. Este banco no pasa por `load_cfg()`, así que la pone
+    # él, como ya hacían `test_comms_age` y `test_historical_milestone`. Sin
+    # ella reventaba con `KeyError: 'tcu_ids'`, y llevaba así sin que nadie se
+    # enterase porque la CI no lo corría: el fichero de al lado es el arreglo
+    # de eso.
+    ncu = {"id": "NCU1", "tcu_ids": list(range(1, 109)), "tcu_count": 108, "hsu_count": 2}
     m = T.TrafficMeter()
     drv = SimulatedNCUDriver(ncu, mmap, "big", meter=m, max_regs=110)
 
@@ -118,7 +125,8 @@ def test_hsu_externa_estimacion_vs_driver():
         mmap = yaml.safe_load(f)
     from drivers.simulated import SimulatedNCUDriver
 
-    ncu = {"id": "NCU2", "tcu_count": 45, "hsu_count": 2, "hsu_ext_count": 1}
+    ncu = {"id": "NCU2", "tcu_ids": list(range(1, 46)), "tcu_count": 45,
+           "hsu_count": 2, "hsu_ext_count": 1}
     m = T.TrafficMeter()
     drv = SimulatedNCUDriver(ncu, mmap, "big", meter=m, max_regs=110)
 
@@ -169,7 +177,7 @@ def test_hsu_externa_estimacion_vs_driver():
     check("fusion: el crudo sufijado entra sin pisar nada", f["alarms1_ext"] == 0x0200)
 
     # la config contradictoria se dice ALTO, no se resuelve en silencio
-    malo = SimulatedNCUDriver({"id": "X", "tcu_count": 1, "hsu_count": 2,
+    malo = SimulatedNCUDriver({"id": "X", "tcu_ids": [1], "tcu_count": 1, "hsu_count": 2,
                                "hsu_extended": True, "hsu_ext_count": 1}, mmap, "big")
     try:
         asyncio.run(malo.read_meteo())

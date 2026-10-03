@@ -18,6 +18,14 @@ Check 'no rejuvenece con el reloj' (Op-Calidad $f $m $ahora.AddMinutes(6)) 'LECT
 $f.Edad_s='500';Check 'cache antigua aunque consulta reciente' (Op-Calidad $f $m $ahora) 'DATO ANTIGUO'
 $f.Edad_s='';Check 'sin edad identificada' (Op-Calidad $f $m $ahora) 'EDAD DE ORIGEN DESCONOCIDA'
 Check 'importado no es actual' (Op-Calidad $f @{origen='importado'} $ahora) 'IMPORTADO / SIN ORIGEN'
+# La NCU y el gateway SON el origen: no tienen edad de origen que desconocer.
+# Salian siempre como dudosos y toda la pestana parecia dudosa (El Burgo, 02/10/2026).
+$fn=[pscustomobject]@{NCU='2';GW='';TCU='NCU';Salud='OK';Alarmas='';Edad_s=''}
+Check 'la NCU es el origen: reciente' (Op-Calidad $fn $m $ahora) 'LECTURA RECIENTE'
+Check 'pero una lectura vieja de la NCU sigue siendo vieja' (Op-Calidad $fn $m $ahora.AddMinutes(6)) 'LECTURA ANTIGUA'
+$fg=[pscustomobject]@{NCU='2';GW='1';TCU='GW1';Salud='OK';Alarmas='';Edad_s=''}
+Check 'el gateway tambien es origen' (Op-Calidad $fg $m $ahora) 'LECTURA RECIENTE'
+Check 'y su tipo es GW' (Fila-Tipo $fg) 'GW'
 $tr=@(@{ncu='2';ip='10.0.0.1';cx=@{puerto=504}})
 $k=Op-Clave $f $m $tr
 Check 'IP separa identidad' ((Op-Clave $f $m @(@{ncu='2';ip='10.0.0.2';cx=@{puerto=504}})) -ne $k) True
