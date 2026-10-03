@@ -139,5 +139,21 @@ try:
 finally:
     os.chdir(_prev)
 
-print("\n%d comprobaciones, %d fallos" % (14, len(fallos)))
+# ── un gateway con IP y SIN esclavos: Bagnarelli (03-10) ─────────────────────────────────────────
+# Las 17 TCU cuelgan del GW1 y el listado de IPs trae un GW2 (192.168.5.23). No hay tramo que
+# escribir, pero el Digi existe: va en `gws_sin_tcus` de la entrada de la NCU.
+print("· un gateway con IP y sin esclavos (Bagnarelli)")
+ent = pasada([["24030", "Bagnarelli", 1, "192.168.5.21", "192.168.5.22", "1-17", "1,2",
+               "192.168.5.23", "", ""]])
+di(len(ent) == 1 and ent[0].get("ip_gw") == "192.168.5.22" and (ent[0]["tcu_ini"], ent[0]["tcu_fin"]) == (1, 17),
+   "una sola entrada, la del GW1 con sus 17 TCU", ent)
+di(ent[0].get("gws_sin_tcus") == [{"gw": 2, "ip_gw": "192.168.5.23"}],
+   "y el GW2 va aparte, con su IP y sin tramo", ent[0].get("gws_sin_tcus"))
+ent = pasada([["23003", "El Burgo I", 1, "10.100.1.52", "10.100.1.53", "1-56", "", "10.100.1.54", "57-108", ""]])
+di(all("gws_sin_tcus" not in e for e in ent), "con esclavos en los dos, ninguno va aparte",
+   [e.get("gws_sin_tcus") for e in ent])
+ent = pasada([["24030", "Bagnarelli", 1, "192.168.5.21", "192.168.5.22", "1-17", "", "192.168.5.21", "", ""]])
+di("gws_sin_tcus" not in ent[0], "y la IP del Modbus no se cuela de gateway", ent[0].get("gws_sin_tcus"))
+
+print("\n%d comprobaciones, %d fallos" % (18, len(fallos)))
 sys.exit(1 if fallos else 0)

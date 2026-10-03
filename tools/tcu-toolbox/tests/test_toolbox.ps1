@@ -1886,8 +1886,9 @@ Check 'flota: y no cuela el hueco' (@($flN7 | Where-Object { $_.Tipo -eq 'TCU' -
 Check 'flota: con su fila de NCU' (@($flN7 | Where-Object { $_.Tipo -eq 'NCU' }).Count) 1
 Check 'flota: total de filas' ($flN7.Count) 23
 # el GW que no existe tampoco es alarma con una NCU suelta: su puerto ES su gateway
-Check 'flota: el puerto de una NCU suelta vale como gateway' (
-    ($src -match '(?s)elseif \(\$tr\.cx\.puerto\) \{ @\(@\{puerto=\[int\]\$tr\.cx\.puerto\}\) \}')) $true
+# (desde el 03-10 lo decide Gws-ParaSalud, que ademas suma los gateways sin TCUs)
+Check 'flota: el puerto de una NCU suelta vale como gateway' (@(Gws-ParaSalud @{puerto=504; gws=$null} | ForEach-Object { [int]$_.puerto }) -join ',') '504'
+Check 'flota: y el barrido en serie lo pide asi' ($src.Contains('$gwsN = @(Gws-ParaSalud $tr.cx)')) $true
 
 # ---------- la fila de la NCU, y las HSUs por cuenta (v11.37) ----------
 # El barrido EN PARALELO -que es el modo por defecto- no ponia la fila de salud
@@ -4617,6 +4618,46 @@ Check 'invg: con ip_gw se le pregunta al Digi en el propio inventario global' ($
 Check 'invg: y sus datos van como campos de la fila GW' ($blqIG.Contains('Gw-Anotar $fGw @{IP_gw = $ipGw')) $true
 Check 'invg: con puerto fijo la IP del Digi sale de la conexion' ($blqIG.Contains('$tr.cx.ip_gw')) $true
 Check 'invg: sin ip_gw no se inventa y se dice como conseguirla' ($blqIG.Contains('escribe la IP a mano bajo la tabla')) $true
+
+Write-Host ''
+Write-Host '== gateways SIN TCUs: el GW2 de Bagnarelli (03-10) =='
+# Cada entrada es un tramo de TCUs detras de UN gateway: un Digi sin seguidores
+# (Bagnarelli GW2, 192.168.5.23; las 17 TCU en el GW1) no tenia donde ir.
+$PLANTAS = [ordered]@{}
+[void](Cargar-FicheroPlantas (Join-Path $raizTb 'plantas/24030-bagnarelli.json'))
+$eB = $PLANTAS['Bagnarelli NCU1']
+Check 'sinTcus: el fichero de Bagnarelli carga el GW2 aparte' (@($eB.gwsSinTcus | ForEach-Object { "$($_.puerto)=$($_.ip_gw)" }) -join ',') '504=192.168.5.23'
+Check 'sinTcus: y su tramo sigue siendo el del GW1' "$($eB.puerto) $($eB.ini)-$($eB.fin) $($eB.ip_gw)" '503 1-17 192.168.5.22'
+$cxB = @{ip='192.168.5.21'; puerto=503; gws=$null; ip_gw='192.168.5.22'; ini=1; fin=17; nombre='Bagnarelli NCU1'; gwsSinTcus=@($eB.gwsSinTcus)}
+Check 'sinTcus: IDENTIFICAR y el diagnostico ven los dos gateways, el GW2 con 0 TCUs' (@(Gws-DeCx $cxB | ForEach-Object { "GW$($_.nGw)=$($_.ip):$($_.tcus)" }) -join ',') 'GW1=192.168.5.22:17,GW2=192.168.5.23:0'
+Check 'sinTcus: y se le pregunta a cada uno' (@(Gws-Objetivos-Cx $cxB).Count) 2
+# la salud de la NCU NO cuenta con el: en Ayora el segundo Digi es de reserva y su
+# bit esta siempre a 1; contarlo serian alarmas falsas en cada barrido
+Check 'sinTcus: la salud de la NCU va solo con el gateway de sus TCUs' (@(Gws-ParaSalud $cxB | ForEach-Object { [int]$_.puerto }) -join ',') '503'
+Check 'sinTcus: y el inventario lo lista aparte, sin estado de la NCU' ($src.Contains("if (`$g.sinTcus) { `$estado = 'la NCU no lo usa para ninguna TCU' }")) $true
+Check 'sinTcus: el filtro GW1 de la barra lo deja fuera' (@(Gws-SinTcus $cxB '503').Count) 0
+Check 'sinTcus: y el GW2 lo deja dentro' (@(Gws-SinTcus $cxB '504').Count) 1
+Check 'sinTcus: de la topologia (planta completa), tambien' (@(Gws-Objetivos-Topologia @(@{puerto=503; ini=1; fin=17; ip_gw='192.168.5.22'}) @($eB.gwsSinTcus) | ForEach-Object { "GW$($_.nGw)" }) -join ',') 'GW1,GW2'
+Check 'sinTcus: un gateway que ya tiene tramo no se duplica' (@(Gws-MasSinTcus @(@{ncu=''; nGw=2; ip='10.0.0.2'; tcus=5}) @(@{puerto=504; ip_gw='10.0.0.9'}) '').Count) 1
+Check 'sinTcus: reiniciarlo dice que no cuelga ningun seguidor' ((Gw-TextoReinicio @{ncu='1'; nGw=2; ip='192.168.5.23'; tcus=0} $null 0 1) -match 'ningun seguidor') $true
+Check 'sinTcus: el inventario no le inventa esclavos' ($src.Contains('sin TCUs en la topologia (gateway declarado solo con su IP)')) $true
+# lo que NO vale: un gw que no es 1 ni 2, una IP que no es IP, y la del Modbus
+$jMal = Join-Path $tmp 'tb_sintcus_mal.json'
+Set-Content -Path $jMal -Encoding utf8 -Value '{"version":1,"plantas":[{"nombre":"X NCU1","ip":"10.9.9.1","puerto":503,"tcu_ini":1,"tcu_fin":3,"gws_sin_tcus":[{"gw":3,"ip_gw":"10.9.9.3"},{"gw":2,"ip_gw":"no"},{"gw":2,"ip_gw":"10.9.9.1"}]}]}'
+$PLANTAS = [ordered]@{}
+[void](Cargar-FicheroPlantas $jMal)
+Check 'sinTcus: gw 3, basura y la IP del Modbus no entran' ($null -eq $PLANTAS['X NCU1'].gwsSinTcus) $true
+# viaja por los tramos juntados, la (auto) y la (Planta completa)
+$jT = @(Tramos-Juntar @(@{nombre='Y NCU1 (TCU 1-5)'; e=@{ip='10.8.0.1'; puerto=503; ini=1; fin=5}}, @{nombre='Y NCU1 (TCU 7-9)'; e=@{ip='10.8.0.1'; puerto=503; ini=7; fin=9; gwsSinTcus=@(@{puerto=504; ip_gw='10.8.0.9'; sinTcus=$true})}}))
+Check 'sinTcus: juntar tramos no lo pierde' (@($jT[0].e.gwsSinTcus).Count) 1
+$PLANTAS = [ordered]@{}
+$PLANTAS['Z NCU1'] = @{ip='10.7.0.1'; puerto=503; ini=1; fin=4; gwsSinTcus=@(@{puerto=504; ip_gw='10.7.0.9'; sinTcus=$true})}
+$PLANTAS['Z NCU2'] = @{ip='10.7.0.2'; puerto=503; ini=1; fin=4}
+Construir-EntradasAuto
+$pc = $PLANTAS['Z (Planta completa)']
+Check 'sinTcus: la (Planta completa) lo lleva en su NCU' (@(@($pc.ncus | Where-Object { $_.ncu -eq 1 })[0].gwsSinTcus).Count) 1
+Check 'sinTcus: y la otra NCU no' (@(@(@($pc.ncus | Where-Object { $_.ncu -eq 2 })[0].gwsSinTcus) | Where-Object { $_ }).Count) 0
+Check 'sinTcus: Params-Conexion lo arrastra con puerto fijo' ($src.Contains('$r.gwsSinTcus = @($pe.gwsSinTcus')) $true
 
 Write-Host ''
 Write-Host '== los grupos de la NCU: su Group Control por Modbus =='

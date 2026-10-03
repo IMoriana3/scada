@@ -381,6 +381,14 @@ def modo_excel(ruta, hoja, puertos, excluir, comentario_extra):
             entrada["_gwidx"] = kgw            # interno, se quita antes de escribir
             plantas[actual].append(entrada)
             ultima_entrada.append(entrada)
+        # UN GATEWAY CON IP Y SIN ESCLAVOS (Bagnarelli, 03-10: GW2 192.168.5.23, las 17
+        # TCU en el GW1). No es un tramo, asi que no sale entrada suya; pero el Digi
+        # existe y la toolbox le pregunta por RCI. Va en la primera entrada de la NCU
+        # como `gws_sin_tcus`, que la toolbox lee al cargar. La IP del Modbus no vale.
+        sin_tcus = [{"gw": k + 1, "ip_gw": ips_gw[k]} for k in range(len(ips_gw))
+                    if ips_gw[k] and ips_gw[k] != ip and k not in _kgws]
+        if sin_tcus and ultima_entrada:
+            ultima_entrada[0]["gws_sin_tcus"] = sin_tcus
 
     # El indice de gateway era solo para repartir las RSU de las filas de continuacion:
     # fuera del bucle ya no pinta nada y no tiene por que acabar en el JSON.

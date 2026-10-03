@@ -13,7 +13,7 @@ $tokens = $null; $errores = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($fuente, [ref]$tokens, [ref]$errores)
 if ($errores.Count) { throw "TCU_Toolbox.ps1 con errores de sintaxis: $($errores.Count)" }
 foreach ($n in @('Fila-Tipo','Diag-NivelNombre','Diag-FilaGw','Diag-FilaNcu','Gw-Linea','Gw-CargaResumen','Gw-MemPct','Gw-Mb',
-                 'Gw-CuantasTcus','Gw-Objetivos','Gws-Objetivos-Topologia','Gw-Numero','Reloj-Nota')) {
+                 'Gw-CuantasTcus','Gw-Objetivos','Gws-Objetivos-Topologia','Gws-MasSinTcus','Gw-Numero','Reloj-Nota')) {
     $nodos = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $x.Name -eq $n }, $true))
     if ($nodos.Count -ne 1) { throw "Se esperaba una sola funcion $n (hay $($nodos.Count))" }
     . ([scriptblock]::Create($nodos[0].Extent.Text))
