@@ -1,5 +1,5 @@
 {
-  "_comentario": "Planta 24030 (Bagnarelli) generada desde el Excel maestro (hoja 'Direcciones IP') por make_plantas.py --excel. Solo topologia: sin credenciales. NO subir el Excel al repo.",
+  "_comentario": "Planta 24030 (Bagnarelli) generada desde el Excel maestro (hoja 'Direcciones IP') por make_plantas.py --excel. Solo topologia: sin credenciales. NO subir el Excel al repo. GW2 (192.168.5.23) anadido el 03-10-2026 del listado de IPs PR.24030 (PC .20, NCU .21, GW1 .22, GW2 .23, switch .24): el Excel de coordenadas pone las 17 TCU en el GW1, asi que el GW2 va sin tramo.",
   "version": 1,
   "plantas": [
     {
@@ -14,7 +14,13 @@
         1,
         2
       ],
-      "ip_gw": "192.168.5.22"
+      "ip_gw": "192.168.5.22",
+      "gws_sin_tcus": [
+        {
+          "gw": 2,
+          "ip_gw": "192.168.5.23"
+        }
+      ]
     }
   ]
 }

@@ -4,6 +4,38 @@
 
 Es el complemento de **escritura** del SCADA de este repo: el SCADA es solo-lectura a propósito; cuando hay que *cambiar* algo en un TCU (configuración, reloj, NVM) se usa esta toolbox desde el portátil conectado a la LAN de planta.
 
+### Un gateway sin TCUs: el GW2 de Bagnarelli (v12.9)
+
+El listado de IPs de Bagnarelli (PR.24030) trae dos Digi: GW1 `192.168.5.22` y GW2
+`192.168.5.23`. El Excel de coordenadas cuelga las 17 TCU del GW1, así que el GW2 no
+tiene tramo. Como cada entrada del fichero de planta es *un tramo de TCUs detrás de un
+gateway*, el GW2 no tenía dónde ir.
+
+Ahora va aparte, en la entrada de su NCU:
+
+```json
+"gws_sin_tcus": [{ "gw": 2, "ip_gw": "192.168.5.23" }]
+```
+
+- **Lo usan** IDENTIFICAR GATEWAYS, el Diagnóstico (su fila GW), el Inventario
+  global y REINICIAR GATEWAY. Al reiniciarlo se avisa de que, según la topología,
+  no se queda ningún seguidor sin servicio.
+- **No lo usa** ningún barrido Modbus, porque no hay TCUs que sondear.
+- **No cuenta** para la salud de la NCU. En Ayora el segundo Digi de cada NCU es de
+  reserva (ver abajo), la NCU no lo usa y su bit de gateway está siempre a 1.
+  Contarlo devolvería las alarmas falsas de cada barrido. El inventario lo lista
+  con «la NCU no lo usa para ninguna TCU», no con «conectado» o «DESCONECTADO».
+- **Se valida al cargar:** `gw` tiene que ser 1 o 2, la IP tiene que ser una IP, y
+  la del Modbus de la NCU no vale.
+- **Se genera solo y se conserva.** `make_plantas.py --excel` lo escribe solo cuando
+  la hoja trae `IP GW n` sin esclavos en ese gateway. Regenerar lo conserva, porque
+  es un campo que la hoja no pisa.
+
+⚠️ Bagnarelli sigue la regla de Ayora (NCU `.21`, Digi `.22` y `.23`), así que el
+GW2 puede ser de reserva. Si contesta a IDENTIFICAR GATEWAYS, el inventario lo dirá
+con su firmware. Si nunca contesta, el diagnóstico pondrá su fila en ALARMA:
+quitarlo del fichero vuelve a dejarlo fuera.
+
 ### Cuánto tarda en arrancar, medido por tramos (v12.8)
 
 Iñaki preguntó por qué tarda tanto en abrirse. **Lo que se pudo medir aquí** (pwsh 7 en

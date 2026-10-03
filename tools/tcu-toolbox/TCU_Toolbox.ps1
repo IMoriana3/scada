@@ -40,7 +40,7 @@ Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo
 [System.Windows.Forms.Application]::EnableVisualStyles()
 $script:T_winforms = Get-Date
 
-$VERSION_TOOLBOX = '12.8'
+$VERSION_TOOLBOX = '12.9'
 $script:ModoDemo = [bool]$Demo
 
 # Segundos desde la hora que dejo el .bat (%TIME%: "12:34:56,78" en Windows en
@@ -172,6 +172,23 @@ function Cargar-FicheroPlantas([string]$ruta) {
         # inventarse la regla "IP de la NCU + n", que solo esta comprobada en
         # El Burgo.
         if ($p.PSObject.Properties['ip_gw'] -and "$($p.ip_gw)".Trim() -ne '') { $e.ip_gw = "$($p.ip_gw)".Trim() }
+        # GATEWAYS SIN TCUs (Bagnarelli, 03-10). Cada entrada es un tramo de TCUs
+        # detras de UN gateway, asi que un Digi del que no cuelga ningun seguidor
+        # -el GW2 de Bagnarelli, 192.168.5.23: el Excel pone las 17 TCU en el GW1-
+        # no tenia donde ir y el inventario, IDENTIFICAR GATEWAYS, el diagnostico
+        # y el reinicio no lo veian. Va aparte, [{gw: 2, ip_gw: '...'}], y NO entra
+        # en gws: nada lo sondea por Modbus ni cuenta para la salud de la NCU (ver
+        # Gws-ParaSalud), solo se le pregunta por RCI. La IP del Modbus no vale.
+        if ($p.PSObject.Properties['gws_sin_tcus']) {
+            $lstG = @()
+            foreach ($x in @($p.gws_sin_tcus)) {
+                if (-not $x) { continue }
+                $nG = "$($x.gw)"; $ipG = "$($x.ip_gw)".Trim()
+                if ($nG -notmatch '^[12]$' -or $ipG -notmatch '^\d+\.\d+\.\d+\.\d+$' -or $ipG -eq "$($p.ip)".Trim()) { continue }
+                $lstG += ,@{puerto = $(if ($nG -eq '1') { $PUERTO_GW1 } else { $PUERTO_GW2 }); ip_gw = $ipG; sinTcus = $true}
+            }
+            if ($lstG.Count -gt 0) { $e.gwsSinTcus = $lstG }
+        }
         if ($p.PSObject.Properties['huecos']) {
             $lstH = @(@($p.huecos) | Where-Object { "$_" -match '^\d+$' } | ForEach-Object { [int]$_ })
             if ($lstH.Count -gt 0) { $e.huecos = $lstH }
@@ -286,7 +303,7 @@ function Tramos-Juntar($entradas) {
         $reps = @(); foreach ($x in $g) { foreach ($rp in @($x.e.reps)) { if ($rp) { $reps += ,$rp } } }
         if ($reps.Count -gt 0) { $j.reps = $reps }
         # y lo que solo trae uno de los tramos no se pierde
-        foreach ($campo in @('hsu','hsus','hsuLista','rsuLista','ip_gw','trackers')) {
+        foreach ($campo in @('hsu','hsus','hsuLista','rsuLista','ip_gw','trackers','gwsSinTcus')) {
             if ($null -ne $j[$campo]) { continue }
             foreach ($x in $g) { if ($null -ne $x.e[$campo]) { $j[$campo] = $x.e[$campo]; break } }
         }
@@ -335,6 +352,8 @@ function Construir-EntradasAuto {
         $fin = @($gws | ForEach-Object { $_.fin } | Measure-Object -Maximum).Maximum
         $auto = @{ip=$ip; puerto=$null; ini=[int]$ini; fin=[int]$fin; gws=$gws}
         foreach ($g in $grupo) { if ($g.p.hsu) { $auto.hsu = $g.p.hsu; break } }
+        $sinT = @(); foreach ($g in $grupo) { foreach ($x in @($g.p.gwsSinTcus)) { if ($x) { $sinT += ,$x } } }
+        if ($sinT.Count -gt 0) { $auto.gwsSinTcus = $sinT }
         # cada NCU sale UNA vez en el desplegable, con su nombre a secas: la
         # entrada agregada se llama como la NCU (antes "<NCU> (auto)") y las de
         # gateway ("<NCU> GW1"/"GW2") se retiran al final. El gateway se elige
@@ -353,11 +372,12 @@ function Construir-EntradasAuto {
         $planta = $m.Groups[1].Value.Trim(); $ncu = [int]$m.Groups[2].Value
         # ojo: hashtable normal, no [ordered] (con clave int lo trataria como indice)
         if (-not $porPlanta.Contains($planta)) { $porPlanta[$planta] = @{} }
-        if (-not $porPlanta[$planta].Contains($ncu)) { $porPlanta[$planta][$ncu] = @{ip=$p.ip; gws=@(); hsu=$null; hsus=0; hsuLista=@(); rsuLista=@()} }
+        if (-not $porPlanta[$planta].Contains($ncu)) { $porPlanta[$planta][$ncu] = @{ip=$p.ip; gws=@(); hsu=$null; hsus=0; hsuLista=@(); rsuLista=@(); gwsSinTcus=@()} }
         if ($porPlanta[$planta][$ncu].ip -ne $p.ip) { continue }   # inconsistencia: ignorar
         # el repetidor cuelga de SU gateway: sin esto no se sabria por que puerto
         # se llega a el, porque su esclavo no cae en ningun rango de TCUs
         $porPlanta[$planta][$ncu].gws += ,@{puerto=$p.puerto; ini=$p.ini; fin=$p.fin; reps=@($p.reps); huecos=@($p.huecos); ip_gw=$p.ip_gw}
+        foreach ($x in @($p.gwsSinTcus)) { if ($x) { $porPlanta[$planta][$ncu].gwsSinTcus += ,$x } }
         if ($p.hsu -and -not $porPlanta[$planta][$ncu].hsu) { $porPlanta[$planta][$ncu].hsu = $p.hsu }
         # el mismo numero viene repetido en las entradas de los dos gateways de
         # la NCU: se queda el mayor, no se suman
@@ -370,7 +390,7 @@ function Construir-EntradasAuto {
         if ($ncus.Count -lt 2) { continue }
         $lista = @()
         foreach ($n in ($ncus.Keys | Sort-Object)) {
-            $lista += ,@{ncu=[int]$n; ip=$ncus[$n].ip; gws=@($ncus[$n].gws | Sort-Object { $_.ini }); hsu=$ncus[$n].hsu; hsus=[int]$ncus[$n].hsus; hsuLista=@($ncus[$n].hsuLista); rsuLista=@($ncus[$n].rsuLista)}
+            $lista += ,@{ncu=[int]$n; ip=$ncus[$n].ip; gws=@($ncus[$n].gws | Sort-Object { $_.ini }); hsu=$ncus[$n].hsu; hsus=[int]$ncus[$n].hsus; hsuLista=@($ncus[$n].hsuLista); rsuLista=@($ncus[$n].rsuLista); gwsSinTcus=@($ncus[$n].gwsSinTcus)}
         }
         $PLANTAS["$planta (Planta completa)"] = @{ip=$null; puerto=$null; ini=$null; fin=$null; ncus=$lista}
     }
@@ -3771,7 +3791,41 @@ function Gws-DeCx($cx) {
     } elseif ("$($cx.puerto)" -match '^\d+$') {
         $l += ,@{ncu = ''; nGw = (Gw-Numero ([int]$cx.puerto)); ip = "$($cx.ip_gw)".Trim(); tcus = (Gw-CuantasTcus $cx.ini $cx.fin)}
     }
+    return @(Gws-MasSinTcus $l (Gws-SinTcus $cx) '')
+}
+
+# Los gateways SIN TCUs de una conexion o de una NCU (ver `gws_sin_tcus` al
+# cargar), con el filtro GW1/GW2 de la barra: '' = todos, o el puerto. Pura.
+function Gws-SinTcus($cx, [string]$gw = '') {
+    if (-not $cx) { return @() }
+    return @(@($cx.gwsSinTcus) | Where-Object { $_ -and $_.puerto -and ($gw -eq '' -or "$($_.puerto)" -eq $gw) })
+}
+
+# Anade los gateways sin TCUs a una lista {ncu, nGw, ip, tcus}, con tcus = 0
+# -cuelgan CERO seguidores, no "no se sabe"-, y sin repetir un gateway que la
+# lista ya tenga (mismo numero). Pura.
+function Gws-MasSinTcus($lista, $sinTcus, [string]$ncu = '') {
+    $l = @(@($lista) | Where-Object { $_ })
+    foreach ($x in @($sinTcus)) {
+        if (-not $x) { continue }
+        $n = Gw-Numero ([int]$x.puerto)
+        if (@($l | Where-Object { [int]$_.nGw -eq $n }).Count -gt 0) { continue }
+        $l += ,@{ncu = $ncu; nGw = $n; ip = "$($x.ip_gw)".Trim(); tcus = 0}
+    }
     return @($l)
+}
+
+# Los gateways que la topologia declara para una NCU, para su salud (Ncu-Salud
+# apaga el bit de los que no existen): los de sus tramos o, con puerto fijo, el
+# de ese puerto. Los que NO llevan TCUs no entran, a proposito: en Ayora el
+# segundo Digi de cada NCU es de RESERVA (README), la NCU no lo usa y su bit
+# esta siempre a 1; contarlo serian las 15 alarmas falsas por barrido otra vez.
+# Si la NCU usa o no el GW2 de Bagnarelli no lo dice la topologia. Pura.
+function Gws-ParaSalud($cx) {
+    if (-not $cx) { return @() }
+    if ($cx.gws) { return @(@($cx.gws) | Where-Object { $_ }) }
+    if ("$($cx.puerto)" -match '^\d+$' -and [int]$cx.puerto -ne $PUERTO_NCU) { return @(@{puerto = [int]$cx.puerto; ini = $cx.ini; fin = $cx.fin}) }
+    return @()
 }
 
 # Y de esos, a los que se puede preguntar: los que traen ip_gw, una vez cada uno. Pura.
@@ -3779,14 +3833,14 @@ function Gws-Objetivos-Cx($cx) { return @(Gw-Objetivos (Gws-DeCx $cx) '') }
 
 # Los gateways de una topologia a los que se puede preguntar: los que traen
 # ip_gw, una vez cada uno. Pura.
-function Gws-Objetivos-Topologia($gws) {
+function Gws-Objetivos-Topologia($gws, $sinTcus = $null) {
     $l = @()
     foreach ($g in @($gws)) {
         if (-not $g) { continue }
         $ip = "$($g.ip_gw)".Trim(); if ($ip -eq '') { continue }
         $l += ,@{ncu = ''; nGw = (Gw-Numero ([int]$g.puerto)); ip = $ip; tcus = (Gw-CuantasTcus $g.ini $g.fin)}
     }
-    return @(Gw-Objetivos $l '')
+    return @(Gw-Objetivos (Gws-MasSinTcus $l $sinTcus '') '')
 }
 
 # Lo leido de un gateway como campos con prefijo GWn_, para colgarlos de la fila
@@ -4052,7 +4106,8 @@ function Gw-ReinicioVolvio($uptimeAntes, $uptimeDespues, [bool]$cayo) {
 function Gw-TextoReinicio($gw, $viento, [int]$leidas, [int]$total) {
     $quien = $(if ("$($gw.ncu)" -eq '?' -or "$($gw.ncu)" -eq '') { "el gateway $($gw.ip) (IP a mano)" } else { "el gateway GW$($gw.nGw) de la NCU$($gw.ncu), $($gw.ip)" })
     $t = "REINICIAR $($quien.ToUpper())`r`n`r`n"
-    if ($null -ne $gw.tcus) { $t += "Mientras arranca, la NCU no llega a los $($gw.tcus) seguidores que cuelgan de el." }
+    if ($null -ne $gw.tcus -and [int]$gw.tcus -eq 0) { $t += "La topologia no le cuelga ningun seguidor: la NCU no deberia perder ninguno mientras arranca. Si alguno deja de contestar, es que SI colgaba de este gateway: anotalo." }
+    elseif ($null -ne $gw.tcus) { $t += "Mientras arranca, la NCU no llega a los $($gw.tcus) seguidores que cuelgan de el." }
     else { $t += "Mientras arranca, la NCU no llega a NINGUN seguidor de los que cuelgan de el (IP a mano: no se cuantos son)." }
     $t += "`r`n`r`nLo que NO se para: esos seguidores siguen al sol por su cuenta, porque el seguimiento vive en la TCU."
     $t += "`r`nLo que SI se para: mientras este abajo NO HAY QUIEN LES MANDE UNA POSICION SEGURA, ni por grupo, ni por viento, ni desde el SCADA. El resto de la planta sigue como estaba."
@@ -9994,7 +10049,7 @@ function Params-Conexion {
         if (-not ($p -and $p.gws) -or ($p.ip -ne $ip)) {
             throw "puerto 'auto' requiere una entrada (auto) seleccionada y su IP sin modificar"
         }
-        return @{ip=$ip; puerto=$null; gws=$p.gws; etiqueta='auto'; to=$to; reint=$reint; nombre="$($cbPlanta.SelectedItem)"}
+        return @{ip=$ip; puerto=$null; gws=$p.gws; etiqueta='auto'; to=$to; reint=$reint; nombre="$($cbPlanta.SelectedItem)"; gwsSinTcus=@($p.gwsSinTcus | Where-Object { $_ })}
     }
     $puerto = Val-Int $pt 'Puerto' 1 65535
     # Lo que la topologia sabe de ESA entrada viajaba solo por la via de los
@@ -10013,6 +10068,7 @@ function Params-Conexion {
         # la IP del Digi de ESE gateway: con puerto fijo no hay lista gws y sin
         # esto el boton y el barrido no sabian a quien preguntar
         $r.ip_gw = "$($pe.ip_gw)".Trim()
+        $r.gwsSinTcus = @($pe.gwsSinTcus | Where-Object { $_ })
     }
     return $r
 }
@@ -10413,7 +10469,7 @@ function Trabajos-Planta([hashtable]$cx, [int[]]$tcus, [string]$filtro = '', $se
                  # cuantos DEBERIA haber, no solo cuantos ha leido
                  hsuLista=@($cx.hsuLista); rsuLista=@($cx.rsuLista)
                  cx=$(if ($null -ne $g) { @{ip=$cx.ip; puerto=$cx.puerto; gws=$g; multi=$null; etiqueta=$cx.etiqueta; to=$cx.to; reint=$cx.reint
-                                            hsuLista=@($cx.hsuLista); rsuLista=@($cx.rsuLista)} } else { $cx })}
+                                            hsuLista=@($cx.hsuLista); rsuLista=@($cx.rsuLista); gwsSinTcus=@(Gws-SinTcus $cx $gw)} } else { $cx })}
     }
     $lista = @()
     $nums = Parse-ListaNums $filtro
@@ -10428,7 +10484,7 @@ function Trabajos-Planta([hashtable]$cx, [int[]]$tcus, [string]$filtro = '', $se
         $lista += ,@{ncu=[int]$n.ncu; ip=$n.ip; tcus=$lt
             hsuLista=@($n.hsuLista); rsuLista=@($n.rsuLista)
             cx=@{ip=$n.ip; puerto=$null; gws=$g; multi=$null; etiqueta='auto'; to=$cx.to; reint=$cx.reint
-                 hsuLista=@($n.hsuLista); rsuLista=@($n.rsuLista)}}
+                 hsuLista=@($n.hsuLista); rsuLista=@($n.rsuLista); gwsSinTcus=@(Gws-SinTcus $n $gw)}}
     }
     return $lista
 }
@@ -11946,7 +12002,9 @@ $DIAG_HILO = {
         # la salud de la propia NCU (GW, UPS, seta, reloj) tambien aqui: el
         # barrido en serie la leia y el paralelo no, y el paralelo es el modo
         # por defecto, asi que la planta entera salia SIN una sola fila de NCU
-        try { $out.salud = Ncu-Salud $t.gws } catch {}
+        # los gateways para la salud vienen calculados (Gws-ParaSalud): con
+        # puerto fijo, el de ese puerto
+        try { $out.salud = Ncu-Salud $(if ($t.gwsSalud -and @($t.gwsSalud).Count -gt 0) { $t.gwsSalud } else { $t.gws }) } catch {}
         $dm = Ncu-DiagCompat $t.tcus
         foreach ($u in $t.tcus) { if ($dm[[int]$u]) { $out.filas += ,$dm[[int]$u] } }
         try { $out.hsus = @(Ncu-HsuCompat) } catch {}
@@ -12416,7 +12474,8 @@ function Diag-Correr {
     $paraleloOk = $false
     if ($chkGPar.Checked -and $chkGNcu.Checked -and @($trabajos).Count -gt 1) {
         Con "Barrido en paralelo: $(@($trabajos).Count) NCUs a la vez (desmarca 'en paralelo' si prefieres una detras de otra)." ([System.Drawing.Color]::SteelBlue)
-        $tareas = @($trabajos | ForEach-Object { @{ncu=$_.ncu; ip=$_.ip; puerto=$PUERTO_NCU; to=$_.cx.to; tcus=@($_.tcus); gws=$_.cx.gws} })
+        $tareas = @($trabajos | ForEach-Object { @{ncu=$_.ncu; ip=$_.ip; puerto=$PUERTO_NCU; to=$_.cx.to; tcus=@($_.tcus); gws=$_.cx.gws
+                                                    gwsSinTcus=@(Gws-SinTcus $_.cx); gwsSalud=@(Gws-ParaSalud $_.cx)} })
         $res = $null
         $avance = { param($t) Prog-Paso @($t.tcus).Count; [System.Windows.Forms.Application]::DoEvents() }
         try { $res = @(Paralelo-Ejecutar $tareas $DIAG_HILO 8 '' $avance) } catch { Con "El barrido en paralelo no ha podido arrancar ($_): se hace en serie." ([System.Drawing.Color]::Orange) }
@@ -12430,7 +12489,7 @@ function Diag-Correr {
                 # dato. El barrido en serie ya lo hacia; el paralelo no, y es el
                 # modo por defecto.
                 $dnP = Diag-FilaNcu $eti $(if ($o) { $o.salud } else { $null }) $(if ($o) { "$($o.error)" } else { "$($r.error)" })
-                $gwsP = @(Diag-AnotarGws $dnP (Gws-Objetivos-Topologia $r.tarea.gws) ([int]$r.tarea.to))
+                $gwsP = @(Diag-AnotarGws $dnP (Gws-Objetivos-Topologia $r.tarea.gws $r.tarea.gwsSinTcus) ([int]$r.tarea.to))
                 $itemNP = New-Object System.Windows.Forms.ListViewItem($eti)
                 foreach ($c in @('', $dnP.TCU, $dnP.Salud, $dnP.Modo, '', '', '', '', '', (Diag-NotaNcu $dnP))) { [void]$itemNP.SubItems.Add("$c") }
                 switch ("$($dnP.Salud)") {
@@ -12494,9 +12553,7 @@ function Diag-Correr {
             # una entrada de NCU suelta no trae lista de gateways, pero su
             # puerto ES su gateway: sin esto seguia cantando "GW2 DESCONECTADO"
             # en una NCU que solo tiene el GW1
-            $gwsN = $(if ($tr.cx.gws) { $tr.cx.gws }
-                      elseif ($tr.cx.puerto) { @(@{puerto=[int]$tr.cx.puerto}) }
-                      else { $null })
+            $gwsN = @(Gws-ParaSalud $tr.cx)
             $ns = Ncu-Salud $gwsN
             Modbus-Cerrar
         } catch { $nsErr = "$_"; Modbus-Cerrar }
@@ -14704,7 +14761,12 @@ function InvG-Correr {
         if (Chequear-Cancelado) { break }
         $script:NcuLog = "$($tr.ncu)"
         $eti = "$($tr.ncu)"
-        $gwsN = @($(if ($cx.multi) { @(@($cx.multi | Where-Object { "$($_.ncu)" -eq $eti })[0].gws) } else { @($cx.gws) }))
+        # los de la NCU entera (sin el filtro GW1/GW2), con el de puerto fijo:
+        # antes, con puerto fijo, aqui salia un GW0 vacio. La salud de la NCU va
+        # solo con ellos; las filas de gateway, ademas, con los que no llevan TCUs
+        $srcN = $(if ($cx.multi) { @($cx.multi | Where-Object { "$($_.ncu)" -eq $eti })[0] } else { $cx })
+        $gwsN = @(Gws-ParaSalud $srcN)
+        $gwsFilas = @($gwsN) + @(Gws-SinTcus $srcN)
 
         # ---- la NCU: version por el 502, y de paso el estado de sus gateways
         $ver = ''; $ids = $null; $ns = $null; $errN = ''
@@ -14723,17 +14785,19 @@ function InvG-Correr {
 
         # ---- sus gateways: lo que Modbus SI sabe de ellos
         $principal = $(if ($ns) { [int]$ns.principal } else { 0 })
-        foreach ($g in $gwsN) {
+        foreach ($g in $gwsFilas) {
             $nGw = Gw-Numero ([int]$g.puerto)
             $bit = $(if ($nGw -eq 1) { 4 } elseif ($nGw -eq 2) { 5 } else { -1 })
             $estado = 'sin datos de la NCU'
             if ($ns -and $bit -ge 0) { $estado = $(if ($principal -band (1 -shl $bit)) { 'DESCONECTADO' } else { 'conectado' }) }
-            $nEq = @(Lista $g.ini $g.fin).Count
+            # sin TCUs, el bit de la NCU no dice nada de el: puede ser de reserva
+            if ($g.sinTcus) { $estado = 'la NCU no lo usa para ninguna TCU' }
             $nRep = @($reps | Where-Object { "$($_.ncu)" -eq $eti -and [int]$_.puerto -eq [int]$g.puerto }).Count
             $ipGw = "$($g.ip_gw)".Trim()
             # con puerto fijo la lista de gateways no trae ip_gw: va en la conexion
             if ($ipGw -eq '' -and "$($tr.cx.ip_gw)".Trim() -ne '' -and "$($tr.cx.puerto)" -eq "$($g.puerto)") { $ipGw = "$($tr.cx.ip_gw)".Trim() }
-            $nota = "$estado; esclavos $($g.ini)-$($g.fin) ($nEq) y $nRep repetidor(es)"
+            if ($g.sinTcus) { $nota = "$estado; sin TCUs en la topologia (gateway declarado solo con su IP)" }
+            else { $nEq = @(Lista $g.ini $g.fin).Count; $nota = "$estado; esclavos $($g.ini)-$($g.fin) ($nEq) y $nRep repetidor(es)" }
             if ($ipGw -eq '') {
                 $nota += ". Sin ip_gw en la topologia: regenera el fichero de planta desde el Excel para poder identificarlo, o escribe la IP a mano bajo la tabla y pulsa IDENTIFICAR GATEWAYS. " + $INV_MOTIVO['GW']
                 $filas += Inv-Fila 'GW' $eti "$nGw" "$($tr.ip):$($g.puerto)" '' '' '' '' '' '' $nota
@@ -15039,13 +15103,15 @@ $btnIGGwReinicio.Add_Click({ Lanzar {
     $gws = @()
     if ($cx.multi) {
         foreach ($n in $cx.multi) { foreach ($g in @($n.gws)) { if ($g) {
-            $gws += ,@{ncu = "$($n.ncu)"; nGw = (Gw-Numero ([int]$g.puerto)); ip = "$($g.ip_gw)".Trim(); tcus = ([int]$g.fin - [int]$g.ini + 1)} } } }
+            $gws += ,@{ncu = "$($n.ncu)"; nGw = (Gw-Numero ([int]$g.puerto)); ip = "$($g.ip_gw)".Trim(); tcus = ([int]$g.fin - [int]$g.ini + 1)} } }
+            $gws = @(Gws-MasSinTcus $gws (Gws-SinTcus $n) "$($n.ncu)") }
     } elseif ($cx.gws) {
         foreach ($g in @($cx.gws)) { if ($g) {
             $gws += ,@{ncu = (Ncu-DeNombre $cx.nombre); nGw = (Gw-Numero ([int]$g.puerto)); ip = "$($g.ip_gw)".Trim(); tcus = ([int]$g.fin - [int]$g.ini + 1)} } }
     } elseif ("$($cx.puerto)" -match '^\d+$') {
         $gws += ,@{ncu = (Ncu-DeNombre $cx.nombre); nGw = (Gw-Numero ([int]$cx.puerto)); ip = "$($cx.ip_gw)".Trim(); tcus = ([int]$cx.fin - [int]$cx.ini + 1)}
     }
+    if (-not $cx.multi) { $gws = @(Gws-MasSinTcus $gws (Gws-SinTcus $cx) (Ncu-DeNombre $cx.nombre)) }
     $o = Gw-ObjetivoReinicio $gws $txtIGGwIp.Text
     if (-not $o.ok) { Con "NO se reinicia: $($o.nota)." ([System.Drawing.Color]::Orange); return }
     Gw-ReiniciarFlujo $o.gw $cx
@@ -15114,7 +15180,9 @@ $btnIGGw.Add_Click({ Lanzar {
     $cx = Params-Conexion
     $gws = @()
     if ($cx.multi) {
-        foreach ($n in $cx.multi) { foreach ($g in @($n.gws)) { if ($g) { $gws += ,@{ncu="$($n.ncu)"; nGw=(Gw-Numero ([int]$g.puerto)); ip="$($g.ip_gw)".Trim()} } } }
+        foreach ($n in $cx.multi) {
+            $gN = @(); foreach ($g in @($n.gws)) { if ($g) { $gN += ,@{ncu="$($n.ncu)"; nGw=(Gw-Numero ([int]$g.puerto)); ip="$($g.ip_gw)".Trim()} } }
+            $gws += @(Gws-MasSinTcus $gN (Gws-SinTcus $n) "$($n.ncu)") }
     } else {
         foreach ($g in @(Gws-DeCx $cx)) { $g.ncu = (Ncu-DeNombre $cx.nombre); $gws += ,$g }
     }
@@ -16395,9 +16463,7 @@ $btnNComm.Add_Click({ Lanzar {
         if (Chequear-Cancelado) { break }
         $script:NcuLog = $(if ($null -ne $tr.ncu) { "$($tr.ncu)" } else { '' })
         $ns = $null; $comm = $null; $fwN = ''
-        $gws = $(if ($tr.cx.gws) { $tr.cx.gws }
-                 elseif ($tr.cx.puerto -and $tr.cx.puerto -ne $PUERTO_NCU) { @(@{puerto=[int]$tr.cx.puerto}) }
-                 else { $null })
+        $gws = @(Gws-ParaSalud $tr.cx)
         try {
             Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
             $ns = Ncu-Salud $gws
@@ -17367,9 +17433,7 @@ $btnNDiag.Add_Click({ Lanzar {
         if (Chequear-Cancelado) { break }
         $script:NcuLog = "$($tr.ncu)"
         $ns = $null; $fwN = ''; $stow = $null
-        $gws = $(if ($tr.cx.gws) { $tr.cx.gws }
-                 elseif ($tr.cx.puerto -and $tr.cx.puerto -ne $PUERTO_NCU) { @(@{puerto=[int]$tr.cx.puerto}) }
-                 else { $null })
+        $gws = @(Gws-ParaSalud $tr.cx)
         try {
             Modbus-Conectar $tr.ip $PUERTO_NCU $tr.cx.to
             $ns = Ncu-Salud $gws
