@@ -95,7 +95,10 @@ class Planta:
            pequeño por TCU para que no salgan los 200 clavados, que oculta errores de índice."""
         h = self.hora_del_dia()
         if h < 6 or h > 20:
-            return 0.0
+            # plano, pero con el MISMO desfase por TCU que de dia: con 0.0 exacto los
+            # 200 salian iguales y el autotest («los angulos NO salen todos iguales»)
+            # fallaba en cualquier CI que corriera entre las 20:00 y las 06:00
+            return math.sin(i * 0.7) * 0.8
         a = -55.0 + 110.0 * (h - 6) / 14.0
         return a + math.sin(i * 0.7) * 0.8
 
