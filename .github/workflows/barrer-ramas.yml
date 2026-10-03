@@ -1,0 +1,174 @@
+# Barrido de ramas muertas · se dispara A MANO desde la pestaña Actions
+#
+# POR QUÉ ESTO ES UN WORKFLOW Y NO UN SCRIPT: el borrado de refs no se puede hacer
+# desde la sesión en la nube de Claude —su proxy lo bloquea con 403 por las dos
+# vías, `gh api -X DELETE` y `git push --delete`— y el mantenedor no siempre tiene
+# una máquina con `git` y `gh` delante. Aquí el que borra es el runner de GitHub con
+# el `GITHUB_TOKEN` del repo, y lo único que hace falta es un navegador.
+#
+# CÓMO SE USA
+#   Actions -> «Barrer ramas muertas» -> Run workflow
+#     · dejándolo en blanco: EN SECO, enseña la lista y no borra nada
+#     · escribiendo BORRAR en el campo: borra
+#
+# QUÉ PUEDE BORRAR: EXACTAMENTE las 37 ramas de la lista de abajo y ninguna más.
+# No descubre ramas por su cuenta a propósito: una lista explícita, medida y
+# revisada no puede sorprender a nadie, y un barrido que se calcula solo sí.
+#
+# CÓMO SE DECIDIÓ LA LISTA (remedida el 3-oct-2026 tras fusionar #294, 43 ramas):
+#   · 30 con PR fusionado
+#   ·  3 sin PR y sin un solo commit propio (ahead=0 contra main, comprobado)
+#   ·  1 claude/maqueta-desbordes — su cambio YA está en main: las siete líneas del
+#        audit de DESBORDES en `maqueta.ps1`, idénticas línea por línea
+#   ·  3 LAS RESCATADAS EN #294, que hasta ese merge estaban reservadas:
+#        - claude/relevo-bateria-desgaste    -> `docs/bateria-desgaste.md`
+#        - claude/scada-elburgo-setup-9z6rbi -> `docs/elburgo-adquisicion/ARRANQUE.md`
+#        - claude/simulador-tcu-24ubzk       -> `tools/ncu_simulada.py` con --gemelo
+#
+# Se decidió por el ESTADO DEL PR y no por `git rev-list`: con squash merge el
+# commit de la rama no es antecesor de main, así que rev-list dice «sin fusionar» de
+# ramas que sí lo están. Y para las que no tenían PR, comparando el CONTENIDO con
+# main y no el historial: `ahead=1` no significa que falte nada — así se descubrió
+# que `maqueta-desbordes` era redundante.
+#
+# QUÉ NO BORRA: main y las cinco ramas con PR abierto (#261, #269, #277, #278, #280).
+# La guarda de abajo lo impone. OJO: en este repo NINGUNA rama está marcada como
+# protegida —al contrario que `main` en `proyectos`—, así que esa guarda es lo único
+# que hay entre un error de lista y la rama principal.
+#
+# Ya NO queda ninguna rama reservada por «trabajo propio sin fusionar»: las tres que
+# lo estaban se rescataron en #294.
+#
+# RECUPERAR una rama borrada: el log de la tirada imprime el SHA de cada una antes
+# de borrarla, así que queda en el historial de Actions. Para devolverla:
+#   gh api -X POST repos/${{ github.repository }}/git/refs \
+#          -f ref=refs/heads/<rama> -f sha=<sha>
+#
+# Este fichero se puede borrar cuando el barrido esté hecho: es una herramienta de
+# una vez, no parte de la puerta.
+name: Barrer ramas muertas
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmar:
+        description: 'Escribe BORRAR para borrar de verdad. En blanco = en seco.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  barrer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Barrer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CONFIRMAR: ${{ inputs.confirmar }}
+        run: |
+          set -uo pipefail
+          REPO='${{ github.repository }}'
+          HAZLO=0; [ "$CONFIRMAR" = "BORRAR" ] && HAZLO=1
+          if [ "$HAZLO" = "0" ]; then
+            echo "### EN SECO · no se borra nada" >> "$GITHUB_STEP_SUMMARY"
+            echo "Para borrar: vuelve a lanzarlo escribiendo **BORRAR** en el campo." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          RAMAS=$(cat <<'LISTA'
+          claude/agente-config-remota
+          claude/analizador-baterias
+          claude/api-scada-recetas
+          claude/b2-ficha-tcu
+          claude/cargar-preset-acepta-backup
+          claude/comms-age-reloj-ncu
+          claude/coverage-simulator-tracker-1kskvi
+          claude/desplegable-tramos
+          claude/fichas-un-fallo-no-tapa-el-resto
+          claude/friendly-faraday-50rjuq
+          claude/generic-names-instructions-w255gi
+          claude/gw-selector
+          claude/health-modo-off
+          claude/imoriana3-solargpt-audit-6httmf
+          claude/inventario-global
+          claude/maqueta-desbordes
+          claude/medidor-trafico-n6qmso
+          claude/relevo-bateria-desgaste
+          claude/relevo-toolbox-modo
+          claude/scada-elburgo-setup-9z6rbi
+          claude/simulador-tcu-24ubzk
+          claude/toolbox-modo-en-salud
+          claude/topographic-survey-trackers-o3auni
+          claude/topologia-repetidores-huecos
+          codex/ncu-hsu-variable-tables
+          codex/scada-historical-measured-coverage-audit
+          codex/toolbox-group-control-fc06-fallback
+          codex/toolbox-groups-illegal-fix
+          codex/toolbox-history-v1193
+          codex/toolbox-operations-v1192
+          codex/toolbox-sequences-v1190
+          codex/toolbox-variable-guards-v1189
+          codex/toolbox-workspace-v1191
+          feature/actual-vs-expected-v1
+          feature/electrical-telemetry-contract-v1
+          feature/field-mode-v1
+          fix/vis-01-scada
+          LISTA
+          )
+
+          # GUARDA: las reservadas no pueden estar en la lista. Si alguien edita
+          # este fichero y mete una por error, la tirada se para antes de tocar nada.
+          for prohibida in main \
+              codex/access-security-v1195 \
+              codex/auditar-contratos-scada/operaciones \
+              codex/toolbox-client-v1194 \
+              feat/field-mode-v1 \
+              feature/electrical-diagnostic-v1; do
+            if grep -qx "$prohibida" <<< "$RAMAS"; then
+              echo "::error::'$prohibida' está en la lista y es una rama RESERVADA. Abortado sin tocar nada."
+              exit 1
+            fi
+          done
+
+          n=0; ok=0; mal=0; ausente=0
+          while IFS= read -r r; do
+            r="$(echo "$r" | tr -d '[:space:]')"
+            [ -z "$r" ] && continue
+            n=$((n + 1))
+            # El SHA ANTES de borrar, para que quede en el log y la rama se pueda
+            # devolver. Sin esto el borrado sería irreversible en la práctica.
+            sha=$(gh api "repos/$REPO/git/ref/heads/$r" --jq .object.sha 2>/dev/null)
+            if [ -z "$sha" ]; then
+              echo "  ya no existe   $r"; ausente=$((ausente + 1)); continue
+            fi
+            if [ "$HAZLO" = "0" ]; then
+              echo "  [seco] $r  $sha"; continue
+            fi
+            if gh api -X DELETE "repos/$REPO/git/refs/heads/$r" >/dev/null 2>&1; then
+              echo "  borrada  $r  $sha"; ok=$((ok + 1))
+            else
+              echo "  FALLO    $r  $sha"; mal=$((mal + 1))
+            fi
+          done <<< "$RAMAS"
+
+          echo
+          if [ "$HAZLO" = "0" ]; then
+            echo "$n en la lista · $ausente ya no existían. NADA BORRADO."
+            echo "- **$n** ramas en la lista, **$ausente** ya no existían" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "$ok borradas · $mal fallos · $ausente ya no existían · de $n"
+            {
+              echo "### Barrido hecho"
+              echo "- borradas: **$ok**"
+              echo "- fallos: **$mal**"
+              echo "- ya no existían: **$ausente**"
+              echo "- en la lista: **$n**"
+              echo ""
+              echo "Los SHA de cada rama están en el log de este paso, por si hay que devolver alguna."
+            } >> "$GITHUB_STEP_SUMMARY"
+            [ "$mal" -eq 0 ] || exit 1
+          fi
+          quedan=$(gh api "repos/$REPO/branches?per_page=100" --jq 'length')
+          echo "ramas que quedan en el repo: $quedan"
+          echo "- ramas que quedan: **$quedan**" >> "$GITHUB_STEP_SUMMARY"
