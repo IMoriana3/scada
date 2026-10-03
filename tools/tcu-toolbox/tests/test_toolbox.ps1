@@ -42,6 +42,7 @@ $logica += "`n" + $src.Substring($i1, $f1 - $i1) + "`n" + $src.Substring($i2, $f
 # los bloques anadidos tambien usan $PSScriptRoot (usuarios.json, registro/)
 $logica = $logica.Replace('$PSScriptRoot', '$PSScriptRootFake')
 Invoke-Expression $logica
+$script:Usuario=@{usuario='banco';nombre='Banco de pruebas';rol='admin'}
 . (Join-Path $raizTb 'Operacion.ps1')
 $script:OpFichero=Join-Path $PSScriptRootFake 'operacion.json'
 
@@ -324,6 +325,7 @@ Check 'csv job coma decimal' ([math]::Round((Palabras-A-F32 $res.jobs[0].esc.pal
 Check 'csv job prefijo' ($res.jobs[1].nombre) '41010 longitud [deg]'
 
 # ---------- cliente Modbus contra el servidor simulado ----------
+$script:Usuario=@{usuario='banco';nombre='Banco de pruebas';rol='admin'}
 Modbus-Conectar '127.0.0.1' 15020 3000
 
 Check 'FC03 u16 vbat'      (Leer-Decodificado 5 @{addr=30094; tipo='u16'}) '25837'

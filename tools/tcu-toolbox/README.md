@@ -589,6 +589,22 @@ un fallo bloquearía 30 s de TCUs por un hipo de red; y **cada tirada empieza
 limpiando** la reutilización anterior. Y lo que no hay que perder de vista: esto no
 es la protección. La protección es la alarma de viento del propio controlador, que
 es independiente de esta ventana.
+## Edición piloto 11.94
+
+Nueva hoja **Inicio, planta y soporte**: alta de topología validada, informe HTML,
+paquete técnico sin datos de planta, demostración aislada e instalación por
+versiones. **Histórico CSV → Tendencias** representa los valores originales y
+compara ángulo/consigna. **Operación → Gestionar** añade responsable y estado de
+intervención; el cierre exige nota y diagnóstico reciente OK.
+
+El paquete `Factiun_Toolbox_Cliente_v11.94.zip` contiene solo programa y guía,
+sin topologías de nuestras plantas. La distribución habitual conserva todas
+las funciones. Consultar `Guia-cliente.html`, `COMPATIBILIDAD.md` y `PILOTO.md`.
+La firma corporativa y la aceptación en planta siguen pendientes de evidencia.
+
+La regla de mejoras en ambos productos y sus diferencias pendientes están en
+[`PARIDAD_PRODUCTO.md`](../../PARIDAD_PRODUCTO.md). Los registros de incidencias
+locales y online todavía no se sincronizan automáticamente.
 
 ## Histórico CSV de NCU (v11.93)
 

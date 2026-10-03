@@ -118,6 +118,16 @@ Lectura (GET, siempre disponibles):
 | `/sat` | estado del ensayo SAT: si está registrando, hasta cuándo, cuántos pases lleva y los ficheros de la carpeta |
 | `/sat/descargar?f=` | un fichero del ensayo, tal cual (solo nombres de esa carpeta: no admite rutas) |
 
+### Compatibilidad con Toolbox 11.94 (agente 4.2)
+
+La identidad de servicio para escribir se establece únicamente después de
+validar token, permiso de escritura y confirmación, y se retira al terminar la
+operación. Esto conserva los controles del agente al aplicar el control de rol
+central de Toolbox. El registro `comandos_*.jsonl` de Toolbox debe poder
+guardarse antes de enviar bytes; si falla, la escritura se bloquea.
+`X-Usuario` sigue siendo una atribución declarada por el cliente y no una
+autenticación individual. Actualizar las dos carpetas desde la misma release.
+
 ### Configuración en remoto (v4.1)
 
 El agente leía `agente_config.json` **al arrancar y nada más**: cambiar cada

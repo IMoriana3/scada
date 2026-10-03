@@ -1,10 +1,11 @@
 ﻿# Historico local de logs NCU. Sin subida automatica ni lectura de control.
 $script:HistRaiz=$PSScriptRoot
+. (Join-Path $PSScriptRoot 'Tendencias.ps1')
 function Hist-Contexto($tag){
     if(-not $tag.trabajos){throw 'Repite el diagnostico para recuperar el origen de conexion.'}
     $d=Diag-Objetivo $tag.fila $tag.trabajos
     $m=$script:OpMeta[$tag.fila]
-    if(-not $m -or -not $m.planta -or $m.origen -ne 'lectura'){throw 'No hay una planta de origen verificada para esta fila.'}
+    if(-not $m -or -not $m.planta -or $m.origen -notin @('lectura','demo')){throw 'No hay una planta de origen verificada para esta fila.'}
     $identidad="$($m.planta)|$($d.ip)|$($d.ncu)"
     $sha=[Security.Cryptography.SHA256]::Create()
     try{$hash=[BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($identidad))).Replace('-','').Substring(0,24)}finally{$sha.Dispose()}
@@ -41,6 +42,7 @@ function Hist-Leer([string]$ruta,[string]$entrada){
     return @{filas=@($salida | Sort-Object datetime);duplicadas=$duplicadas;conflictos=$conflictos}
 }
 function Hist-Descargar($ctx,[string]$fecha){
+    if($script:ModoDemo){throw 'DEMOSTRACION: descarga de equipos bloqueada.'}
     $ruta=Join-Path $script:HistRaiz 'descarga-logs\descarga_logs_ncu.ps1'
     if(-not (Test-Path -LiteralPath $ruta)){$ruta=Join-Path (Split-Path $script:HistRaiz) 'descarga-logs\descarga_logs_ncu.ps1'}
     if(-not (Test-Path -LiteralPath $ruta)){throw 'No se encuentra el descargador de logs.'}
@@ -58,22 +60,23 @@ function Hist-Abrir($tag){
     $d=New-Object Windows.Forms.Form;$d.Name='histCSV';$d.Text="Historico CSV - $($ctx.planta) / NCU$($ctx.ncu) / $($ctx.equipo)"
     $d.Size=New-Object Drawing.Size(950,700);$d.MinimumSize=New-Object Drawing.Size(750,550);$d.StartPosition='CenterParent';$d.Font=$form.Font
     $l=New-Object Windows.Forms.TableLayoutPanel;$l.Dock='Fill';$l.ColumnCount=1;$l.RowCount=5
-    foreach($h in @(58,42,38)){[void]$l.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',$h)))}
+    foreach($h in @(58,76,38)){[void]$l.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',$h)))}
     [void]$l.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent',100)));[void]$l.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute',76)));$d.Controls.Add($l)
     $aviso=New-Object Windows.Forms.Label;$aviso.Dock='Fill';$aviso.Padding=New-Object Windows.Forms.Padding(8)
     $aviso.Text="HISTORICO: no representa el estado actual. Origen: $($ctx.planta) / $($ctx.ip) / NCU$($ctx.ncu).`r`nHoras tal como las registra la NCU; si el CSV no indica zona horaria, no se presupone ninguna.";$l.Controls.Add($aviso)
     $barra=Sec-Barra $l
     $dia=New-Object Windows.Forms.DateTimePicker;$dia.Format='Custom';$dia.CustomFormat='yyyy-MM-dd';$dia.Width=120;$dia.Value=(Get-Date).AddDays(-1);$dia.MaxDate=(Get-Date).Date;$barra.Controls.Add($dia)
-    $desc=Sec-Boton $barra 'Descargar / actualizar'
+    $desc=Sec-Boton $barra 'Descargar / actualizar';$desc.Enabled=-not $script:ModoDemo
     $ref=Sec-Boton $barra 'Leer copia local';$ref.Name='histLeer'
     $abrir=Sec-Boton $barra 'Abrir carpeta'
-    $web=Sec-Boton $barra 'Importador web'
+    $web=Sec-Boton $barra 'Importador web';$web.Enabled=-not $script:ModoDemo
+    $trend=Sec-Boton $barra 'Tendencias';$trend.Name='histTrend';$trend.Enabled=$false
     $csv=New-Object Windows.Forms.ComboBox;$csv.Dock='Fill';$csv.DropDownStyle='DropDownList';$l.Controls.Add($csv)
     $grid=New-Object Windows.Forms.DataGridView;$grid.Name='histTabla';$grid.Dock='Fill';$grid.ReadOnly=$true;$grid.AllowUserToAddRows=$false;$grid.AllowUserToDeleteRows=$false;$grid.AutoSizeColumnsMode='DisplayedCells';$grid.RowHeadersVisible=$false;$l.Controls.Add($grid)
     $estado=New-Object Windows.Forms.Label;$estado.Dock='Fill';$estado.Padding=New-Object Windows.Forms.Padding(8);$estado.Text='Elige un dia y descarga los logs, o lee una copia local ya descargada.';$l.Controls.Add($estado)
-    $st=@{ruta='';proceso=$null}
+    $st=@{ruta='';proceso=$null;lectura=$null}
     $cargar={
-        $csv.Items.Clear();$grid.DataSource=$null
+        $csv.Items.Clear();$grid.DataSource=$null;$st.lectura=$null;$trend.Enabled=$false
         $fecha=$dia.Value.ToString('yyyy-MM-dd')
         $st.ruta=Join-Path $ctx.carpeta "NCU$($ctx.ncu)\NCU$($ctx.ncu)_$fecha.zip"
         try{
@@ -97,12 +100,13 @@ function Hist-Abrir($tag){
             foreach($f in @($r.filas | Select-Object -Last 2000)){
                 $row=$tabla.NewRow();foreach($p in $f.PSObject.Properties){$row[$p.Name]="$($p.Value)"};$tabla.Rows.Add($row)
             }
-            $grid.DataSource=$tabla
+            $grid.DataSource=$tabla;$st.lectura=$r;$trend.Enabled=$true
             $estado.Text="$($csv.SelectedItem) | $($r.filas.Count) muestras unicas; se muestran las ultimas $($tabla.Rows.Count).`r`nCopia local: $((Get-Item -LiteralPath $st.ruta).LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')). Ultima muestra registrada: $($r.filas[-1].datetime).`r`nDuplicados exactos omitidos: $($r.duplicadas). Filas distintas con la misma hora: $($r.conflictos), conservadas. ZIP original intacto."
-        }catch{$grid.DataSource=$null;$estado.Text="$_"}finally{$d.UseWaitCursor=$false}
+        }catch{$grid.DataSource=$null;$st.lectura=$null;$trend.Enabled=$false;$estado.Text="$_"}finally{$d.UseWaitCursor=$false}
     }.GetNewClosure())
+    $trend.Add_Click({if($st.lectura){Tendencia-Abrir $st.lectura "$($ctx.planta) / NCU$($ctx.ncu) / $($csv.SelectedItem)"}}.GetNewClosure())
     $ref.Add_Click($cargar)
-    $dia.Add_ValueChanged({$csv.Items.Clear();$grid.DataSource=$null;$estado.Text='Dia cambiado: descarga o lee su copia local.'}.GetNewClosure())
+    $dia.Add_ValueChanged({$csv.Items.Clear();$grid.DataSource=$null;$st.lectura=$null;$trend.Enabled=$false;$estado.Text='Dia cambiado: descarga o lee su copia local.'}.GetNewClosure())
     $desc.Add_Click({
         try{
             if($st.proceso -and -not $st.proceso.HasExited){$estado.Text='La consola de descarga sigue abierta. Finalizala antes de iniciar otra.';return}

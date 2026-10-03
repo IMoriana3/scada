@@ -242,6 +242,10 @@ try {
     # escrituras
     $e1 = Pedir '/escribir' 'POST' @{confirmar = $true; ncu = 1; tcus = '1'; variable = '41010'; valor = '-1.685'}
     Check 'escribir: una variable' $e1.ok 'True'
+    Check 'escribir: llega al simulador' $e1.correctas 1
+    Check 'escribir: ningun fallo oculto en HTTP OK' $e1.fallos 0
+    $journal=@(Get-ChildItem (Join-Path $tmp 'tcu-toolbox/registro') -Filter 'comandos_*.jsonl')
+    Check 'escribir: registra antes de enviar' ($journal.Count -gt 0 -and (Get-Content $journal[0].FullName -Raw).Contains('PREPARADO')) $true
     $e2 = Pedir '/escribir-lote' 'POST' @{confirmar = $true; ncu = 1; tcus = '1-2'
         valores = @(@{variable = '41010'; valor = '-1.685'}, @{variable = '41111'; valor = '55'})}
     Check 'escribir-lote: varias variables' $e2.ok 'True'
@@ -303,7 +307,7 @@ try {
     $c0 = Pedir '/config'
     Check 'config: se puede consultar' ($null -ne $c0.planta) $true
     Check 'config: dice lo que esta corriendo AHORA' ($null -ne $c0._en_curso.intervalo_vigilancia_min) $true
-    Check 'config: y su version' ($c0._en_curso.version_agente) '4.1'
+    Check 'config: y su version' ($c0._en_curso.version_agente) '4.2'
     # LOS SECRETOS NO SE DEVUELVEN: quien pregunta ya tiene el token, y
     # devolverlo solo lo deja en el historial del navegador y en el tunel
     Check 'config: el token no se devuelve' ($c0.token) '(puesto)'

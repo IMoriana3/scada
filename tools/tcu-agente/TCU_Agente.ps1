@@ -10,7 +10,7 @@
 #  endpoint de escritura: escribir se sigue haciendo con la toolbox en local.
 # ============================================================================
 $ErrorActionPreference = 'Stop'
-$VERSION_AGENTE = '4.1'
+$VERSION_AGENTE = '4.2'
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
 $dirBase = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -1445,7 +1445,13 @@ while ($true) {
                 if (-not $body -or $body.confirmar -ne $true) { $code = 400; $out = @{error = "falta 'confirmar': true en el cuerpo"} }
                 else {
                     $usuario = "$($req.Headers['X-Usuario'])"; if (-not $usuario) { $usuario = '(desconocido)' }
-                    $filas = @(Op-Escritura $op $body)
+                    # Identidad del servicio, solo tras token + permiso + confirmacion.
+                    # X-Usuario sigue siendo atribucion declarada, no login individual.
+                    $sesionAnterior=$script:Usuario
+                    try{
+                        $script:Usuario=@{usuario='agente';nombre='Servicio de planta';rol='tecnico'}
+                        $filas = @(Op-Escritura $op $body)
+                    }finally{$script:Usuario=$sesionAnterior}
                     Auditar $usuario $op @{ncu = $body.ncu; tcus = "$($body.tcus)"; modo = "$($body.modo)"; safe_pos = "$($body.safe_pos)"; estado = "$($body.estado)"; variable = "$($body.variable)"; valor = "$($body.valor)"} $filas
                     $out = [ordered]@{ok = $true; operacion = $op
                         correctas = @($filas | Where-Object { $_.ok }).Count

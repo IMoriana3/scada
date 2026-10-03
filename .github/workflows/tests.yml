@@ -301,6 +301,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
           powershell -NoProfile -File test_operations.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          pwsh -NoProfile -File test_client.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
+          powershell -NoProfile -File test_client.ps1
+          if ($LASTEXITCODE -ne 0) { $rc = 1 }
           pwsh -NoProfile -File test_history.ps1
           if ($LASTEXITCODE -ne 0) { $rc = 1 }
           powershell -NoProfile -File test_history.ps1
