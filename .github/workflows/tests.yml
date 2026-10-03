@@ -88,6 +88,33 @@ jobs:
             echo "ROJO · solo $corridos bancos; el 2026-10-02 eran 12 en bucle + 1 por unittest"
             exit 1
           fi
+
+      # LA NCU SIMULADA, QUE NO CASA CON `test_*.py` Y POR ESO NO LA CORRÍA NADIE.
+      # No es un banco de una función: levanta un esclavo Modbus TCP de verdad con el
+      # mapa real y le pone el DRIVER DE HIERRO por delante, así que recorre Modbus +
+      # troceado + decode —el camino que `drivers/simulated.py` no toca nunca—.
+      #
+      # Se enciende aquí porque al rescatarla de `claude/simulador-tcu-24ubzk`
+      # (20-ago, nunca fusionada) reventó con `KeyError: 'tcu_ids'`, que es EL MISMO
+      # fallo de los tres fixtures de arriba: los drivers pasaron a exigir la lista de
+      # bindings comisionados y esto se quedó en `tcu_count`. O sea que es el cuarto
+      # sitio con la misma podredumbre, y lo único que lo distinguía es que nadie lo
+      # corría para verlo. Un banco que no corre nadie es decoración.
+      #
+      # El camino con `--gemelo` (planta de `gemelo-digital`, escritura incluida) NO
+      # entra aquí a propósito: necesita node y el repo hermano levantado. Se corrió a
+      # mano el 3-oct-2026 con 19 de 19, y lo que comprueba está en el README.
+      - name: la NCU simulada, con el driver real por delante
+        run: |
+          set -o pipefail
+          python3 tools/ncu_simulada.py --autotest | tee /tmp/sim.log
+          grep -q 'el camino entero' /tmp/sim.log || {
+            echo "ROJO · el autotest no llegó a su veredicto"; exit 1; }
+          # Y QUE CUENTE: un autotest que imprimiera su línea final sin haber
+          # comprobado nada saldría verde. El 3-oct-2026 eran 12 comprobaciones.
+          n=$(grep -c '^  ok ' /tmp/sim.log)
+          echo "comprobaciones de la simulada: $n"
+          [ "$n" -ge 12 ] || { echo "ROJO · solo $n comprobaciones, eran 12"; exit 1; }
           exit $rc
 
   # El banco de ficheros de planta de la toolbox (python) no corria en ningun
