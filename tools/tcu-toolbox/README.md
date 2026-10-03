@@ -4,6 +4,42 @@
 
 Es el complemento de **escritura** del SCADA de este repo: el SCADA es solo-lectura a propósito; cuando hay que *cambiar* algo en un TCU (configuración, reloj, NVM) se usa esta toolbox desde el portátil conectado a la LAN de planta.
 
+### Cuánto tarda en arrancar, medido por tramos (v12.8)
+
+Iñaki preguntó por qué tarda tanto en abrirse. **Lo que se pudo medir aquí** (pwsh 7 en
+un Linux rápido): parsear el fichero 0,7 s, cargar las plantas 0,6 s (San José son 82
+entradas), el resto de la lógica 0,5 s. O sea, **lo de antes de la ventana es barato**.
+Lo que no se puede medir desde fuera es lo que pasa en el Windows de planta:
+PowerShell 5.1 parseando 1,1 MB (su parser es varias veces más lento que el de pwsh 7),
+el **antivirus escaneando ese 1,1 MB** antes de dejar correr la primera línea (AMSI), y
+los 430 controles de la ventana construidos uno a uno.
+
+**Así que ahora se mide y se dice.** El `.bat` deja la hora del doble clic en
+`TOOLBOX_T0`; el script toma la hora en su primera línea, al cargar WinForms, tras las
+plantas, tras la lógica, al abrir la consola y al quedar la ventana lista. La consola
+lo imprime en gris al arrancar:
+
+```
+Arranque: powershell + parsear + antivirus 6.3 s, WinForms 0.4 s, plantas 0.9 s, logica 0.7 s, construir la ventana 3.1 s.
+Ventana lista a los 12.1 s del doble clic; el ajuste final de la ventana tardo 0.6 s.
+```
+
+El primer tramo es el que ningún cronómetro de dentro del script puede ver de otra
+manera, y es el que señala al parser y al antivirus. Con esos números delante se decide
+qué optimizar; sin ellos sería adivinar.
+
+**Y un arreglo que no necesita medirse:** la ventana se construía **sin suspender la
+disposición**. Cada control añadido y cada propiedad tocada disparaba un cálculo de
+disposición de toda la ventana: 430 controles, 430 veces. Ahora `$form` y el
+`TabControl` se construyen con `SuspendLayout()` y se reanudan una sola vez justo antes
+de `ShowDialog()`, que es el patrón de cualquier formulario del diseñador de Visual
+Studio. El ajuste de anchos y anclajes de `Shown` sigue igual, porque mide los
+contenedores ya dispuestos.
+
+Lo que **no** se ha hecho, a propósito, hasta ver los números: construir las pestañas al
+visitarlas (lazy) sería el gran ahorro si la ventana es el tramo gordo, pero es una
+reforma grande de un fichero de 20.000 líneas y no se emprende por una sospecha.
+
 ### El gateway como equipo propio del Diagnóstico (v12.7)
 
 Lo pidió Iñaki el 02/10/2026: *"los GW los metería en la columna de la izquierda,

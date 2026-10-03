@@ -21,12 +21,51 @@
 #  Lanzar con TCU_Toolbox.bat (PowerShell 5.1+, sin instalar nada).
 # =============================================================================
 
+# CUANTO TARDA EN ARRANCAR, medido y no supuesto (v12.8). Inaki pregunto por que
+# tarda tanto. Lo de antes de la ventana se midio en un Linux rapido y es poco
+# (parsear 0,7 s, plantas 0,6 s, resto 0,5 s); lo que no se puede medir desde
+# fuera es lo que pasa en SU Windows: PowerShell 5.1 parseando 1,1 MB, el
+# antivirus escaneando ese 1,1 MB antes de dejar correr la primera linea, y los
+# 400 y pico controles de la ventana. Asi que se mide por tramos y se dice en
+# la consola. El .bat deja la hora del doble clic en TOOLBOX_T0: la distancia
+# hasta ESTA linea es lo que cuesta arrancar powershell, parsear y pasar el
+# antivirus, que es justo el tramo que ningun cronometro de dentro del script
+# puede ver de otra manera.
+$script:T_arranque = Get-Date
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic   # InputBox: la nota de un trabajo guardado
 [System.Windows.Forms.Application]::EnableVisualStyles()
+$script:T_winforms = Get-Date
 
-$VERSION_TOOLBOX = '12.7'
+$VERSION_TOOLBOX = '12.8'
+
+# Segundos desde la hora que dejo el .bat (%TIME%: "12:34:56,78" en Windows en
+# castellano, "12:34:56.78" en ingles, a veces con un espacio delante si la
+# hora es de un digito) hasta $ahora. $null si no hay hora o no se entiende:
+# un numero inventado aqui seria peor que no dar ninguno. Si se cruza la
+# medianoche, se corrige. Pura.
+function Arranque-DesdeBat([string]$t0, [datetime]$ahora) {
+    $t = "$t0".Trim()
+    if ($t -eq '') { return $null }
+    $m = [regex]::Match($t, '^(\d{1,2}):(\d{2}):(\d{2})(?:[.,](\d{1,2}))?$')
+    if (-not $m.Success) { return $null }
+    $cent = $(if ($m.Groups[4].Success) { [int]$m.Groups[4].Value.PadRight(2, '0') } else { 0 })
+    $seg0 = [int]$m.Groups[1].Value * 3600 + [int]$m.Groups[2].Value * 60 + [int]$m.Groups[3].Value + $cent / 100.0
+    $seg1 = $ahora.TimeOfDay.TotalSeconds
+    $d = $seg1 - $seg0
+    if ($d -lt -43200) { $d += 86400 }      # el .bat arranco antes de medianoche y esto despues
+    if ($d -lt 0 -or $d -gt 3600) { return $null }   # un arranque de mas de una hora no es un arranque
+    return [math]::Round($d, 2)
+}
+
+# El texto del reparto de tiempos para la consola. Pura.
+function Arranque-Texto($bat, [double]$winforms, [double]$plantas, [double]$logica, [double]$ventana) {
+    $t = 'Arranque: '
+    if ($null -ne $bat) { $t += "powershell + parsear + antivirus $bat s, " } else { $t += 'powershell + parsear (sin hora del .bat), ' }
+    $t += "WinForms $winforms s, plantas $plantas s, logica $logica s, construir la ventana $ventana s."
+    return $t
+}
 # La etiqueta va en el titulo de la ventana: es lo que mira alguien en campo
 # para saber QUE MAPA da por bueno la herramienta. Decia R7.1 desde la v11.86,
 # que es cuando entraron registros que solo existen en el R8 (40030-40039, el
@@ -420,6 +459,7 @@ if (Test-Path $dirPlantas) {
     }
 }
 Construir-EntradasAuto
+$script:T_plantas = Get-Date
 
 # ---------------------------------------------------------------------------
 #  Mapa de registros de ESTADO (solo lectura, 30xxx)
@@ -6453,7 +6493,14 @@ function Auditar([string]$accion, [string]$ncu, $tcu, [string]$detalle) {
 # ---------------------------------------------------------------------------
 #  Interfaz
 # ---------------------------------------------------------------------------
+$script:T_logica = Get-Date
 $form = New-Object System.Windows.Forms.Form
+# Sin esto, cada control que se anade y cada propiedad que se toca dispara un
+# calculo de disposicion de toda la ventana: 400 y pico controles, 400 y pico
+# veces. Con la disposicion suspendida se hace UNA, antes de ensenar la ventana
+# (ResumeLayout junto al ShowDialog). Es el patron de cualquier formulario
+# generado por el disenador de Visual Studio, y aqui no se hacia (v12.8).
+$form.SuspendLayout()
 $form.Text = "TCU Toolbox v$VERSION_TOOLBOX - Sunner  (mapa $VERSION_MAPA)"
 # 1142 y no 960: los 182 de mas son la columna de navegacion de la izquierda.
 # El interior de las pestanas no se ha tocado ni un pixel, asi que todo lo que
@@ -6632,6 +6679,7 @@ $pnlCuerpo.Size = New-Object System.Drawing.Size(925, 400)
 $form.Controls.Add($pnlCuerpo)
 
 $tabs = New-Object System.Windows.Forms.TabControl
+$tabs.SuspendLayout()
 $tabs.Name = 'cuerpoTabs'
 $tabs.Location = New-Object System.Drawing.Point(0, 0)
 $tabs.Size = New-Object System.Drawing.Size(925, 400)
@@ -18701,6 +18749,13 @@ Con 'INFORME HTML: volcado de la sesion (diagnostico, PEM, auditoria, inventario
 Con 'Escritura masiva (>3 TCUs): se crea antes un rollback en backups/ restaurable con "CSV por TCU...".' ([System.Drawing.Color]::Gainsboro)
 Con 'PEM > SEGUIMIENTO JSON: exporta la ficha de seguimiento (comisionado + auditoria + motor) para subirla al Historico de la plataforma.' ([System.Drawing.Color]::Gainsboro)
 foreach ($m in $script:MsgsInicio) { Con $m ([System.Drawing.Color]::SteelBlue) }
+# el reparto de tiempos del arranque hasta aqui; la ventana visible se dice en Shown
+$script:T_consola = Get-Date
+Con (Arranque-Texto (Arranque-DesdeBat "$env:TOOLBOX_T0" $script:T_arranque) `
+        ([math]::Round(($script:T_winforms - $script:T_arranque).TotalSeconds, 2)) `
+        ([math]::Round(($script:T_plantas - $script:T_winforms).TotalSeconds, 2)) `
+        ([math]::Round(($script:T_logica - $script:T_plantas).TotalSeconds, 2)) `
+        ([math]::Round(($script:T_consola - $script:T_logica).TotalSeconds, 2))) ([System.Drawing.Color]::Gray)
 if ($PLANTAS.Count -le 1) {
     Con 'Sin plantas cargadas: usa el boton Cargar... (o copia los JSON de la plataforma en la subcarpeta plantas/).' ([System.Drawing.Color]::Orange)
 }
@@ -19904,6 +19959,9 @@ $form.Add_Shown({
         # lo ultimo: Layout-Rescatar mide contenedores y esto deja el TabControl
         # a proposito fuera del suyo
         Nav-OcultarCabecera
+        $desdeBat = Arranque-DesdeBat "$env:TOOLBOX_T0" $script:T_arranque
+        $total = [math]::Round(((Get-Date) - $script:T_arranque).TotalSeconds + $(if ($null -ne $desdeBat) { $desdeBat } else { 0 }), 1)
+        Con "Ventana lista a los $total s$(if ($null -eq $desdeBat) { ' desde la primera linea del script (sin la hora del .bat)' } else { ' del doble clic' }); el ajuste final de la ventana tardo $([math]::Round(((Get-Date) - $script:T_consola).TotalSeconds, 2)) s." ([System.Drawing.Color]::Gray)
     } catch {
         Con "AVISO: no se pudo ajustar el diseno de la ventana ($_)" ([System.Drawing.Color]::Orange)
     }
@@ -20124,5 +20182,8 @@ Cierre-Cargar (Nombre-Planta)
 Cierre-Pintar
 Cierre-Avisar
 Trabajos-Pintar
+# una sola disposicion, ahora que esta todo construido (ver $form.SuspendLayout)
+$tabs.ResumeLayout($false)
+$form.ResumeLayout($true)
 [void]$form.ShowDialog()
 Modbus-Cerrar
